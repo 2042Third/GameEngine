@@ -1,0 +1,133 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+
+#include "Include/Scene.glsl"
+#include "Include/OrderedFloat.glsl"
+
+// The receivers the frame's prepass depth holds, for the sun's cascades fitted to what the camera sees (ShadowFitTracker,
+// Renderer/ShadowFit.h; RenderData::ShadowFitResult): the nearest and farthest view distance of any of them, how many pixels
+// hold one, and per quarter stop of view distance (RenderData::c_ShadowFitBins from c_ShadowFitBinBase) the box of their
+// positions in the camera's view space, which the CPU re-projects into later cameras and lights, and how many pixels hold them.
+// Every box field reduces with atomicMax (the minima stored complemented) into a buffer cleared to 0, the counts with
+// atomicAdd. Each thread reduces a
+// 4 x 4 block of pixels in registers (neighbors mostly share a bin) before the group's shared copy, which adds its non-zero
+// entries to the buffer once each. Both paths run it on the complete prepass depth, in GPU.ScreenShadows.
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_SRV(22)) uniform texture2D u_Depth;
+
+// RenderData::ShadowFitResult as words: Nearest, Farthest, SurfacePixels, Reserved, then per bin MinX, MinY, MinD, MaxX, MaxY,
+// MaxD and Pixels.
+const uint c_Bins = 80u;
+const uint c_FieldsPerBin = 7u;
+const uint c_BinPixels = 6u;
+const uint c_FirstBin = 4u;
+const uint c_Words = c_FirstBin + c_Bins * c_FieldsPerBin;
+const uint c_SurfacePixels = 2u;
+const float c_BinBase = 0.0625;
+const int c_BlockPixels = 4;
+
+layout(set = 0, binding = ST_UAV(0), std430) buffer ShadowFitBuffer
+{
+	uint o_Fit[c_Words];
+};
+
+layout(push_constant) uniform ShadowFitParameters
+{
+	uvec2 Size; // The depth's pixels
+	uvec2 Reserved;
+} u_Parameters;
+
+shared uint s_Fit[c_Words];
+
+// Adds a bin's box (x, y and view distance d) and pixels to the group's copy.
+void AddBin(int bin, vec3 boxMin, vec3 boxMax, uint pixels)
+{
+	if (bin < 0)
+		return;
+	uint first = c_FirstBin + uint(bin) * c_FieldsPerBin;
+	atomicMax(s_Fit[first + 0u], ~EncodeOrderedFloat(boxMin.x));
+	atomicMax(s_Fit[first + 1u], ~EncodeOrderedFloat(boxMin.y));
+	atomicMax(s_Fit[first + 2u], ~EncodeOrderedFloat(boxMin.z));
+	atomicMax(s_Fit[first + 3u], EncodeOrderedFloat(boxMax.x));
+	atomicMax(s_Fit[first + 4u], EncodeOrderedFloat(boxMax.y));
+	atomicMax(s_Fit[first + 5u], EncodeOrderedFloat(boxMax.z));
+	atomicAdd(s_Fit[first + c_BinPixels], pixels);
+}
+
+void main()
+{
+	uint thread = gl_LocalInvocationIndex;
+	for (uint word = thread; word < c_Words; word += 256u)
+		s_Fit[word] = 0u;
+	barrier();
+
+	ivec2 size = ivec2(u_Parameters.Size);
+	vec2 inverseSize = 1.0 / vec2(size);
+	ivec2 firstPixel = ivec2(gl_GlobalInvocationID.xy) * c_BlockPixels;
+	int bin = -1;
+	vec3 boxMin = vec3(0.0);
+	vec3 boxMax = vec3(0.0);
+	uint binPixels = 0u;
+	uint pixels = 0u;
+	float nearest = 0.0;
+	float farthest = 0.0;
+	for (int y = 0; y < c_BlockPixels; y++)
+	{
+		for (int x = 0; x < c_BlockPixels; x++)
+		{
+			ivec2 pixel = firstPixel + ivec2(x, y);
+			if (any(greaterThanEqual(pixel, size)))
+				continue;
+			float depth = texelFetch(u_Depth, pixel, 0).r;
+			if (!(depth > 0.0))
+				continue; // Nothing drawn (reversed-Z: the far plane is 0)
+			// View space, as the camera's own (rotation-only View) sees it.
+			vec4 point = u_Frame.InverseProjection * vec4(UVToNDC((vec2(pixel) + 0.5) * inverseSize), depth, 1.0);
+			vec3 position = point.xyz / point.w;
+			float distance = -position.z;
+			if (!(distance > 0.0) || isinf(distance) || any(isinf(position.xy)) || any(isnan(position.xy)))
+				continue;
+			int pixelBin = clamp(int(floor(4.0 * log2(distance / c_BinBase))), 0, int(c_Bins) - 1);
+			vec3 sample3 = vec3(position.xy, distance);
+			if (pixelBin != bin)
+			{
+				AddBin(bin, boxMin, boxMax, binPixels);
+				bin = pixelBin;
+				boxMin = sample3;
+				boxMax = sample3;
+				binPixels = 0u;
+			}
+			else
+			{
+				boxMin = min(boxMin, sample3);
+				boxMax = max(boxMax, sample3);
+			}
+			binPixels++;
+			nearest = pixels == 0u ? distance : min(nearest, distance);
+			farthest = max(farthest, distance);
+			pixels++;
+		}
+	}
+	AddBin(bin, boxMin, boxMax, binPixels);
+	if (pixels > 0u)
+	{
+		atomicMax(s_Fit[0], ~EncodeOrderedFloat(nearest));
+		atomicMax(s_Fit[1], EncodeOrderedFloat(farthest));
+		atomicAdd(s_Fit[c_SurfacePixels], pixels);
+	}
+	barrier();
+
+	for (uint word = thread; word < c_Words; word += 256u)
+	{
+		uint value = s_Fit[word];
+		if (value == 0u)
+			continue;
+		if (word == c_SurfacePixels || (word >= c_FirstBin && (word - c_FirstBin) % c_FieldsPerBin == c_BinPixels))
+			atomicAdd(o_Fit[word], value);
+		else
+			atomicMax(o_Fit[word], value);
+	}
+}

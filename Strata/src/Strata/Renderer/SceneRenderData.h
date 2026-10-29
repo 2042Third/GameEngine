@@ -60,13 +60,17 @@ namespace Strata
 			glm::vec4 TimeParams;                // x: scene time in seconds
 			glm::vec4 SkyParams;                 // x: background mip (blur), y: 1 when the environment is the background
 			glm::vec4 CascadeSplits;             // View distance where each cascade ends (their projections: CascadeData)
-			glm::vec4 ShadowParams;              // x: 2 tan(light angular radius), y: 1 / map size, z: cascade blend, w: cascade count
-			glm::vec4 ShadowBias;                // x: depth bias (texels), y: normal offset (texels)
+			// x: tan(light angular radius), the penumbra's half-width per unit of separation; y: 1 / map size, z: cascade blend, w:
+			// cascade count
+			glm::vec4 ShadowParams;
+			// x: depth bias (texels), y: normal offset (texels), z: the wide penumbrae's taps (RendererQualitySettings::
+			// ShadowFilterQuality), w: unused (0)
+			glm::vec4 ShadowBias;
 			glm::vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
 			glm::vec4 MaterialParams;            // x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels)
 			// x: 1 when the motion history holds the renderer's previous frame; y: the pre-exposure, the power of two every writer of
 			// the HDR target multiplies its luminance by (SceneRendererStats::PreExposure); z: the frame's rotation of per-pixel noise
-			// (PCSS, ambient occlusion) in turns, 0 without temporal anti-aliasing
+			// (local shadows' PCF, ambient occlusion) in turns, 0 without temporal anti-aliasing
 			glm::vec4 TemporalParams;
 			// Temporal anti-aliasing's offset of the frame's samples in clip units (added to Projection, ViewProjection and their
 			// inverses; 0 without it): xy this frame's, zw the renderer's previous frame's
@@ -502,6 +506,116 @@ namespace Strata
 			uint32_t ListOffset;  // The list's first entry in the list buffer
 		};
 		static_assert(sizeof(MotionCopyParameters) == 16);
+
+		// The shadows debug view (SceneRenderOptions::ShowShadowView, Include/ShadowView.glsl): screen pixels per shadow texel,
+		// binned per cascade in eighths of a stop over [2^c_ShadowViewMinStops, 2^(c_ShadowViewMinStops + c_ShadowViewBins / 8)):
+		// bin b covers [2^(b / 8 - 4), 2^((b + 1) / 8 - 4)), and ratios outside the range count in the first or last bin.
+		constexpr uint32_t c_ShadowViewBins = 64;
+		constexpr uint32_t c_ShadowViewBinsPerStop = 8;
+		constexpr int32_t c_ShadowViewMinStops = -4;
+
+		// Overlay/ShadowView.frag: the ramp's colors at 1 (or fewer), 2 and 4 (or more) screen pixels per shadow texel.
+		struct ShadowViewParameters
+		{
+			glm::vec4 Colors[3];
+		};
+		static_assert(sizeof(ShadowViewParameters) == 48);
+
+		// Debug/ShadowViewStats.comp's result: per cascade the receiver pixels of each bin, and the frame's surface pixels
+		// (anything drawn: receivers in a cascade and those outside every one), sky pixels (nothing drawn) and surface pixels
+		// outside every cascade.
+		struct ShadowViewCounts
+		{
+			uint32_t Bins[c_MaxCascades][c_ShadowViewBins];
+			uint32_t SurfacePixels;
+			uint32_t SkyPixels;
+			uint32_t UncoveredPixels;
+			uint32_t Reserved;
+		};
+		static_assert(sizeof(ShadowViewCounts) == 1040);
+
+		// The sun shadow cascades' depth ranges (Scene/ShadowRanges.comp, Include/Shadows.glsl): levels of cells of
+		// c_ShadowRangeCellTexels << level shadow texels each way, the nearest and farthest depth of each packed in 16 bits.
+		constexpr uint32_t c_ShadowRangeLevels = 3;
+		constexpr uint32_t c_ShadowRangeCellTexels = 4;
+
+		// Scene/ShadowRanges.comp: one level's sizes, and the cascade layers it builds (the others keep their ranges).
+		struct ShadowRangeParameters
+		{
+			glm::uvec2 SourceSize;
+			glm::uvec2 DestinationSize;
+			uint32_t LayerMask;
+			uint32_t Reserved[3];
+		};
+		static_assert(sizeof(ShadowRangeParameters) == 32);
+
+		// Effects/ContactShadows.frag: the sun's contact shadows (the pass does not run while ContactSteps is 0).
+		struct ScreenShadowParameters
+		{
+			float ContactLength;         // Meters toward the sun
+			uint32_t ContactSteps;
+			float ContactMaxPixels;      // The march's longest reach on screen
+			float ContactFadeStart;      // View distances over which contact shadows fade out
+			float ContactFadeEnd;
+			float ContactThickness;      // Meters behind a surface that still occlude...
+			float ContactThicknessScale; // ...plus this much per meter of view distance
+			uint32_t Reserved;
+		};
+		static_assert(sizeof(ScreenShadowParameters) == 32);
+
+		// Effects/ScreenShadowsBlur.frag: one direction of the mask's blur.
+		struct ScreenShadowBlurParameters
+		{
+			int32_t DirectionX;
+			int32_t DirectionY;
+			float PlaneTolerance; // How far from a pixel's plane a tap may lie, as a fraction of its view distance
+			uint32_t Reserved;
+		};
+		static_assert(sizeof(ScreenShadowBlurParameters) == 16);
+
+		// Scene/ShadowFit.comp: the receivers the frame's depth holds, binned by view distance in quarter stops from
+		// c_ShadowFitBinBase (bin = floor(4 log2(d / c_ShadowFitBinBase)), clamped to the bins: 6.25 cm to 65 km), for the
+		// cascades' fit to what the camera sees (ShadowFitTracker, Renderer/ShadowFit.h).
+		constexpr uint32_t c_ShadowFitBins = 80;
+		constexpr float c_ShadowFitBinBase = 0.0625f;
+		constexpr uint32_t c_ShadowFitBinsPerStop = 4;
+
+		// A bin's receivers as a box in the camera's view space: x and y of their positions and their view distance d, each an
+		// EncodeOrderedFloat (Include/OrderedFloat.glsl), and how many pixels hold them. The minima are stored complemented, so
+		// every box field reduces with atomicMax (the count with atomicAdd) and a buffer cleared to 0 holds empty bins (MaxD 0:
+		// no float encodes to 0).
+		struct ShadowFitBin
+		{
+			uint32_t MinX;
+			uint32_t MinY;
+			uint32_t MinD;
+			uint32_t MaxX;
+			uint32_t MaxY;
+			uint32_t MaxD;
+			uint32_t Pixels;
+		};
+		static_assert(sizeof(ShadowFitBin) == 28);
+
+		// Scene/ShadowFit.comp's result: the nearest (complemented) and farthest view distance of any receiver, how many pixels
+		// hold one, and the bins.
+		struct ShadowFitResult
+		{
+			uint32_t Nearest;
+			uint32_t Farthest;
+			uint32_t SurfacePixels;
+			uint32_t Reserved;
+			ShadowFitBin Bins[c_ShadowFitBins];
+		};
+		static_assert(sizeof(ShadowFitResult) == 2256);
+
+		// Scene/ShadowFit.comp's push constants: the depth's size in pixels.
+		struct ShadowFitParameters
+		{
+			uint32_t Width;
+			uint32_t Height;
+			uint32_t Reserved[2];
+		};
+		static_assert(sizeof(ShadowFitParameters) == 16);
 
 	}
 

@@ -244,6 +244,19 @@ namespace
 			Run("camera.set", { { "position", { 0, 0, 4 } }, { "target", { 0, 0, 0 } } });
 		}
 
+		// The scene's suns cast no shadows: a capture that counts its frames for another reason (text, probes, the motion view)
+		// then has no cascades whose fit to the view it waits for (SceneRendererStats::ShadowFitSettled).
+		void TurnOffSunShadows()
+		{
+			std::vector<UUID> suns;
+			Scene& scene = *Context.GetEditScene();
+			for (const entt::entity handle : scene.GetRegistry().view<DirectionalLightComponent>())
+				suns.push_back(Entity(handle, &scene).GetUUID());
+			for (const UUID sun : suns)
+				Run("component.set", { { "entity", UUIDToJson(sun) }, { "component", "DirectionalLight" }, { "values", { { "CastShadows", false } } } });
+			CHECK_FALSE(suns.empty());
+		}
+
 		int CountDifferences(const DecodedImage& a, const DecodedImage& b)
 		{
 			REQUIRE(a.Width == b.Width);
@@ -423,6 +436,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(gpu.IsValid());
 		ViewportGPUHarness harness;
 		harness.AddScene();
+		harness.TurnOffSunShadows(); // The second capture waits for nothing
 		harness.Run("viewport.setSettings", { { "gameUI", true } });
 		// A UI label with more distinct glyphs than a render may rasterize (TextRenderer::c_FrameRasterBudget), new to the
 		// capture renderer, which the UI pass shares with the text.
@@ -700,8 +714,10 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(harness.CountDifferences(image, settled) == 0);
 
 		// Without waiting, a capture takes what the frame has: it renders again only for the scene's temporal anti-aliasing, the
-		// jitter's phases.
+		// jitter's phases. Its sun casts no shadows here: else the capture would first wait for the cascades' fit, whose frames
+		// follow how soon the GPU finishes the readbacks, and waitedFrames would report the larger of the two waits.
 		harness.Run("play.stop");
+		harness.TurnOffSunShadows();
 		harness.Run("play.start", { { "build", false } });
 		nlohmann::json immediate = size;
 		immediate["waitForAssets"] = false;
@@ -1509,6 +1525,8 @@ TEST_SUITE("GPU.Editor.Viewport")
 			{ "Capture", UUIDToJson(capture) } } } } } });
 		harness.Run("entity.create", { { "name", "Ball" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::SphereMesh) } } } } } });
 		harness.Run("camera.set", { { "position", { 0, 0, 3 } }, { "target", { 0, 0, 0 } } });
+		// Taken at once: a sun without shadows (else the preview's sun casts them), so no cascades whose fit to the view it waits for.
+		harness.Run("entity.create", { { "name", "Sun" }, { "components", { { "DirectionalLight", { { "Intensity", 3.0 }, { "CastShadows", false } } } } } });
 
 		// Without waitForAssets the picture is taken at once, the probe reported as pending.
 		nlohmann::json result;
@@ -1661,6 +1679,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(gpu.IsValid());
 		ViewportGPUHarness harness;
 		harness.AddScene();
+		harness.TurnOffSunShadows(); // The motion view's capture renders exactly one frame more
 		// No overlays: the debug views apply without them.
 		const nlohmann::json size = { { "width", 64 }, { "height", 64 }, { "overlays", false } };
 		auto withView = [&size](const char* view)
@@ -1721,6 +1740,88 @@ TEST_SUITE("GPU.Editor.Viewport")
 		const EditorCommandResult invalid = harness.Commands.Execute(harness.Context, "viewport.capture", withView("mips"));
 		CHECK(invalid.ErrorKind == EditorCommandError::InvalidParameters);
 		CHECK(invalid.Error.find("debugView") != std::string::npos);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A capture with the shadows debug view reports its cascades")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.AddScene();
+		harness.Run("entity.create", { { "name", "Floor" }, { "components", { { "Transform", { { "Translation", { 0, -0.5, 0 } }, { "Scale", { 40, 1, 40 } } } },
+			{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::PlaneMesh) } } } } } });
+		harness.Run("camera.set", { { "position", { 0, 2, 6 } }, { "target", { 0, 0, 0 } } });
+		const nlohmann::json parameters = { { "width", 96 }, { "height", 64 }, { "overlays", false } };
+		nlohmann::json result;
+		const DecodedImage plain = harness.Capture(parameters, &result);
+		nlohmann::json withView = parameters;
+		withView["debugView"] = "shadows";
+		const DecodedImage shadows = harness.Capture(withView, &result);
+		CHECK(harness.CountDifferences(shadows, plain) > 50);
+		const nlohmann::json& view = result["debugView"];
+		CHECK(view["view"] == "shadows");
+		REQUIRE(view.contains("shadows"));
+		const nlohmann::json& stats = view["shadows"];
+		CHECK(stats["complete"] == true);
+		const SceneRendererStats& frame = harness.Context.GetViewport().GetCaptureRenderer()->GetStats();
+		REQUIRE(frame.CascadeCount > 0);
+		REQUIRE(stats["cascades"].size() == frame.CascadeCount);
+		CHECK(stats["shadowMapSize"].get<uint32_t>() == frame.ShadowMapSize);
+		double shares = stats["skyShare"].get<double>() + stats["uncoveredShare"].get<double>();
+		for (uint32_t cascade = 0; cascade < frame.CascadeCount; cascade++)
+		{
+			const nlohmann::json& entry = stats["cascades"][cascade];
+			CHECK(entry["index"] == cascade);
+			CHECK(entry["far"].get<float>() == doctest::Approx(frame.Cascades[cascade].Far));
+			CHECK(entry["texelSize"].get<float>() == doctest::Approx(frame.Cascades[cascade].WorldPerTexel));
+			shares += entry["screenShare"].get<double>();
+		}
+		CHECK(std::abs(shares - 1.0) <= 1e-3);
+		CHECK(std::abs(stats["surfaceShare"].get<double>() + stats["skyShare"].get<double>() - 1.0) <= 1e-6);
+		CHECK(stats["medianPixelsPerTexel"].get<double>() > 0.0);
+		CHECK_FALSE(stats.contains("note"));
+
+		// Without a shadowed sun: no cascades, with a note.
+		auto suns = harness.Context.GetActiveScene()->GetRegistry().view<DirectionalLightComponent>();
+		REQUIRE(suns.size() == 1);
+		const Entity sun(suns.front(), harness.Context.GetActiveScene().get());
+		harness.Run("component.set", { { "entity", UUIDToJson(sun.GetUUID()) }, { "component", "DirectionalLight" }, { "values", { { "CastShadows", false } } } });
+		harness.Capture(withView, &result);
+		CHECK(result["debugView"]["shadows"]["cascades"].empty());
+		CHECK(result["debugView"]["shadows"]["note"] == "no shadowed directional light");
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A capture waits until the sun's cascades fit the view, and a second capture equals it byte for byte")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.AddScene();
+		harness.Run("entity.create", { { "name", "Floor" }, { "components", { { "Transform", { { "Translation", { 0, -0.5, 0 } }, { "Scale", { 60, 1, 60 } } } },
+			{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::PlaneMesh) } } } } } });
+		// The Physics Playground's framing: high above the floor, the receivers 20-60 m away.
+		harness.Run("camera.set", { { "position", { 0, 22, 30 } }, { "target", { 0, 0, 0 } } });
+		const nlohmann::json parameters = { { "width", 128 }, { "height", 72 }, { "overlays", false } };
+		nlohmann::json first;
+		harness.Capture(parameters, &first);
+		CHECK(first["shadowFitSettled"] == true);
+		CHECK(first["waitedFrames"].get<int>() >= 1); // The first frame cannot know the receivers yet
+		CHECK(first["renderStats"]["shadowFit"]["fitted"] == true);
+		CHECK(first["renderStats"]["shadowFit"]["settled"] == true);
+		CHECK(first["renderStats"]["cascades"].size() == harness.Context.GetViewport().GetCaptureRenderer()->GetStats().CascadeCount);
+		CHECK(harness.Context.GetViewport().GetCaptureRenderer()->GetStats().ShadowFit);
+		// Each capture starts the fit again (ResetShadowFit) and waits for it alike. How many frames that takes follows how soon the
+		// GPU finishes each frame's readback (polled, never waited for), so only its bounds are checked: the pictures are equal.
+		nlohmann::json second;
+		harness.Capture(parameters, &second);
+		CHECK(second["shadowFitSettled"] == true);
+		CHECK(second["waitedFrames"].get<int>() >= 1);
+		CHECK(second["waitedFrames"].get<int>() <= 12); // EditorViewportCommands.cpp's c_MaxCaptureShadowFitFrames
+		CHECK(second["Image"]["Data"] == first["Image"]["Data"]);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

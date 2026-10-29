@@ -145,10 +145,12 @@
 				"MaxShadowedLocalLights": 8,
 				"MinProjectedPixels": 0.75,
 				"Preset": "Custom",
+				"ContactShadows": 16,
 				"ShadowCascades": 3,
+				"ShadowFilterQuality": "32",
 				"ShadowResolution": "1024"
 			},
-			"Version": 1
+			"Version": 2
 		},
 		"Scene.CollisionLayers": {
 			"Value": {

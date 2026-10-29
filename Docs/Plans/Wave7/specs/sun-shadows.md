@@ -1378,3 +1378,156 @@ toward the light, which only makes the classification more conservative), the ex
 the half-width PCSS analysis. Noted rather than changed: most lit ground under a sun below about 70 degrees is not
 classified lit (its own texels span each cell's range) and takes the 4-tap floor, so the early exit is mostly the
 umbra's (section 10, item 18).
+
+## 14. As built
+
+Step 0 landed with the names section 2.3 assumes (`RendererQualitySettings` and its `PresetRow` lines,
+`RendererQuality::ResolveShadowMapSize`, `SceneRenderer::GetShadowMapSize`, `m_ShadowMapLayers`, `ReleaseShadowMap()`,
+`InvalidateShadowCache()`, `ForThumbnails()`/`ForBake()`, the slot comment with SRV 28, 32 and 33, the look-dev shots by
+name). Differences found while building:
+
+- Step 1: the shadows view's CPU types live in `Strata/Renderer/ShadowView.h` (`ShadowCascadeStats`, `ShadowViewRatioStats`,
+  `ShadowViewStats`, and `ShadowView::GetBin`, `GetBinCenter`, `Summarize`, `SummarizeAll`, which the GPU test's CPU
+  histogram shares); `RenderData::ShadowViewParameters` is the three colors (48 bytes; the review fixes added the mask without `HasMask`, a white texture standing for none);
+  `SceneRenderOptions::ShadowViewColors` defaults to the theme's Malachite, Sulfur and Cinnabar. The view's draw and count
+  are `SceneRenderer::DrawShadowView` in `SceneRendererShadowView.cpp`. `Tools/LookDev.py capture --debug-view <view>`
+  takes the acceptance's statistics.
+- `graphics-options`' `c_RowTraits` is not on main yet: the rows' trait lines are added when that stream lands.
+- The worktree builds in its own `build/windows` (the stream brief), not `build/agent-sun-shadows`.
+- Step 2: the blue-noise tile uses a Gaussian of sigma 1.5, not 1.9 (at 1.9 an 8x8 block's mean strays up to 8.3 from
+  127.5, at 1.5 up to 4.6, 1.9 on average; `Renderer.BlueNoise` bounds the worst block at 6 and the mean at 2.5).
+  `ShadowFilterQuality` is an Enum field of "8", "16", "24" and "32" (the section refuses other values). The thin-caster
+  test's camera has a 40 degree field of view (at 60 the cascade's texels are 7.5 mm). The cascade seam test's check is
+  now the larger of the in-cascade step and a quarter pixel: the filter has no per-pixel noise any more.
+- Step 3: `SceneRendererStats::ScreenShadows` and `SceneRenderer::GetScreenShadowTexture` as specified; the mask's blur
+  constants are `SceneRenderer::c_ScreenShadowMaxBlurPixels` (8) and `c_ScreenShadowPlaneTolerance` (0.01). The test
+  comparing the mask with the per-pixel filter compares blurred pixels with the per-pixel result's mean along the edge
+  (17 pixels): a single per-pixel value carries the disk's grain (up to 0.12 at 16 taps), which the 0.08 bound cannot
+  hold. The silhouette test's pole is lit on its visible face (a sun from +Z): under a sun straight down its faces are
+  parallel to the light, whose receiver plane makes their visibility 0.5 (shaded by N.L = 0, so never seen). The TAA
+  suite's smoothing cases now bound the converged roughness at 0.9 of a frame's: with the mask, a frame's penumbra is
+  smooth already.
+- Step 4: the march and `FaceNormal` live in `Effects/ContactShadows.frag` (`ContactShadow` returns the occlusion and the
+  step's length on screen); the constants are `SceneRenderer::c_ContactShadowMaxScreenShare` (0.05),
+  `c_ContactShadowThickness` (0.02) and `c_ContactShadowThicknessScale` (0.005); `RenderScreenShadows` takes the frame's
+  constants for the shadow distance. `ContactShadows` is an Int field 0-32 whose description says 1-3 count as 4
+  (`Clamp`); the section stays at version 2 (one bump for the stream). The plate test's single cascade covers 400 m, not
+  200: at 200 its texels (0.37 m) are smaller than the plate's bounding sphere (0.43 m), so the plate was drawn as a
+  one-texel caster. The convex test reads the sun's share in HDR (an 8-bit image hides a whole shadow on faces lit at
+  grazing angles) and adds an 8-segment cylinder 2 m long: on the 16 x 8 sphere a ray leaving a face turned from the sun
+  near its sun-side edge crosses the face's plane only beyond that edge, where the next face bends away, so the sphere
+  cannot fail without the face test; the cylinder's long faces let the ray dip into them (it fails without the face test,
+  least share 0.0). The grain test measures the RMS along the contact shadow's edge (each column against its mean over
+  20 cm of the plate's length) instead of against a 9-pixel moving average, which reads the edge's own curvature as
+  noise: 1.4% with the blur by step length, 5.4% with a 1-pixel blur. The fade test's plate casts nothing into the
+  cascades. `GPU.SceneRenderer.GPUDriven`'s comparison renders every scene with 12 contact steps.
+  Contact shadows are a pass of their own, `Effects/ContactShadows.frag`, between the evaluation (which then writes B) and
+  the blur (B into A), not a block of `ScreenShadows.frag`: inside the evaluation the march made `GPU.ScreenShadows` 1.34
+  ms in `tp.scene` at 3840x2160 High (0.60 without it, step 3), the two parts' registers together; apart, with the steps
+  interpolated in clip space, their depth reads issued four at a time, steps more than two pixels' footprint in front of
+  the depth buffer's surface ended without the face's plane, and the start's face test asked only once a step hits, the
+  stage is 0.87 ms (contact shadows +0.27 ms). `ScreenShadowParameters` are the contact pass's push constants (the
+  evaluation has none); `Include/BlueNoise.glsl` holds the tile both passes read.
+  The blur radius by step length also goes to pixels whose march passed behind a surface by more than the thickness, not
+  only to those that hit: behind objects seen from the camera, whether a step lands within the thickness depends on the
+  per-pixel offset, and blurring only the hits left a stipple of unblurred lit pixels between them (the ThirdPerson
+  robot's arm over the floor in `tp.scene`, no AA); now that area is a smooth partial shadow, at the same cost.
+- Step 5: `Docs/Manual/Graphics.md` and `graphics-options`' `c_RowTraits` are not on main, so the rows' trait lines and
+  table lines wait for that stream's landing (merge notes). The AGENTS.md bullet leaves out "cascade layouts come only
+  from `ShadowFitTracker` on the CPU" until step 6 builds the tracker. Saving the samples' scenes through the editor also
+  dropped their old copy of the collision layers (the projects' `Scene.CollisionLayers` hold them).
+- Step 6: `SceneRendererShadowFit.cpp` holds `UpdateShadowFit`, `RecordShadowFit` and `SubmitShadowFitReadback`;
+  `Renderer/ShadowFit.h` `ShadowFitView`, `ShadowFitReadback`, `ShadowFitCascade`, `ShadowFitLayout` and
+  `ShadowFitTracker` (its layout holds the slices, their spheres and the fitted squares, which `FindShadowCasters` turns
+  into `m_Cascades`; `GetUnfittedLayout` is 0.6.0's, `GetSplit` the split formula). `UpdateShadowFit` also computes the
+  light's view (moved from `FindShadowCasters`), so the tracker has it before culling. Differences from D11-D13:
+  - `ShadowFit.comp` reconstructs view-space positions through the frame's `InverseProjection` (the rotation-only `View`
+    makes that the camera's view space directly); a thread reduces a 4 x 4 block of pixels in registers before the
+    group's shared copy (neighbors mostly share a bin), so a group covers 64 x 64 pixels.
+  - Bounds come from the readback's `Nearest`/`Farthest` as rule 3 says (not re-projected); the bins' re-projected
+    distances decide which bins reach a slice, the first slice's from 0 (the first cascade is selected for everything
+    nearer than its split).
+  - A fitted square keeps its center while it holds the receivers by the filter's reach, and is centered on them (on its
+    texels) only otherwise. Without this, temporal anti-aliasing's jitter moved the receivers' box by sub-pixel amounts
+    every frame, the snapped center flipped by a texel, and a still view redrew its cascades every frame (the
+    `GPU.SceneRenderer.ShadowFit` still-camera case checks the cache with TAA too).
+  - A light that stops casting (`ShadowLight.Enabled` false, also intensity 0) starts a new epoch. `RenderSunlight`
+    (tests) renders its lit and dark frames that way, so its shadowed frames are unfitted; the fit's own tests compare
+    against a second renderer instead.
+  - `HDROutput` frames submit the fit's readback too (the spec turned the fit off for them instead: a renderer with the
+    fit on may still render one).
+  - `DescribeRenderStats`' cascades also carry `fitted`.
+  - The perf metrics `ScreenShadows4K*` and `ShadowRedraw4K*` are measured by step 0's case "Render cost of 100,000 cubes
+    whose shadows cover a 4K view, at Medium and at High", which is exactly the scene section 7 describes (cascade cache
+    off, Medium and High at 3840x2160): no second case renders it again.
+  - Tests: "A high camera gets finer texels" compares the shadows view's median (fitted at most 0.6 of unfitted) at
+    2048 x 4, not `Cascades[0].WorldPerTexel`: the fitted first cascade is a different slice (from about 13 m instead of
+    the near clip), whose texels are coarser than 0.6.0's first cascade's while those of the cascades holding the
+    receivers are finer. Suites whose cases compare frames of a renderer, or of renderers whose frames are not waited for,
+    turn the fit off with a comment: the filter, mask and contact suites' helpers (spec-listed), the TAA suites' helper,
+    the motion suite's helper, the cascade cache cases (`GPU.SceneRenderer.Shadows`, `.Quality`), the seam, band and fade
+    cases (0.6.0's splits), the pre-exposure case, the extraction determinism case, an animation case, Medium's contact
+    case. `GPU.Editor.Viewport` cases that count their capture's frames for another reason turn their sun's shadows off
+    (`TurnOffSunShadows`) or give the scene an unshadowed sun (the preview's sun casts shadows).
+  - The revealed floor of D13's tests fails without the last cascade reaching `D` (lit beyond `F`), but not without
+    containment: the wall's fitted squares, as wide as the view at the wall, hold the floor beyond it too. Containment's
+    must-fail case is "A floor that appears beside what the readback saw": a box alone on screen fits small squares, then
+    the floor is drawn; without containment its pixels at the first slices' distances, outside their squares, are lit
+    (sun share 1.0), with it they fall to the last cascade (shadowed).
+  - Two corrections after the first acceptance run (ow.scene, the flying camera over the forest, read 2.28 against 2.09
+    before the fit, 9.4% of its receivers above 4, its fitted range starting at the near clip): the transparent surfaces'
+    near bound took their bounds' center depth less half their diagonal, which the sea's water put behind the camera;
+    it is now where the view can see the bounds at the nearest (the larger of the nearest corner's depth and the distance
+    times the cosine of the view's half diagonal). And the near bound leaves out the nearest receivers while together they
+    hold under 1% of the receiver pixels (`ShadowFitTracker::c_NearOutlierShare`; a tree top at the camera), which needs a
+    pixel count per bin (`ShadowFitBin::Pixels`, `ShadowFitResult` 2,256 bytes); they are left out of the squares too, and
+    containment shades them from a coarser cascade.
+  - Acceptance (look-dev `step6-shadowview3`, High, TAA, the shadows view's median screen pixels per texel and share above
+    4, 3840x2160 and 1920x1080 alike): tp.scene 1.24 (0%), tp.editor 0.31 (0%; most receivers in the second and third
+    cascades now, not the last), pp.scene 0.81 (0%), pp.editor 0.62 (0%), ow.scene 1.35 (0%; before: 1.76, 2.09, 2.48,
+    1.92, 2.09 with 2.1% above 4). ow.editor has no receiver within the shadow distance (as before). No sample needed its
+    Cascade Distribution changed.
+- Finish: the A/Bs of section 7 (look-dev `ab/`, three interleaved pairs against cc9524a1's Release built from `git
+  archive`, each run under `Tools/PerfLock.py`, TAA, medians of the pairs, base / branch): 3840x2160 High GPU busy
+  tp.scene 1.966 / 2.533 ms (1.29x), pp.scene 1.329 / 1.855 (1.40x), ow.scene 1.390 / 1.768 (1.27x), with
+  `GPU.ScreenShadows` 0.780, 0.568, 0.463 ms and `GPU.Opaque` 0.399 / 0.219, 0.270 / 0.212, 0.303 / 0.235; 1920x1080
+  Medium tp.scene 0.570 / 0.671 (1.18x), pp.scene 0.494 / 0.589 (1.19x), ow.scene 0.562 / 0.633 (1.13x), with
+  `GPU.ScreenShadows` 0.138, 0.091, 0.085 and `GPU.Opaque` 0.094 / 0.064, 0.098 / 0.087, 0.129 / 0.117. Medium at 1080
+  exceeds section 7's 1.08x: the cause is the stage (the evaluation pass above all: the blur's clip-space rewrite saved
+  0.01-0.03 ms at 4K, and the reduction is one compute pass over the depth), not the forward pass. Not resolved in this
+  stream (open problem in the landing report): skipping pixels that face away from the sun is not safe (the forward pass
+  lights with the shading normal, which the mask does not have), and per-pass timers inside the stage are the next step.
+- Review fixes (an independent review of the branch; each behavior fix in its own commit with a regression test that fails
+  without it, but the contact shadows' lit specks, shown by look-dev only):
+  - Contact shadows: `FaceNormal` orients faces by the view ray (`GetViewVector`), so orthographic views get them right;
+    the march's reach is solved in perspective (`r = M w0 / (B - M D.w)`), so marches toward the camera are shortened,
+    never dropped, and no longer over- or under-shortened; pixels whose march passed near an occluder (a surface standing
+    off the start's plane toward the sun by more than the thickness) take the blur radius too, so a contact shadow's
+    edges have no lit specks. Fringes beside thin foliage (marches passing behind a leaf thinner than the assumed
+    thickness) remain: an open problem.
+  - `BlueNoise()` returns `(k + 0.5) / 256` (the R8_UNORM tile reads as `k / 255`); `Debug/BlueNoise.comp` and
+    `GPU.Renderer.BlueNoise` check it.
+  - Near outliers stay out of the fit only where the last cascade's sphere still holds them (`N <= D k`); narrow and
+    orthographic views keep them (`ShadowFitTracker::GetFittedNearest`, `GetSphereReach`).
+  - The mask's evaluation gives the tent's partly lit edge pixels on receivers the sun grazes (`|n.L| < 0.5`) a blur
+    radius of a stretched texel's footprint, at most 4 pixels, once it exceeds 1.5 pixels (`ReceiverTexelPixels`): the
+    saw teeth under the Open World's pine tiers are gone. It costs `GPU.ScreenShadows` 0.02-0.03 ms at Medium 1080.
+  - The shadows view darkens its colors by the mask (SRV 23, white without one; `ShadowViewParameters` stays 48 bytes,
+    the white texture standing for `HasMask`).
+  - Section 7's first lever (the fit's reduction on every second row and column) was measured and not kept: the pass is
+    0.011-0.012 ms at Medium 1080 with and without it, all fixed costs.
+  - Measured for the review (look-dev under `wave7-plan/lookdev/sun-shadows/review-*`): the final A/B (`review-ab-final`,
+    three interleaved pairs against cc9524a1 under PerfLock, TAA, medians, base / branch) at 1920x1080 Medium tp.scene
+    0.561 / 0.697 ms (1.24x), pp.scene 0.497 / 0.592 (1.19x), ow.scene 0.564 / 0.650 (1.15x), `GPU.ScreenShadows` 0.160,
+    0.113, 0.116; at 3840x2160 High 1.971 / 2.592 (1.32x), 1.321 / 1.874 (1.42x), 1.393 / 1.839 (1.32x), the stage 0.829,
+    0.612, 0.535. Medium stays above section 7's 1.08x and the wave's 1.15x, and the stage above steps 3 and 4's 0.35
+    and 0.45 ms targets: unmet. Timed apart at Medium 1080 the evaluation is 0.07-0.12 ms, the blur 0.035-0.046 ms, the
+    reduction 0.011 ms (`review-stages2`); what remains to cut is in the evaluation (its range reads and tent run for most
+    lit pixels), which no lever keeps Medium's sample counts for. The noise measure (`shadows/tools/noise.py`, row 1450,
+    x 1170-1290 of tp.scene at 3840x2160) gives 1.6% of the contrast at High and Medium with no AA, FXAA and TAA alike:
+    the same in every mode, so it is the edge's own profile against the 9-pixel average, not grain (0.6.0: 4.6% no AA,
+    1.6% TAA); the step 2 and 3 targets (2.5%, 1.0% High, 1.5% Medium) are met at 2.5% and missed by that profile at 1.0%
+    and 1.5%. The low-sun, thin-caster, water and editor shots (`review-final`) show no acne, peter-panning or lost
+    shadows; `tp.live.pan` and `ow.live.tour` (`review-before`, four frames each) show no change of near shadows'
+    sharpness. Not measured: the per-cascade baseline of step 1, the identical-PNG check, the CastShadows-off GPU.Opaque
+    comparison, lookdev.contact's strip share, and the step 6 day-cycle tour beyond four frames.

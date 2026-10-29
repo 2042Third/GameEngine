@@ -653,6 +653,7 @@ TEST_SUITE("PerfGPU.Renderer")
 		Perf::AddCameraAndLight(scene, 4.0f * halfExtent);
 		Perf::CreateCubeGrid(scene, c_Count);
 		const bool measuresGPU = Perf::MeasuresGPU();
+		std::array<double, 2> redrawMs = {}; // GPU.Shadows at Medium and High
 		for (const RendererQualityPreset preset : { RendererQualityPreset::Medium, RendererQualityPreset::High })
 		{
 			CAPTURE(RendererQuality::PresetToString(preset));
@@ -662,22 +663,36 @@ TEST_SUITE("PerfGPU.Renderer")
 			SceneRenderer renderer(specification);
 			renderer.SetViewportSize(c_Width4K, c_Height4K);
 			CHECK(renderer.GetShadowMapSize() == (preset == RendererQualityPreset::High ? 4096u : 2048u));
-			const std::string key = preset == RendererQualityPreset::High ? "PerfGPU.Renderer.Render100kCubesShadowedHigh4K"
-				: "PerfGPU.Renderer.Render100kCubesShadowed4K";
+			const bool high = preset == RendererQualityPreset::High;
+			const std::string key = high ? "PerfGPU.Renderer.Render100kCubesShadowedHigh4K" : "PerfGPU.Renderer.Render100kCubesShadowed4K";
+			// The render cost of the sun's shadows: GPU.ScreenShadows (the mask, its blur, contact shadows at High and the
+			// cascades' fit to the view) and GPU.Shadows with every cascade drawn and its depth ranges built.
+			const std::string screenKey = high ? "PerfGPU.Renderer.ScreenShadows4KHigh" : "PerfGPU.Renderer.ScreenShadows4KMedium";
+			const std::string redrawKey = high ? "PerfGPU.Renderer.ShadowRedraw4KHigh" : "PerfGPU.Renderer.ShadowRedraw4KMedium";
 			std::vector<std::string> keys = { key };
 			if (measuresGPU)
-				keys.push_back(key + "GPU");
+				keys.insert(keys.end(), { key + "GPU", screenKey, redrawKey });
 			Perf::CheckBudgetsConfirmed(keys, [&]
 			{
 				const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(c_Count), key);
 				CHECK(GetDrawnCounts(renderer).Instances == c_Count);
 				CHECK(renderer.GetStats().CachedCascadeMask == 0u);
+				CHECK(renderer.GetStats().ScreenShadows);
 				Perf::MetricValues values { { key, measurement.CPU.MedianMs } };
 				if (measuresGPU)
+				{
 					values.emplace(key + "GPU", Perf::MeasureGPU(measurement));
+					values.emplace(screenKey, MedianGPUStageMs("GPU.ScreenShadows"));
+					values.emplace(redrawKey, MedianGPUStageMs("GPU.Shadows"));
+				}
 				return values;
 			});
+			if (measuresGPU)
+				redrawMs[high ? 1 : 0] = MedianGPUStageMs("GPU.Shadows");
 		}
+		// High draws four times Medium's texels with the same casters: its redraw should cost at most about 3.5 times as much.
+		if (measuresGPU && redrawMs[0] > 0.0)
+			MESSAGE("GPU.Shadows High / Medium: ", redrawMs[1] / redrawMs[0]);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

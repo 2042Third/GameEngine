@@ -4,7 +4,7 @@ editors, and the comparison of two sets of them.
 
   python -I Tools/LookDev.py capture --build <bin dir> [--label <text>] [--output <dir>] [--projects a,b] [--shots <glob>]
          [--sizes 3840x2160,1920x1080] [--aa taa,fxaa,off] [--quality project|low|medium|high|ultra] [--repeat 5] [--live]
-         [--keep-work] [--work <dir> [--fresh-work]]
+         [--debug-view none|streaming|lod|mip|motion|shadows] [--keep-work] [--work <dir> [--fresh-work]]
   python -I Tools/LookDev.py compare <before dir> <after dir> --output <dir>
   python -I Tools/LookDev.py selftest --build <bin dir> --output <dir>
 
@@ -49,6 +49,9 @@ AA_MODES = {
     "off": {"AntiAliasing": False},
 }
 QUALITIES = ("project", "low", "medium", "high", "ultra")
+# viewport.capture's debug views: the stills of a run show one of them, and its result's debugView (with the shadows view's
+# statistics) is kept with each repeat's stats.
+DEBUG_VIEWS = ("none", "streaming", "lod", "mip", "motion", "shadows")
 CROP_SCALE = 4
 CALL_TIMEOUT_MS = 300000
 OPEN_TIMEOUT_MS = 900000
@@ -502,7 +505,7 @@ def open_scene(editor, scene, load_world):
                     OPEN_TIMEOUT_MS)
 
 
-def capture_still(editor, shot, size, mode, repeat, quality, output, work):
+def capture_still(editor, shot, size, mode, repeat, quality, output, work, debug_view="none"):
     """Every repeat of a shot at a size and mode: their results (without the image), the first saved in shots/."""
     results = []
     name = shot_file_name(shot, size, mode)
@@ -512,6 +515,8 @@ def capture_still(editor, shot, size, mode, repeat, quality, output, work):
         params.update({"width": size[0], "height": size[1], "overlays": False, "path": str(path), "overwrite": True})
         if quality != "project":
             params["quality"] = quality
+        if debug_view != "none":
+            params["debugView"] = debug_view
         result = editor.call("viewport.capture", params)
         result.pop("Image", None)
         result["file"] = str(path)
@@ -680,7 +685,7 @@ def capture_command(args):
     log = open(output / "run.log", "w", encoding="utf-8")
     children = Children(args.build, work, log)
     run = {"date": datetime.datetime.now().isoformat(timespec="seconds"), "label": args.label, "build": str(Path(args.build).resolve()),
-           "version": children.version(), "options": {"sizes": args.sizes, "aa": modes, "quality": args.quality, "repeat": args.repeat,
+           "version": children.version(), "options": {"sizes": args.sizes, "aa": modes, "quality": args.quality, "debugView": args.debug_view, "repeat": args.repeat,
            "live": args.live, "projects": args.projects, "shots": args.shots}, "editor": None, "projects": {}, "shots": []}
     records = []
     failed = []
@@ -734,7 +739,7 @@ def capture_command(args):
                                     editor.call("component.set", {"entities": post_process, "component": "PostProcess", "values": AA_MODES[mode]})
                                 for size in sizes:
                                     print(f"  {shot['Name']} {size[0]}x{size[1]} {mode}", flush=True)
-                                    results = capture_still(editor, shot, size, mode, args.repeat, args.quality, output, work)
+                                    results = capture_still(editor, shot, size, mode, args.repeat, args.quality, output, work, args.debug_view)
                                     name = shot_file_name(shot, size, mode)
                                     records.append({"shot": shot["Name"], "size": f"{size[0]}x{size[1]}", "mode": mode, "results": results, "name": name})
                                     postprocess_tasks.append((name, (results[0]["file"], [result["file"] for result in results[1:]],
@@ -908,7 +913,7 @@ def selftest_command(args):
             problems.append(f"PNG filter type {kind} is not undone")
 
     capture = argparse.Namespace(build=args.build, label="selftest", output=str(output / "capture"), projects="LookDev",
-                                 shots="lookdev.contact", sizes="320x180", aa="fxaa", quality="project", repeat=2, live=False,
+                                 shots="lookdev.contact", sizes="320x180", aa="fxaa", quality="project", debug_view="none", repeat=2, live=False,
                                  live_only=False, keep_work=False, work=None, fresh_work=False)
     code = capture_command(capture)
     if code != 0:
@@ -965,6 +970,7 @@ def main():
     capture.add_argument("--sizes", default="3840x2160,1920x1080")
     capture.add_argument("--aa", default="taa,fxaa,off")
     capture.add_argument("--quality", default="project")
+    capture.add_argument("--debug-view", default="none", choices=DEBUG_VIEWS, help="the debug view the stills show")
     capture.add_argument("--repeat", type=int, default=5)
     capture.add_argument("--live", action="store_true", help="also the live shots (windowed editors)")
     capture.add_argument("--live-only", action="store_true", help="only the live shots")

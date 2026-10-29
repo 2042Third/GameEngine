@@ -217,11 +217,23 @@ namespace Strata
 			nlohmann::json tileSizes = nlohmann::json::array();
 			for (uint32_t light = 0; light < stats.LocalShadowLights && light < stats.LocalShadowTileSizes.size(); light++)
 				tileSizes.push_back(stats.LocalShadowTileSizes[light]);
+			// The sun's cascades as the frame laid them out: each one's slice of view distances and texel size (world units).
+			nlohmann::json cascades = nlohmann::json::array();
+			for (uint32_t cascade = 0; cascade < stats.CascadeCount && cascade < stats.Cascades.size(); cascade++)
+			{
+				const ShadowCascadeStats& slice = stats.Cascades[cascade];
+				cascades.push_back({ { "near", slice.Near }, { "far", slice.Far }, { "texelSize", slice.WorldPerTexel }, { "fitted", slice.Fitted } });
+			}
 			return {
 				// What the frame drew with: the Renderer.Quality section's fields and values (project.setSettings takes them), the
 				// sun's cascades' size and each shadowed point and spot light's tile.
 				{ "quality", RendererQuality::ToSectionValue(stats.Quality) },
 				{ "shadowMapSize", stats.ShadowMapSize },
+				{ "cascades", std::move(cascades) },
+				// Whether the cascades were fitted to what the view shows (the slices to the receivers' range, the squares to their
+				// extent) and the fit settled, and the range the slices divide.
+				{ "shadowFit", { { "fitted", stats.ShadowFit }, { "squaresFitted", stats.ShadowFitSquares }, { "settled", stats.ShadowFitSettled },
+					{ "near", stats.ShadowFitNear }, { "far", stats.ShadowFitFar } } },
 				{ "localShadowTileSizes", std::move(tileSizes) },
 				{ "gpuDriven", stats.GPUDriven },
 				{ "gpuCounts", stats.GPUDriven && gpu.HasCounters },
@@ -889,12 +901,15 @@ namespace Strata
 			"stages inside the frame time added up per frame), untimed (the rest of each frame, work no stage accounts for) and jobs (worker, "
 			"I/O and background threads (imports, exports), how busy they were in percent, running and queued jobs now). gpu is the GPU's side of "
 			"the same frames, known 2-3 frames late: frames (with GPU times), latencyFrames, busy (the GPU stages added up per frame), stages (per GPU "
-			"stage: GPU.Uploads, GPU.Setup, GPU.Cull, GPU.Shadows, GPU.Prepass, GPU.AO, GPU.Reflections (reflection probes' conversions, screen-space reflections), "
+			"stage: GPU.Uploads, GPU.Setup, GPU.Cull, GPU.Shadows, GPU.Prepass, GPU.ScreenShadows (the sun's shadow mask), GPU.AO, GPU.Reflections (reflection probes' conversions, screen-space reflections), "
 			"GPU.Opaque (with the sky), GPU.Transparent, GPU.TAA (motion vectors' history and temporal anti-aliasing), GPU.Post, "
 			"GPU.Overlays, GPU.UI (the game UI), GPU.ImGui) and boundBy: gpu when the GPU's median busy time takes at least 90% of the median frame interval and exceeds "
 			"the CPU's frame time, cpu when the CPU's does, capped when neither does (vsync or a frame-rate cap sets the pace), unknown without GPU "
 			"times. renderStats is the viewport's latest frame (null while it renders none): quality (the Graphics Quality it drew with, as "
-			"project.settings shows Renderer.Quality), shadowMapSize (the sun's cascades' texels), localShadowTileSizes (each shadowed point and spot "
+			"project.settings shows Renderer.Quality), shadowMapSize (the sun's cascades' texels), cascades (each sun cascade's slice near and far in "
+			"meters of view distance, texelSize in meters, and fitted: its square follows the receivers rather than its slice's sphere), shadowFit "
+			"(fitted: the cascades are laid out over the receivers the frame's depth showed; squaresFitted; settled: no readback is due that may "
+			"change them; near and far: the range the slices divide), localShadowTileSizes (each shadowed point and spot "
 			"light's tile), gpuDriven (the GPU culled the frame and built its draws: "
 			"its counts are the GPU's, of a frame 2-3 frames older, once gpuCounts is true; transparent surfaces are the CPU's), feedbackRequests (its "
 			"asset requests came from the GPU's visibility feedback of an earlier frame, not from the CPU walking the view), drawCommands (draw "

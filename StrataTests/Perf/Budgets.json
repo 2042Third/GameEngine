@@ -216,5 +216,9 @@
 	"PerfGPU.Renderer.LocalShadows16LightsGPU": { "Measured": 1.558, "Budget": 2.337, "Unit": "ms" },
 	"PerfGPU.Renderer.LocalShadows16LightsCached": { "Measured": 0.2214, "Budget": 0.3321, "Unit": "ms" },
 	"PerfGPU.Renderer.LocalShadows16LightsCachedGPU": { "Measured": 1.252, "Budget": 1.878, "Unit": "ms" },
-	"PerfGPU.Renderer.TAALocalShadowsPeakMemory": { "Measured": 528.4, "Budget": 792.5, "Unit": "MB" }
+	"PerfGPU.Renderer.TAALocalShadowsPeakMemory": { "Measured": 528.4, "Budget": 792.5, "Unit": "MB" },
+	"PerfGPU.Renderer.ScreenShadows4KHigh": { "Unit": "ms", "Provisional": true, "Target": 0.45 },
+	"PerfGPU.Renderer.ScreenShadows4KMedium": { "Unit": "ms", "Provisional": true, "Target": 0.3 },
+	"PerfGPU.Renderer.ShadowRedraw4KHigh": { "Unit": "ms", "Provisional": true, "Target": 1.0 },
+	"PerfGPU.Renderer.ShadowRedraw4KMedium": { "Unit": "ms", "Provisional": true }
 }

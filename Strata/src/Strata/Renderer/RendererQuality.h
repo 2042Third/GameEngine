@@ -66,6 +66,11 @@ namespace Strata
 		// not drawn in the view, by either path: they add moire and GPU time, not information. 0 draws them all. Shadow
 		// cascades leave out casters below a texel (SceneRendererStats::SubTexelCasters).
 		float MinProjectedPixels = 0.5f;
+		// Taps of the sun's shadow edges where their penumbra is wider than a shadow texel (a Vogel disk turned by a fixed
+		// blue-noise tile, Include/Shadows.glsl): 8, 16, 24 or 32. More taps, less grain.
+		uint32_t ShadowFilterQuality = 16;
+		// Steps of the sun's screen-space contact shadows (0 off; else 4 to 32), which ground objects below the cascades' detail.
+		uint32_t ContactShadows = 0;
 
 		// Every member equal, Preset included.
 		bool operator==(const RendererQualitySettings& other) const = default;
@@ -77,7 +82,7 @@ namespace Strata
 	namespace RendererQuality
 	{
 		constexpr std::string_view c_SectionId = "Renderer.Quality";
-		constexpr uint32_t c_SectionVersion = 1; // Each landing of a row adds one (Docs/DeveloperGuide.md, "Quality settings")
+		constexpr uint32_t c_SectionVersion = 2; // Each landing of a row adds one (Docs/DeveloperGuide.md, "Quality settings")
 		constexpr uint32_t c_HighResolutionRows = 1440;
 		constexpr uint32_t c_MaxShadowMapSize = 8192; // The most texels each way of a cascade (SceneRenderer applies it)
 

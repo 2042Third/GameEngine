@@ -233,6 +233,8 @@ namespace Strata
 		m_StreamingView.Build(*scene, settings.DebugView, view.Camera, m_Renderer->GetLODCriteria(), settings.DebugColors, m_DebugDraw);
 		options.EntityTints = m_StreamingView.GetTints();
 		options.ShowMotionVectors = settings.DebugView == ViewportDebugView::Motion;
+		options.ShowShadowView = settings.DebugView == ViewportDebugView::Shadows;
+		options.ShadowViewColors = settings.DebugColors.ShadowRatio;
 		if (!m_DebugDraw.IsEmpty())
 			options.DebugShapes = &m_DebugDraw;
 

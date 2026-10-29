@@ -244,9 +244,15 @@ namespace Strata
 				"along the surface normal in shadow-map texels: raise it against acne on surfaces at grazing angles to the light"))
 			.Property("CascadeBlend", &DirectionalLightComponent::CascadeBlend,
 				WithTooltip(Slider(0.0f, DirectionalLightComponent::c_MaxCascadeBlend), "Fraction of each shadow cascade's depth range over which it blends into the next one, "
-					"hiding the seams between them; the last one fades out by the Shadow Distance. 0 switches at once"));
-		SetInactiveReasons<DirectionalLightComponent>({ "ShadowDistance", "ShadowSoftness", "ShadowBias", "ShadowNormalBias", "CascadeBlend" },
-			&WithShadows<DirectionalLightComponent>);
+					"hiding the seams between them; the last one fades out by the Shadow Distance. 0 switches at once"))
+			.Property("ContactShadowLength", &DirectionalLightComponent::ContactShadowLength,
+				WithTooltip(Range(0.0f, DirectionalLightComponent::c_MaxContactShadowLength, 0.01f), "Meters toward the light over which contact "
+					"shadows ground objects smaller than the shadow cascades' texels (Graphics Quality's Contact Shadows, High and Ultra); 0 off"))
+			.Property("CascadeDistribution", &DirectionalLightComponent::CascadeDistribution,
+				WithTooltip(Slider(0.0f, 1.0f), "How the cascades share the distance from the nearest to the farthest surface the camera sees: "
+					"0 evenly, 1 each cascade the same ratio farther than the previous. Higher puts more detail near the camera"));
+		SetInactiveReasons<DirectionalLightComponent>({ "ShadowDistance", "ShadowSoftness", "ShadowBias", "ShadowNormalBias", "CascadeBlend", "ContactShadowLength",
+			"CascadeDistribution" }, &WithShadows<DirectionalLightComponent>);
 
 		ComponentRegistry::Register<PointLightComponent>("PointLight")
 			.DisplayName("Point Light")

@@ -277,9 +277,12 @@ TEST_SUITE("GPU.RenderScene")
 		}
 		const SceneCamera camera = ViewFrom(glm::vec3(10.0f, 60.0f, 90.0f), glm::vec3(0.0f), 1000.0f);
 
-		// The CPU path's extraction (the GPU path builds its draws on the GPU).
+		// The CPU path's extraction (the GPU path builds its draws on the GPU). The cascades' casters are compared frame after
+		// frame of renderers whose frames are not waited for: their layout must not follow readbacks that arrive as the GPU
+		// finishes.
 		SceneRendererSpecification specification;
 		specification.GPUDriven = GPUDrivenMode::Off;
+		specification.FitShadowsToView = false;
 		SceneRenderer reference(specification);
 		reference.SetViewportSize(c_Size, c_Size);
 		REQUIRE(reference.Render(scene, camera));

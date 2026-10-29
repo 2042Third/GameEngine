@@ -97,6 +97,18 @@ namespace
 		return TextOf(PageKey("CustomTooltip"));
 	}
 
+	// Scrolls the page to its end, where Reset to Defaults is: a row per field of Renderer.Quality puts it below the
+	// window's bottom in the harness's 1600x900 display, where a click reaches nothing.
+	void ScrollPageToEnd(HarnessEditor& editor)
+	{
+		const std::optional<UI::ItemProbe::Item> row = UI::ItemProbe::Find(PageKey("Row.ShadowResolution"));
+		REQUIRE(row.has_value());
+		editor.Harness.MoveMouse(row->GetCenter());
+		editor.Frames(1);
+		editor.Harness.ScrollMouse(-50.0f); // Far past the end: the page's scroll stops there
+		editor.Frames(2);
+	}
+
 	// A layer that draws one page in a window, for pages no registered section shows (a test section's).
 	class PageLayer final : public Layer
 	{
@@ -130,7 +142,7 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		CreateProject(editor, "GraphicsQualityPage");
 		OpenGraphicsQuality(editor);
 
-		// Not the generic page's fields: the page's own table, a row per step-0 knob, a cell per preset and Custom's widget.
+		// Not the generic page's fields: the page's own table, a row per knob, a cell per preset and Custom's widget.
 		CHECK_FALSE(IsDrawn(PageKey("ShadowCascades")));
 		for (const RendererQuality::RowTraits& row : RendererQuality::GetRowTraits())
 		{
@@ -141,7 +153,7 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 				CHECK(IsDrawn(PageKey("Cell." + field + "." + preset)));
 			CHECK(IsDrawn(PageKey("Custom." + field)));
 		}
-		CHECK(RendererQuality::GetRowTraits().size() == 7);
+		CHECK(RendererQuality::GetRowTraits().size() == 9); // Shadows and detail (7), the sun's filter taps and contact shadows
 		// The project's preset, High (the default), is chosen: its header and cells on the accent's highlight.
 		for (const char* preset : { "Low", "Medium", "High", "Ultra", "Custom" })
 			CHECK(IsDrawn(PageKey(std::string("Preset.") + preset)));
@@ -247,6 +259,7 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		REQUIRE(editor.Click(PageKey("Preset.Low")));
 		editor.Frames(2);
 		REQUIRE(editor.Context().GetProject()->GetSettings().IsStored(RendererQuality::c_SectionId));
+		ScrollPageToEnd(editor);
 		REQUIRE(editor.Click(PageKey("Reset")));
 		editor.Frames(2);
 		CHECK_FALSE(editor.Context().GetProject()->GetSettings().IsStored(RendererQuality::c_SectionId));

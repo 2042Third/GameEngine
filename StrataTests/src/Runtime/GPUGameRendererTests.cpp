@@ -174,6 +174,61 @@ TEST_SUITE("GPU.Runtime.GameRenderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A game's sun cascades start their fit to the view again with each scene it shows and when its camera returns")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		WindowTarget target(gpu.GetNvrhiDevice());
+		const auto makeLevel = [](const char* name)
+		{
+			Ref<Scene> level = CreateRef<Scene>(name);
+			AddNeutralPostProcess(*level);
+			AddMesh(*level, BuiltinAssets::PlaneMesh, UUID::Null(), glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(40.0f);
+			AddMesh(*level, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f, 0.5f, 0.0f), "Cube");
+			AddSun(*level, glm::normalize(glm::vec3(-0.3f, -1.0f, -0.2f)), 2.0f);
+			Entity camera = level->CreateEntity("Camera");
+			camera.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 3.0f, 6.0f);
+			camera.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::normalize(glm::vec3(0.0f, -3.0f, -6.0f)));
+			camera.AddComponent<CameraComponent>();
+			return level;
+		};
+		const Ref<Scene> first = makeLevel("First");
+		const Ref<Scene> second = makeLevel("Second");
+		GameRenderer renderer;
+		const glm::uvec2 size(c_Size, c_Size);
+		const SceneRendererStats& stats = renderer.GetSceneRenderer().GetStats();
+		// Each frame waited for (the window's image read back), so the fit's readback of a frame arrives in the next one.
+		const auto render = [&](const Ref<Scene>& scene)
+		{
+			REQUIRE(renderer.Render(scene, target.Framebuffer, size));
+			target.Read();
+		};
+		const auto renderUntilFitted = [&](const Ref<Scene>& scene)
+		{
+			for (int frame = 0; frame < 8 && !stats.ShadowFit; frame++)
+				render(scene);
+			CHECK(stats.ShadowFit);
+		};
+		render(first);
+		CHECK_FALSE(stats.ShadowFit); // The first frame knows no receivers yet
+		renderUntilFitted(first);
+		// A level load: the previous level's receivers say nothing about it.
+		render(second);
+		CHECK_FALSE(stats.ShadowFit);
+		renderUntilFitted(second);
+		// The camera goes (the message shows) and comes back: its view is fitted afresh.
+		Entity camera = second->FindEntityByName("Camera");
+		camera.SetActive(false);
+		REQUIRE(renderer.Render(second, target.Framebuffer, size));
+		CHECK(renderer.IsShowingMessage());
+		camera.SetActive(true);
+		render(second);
+		CHECK_FALSE(stats.ShadowFit);
+		renderUntilFitted(second);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The perf log's Render columns hold what the game's frame drew, with the GPU's counts")
 	{
 		GPUContext gpu;

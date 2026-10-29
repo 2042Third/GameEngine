@@ -19,11 +19,18 @@ what each one costs:
 | Point and spot lights with shadows | 4 | 16 | 16 | 16 |
 | Level of detail error (pixels) | 2 | 1 | 1 | 0.5 |
 | Smallest drawn size (pixels) | 1 | 0.5 | 0.5 | 0.25 |
+| Sun shadow filter taps (wide soft edges) | 8 | 16 | 24 | 32 |
+| Contact shadow steps | Off | Off | 12 | 16 |
 | Shadow maps and atlas of one view, 1920 x 1080 | 28 MiB | 128 MiB | 128 MiB | 512 MiB |
 | Shadow maps and atlas of one view, 3840 x 2160 | 28 MiB | 128 MiB | 320 MiB | 1.25 GiB |
 
-- **Medium** draws what Strata 0.6.0 drew. **High**, the default, is Medium on screens below 1440 rows and sharper sun
-  shadows from 1440 rows on. **Ultra** is for large GPUs; **Low** for older and integrated ones.
+- **Medium** keeps Strata 0.6.0's shadow map sizes and sample counts, without contact shadows. **High**, the default,
+  adds smoother wide sun penumbrae and contact shadows at every size, and sharper sun shadows from 1440 rows on.
+  **Ultra** is for large GPUs; **Low** for older and integrated ones.
+- **Sun shadow filter taps** smooth the sun's soft shadow edges where they are wider than a shadow texel, and
+  **contact shadows** ground small objects the shadow maps are too coarse for (each sun's Contact Shadow Length sets
+  how far they reach: [Lighting.md](Lighting.md#shadows)). Neither takes memory of its own; both cost GPU time in the
+  `GPU.ScreenShadows` stage.
 - **Custom** sets each value yourself: the table's Custom column is editable. Choosing a preset keeps your Custom values
   for later, and the column keeps showing them. Editing it while a preset is chosen switches to Custom, starting from
   the values the column shows: your earlier Custom values, or that preset's when you have none (its tooltip says which).

@@ -173,8 +173,15 @@ editor started with `--no-gpu` (use `--headless`):
   (green: as needed, blue 1 level short, yellow 2, red 3+ or still loading; textures stream their mip levels to what
   the screen shows, so a picture taken right after the camera moved may be blurry where it is red); `"motion"` colors
   every pixel by how it moved since the view's previous frame (hue: direction, right red, up yellow-green, left cyan, down
-  violet; strength: speed, full at 16 pixels a frame; still pixels darkened: useful while playing); `"none"` is the
-  plain image. Pass it to `viewport.capture` for one picture, or set it for the viewport with
+  violet; strength: speed, full at 16 pixels a frame; still pixels darkened: useful while playing); `"shadows"` colors
+  every surface by how many screen pixels one texel of the sun's shadow cascade there spans (green at most 1, yellow 2,
+  red 4 and more; a checker shows the texels where they are coarse), draws the cascades' edges white and hatches their
+  blend bands, veils what no cascade covers in gray and darkens the sky, and the result's `debugView.shadows` reports
+  `{complete, shadowMapSize, surfaceShare, skyShare, uncoveredShare, medianPixelsPerTexel, p10PixelsPerTexel,
+  p90PixelsPerTexel, aboveFourShare, cascades: [{index, near, far, texelSize, screenShare, medianPixelsPerTexel, ...}]}`
+  (shares of the image; pixels per texel over covered receivers: about 1 or less means shadows as fine as the screen; the
+  cascades follow what the view shows a few frames late, and a capture waits for them: `shadowFitSettled` in its result);
+  `"none"` is the plain image. Pass it to `viewport.capture` for one picture, or set it for the viewport with
   `viewport.setSettings {"debugView": ...}` (it then colors the person's viewport too, also the Game view). The result's
   `debugView` counts what it found among the entities in view: `{view, tintedEntities, pendingEntities, failedEntities,
   placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+], lodErrorPixels: [the largest error in pixels drawn at each of
@@ -489,7 +496,8 @@ time: presenting, and the wait for the display's image at the back buffer's firs
 
 **Render statistics and GPU time**: `editor.perf` also has `gpu` (`frames` with GPU times, `latencyFrames`: they arrive
 2-3 frames late, `busy`, `stages` per GPU stage: `GPU.Uploads`, `GPU.Setup`, `GPU.Cull`, `GPU.Shadows`, `GPU.Prepass`,
-`GPU.AO`, `GPU.Reflections` (reflection probes' conversions, screen-space reflections), `GPU.Opaque` (with the sky),
+`GPU.ScreenShadows` (the sun's shadow mask, its blur, contact shadows and the cascades' fit to the view), `GPU.AO`,
+`GPU.Reflections` (reflection probes' conversions, screen-space reflections), `GPU.Opaque` (with the sky),
 `GPU.Transparent`, `GPU.TAA` (motion vectors' history, temporal anti-aliasing), `GPU.Post`, `GPU.Overlays`, `GPU.UI` (the
 game UI), `GPU.ImGui`) and `boundBy`: `"gpu"`
 (the GPU's median busy time takes at least 90% of the frame interval and exceeds the CPU's frame time: make the scene
@@ -497,7 +505,11 @@ cheaper to draw), `"cpu"` (the CPU's frame time does: look at `stages`), `"cappe
 pace: neither is the limit) or `"unknown"` (no GPU times: `--no-gpu`, or a driver without timestamps). Its `renderStats`
 (`gameRenderStats` for the Game view's frame, null while it is hidden; and every `viewport.capture` result's, for the
 captured frame) says what a frame drew: `quality` (the Graphics Quality it drew with, as `project.setSettings` takes
-it), `shadowMapSize` (the sun's cascades' texels), `localShadowTileSizes` (each shadowed point and spot light's tile),
+it), `shadowMapSize` (the sun's cascades' texels), `cascades` (each sun cascade's slice `near`/`far` in meters of view
+distance, `texelSize` in meters and `fitted`: its square follows the receivers rather than its slice's sphere),
+`shadowFit` (`fitted`: the cascades are laid out over the receivers the frame's depth showed; `squaresFitted`, `settled`:
+no readback is due that may change them; `near`, `far`: the range the slices divide), `localShadowTileSizes` (each
+shadowed point and spot light's tile),
 `gpuDriven` (the GPU culled it
 and built its draws: its counts are the GPU's, of a frame 2-3 frames older in `editor.perf` and of the captured frame in
 captures, once `gpuCounts` is true), `feedbackRequests` (its asset requests came from the GPU's visibility feedback of a

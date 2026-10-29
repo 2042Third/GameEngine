@@ -15,6 +15,8 @@
 #include "Strata/Renderer/SceneOverlay.h"
 #include "Strata/Renderer/SceneRenderData.h"
 #include "Strata/Renderer/ShadowAtlasAllocator.h"
+#include "Strata/Renderer/ShadowFit.h"
+#include "Strata/Renderer/ShadowView.h"
 #include "Strata/Renderer/TextureReadback.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
@@ -26,6 +28,7 @@
 #include <chrono>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -201,6 +204,15 @@ namespace Strata
 		// tables and, while materials are alpha-masked, the texture table's entries). Other cascades keep their shadow map
 		// layer (SceneRendererStats::CachedCascadeMask): a still camera over a still or local change costs no shadow draws.
 		bool CacheShadowCascades = true;
+		// The sun's cascades are fitted to what the camera sees (ShadowFitTracker, Renderer/ShadowFit.h): each frame's prepass
+		// depth is reduced on the GPU (Scene/ShadowFit.comp, in GPU.ScreenShadows) to the receivers' range of view distances and
+		// their extent, read back frames later, and the cascades' slices cover that range while their squares (all but the last
+		// one's) shrink to those receivers: finer texels where the receivers are. The last cascade still reaches the shadow
+		// distance on its slice's sphere, and shaders select cascades by containment, so a receiver no readback saw yet is
+		// shadowed by a coarser cascade, never left unshadowed. A renderer's first frames, frames after a camera cut, another
+		// scene or other cascades, and frames without receivers use Strata 0.6.0's layout (SceneRendererStats::ShadowFit).
+		// Off: always Strata 0.6.0's layout (renderers of single images: thumbnails, bakes; tests of the layout itself).
+		bool FitShadowsToView = true;
 		// Scenes whose PostProcessComponent chooses AntiAliasingMode::TAA are drawn with temporal anti-aliasing: each frame
 		// offsets its samples by a sub-pixel jitter (8 phases of a Halton (2, 3) sequence, from the history's latest reset on,
 		// in the frame's copy of the camera only: culling, levels of detail, the shadow cascades and the overlays keep the
@@ -351,6 +363,15 @@ namespace Strata
 		// yellow-green, left cyan, down violet) and its strength the speed, full at 16 pixels a frame; still pixels show the
 		// image darkened. Where nothing was drawn (the sky) the motion is the camera's.
 		bool ShowMotionVectors = false;
+		// The shadows debug view, drawn first (Overlay/ShadowView.frag): every pixel the scene drew colored by the screen pixels
+		// one texel of the sun's cascade that shades it spans there (a texel's world size over a pixel's facing the camera at the
+		// pixel's view distance, Include/ShadowView.glsl), from ShadowViewColors[0] at one or fewer through [1] at two to [2] at
+		// four or more, linear in stops; a checker of the texels where they span more than about 1.4 pixels, white cascade edges
+		// and hatched blend bands. Pixels no cascade covers show the image under a gray veil, the sky the image darkened. The
+		// frame also counts its pixels by cascade and ratio (SceneRenderer::GetShadowViewStats, read back frames later).
+		bool ShowShadowView = false;
+		// Display colors (sRGB; alpha unused) of the ramp: green, yellow and red by default (the editor passes its theme's).
+		std::array<glm::vec4, 3> ShadowViewColors = { { { 0.24f, 0.75f, 0.55f, 1.0f }, { 0.91f, 0.76f, 0.30f, 1.0f }, { 0.90f, 0.33f, 0.29f, 1.0f } } };
 	};
 
 	struct SceneRendererStats
@@ -511,6 +532,23 @@ namespace Strata
 		// then the brightest and darkest values of the frame may have overflowed or lost precision (captures wait for it).
 		float PreExposure = 1.0f;
 		bool PreExposureSettled = false;
+		// The sun's cascades the frame laid out (SceneRenderer::FindShadowCasters): the first CascadeCount entries, 0 without a
+		// shadowed sun (the shadows debug view reports them).
+		std::array<ShadowCascadeStats, RenderData::c_MaxCascades> Cascades = {};
+		uint32_t CascadeCount = 0;
+		// The frame drew the sun's screen-space shadow mask (SceneRenderer::GetScreenShadowTexture): every frame with a shadowed sun.
+		bool ScreenShadows = false;
+		// The sun's cascades fitted to what the camera sees (SceneRendererSpecification::FitShadowsToView): the frame's slices came
+		// from a readback of the receivers (else Strata 0.6.0's layout), and some cascade's square was fitted to them; whether
+		// the layout settled (no readback is due that may change it: true without a fit); the range [ShadowFitNear,
+		// ShadowFitFar] the slices divide (the last cascade always reaches the shadow distance); layout changes since the
+		// renderer was made. Cascades[c].Fitted says which squares were fitted.
+		bool ShadowFit = false;
+		bool ShadowFitSquares = false;
+		bool ShadowFitSettled = true;
+		float ShadowFitNear = 0.0f;
+		float ShadowFitFar = 0.0f;
+		uint64_t ShadowFitChanges = 0;
 	};
 
 	// What the GPU did for a frame of a renderer, known frames later (SceneRenderer::GetGPUStats).
@@ -676,6 +714,20 @@ namespace Strata
 		// The sun's shadow cascades' depth array (Quality.ShadowCascades layers): null until a frame draws a shadowed sun, and
 		// again once the cascades were released (a zero viewport releases them with the render targets).
 		nvrhi::ITexture* GetShadowMap() const { return m_ShadowMap; }
+		// The cascades' depth ranges (Include/Shadows.glsl, Scene/ShadowRanges.comp): made and released with the shadow map.
+		nvrhi::ITexture* GetShadowRanges() const { return m_ShadowRanges; }
+		// The sun's screen-space shadow mask the forward pass read (RG8_UNORM: red the square root of the sun's visibility, green
+		// the pixel's blur radius over c_ScreenShadowMaxBlurPixels; Effects/ScreenShadows.frag): null until a frame draws a
+		// shadowed sun, and again once the render targets are released.
+		nvrhi::ITexture* GetScreenShadowTexture() const { return m_ScreenShadowTextures[0]; }
+		static constexpr float c_ScreenShadowMaxBlurPixels = 8.0f;
+		// The mask's blur keeps taps within this fraction of a pixel's view distance of its plane.
+		static constexpr float c_ScreenShadowPlaneTolerance = 0.01f;
+		// Contact shadows: the march's reach on screen as a share of the image's height, and how thick (meters, plus a share of
+		// the view distance) what it passes behind must be to occlude.
+		static constexpr float c_ContactShadowMaxScreenShare = 0.05f;
+		static constexpr float c_ContactShadowThickness = 0.02f;
+		static constexpr float c_ContactShadowThicknessScale = 0.005f;
 		// Frames over which a light's shadow fades in once all its views are drawn (SceneRendererSpecification::
 		// SpreadLightingUpdates).
 		static constexpr uint32_t c_LocalShadowFadeFrames = 8;
@@ -713,6 +765,10 @@ namespace Strata
 		// Only the jump of ResetExposureAdaptation: the next frame's automatic exposure is the brightness it meters, and the
 		// pre-exposure keeps its value (the later frames of a capture, each metered alone, wait for it to settle).
 		void JumpExposureAdaptation() { m_ResetExposure = true; }
+		// The sun's cascades start their fit to the view again with the next frame (SceneRendererSpecification::
+		// FitShadowsToView): Strata 0.6.0's layout until a readback of that frame's receivers arrives (scene loads, a capture's
+		// first frame; camera cuts do it themselves).
+		void ResetShadowFit() { m_ResetShadowFit = true; }
 		// Stops of headroom the automatic pre-exposure keeps above the metered exposure (SceneRendererStats::PreExposure).
 		static constexpr int32_t c_PreExposureHeadroomStops = 2;
 		// The pre-exposure stays within 2^-c_MaxPreExposureStops and 2^c_MaxPreExposureStops.
@@ -753,6 +809,15 @@ namespace Strata
 		void ResolveGPUStats(bool wait);
 		// Frames rendered (Render calls that returned true) since the renderer was created.
 		uint64_t GetRenderCount() const { return m_RenderCount; }
+		// What the shadows debug view (SceneRenderOptions::ShowShadowView) counted in the newest frame that showed it whose counts
+		// came back from the GPU (2-3 frames later, read without waiting; Render resolves them at the start of each frame). Its
+		// Render is 0 until one arrived.
+		const ShadowViewStats& GetShadowViewStats() const { return m_ShadowViewStats; }
+		// Reads the counts of frames whose GPU work completed (never waits): tools that wait for a frame's statistics without
+		// rendering another one call it.
+		void ResolveShadowViewStats();
+		// Whether the shadows debug view's resources exist (made by the first frame that shows it).
+		bool HasShadowViewResources() const { return m_ShadowViewCountBuffer != nullptr; }
 		// Whether frames are culled and drawn by the GPU (SceneRendererSpecification::GPUDriven and the device).
 		bool IsGPUDriven() const;
 
@@ -806,6 +871,8 @@ namespace Strata
 			float Bias = 1.0f;
 			float NormalBias = 1.5f;
 			float CascadeBlend = 0.1f; // DirectionalLightComponent::CascadeBlend, within [0, 0.5]
+			float ContactLength = 0.3f; // DirectionalLightComponent::ContactShadowLength, within [0, 2]
+			float Distribution = 0.9f;  // DirectionalLightComponent::CascadeDistribution, within [0, 1]
 		};
 
 		// A transparent submesh instance, drawn on its own, back to front.
@@ -913,6 +980,7 @@ namespace Strata
 			uint32_t SizeCulled = 0;             // Visible proxies below RendererQualitySettings::MinProjectedPixels
 			AABB Receivers; // The world bounds of the chunk's visible proxies (scenes with Skin proxies only)
 			uint32_t SkinnedInstances = 0;
+			float NearestTransparent = 0.0f; // The view distance of the nearest point of its transparent draws' bounds
 		};
 
 		struct LightCandidate
@@ -1294,6 +1362,17 @@ namespace Strata
 		// CullView's work on a feedback frame: the feedback's marks and screen sizes, and the proxies the CPU still looks at in
 		// the view (users of transparent materials, skinned proxies).
 		void ApplyFeedback(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum);
+		// The sun's cascade layout of the frame (SceneRendererShadowFit.cpp): the light's view, the newest readback of the
+		// receivers and the tracker's layout (m_ShadowFitLayout), which FindShadowCasters applies. A new epoch on a camera cut,
+		// another scene (not a clone), other cascades, ResetShadowFit, and when the fit stops; unfitted without a shadowed sun
+		// or with FitShadowsToView off.
+		void UpdateShadowFit(const RenderScene& renderScene, const SceneCamera& camera, bool cameraCut);
+		// After the mask (GPU.ScreenShadows): reduces the prepass depth to the receivers (Scene/ShadowFit.comp) and records their
+		// copy into the readback ring, for frames whose cascades follow the view; false when its resources cannot be made
+		// (reported; the layout stays unfitted).
+		bool RecordShadowFit(nvrhi::ICommandList* commandList, const SceneCamera& camera);
+		// After the executed command list of a frame that recorded the reduction: the copy is pending.
+		void SubmitShadowFitReadback();
 		// Computes the cascades and, with `findCasters`, finds the shadow casters of each (feedback frames leave that to the
 		// GPU); leaves ShadowParams.w at 0 without shadows. Reports the animators of skinned casters out of view whose shadows
 		// can fall on what the view shows (CanShadowView).
@@ -1344,6 +1423,12 @@ namespace Strata
 		template<typename T>
 		uint64_t UploadChangedRange(nvrhi::ICommandList* commandList, nvrhi::IBuffer* buffer, std::vector<T>& list, std::vector<T>& uploaded, bool full);
 
+		// The cascades' depth ranges for a new shadow map of `size` texels and `layers` layers (m_ShadowRanges, its binding
+		// sets); false when they cannot be made (nothing is kept then).
+		bool CreateShadowRanges(nvrhi::ITexture* shadowMap, uint32_t size, uint32_t layers);
+		// Builds the depth ranges of the cascade layers in `layerMask` from the shadow map (Scene/ShadowRanges.comp), right
+		// after they were drawn.
+		void BuildShadowRanges(nvrhi::ICommandList* commandList, uint32_t layerMask);
 		// Makes the cascades' depth array (Quality.ShadowCascades layers of m_ShadowMapSize) and their framebuffers once.
 		bool EnsureShadowMap();
 		// Releases the cascades' depth array with what references it (framebuffers, depth pyramids and their sets, the cached
@@ -1499,6 +1584,21 @@ namespace Strata
 		void DrawDebugLines(nvrhi::ICommandList* commandList, DebugDrawDepth depth, uint32_t firstVertex, uint32_t vertexCount);
 		// The motion debug view (SceneRenderOptions::ShowMotionVectors) into the output texture; false when GPU resources failed.
 		bool DrawMotionView(nvrhi::ICommandList* commandList, const nvrhi::Viewport& viewport);
+		// The shadows debug view (SceneRenderOptions::ShowShadowView, SceneRendererShadowView.cpp): counts the frame's pixels
+		// (Debug/ShadowViewStats.comp, read back through m_ShadowViewReadbacks) and draws the view into the output texture;
+		// false when GPU resources failed (reported).
+		bool DrawShadowView(nvrhi::ICommandList* commandList, const SceneRenderOptions& options, const nvrhi::Viewport& viewport);
+		// After the executed command list of a frame that recorded the view's counts: the copy is pending.
+		void SubmitShadowViewReadback();
+		// The sun's screen-space shadow mask (SceneRendererScreenShadows.cpp): its targets (RG8, the viewport's size, made by the
+		// first frame with a shadowed sun, released with the render targets), pipelines and binding sets; false when they cannot
+		// be made (the frame renders without the sun's shadows, reported). RenderScreenShadows records the evaluation and the
+		// two blur passes after the depth prepass.
+		bool EnsureScreenShadowResources();
+		void RenderScreenShadows(nvrhi::ICommandList* commandList, const RenderData::FrameConstants& frame);
+		void ReleaseScreenShadowTargets(std::vector<nvrhi::ResourceHandle>& released);
+		// What the scene binding sets name at SRV 28: the mask, or white (visibility 1) without one.
+		nvrhi::ITexture* GetBoundScreenShadows() const;
 		// The tints of SceneRenderOptions::EntityTints (StatusTint.frag); false when GPU resources failed.
 		bool DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport);
 	private:
@@ -1580,6 +1680,34 @@ namespace Strata
 		uint32_t m_ShadowMapLayers = 0;        // Its layers (the cascades it was made for)
 		nvrhi::TextureHandle m_DummyShadowMap; // Bound while no shadows are rendered
 		nvrhi::ITexture* m_BoundShadowMap = nullptr;
+		// The cascades' depth ranges (R32_UINT, a layer per cascade, RenderData::c_ShadowRangeLevels levels; made and released
+		// with the shadow map, built for the layers a frame draws: they belong to the cascade cache), a binding set per level,
+		// the pipelines that build them, and what the scene binding sets name (a dummy without shadows).
+		nvrhi::TextureHandle m_ShadowRanges;
+		std::vector<nvrhi::BindingSetHandle> m_ShadowRangeSets;
+		nvrhi::BindingLayoutHandle m_ShadowRangeLayout;
+		nvrhi::ComputePipelineHandle m_ShadowRangePipeline;
+		nvrhi::ComputePipelineHandle m_ShadowRangeDownsamplePipeline;
+		nvrhi::TextureHandle m_DummyShadowRanges;
+		nvrhi::ITexture* m_BoundShadowRanges = nullptr;
+		// The sun's screen-space shadow mask (EnsureScreenShadowResources): targets A (the result) and B, their framebuffers, the
+		// evaluation's, the contact shadows' and the blur's pipelines and binding sets (the evaluation's names the shadow map and
+		// ranges it was made with; the contact shadows' read B; the blur's read A, then B), and the texture the scene binding
+		// sets name at SRV 28.
+		std::array<nvrhi::TextureHandle, 2> m_ScreenShadowTextures;
+		std::array<nvrhi::FramebufferHandle, 2> m_ScreenShadowFramebuffers;
+		nvrhi::BindingLayoutHandle m_ScreenShadowLayout;
+		nvrhi::BindingLayoutHandle m_ScreenShadowBlurLayout;
+		nvrhi::BindingLayoutHandle m_ContactShadowLayout;
+		nvrhi::GraphicsPipelineHandle m_ScreenShadowPipeline;
+		nvrhi::GraphicsPipelineHandle m_ScreenShadowBlurPipeline;
+		nvrhi::GraphicsPipelineHandle m_ContactShadowPipeline;
+		nvrhi::BindingSetHandle m_ScreenShadowSet;
+		nvrhi::BindingSetHandle m_ContactShadowSet;
+		std::array<nvrhi::BindingSetHandle, 2> m_ScreenShadowBlurSets;
+		const nvrhi::ITexture* m_ScreenShadowBoundMap = nullptr;
+		const nvrhi::ITexture* m_ScreenShadowBoundRanges = nullptr;
+		nvrhi::ITexture* m_BoundScreenShadows = nullptr;
 		std::vector<nvrhi::FramebufferHandle> m_ShadowFramebuffers;
 		nvrhi::BufferHandle m_ShadowDrawListBuffer; // Instance indices of the shadow draws
 		nvrhi::BindingSetHandle m_ShadowBindingSet; // Scene bindings with the shadow draw list
@@ -1650,6 +1778,37 @@ namespace Strata
 		std::array<CascadeBox, RenderData::c_MaxCascades> m_Cascades = {};
 		glm::mat4 m_LightView = glm::mat4(1.0f);
 		uint32_t m_CascadeCount = 0;
+		// The cascades' fit to the view (UpdateShadowFit, RecordShadowFit): the tracker and the frame's layout; whether the
+		// frame's cascades follow the view (FitShadowsToView, a shadowed sun); a reset asked for; what a change of starts a new
+		// epoch (the render scene, the cascades' size and count); the nearest transparent surface the latest frame drew (for the
+		// next frame's near bound); the reduction's pipeline, buffer and binding set (which names the depth: released with the
+		// targets), and the ring of its readbacks, each with the camera and epoch of the frame it copied.
+		ShadowFitTracker m_ShadowFit;
+		ShadowFitLayout m_ShadowFitLayout;
+		bool m_ShadowFitActive = false;
+		bool m_ResetShadowFit = false;
+		uint64_t m_ShadowFitSceneId = 0;
+		uint32_t m_ShadowFitMapSize = 0;
+		uint32_t m_ShadowFitCascades = 0;
+		float m_NearestTransparent = std::numeric_limits<float>::infinity();
+		nvrhi::BindingLayoutHandle m_ShadowFitLayoutHandle;
+		nvrhi::ComputePipelineHandle m_ShadowFitPipeline;
+		nvrhi::BindingSetHandle m_ShadowFitSet;
+		nvrhi::BufferHandle m_ShadowFitBuffer;
+		struct ShadowFitRecord
+		{
+			Scope<BufferReadback> Readback;
+			uint64_t Render = 0;
+			uint64_t Epoch = 0;
+			uint64_t LayoutVersion = 0;
+			glm::dvec3 CameraPosition = glm::dvec3(0.0);
+			glm::dmat3 CameraRotation = glm::dmat3(1.0);
+		};
+		std::array<ShadowFitRecord, c_GPURecordCount> m_ShadowFitReadbacks;
+		uint32_t m_ShadowFitReadbackIndex = 0;
+		bool m_ShadowFitRecorded = false; // The frame being recorded copies the reduction (SubmitShadowFitReadback)
+		uint64_t m_ShadowFitSeen = 0;     // The newest frame whose readback the tracker was given
+		ShadowFitReadback m_ShadowFitScratch;
 
 		// Clustered lighting
 		nvrhi::BindingLayoutHandle m_ClusterBindingLayout;
@@ -2103,6 +2262,31 @@ namespace Strata
 		nvrhi::BindingLayoutHandle m_MotionViewLayout;
 		nvrhi::BindingSetHandle m_MotionViewBindingSet;
 		nvrhi::GraphicsPipelineHandle m_MotionViewPipeline;
+		// The shadows debug view (DrawShadowView): the overlay's and the count's pipelines, their binding sets (which name the
+		// depth: released with the targets), the counts' buffer and the ring of their readbacks, each with the layout of the
+		// frame it copied (made by the first frame that shows the view, kept with the renderer so a capture's counts survive
+		// the release of its targets), and the newest statistics read.
+		nvrhi::BindingLayoutHandle m_ShadowViewLayout;
+		nvrhi::GraphicsPipelineHandle m_ShadowViewPipeline;
+		nvrhi::BindingSetHandle m_ShadowViewBindingSet;
+		nvrhi::ITexture* m_ShadowViewBoundMask = nullptr; // The sun's shadow mask (or white) m_ShadowViewBindingSet names
+		nvrhi::BindingLayoutHandle m_ShadowViewCountLayout;
+		nvrhi::ComputePipelineHandle m_ShadowViewCountPipeline;
+		nvrhi::BindingSetHandle m_ShadowViewCountBindingSet;
+		nvrhi::BufferHandle m_ShadowViewCountBuffer;
+		struct ShadowViewReadback
+		{
+			Scope<BufferReadback> Readback;
+			uint64_t Render = 0;
+			glm::uvec2 ViewportSize = glm::uvec2(0);
+			uint32_t ShadowMapSize = 0;
+			uint32_t CascadeCount = 0;
+			std::array<ShadowCascadeStats, RenderData::c_MaxCascades> Cascades = {};
+		};
+		std::array<ShadowViewReadback, c_GPURecordCount> m_ShadowViewReadbacks;
+		uint32_t m_ShadowViewReadbackIndex = 0;
+		bool m_ShadowViewReadbackRecorded = false; // The frame being recorded copies the counts (SubmitShadowViewReadback)
+		ShadowViewStats m_ShadowViewStats;
 		nvrhi::BindingLayoutHandle m_MotionCopyLayout;
 		nvrhi::ComputePipelineHandle m_MotionCopyPipeline;
 		nvrhi::BufferHandle m_MotionCopyListBuffer; // The elements a frame copies: the instances', then the joints'

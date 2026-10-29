@@ -487,6 +487,32 @@
 					"Speed": 0.0,
 					"Tooltip": "Fraction of each shadow cascade's depth range over which it blends into the next one, hiding the seams between them; the last one fades out by the Shadow Distance. 0 switches at once",
 					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Contact Shadow Length",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 2.0,
+					"Min": 0.0,
+					"Name": "ContactShadowLength",
+					"Section": "Shadows",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Meters toward the light over which contact shadows ground objects smaller than the shadow cascades' texels (Graphics Quality's Contact Shadows, High and Ultra); 0 off",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Cascade Distribution",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "CascadeDistribution",
+					"Section": "Shadows",
+					"Speed": 0.0,
+					"Tooltip": "How the cascades share the distance from the nearest to the farthest surface the camera sees: 0 evenly, 1 each cascade the same ratio farther than the previous. Higher puts more detail near the camera",
+					"Type": "Float"
 				}
 			]
 		},
@@ -905,6 +931,194 @@
 					"Speed": 0.009999999776482582,
 					"Tooltip": "Atmosphere: diffuse reflectance of the planet's ground, which lights the sky from below",
 					"Type": "Float"
+				}
+			]
+		},
+		{
+			"Category": "Rendering",
+			"Description": "Fog that thickens toward the ground, over the scene's surfaces and its sky (the first active one applies)",
+			"DisplayName": "Height Fog",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "HeightFog",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Density",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "Density",
+					"Speed": 0.0010000000474974513,
+					"Tooltip": "Extinction per meter at the base height: 0.02 hides half of what lies 35 m away",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Height Falloff",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 9.999999747378752e-05,
+					"Name": "HeightFalloff",
+					"Speed": 0.0010000000474974513,
+					"Tooltip": "Per meter: the density falls by the factor e every 1 / falloff meters above the base height and rises below it",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Base Height",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": -1000000.0,
+					"Name": "BaseHeight",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "World height in meters where the density is Density",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Start Distance",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "StartDistance",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "Meters from the camera before which there is no fog",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Max Opacity",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "MaxOpacity",
+					"Speed": 0.0,
+					"Tooltip": "The most the fog hides of what lies behind it; the sky at the horizon gets this much",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Color",
+					"Speed": 0.0,
+					"Tooltip": "Linear albedo: the fraction of its light the fog scatters toward the viewer",
+					"Type": "Color3"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Color From Sky",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "ColorFromSky",
+					"Speed": 0.0,
+					"Tooltip": "The sky lights the fog: the procedural sky's horizon color, an environment map's light from above, or the ambient color without either; off, Color is the fog's own radiance. The directional light lights it either way",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Sun Scattering",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "SunScattering",
+					"Speed": 0.0,
+					"Tooltip": "How strongly the fog scatters the directional light toward a viewer looking at it: 0 equally in every direction, 1 into a glow around the light",
+					"Type": "Float"
+				}
+			]
+		},
+		{
+			"Category": "Rendering",
+			"Description": "Reflections and ambient light inside a box from a capture of the scene around the entity (lighting.bakeProbes renders it); where boxes overlap the two strongest blend",
+			"DisplayName": "Reflection Probe",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "ReflectionProbe",
+			"Properties": [
+				{
+					"AssetFilter": 6,
+					"DisplayName": "Capture",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Capture",
+					"Speed": 0.0,
+					"Tooltip": "Equirectangular HDR texture of the scene seen from the probe (luminance in nits): Bake writes one",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Extents",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.009999999776482582,
+					"Name": "Extents",
+					"Speed": 0.05000000074505806,
+					"Tooltip": "Half size of the influence box in meters, along the entity's axes (times its scale)",
+					"Type": "Vec3"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Blend Distance",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "BlendDistance",
+					"Speed": 0.05000000074505806,
+					"Tooltip": "Meters inside the box's faces over which the probe fades into the sky's lighting (or a weaker probe's)",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Box Projection",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "BoxProjection",
+					"Speed": 0.0,
+					"Tooltip": "Reflections are projected onto the box's faces, so walls near the box's faces reflect where they are (rooms); off, the capture is seen as if infinitely far (open spaces)",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Intensity",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "Intensity",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Multiplies the capture's luminance",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Priority",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000.0,
+					"Min": -1000.0,
+					"Name": "Priority",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "Where boxes overlap the higher priority wins (then the smaller box); with more probes in view than the renderer keeps, the strongest stay",
+					"Type": "Int"
 				}
 			]
 		},
@@ -2264,6 +2478,1560 @@
 			"Flags": 0,
 			"Name": "Script",
 			"Properties": []
+		},
+		{
+			"Category": "World",
+			"Description": "Makes the scene a world's persistent scene: its cells stream around the streaming sources while it runs",
+			"DisplayName": "World",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "World",
+			"Properties": [
+				{
+					"AssetFilter": 12,
+					"DisplayName": "World",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "World",
+					"Speed": 0.0,
+					"Tooltip": "The world whose cells stream (a .stworld asset)",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Distance Scale",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 10.0,
+					"Min": 0.10000000149011612,
+					"Name": "DistanceScale",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Multiplies every layer's streaming distance: lower on devices with less memory",
+					"Type": "Float"
+				}
+			]
+		},
+		{
+			"Category": "World",
+			"Description": "A point the world's cells stream around; without an active one, the primary camera is",
+			"DisplayName": "Streaming Source",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "StreamingSource",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Enabled",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Enabled",
+					"Speed": 0.0,
+					"Tooltip": "Whether the source streams",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Radius",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "Radius",
+					"Speed": 1.0,
+					"Tooltip": "Streams the cells within this distance on every layer; 0: each layer's streaming distance",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Layers",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Layers",
+					"Speed": 0.0,
+					"Tooltip": "The layers it streams, separated by commas; empty: every enabled layer",
+					"Type": "String"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Priority",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 100.0,
+					"Min": -100.0,
+					"Name": "Priority",
+					"Speed": 1.0,
+					"Tooltip": "Higher-priority sources' cells load first",
+					"Type": "Int"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "View Bias",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "ViewBias",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Cells ahead of the source (its -Z axis) load as if this share of the radius nearer",
+					"Type": "Float"
+				}
+			]
+		},
+		{
+			"Category": "UI",
+			"Description": "A screen of game UI: lays its elements out for the screen it is shown on, scaled by its scale mode, and draws them over the scene",
+			"DisplayName": "UI Canvas",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "UICanvas",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Scale Mode",
+					"EnumValues": [
+						{
+							"DisplayName": "Constant Pixel Size",
+							"Name": "ConstantPixelSize",
+							"Value": 0
+						},
+						{
+							"DisplayName": "Scale With Screen",
+							"Name": "ScaleWithScreen",
+							"Value": 1
+						},
+						{
+							"DisplayName": "Constant Physical Size",
+							"Name": "ConstantPhysicalSize",
+							"Value": 2
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "ScaleMode",
+					"Speed": 0.0,
+					"Tooltip": "Constant Pixel Size: a canvas unit is Scale Factor pixels; Scale With Screen: the layout keeps the reference resolution's proportions on every screen; Constant Physical Size: a canvas unit is Scale Factor pixels at 96 DPI",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Reference Resolution",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 16384.0,
+					"Min": 1.0,
+					"Name": "ReferenceResolution",
+					"Speed": 1.0,
+					"Tooltip": "Scale With Screen: the screen size in pixels the layout is designed for",
+					"Type": "Vec2"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Match Width Or Height",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "MatchWidthOrHeight",
+					"Speed": 0.0,
+					"Tooltip": "Scale With Screen: 0 follows the screen's width, 1 its height, between them both",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Scale Factor",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 100.0,
+					"Min": 0.009999999776482582,
+					"Name": "ScaleFactor",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Multiplies the scale of the constant modes",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Safe Area Padding",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "SafeAreaPadding",
+					"Speed": 1.0,
+					"Tooltip": "Left, top, right and bottom insets of the canvas's rect, in canvas units",
+					"Type": "Vec4"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Sort Order",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "SortOrder",
+					"Speed": 0.0,
+					"Tooltip": "Canvases with a higher order draw over the others and get input first",
+					"Type": "Int"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Pixel Snap",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "PixelSnap",
+					"Speed": 0.0,
+					"Tooltip": "Rect edges and text baselines on whole pixels",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Receives Input",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "ReceivesInput",
+					"Speed": 0.0,
+					"Tooltip": "Off: drawn, but never hit by the pointer or reached by navigation (a HUD that never blocks clicks)",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "First Selected",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "FirstSelected",
+					"Speed": 0.0,
+					"Tooltip": "The selectable focused when keyboard or gamepad navigation starts",
+					"Type": "Entity"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Render Mode",
+					"EnumValues": [
+						{
+							"DisplayName": "Screen Space",
+							"Name": "ScreenSpace",
+							"Value": 0
+						},
+						{
+							"DisplayName": "World Space",
+							"Name": "WorldSpace",
+							"Value": 1
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "RenderMode",
+					"Speed": 0.0,
+					"Tooltip": "Screen Space: over the scene, laid out for the screen; World Space: a plane in the scene at the entity's transform, Reference Resolution canvas units wide and high, depth-tested like world text",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "World Units Per Unit",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 100.0,
+					"Min": 9.999999747378752e-06,
+					"Name": "WorldUnitsPerUnit",
+					"Speed": 9.999999747378752e-05,
+					"Tooltip": "World Space: world units per canvas unit (0.01: a canvas 100 units wide is a meter)",
+					"Type": "Float"
+				}
+			]
+		},
+		{
+			"Category": "UI",
+			"Description": "The rectangle of a UI element: anchored in its parent's rect, offset and sized in canvas units",
+			"DisplayName": "UI Rect",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "UIRect",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Anchor Min",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "AnchorMin",
+					"Speed": 0.004999999888241291,
+					"Tooltip": "Lower anchor in the parent's rect (0, 0 is its top-left corner)",
+					"Type": "Vec2"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Anchor Max",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "AnchorMax",
+					"Speed": 0.004999999888241291,
+					"Tooltip": "Upper anchor in the parent's rect (1, 1 is its bottom-right corner)",
+					"Type": "Vec2"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Pivot",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "Pivot",
+					"Speed": 0.004999999888241291,
+					"Tooltip": "The point of the rect Position places, in the rect (0, 0 is its top-left corner)",
+					"Type": "Vec2"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Position",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Position",
+					"Speed": 1.0,
+					"Tooltip": "The pivot's offset from the anchor point, in canvas units (+Y down)",
+					"Type": "Vec2"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Size",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Size",
+					"Speed": 1.0,
+					"Tooltip": "Added to the span between the anchors, in canvas units",
+					"Type": "Vec2"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Fit Content",
+					"EnumValues": [
+						{
+							"DisplayName": "",
+							"Name": "None",
+							"Value": 0
+						},
+						{
+							"DisplayName": "",
+							"Name": "Width",
+							"Value": 1
+						},
+						{
+							"DisplayName": "",
+							"Name": "Height",
+							"Value": 2
+						},
+						{
+							"DisplayName": "",
+							"Name": "Both",
+							"Value": 3
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "FitContent",
+					"Speed": 0.0,
+					"Tooltip": "The rect takes its content's size on these axes: its text, or the children its layout places",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Ignore Layout",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "IgnoreLayout",
+					"Speed": 0.0,
+					"Tooltip": "A parent's layout leaves this element where its anchors put it",
+					"Type": "Bool"
+				}
+			]
+		},
+		{
+			"Category": "UI",
+			"Description": "Fills the element's rect with a texture or a solid color, optionally nine-sliced, filled, with rounded corners and a border",
+			"DisplayName": "UI Image",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "UIImage",
+			"Properties": [
+				{
+					"AssetFilter": 6,
+					"DisplayName": "Texture",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Texture",
+					"Speed": 0.0,
+					"Tooltip": "None: a solid color",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Color",
+					"Speed": 0.0,
+					"Tooltip": "Tints the texture (display color)",
+					"Type": "Color4"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Type",
+					"EnumValues": [
+						{
+							"DisplayName": "",
+							"Name": "Simple",
+							"Value": 0
+						},
+						{
+							"DisplayName": "",
+							"Name": "Sliced",
+							"Value": 1
+						},
+						{
+							"DisplayName": "",
+							"Name": "Filled",
+							"Value": 2
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Type",
+					"Speed": 0.0,
+					"Tooltip": "Sliced: nine-slice, the borders keep their size; Filled: cut to Fill Amount (health bars)",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "UV Rect",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": -1000000.0,
+					"Name": "UVRect",
+					"Speed": 0.004999999888241291,
+					"Tooltip": "The part of the texture shown: u0, v0, u1, v1",
+					"Type": "Vec4"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Slice Borders",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "SliceBorders",
+					"Speed": 1.0,
+					"Tooltip": "Sliced: left, top, right and bottom borders in texels",
+					"Type": "Vec4"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Slice Scale",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000.0,
+					"Min": 0.0010000000474974513,
+					"Name": "SliceScale",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Sliced: canvas units per border texel",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Fill Amount",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "FillAmount",
+					"Speed": 0.0,
+					"Tooltip": "Filled: the fraction shown",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Fill Direction",
+					"EnumValues": [
+						{
+							"DisplayName": "Left To Right",
+							"Name": "LeftToRight",
+							"Value": 0
+						},
+						{
+							"DisplayName": "Right To Left",
+							"Name": "RightToLeft",
+							"Value": 1
+						},
+						{
+							"DisplayName": "Top To Bottom",
+							"Name": "TopToBottom",
+							"Value": 2
+						},
+						{
+							"DisplayName": "Bottom To Top",
+							"Name": "BottomToTop",
+							"Value": 3
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "FillDirection",
+					"Speed": 0.0,
+					"Tooltip": "Filled: where the shown part starts",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Preserve Aspect",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "PreserveAspect",
+					"Speed": 0.0,
+					"Tooltip": "Keeps the texture's aspect ratio, centered in the rect",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Corner Radius",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "CornerRadius",
+					"Speed": 0.5,
+					"Tooltip": "Canvas units",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Border Width",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "BorderWidth",
+					"Speed": 0.5,
+					"Tooltip": "Canvas units, inside the rect",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Border Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "BorderColor",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Color4"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Raycast Target",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "RaycastTarget",
+					"Speed": 0.0,
+					"Tooltip": "Hit by the pointer, so the game does not get clicks on it",
+					"Type": "Bool"
+				}
+			]
+		},
+		{
+			"Category": "UI",
+			"Description": "Text in the element's rect, aligned, wrapped and truncated in it",
+			"DisplayName": "UI Text",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "UIText",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Text",
+					"EnumValues": [],
+					"Flags": 8,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Text",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "String"
+				},
+				{
+					"AssetFilter": 8,
+					"DisplayName": "Font",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Font",
+					"Speed": 0.0,
+					"Tooltip": "None: the engine's default font",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Font Size",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1024.0,
+					"Min": 1.0,
+					"Name": "FontSize",
+					"Speed": 0.5,
+					"Tooltip": "Canvas units per em",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Color",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Color4"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Alignment",
+					"EnumValues": [
+						{
+							"DisplayName": "",
+							"Name": "Left",
+							"Value": 0
+						},
+						{
+							"DisplayName": "",
+							"Name": "Center",
+							"Value": 1
+						},
+						{
+							"DisplayName": "",
+							"Name": "Right",
+							"Value": 2
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Alignment",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Vertical Alignment",
+					"EnumValues": [
+						{
+							"DisplayName": "",
+							"Name": "Top",
+							"Value": 0
+						},
+						{
+							"DisplayName": "",
+							"Name": "Middle",
+							"Value": 1
+						},
+						{
+							"DisplayName": "",
+							"Name": "Bottom",
+							"Value": 2
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "VerticalAlignment",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Wrap",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Wrap",
+					"Speed": 0.0,
+					"Tooltip": "Lines wrap at the rect's width",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Overflow",
+					"EnumValues": [
+						{
+							"DisplayName": "",
+							"Name": "Overflow",
+							"Value": 0
+						},
+						{
+							"DisplayName": "",
+							"Name": "Truncate",
+							"Value": 1
+						},
+						{
+							"DisplayName": "",
+							"Name": "Ellipsis",
+							"Value": 2
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Overflow",
+					"Speed": 0.0,
+					"Tooltip": "Lines beyond the rect's height: drawn outside it, left out, or left out with \"...\" ending the last line shown",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Line Spacing",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 3.0,
+					"Min": 0.5,
+					"Name": "LineSpacing",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Times the font's line height",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Outline Width",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.10000000149011612,
+					"Min": 0.0,
+					"Name": "OutlineWidth",
+					"Speed": 0.0010000000474974513,
+					"Tooltip": "Em",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Outline Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "OutlineColor",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Color4"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Raycast Target",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "RaycastTarget",
+					"Speed": 0.0,
+					"Tooltip": "Hit by the pointer, so the game does not get clicks on it",
+					"Type": "Bool"
+				}
+			]
+		},
+		{
+			"Category": "UI",
+			"Description": "How a widget shows hover, press, focus and disabled, and how keyboard and gamepad navigation leaves it",
+			"DisplayName": "UI Selectable",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "UISelectable",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Interactable",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Interactable",
+					"Speed": 0.0,
+					"Tooltip": "Off: disabled, never hovered, pressed or focused, and raises no events",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Transition",
+					"EnumValues": [
+						{
+							"DisplayName": "",
+							"Name": "None",
+							"Value": 0
+						},
+						{
+							"DisplayName": "Color Tint",
+							"Name": "ColorTint",
+							"Value": 1
+						},
+						{
+							"DisplayName": "Image Swap",
+							"Name": "ImageSwap",
+							"Value": 2
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Transition",
+					"Speed": 0.0,
+					"Tooltip": "Color Tint multiplies the target image's color by the state's; Image Swap shows the state's texture",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Target Image",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "TargetImage",
+					"Speed": 0.0,
+					"Tooltip": "The element whose image shows the states; none: this entity's",
+					"Type": "Entity"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Normal Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "NormalColor",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Color4"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Hover Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "HoverColor",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Color4"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Pressed Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "PressedColor",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Color4"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Focused Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "FocusedColor",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Color4"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Disabled Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "DisabledColor",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Color4"
+				},
+				{
+					"AssetFilter": 6,
+					"DisplayName": "Hover Image",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "HoverImage",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 6,
+					"DisplayName": "Pressed Image",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "PressedImage",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 6,
+					"DisplayName": "Focused Image",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "FocusedImage",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 6,
+					"DisplayName": "Disabled Image",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "DisabledImage",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Fade Duration",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 60.0,
+					"Min": 0.0,
+					"Name": "FadeDuration",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Seconds of unscaled time a color change takes",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Navigation",
+					"EnumValues": [
+						{
+							"DisplayName": "",
+							"Name": "Automatic",
+							"Value": 0
+						},
+						{
+							"DisplayName": "",
+							"Name": "Explicit",
+							"Value": 1
+						},
+						{
+							"DisplayName": "",
+							"Name": "None",
+							"Value": 2
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Navigation",
+					"Speed": 0.0,
+					"Tooltip": "Automatic: the nearest selectable in the direction; Explicit: the entities below; None: never reached or left by navigation",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Navigate Up",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "NavigateUp",
+					"Speed": 0.0,
+					"Tooltip": "Explicit navigation",
+					"Type": "Entity"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Navigate Down",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "NavigateDown",
+					"Speed": 0.0,
+					"Tooltip": "Explicit navigation",
+					"Type": "Entity"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Navigate Left",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "NavigateLeft",
+					"Speed": 0.0,
+					"Tooltip": "Explicit navigation",
+					"Type": "Entity"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Navigate Right",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "NavigateRight",
+					"Speed": 0.0,
+					"Tooltip": "Explicit navigation",
+					"Type": "Entity"
+				}
+			]
+		},
+		{
+			"Category": "UI",
+			"Description": "Clicks on release over the button it was pressed on, or on Submit while focused: the scripts of its entity get OnUIClick",
+			"DisplayName": "UI Button",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "UIButton",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Event Target",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "EventTarget",
+					"Speed": 0.0,
+					"Tooltip": "Its scripts get the button's events too",
+					"Type": "Entity"
+				}
+			]
+		},
+		{
+			"Category": "UI",
+			"Description": "A switch that flips on click; toggles of one group are exclusive",
+			"DisplayName": "UI Toggle",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "UIToggle",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Is On",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "IsOn",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Checkmark",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Checkmark",
+					"Speed": 0.0,
+					"Tooltip": "An element drawn only while the toggle is on",
+					"Type": "Entity"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Group",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Group",
+					"Speed": 0.0,
+					"Tooltip": "Toggles naming the same group are exclusive",
+					"Type": "Entity"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Event Target",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "EventTarget",
+					"Speed": 0.0,
+					"Tooltip": "Its scripts get the toggle's events too",
+					"Type": "Entity"
+				}
+			]
+		},
+		{
+			"Category": "UI",
+			"Description": "A value between a minimum and a maximum, dragged with the pointer or stepped with the navigation keys",
+			"DisplayName": "UI Slider",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "UISlider",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Min Value",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": -1000000.0,
+					"Name": "MinValue",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Max Value",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": -1000000.0,
+					"Name": "MaxValue",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Value",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": -1000000.0,
+					"Name": "Value",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Whole Numbers",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "WholeNumbers",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Direction",
+					"EnumValues": [
+						{
+							"DisplayName": "Left To Right",
+							"Name": "LeftToRight",
+							"Value": 0
+						},
+						{
+							"DisplayName": "Right To Left",
+							"Name": "RightToLeft",
+							"Value": 1
+						},
+						{
+							"DisplayName": "Top To Bottom",
+							"Name": "TopToBottom",
+							"Value": 2
+						},
+						{
+							"DisplayName": "Bottom To Top",
+							"Name": "BottomToTop",
+							"Value": 3
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Direction",
+					"Speed": 0.0,
+					"Tooltip": "Where the minimum is",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Fill",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Fill",
+					"Speed": 0.0,
+					"Tooltip": "An element anchored from the slider's start to the value",
+					"Type": "Entity"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Handle",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Handle",
+					"Speed": 0.0,
+					"Tooltip": "An element anchored at the value",
+					"Type": "Entity"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Keyboard Step",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "KeyboardStep",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "The navigation keys' step; 0: a tenth of the range",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Event Target",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "EventTarget",
+					"Speed": 0.0,
+					"Tooltip": "Its scripts get the slider's events too",
+					"Type": "Entity"
+				}
+			]
+		},
+		{
+			"Category": "UI",
+			"Description": "Places the element's children: stacked horizontally or vertically, or in a grid",
+			"DisplayName": "UI Layout",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "UILayout",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Type",
+					"EnumValues": [
+						{
+							"DisplayName": "",
+							"Name": "Horizontal",
+							"Value": 0
+						},
+						{
+							"DisplayName": "",
+							"Name": "Vertical",
+							"Value": 1
+						},
+						{
+							"DisplayName": "",
+							"Name": "Grid",
+							"Value": 2
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Type",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Padding",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "Padding",
+					"Speed": 1.0,
+					"Tooltip": "Left, top, right and bottom, in canvas units",
+					"Type": "Vec4"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Spacing",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": -1000000.0,
+					"Name": "Spacing",
+					"Speed": 1.0,
+					"Tooltip": "Between children (x: horizontal, y: vertical), in canvas units",
+					"Type": "Vec2"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Child Alignment",
+					"EnumValues": [
+						{
+							"DisplayName": "Top Left",
+							"Name": "TopLeft",
+							"Value": 0
+						},
+						{
+							"DisplayName": "Top Center",
+							"Name": "TopCenter",
+							"Value": 1
+						},
+						{
+							"DisplayName": "Top Right",
+							"Name": "TopRight",
+							"Value": 2
+						},
+						{
+							"DisplayName": "Middle Left",
+							"Name": "MiddleLeft",
+							"Value": 3
+						},
+						{
+							"DisplayName": "Middle Center",
+							"Name": "MiddleCenter",
+							"Value": 4
+						},
+						{
+							"DisplayName": "Middle Right",
+							"Name": "MiddleRight",
+							"Value": 5
+						},
+						{
+							"DisplayName": "Bottom Left",
+							"Name": "BottomLeft",
+							"Value": 6
+						},
+						{
+							"DisplayName": "Bottom Center",
+							"Name": "BottomCenter",
+							"Value": 7
+						},
+						{
+							"DisplayName": "Bottom Right",
+							"Name": "BottomRight",
+							"Value": 8
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "ChildAlignment",
+					"Speed": 0.0,
+					"Tooltip": "Where the block of children sits in the padded rect",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Stretch Children",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "StretchChildren",
+					"Speed": 0.0,
+					"Tooltip": "Children fill the cross axis",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Cell Size",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 1.0,
+					"Name": "CellSize",
+					"Speed": 1.0,
+					"Tooltip": "Grid: the size of a cell, in canvas units",
+					"Type": "Vec2"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Columns",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 4096.0,
+					"Min": 0.0,
+					"Name": "Columns",
+					"Speed": 0.0,
+					"Tooltip": "Grid: 0 fits as many columns as the width holds",
+					"Type": "UInt"
+				}
+			]
+		},
+		{
+			"Category": "UI",
+			"Description": "A line of text the player types while the field has the focus; Enter submits it (OnUISubmit)",
+			"DisplayName": "UI Input Field",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "UIInputField",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Text",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Text",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "String"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Text Element",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "TextElement",
+					"Speed": 0.0,
+					"Tooltip": "An element with a UI Text that shows the text, the caret and the selection",
+					"Type": "Entity"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Placeholder",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Placeholder",
+					"Speed": 0.0,
+					"Tooltip": "An element shown while the text is empty",
+					"Type": "Entity"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Character Limit",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "CharacterLimit",
+					"Speed": 0.0,
+					"Tooltip": "Characters at most; 0: no limit",
+					"Type": "UInt"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Caret Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "CaretColor",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Color4"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Selection Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "SelectionColor",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Color4"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Event Target",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "EventTarget",
+					"Speed": 0.0,
+					"Tooltip": "Its scripts get the field's events too",
+					"Type": "Entity"
+				}
+			]
+		},
+		{
+			"Category": "UI",
+			"Description": "Clips the element's children to its rect: what lies outside is neither drawn nor hit",
+			"DisplayName": "UI Mask",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "UIMask",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Padding",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": -1000000.0,
+					"Name": "Padding",
+					"Speed": 1.0,
+					"Tooltip": "Left, top, right and bottom insets of the clip rect, in canvas units (negative: outside the rect)",
+					"Type": "Vec4"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Softness",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "Softness",
+					"Speed": 0.5,
+					"Tooltip": "Canvas units over which the children fade out toward the clip rect's edges (0: a hard edge)",
+					"Type": "Float"
+				}
+			]
 		}
 	]
 }

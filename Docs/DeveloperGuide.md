@@ -127,7 +127,7 @@ modules:
 | `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`, drawn by `GameRenderer`): it runs the `.stgame` manifest next to it, or `--game <file>`; `--headless` runs without window and GPU at 60 frames per second (servers, CI); `--frames N` stops after N frames (a count that is not a positive whole number exits 3, so a mistyped check cannot run forever); `--seconds S` stops at the frame by which the game played S seconds of game time (`GameRuntime::GetPlayedSeconds`: the fixed steps of its scenes from its start on, not the loading scene's; refused like `--frames`; with both, the first reached ends the run), the length of a check whose outcome depends on how far the game got (a picture, a tour), which a count of frames is not: the frame rate differs by machine and configuration; both keep every fixed step (no time dilation, and a frame longer than the scene's `MaxFixedStepsPerFrame` steps plays only the time they simulate, `GameRuntimeOptions::KeepEveryFixedStep`, so the scene's clock and its scripts' frame time agree with the steps counted); `--screenshot out.png` with `--frames N` or `--seconds S` saves the last frame (and fails the run when it shows the missing-camera message, or a black frame because the start scene still loads: scenes load in the background, the manifest's optional `LoadingScene` plays meanwhile); `--asset-budget-mb <n>` sets the GPU texture budget of the game's assets; `--resolution <width>x<height>` renders in a window of exactly that many pixels whatever the display's scale (instead of the manifest's window, which scales with the display; implies `--windowed`); `--quality <low|medium|high|ultra>` draws the run at a Graphics Quality preset and saves nothing (Custom, unknown names and `--headless` exit 3; "Quality settings"); `--perf-log <csv>` writes a row per frame (frame time, frame profiler stages, job threads, asset streaming and mip streaming, the upload queue, the device's memory and its staging, the process's private memory and its peak, the GPU's stages and busy time of the same frame, then a world's streaming and physics columns and what the renderer
 drew: draw calls, instances, triangles, visible and occluded proxies, instance uploads), also headless; `--save-directory <dir>` keeps the game's save files there instead of the player's data directory (tests); `--help` prints the options (`c_Arguments`), and an argument it does not understand or a bad value ends the run with the problem and the usage on stderr and exit code 3, as in the editor (`Core/CommandLineOptions`: `FindUnknownArgument`, `FormatUsage`, `c_UsageExitCode`). Patch packs the manifest lists (`PatchPacks`) are mounted over the game's pack. |
 | `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `ThirdPerson`, `OpenWorld`, `PhysicsPlayground` and `Tetris` (played and exported by the CTests `StrataEditor.ThirdPerson`, `StrataEditor.OpenWorld`, `StrataEditor.PhysicsPlayground` and `StrataEditor.Tetris`), each with `README.md`, `CREDITS.md` and `Picture.png` ([Samples](#samples): how they are made, credited and kept within budgets). `Samples.json` lists them; the build copies them next to the executables (`StrataSamples`), where the launcher's Open Sample and `project.openSample` offer them as copies. Open one in place only to change the sample: `StrataEditor --project Samples/<Game>`. |
-| `Tools/` | Standard-library Python tools: generators whose outputs are committed (`GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/`: PNGs, raw RGBA for the window icon, the `.ico` of the executables; `GenerateIslandTerrain.py` makes the Open World sample's island: its terrain tiles and palette, and the command script that scatters its vegetation), `PerfStability.py` (runs the perf tests repeatedly and reports how stable every metric is, see [Testing](#testing)), `PerfLock.py` (runs a command under a lock in the user's temporary directory, so that the measurements of agents run by one user never overlap) `CompatLint.py` (compiles changed files with GCC 14 and LLVM 16, the compilers closest to CI's, without precompiled headers, before a push: AGENTS.md, "CI before main") and `CIStatus.py` (the state of a commit's CI runs and the failure annotations its jobs left, readable without a job log) and `LookDev.py` (pictures of fixed shots through headless editors and their comparison between builds, see [Look-dev harness](#look-dev-harness)). |
+| `Tools/` | Standard-library Python tools: generators whose outputs are committed (`GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/`: PNGs, raw RGBA for the window icon, the `.ico` of the executables; `GenerateIslandTerrain.py` makes the Open World sample's island: its terrain tiles and palette, and the command script that scatters its vegetation; `GenerateBlueNoise.py` writes the sun shadows' 64x64 blue-noise tile, `Strata/src/Strata/Renderer/BlueNoise.h`, and `--check` verifies the committed one), `PerfStability.py` (runs the perf tests repeatedly and reports how stable every metric is, see [Testing](#testing)), `PerfLock.py` (runs a command under a lock in the user's temporary directory, so that the measurements of agents run by one user never overlap) `CompatLint.py` (compiles changed files with GCC 14 and LLVM 16, the compilers closest to CI's, without precompiled headers, before a push: AGENTS.md, "CI before main") and `CIStatus.py` (the state of a commit's CI runs and the failure annotations its jobs left, readable without a job log) and `LookDev.py` (pictures of fixed shots through headless editors and their comparison between builds, see [Look-dev harness](#look-dev-harness)). |
 | `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, streaming and residency, render scene, animation, scripting, editor, export and runtime), `Roadmap.md` (the pillars, the waves of workstreams and what each landed wave delivered; update its Status when a wave lands), `Manual/` (guides for people making games in the editor: `Scripting.md`), `Releases/` (the notes of each release, `<version>.md`, and the README of the release archives, `PackageReadme.md`). |
 | `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, editor automation, making a game end to end: `strata-make-a-game`). |
 
@@ -621,7 +621,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     `Tools/LookDev/Shots.json` (the scenes' cameras, the editor's opening views, the audits' close-ups) at each size
     (`--sizes`, default 3840x2160 and 1920x1080), anti-aliasing mode (`--aa`: TAA, FXAA and none, set on the scenes'
     Post Process components without saving) and repeat (`--repeat`, default 5), at the project's Graphics Quality or
-    `--quality <preset>` (refused with a build whose `viewport.capture` has no `quality`). `--live` adds the live shots:
+    `--quality <preset>` (refused with a build whose `viewport.capture` has no `quality`), and with `--debug-view <view>`
+    the stills show that debug view (each repeat's stats keep the result's `debugView`, with the shadows view's
+    statistics). `--live` adds the live shots:
     windowed editors play the scene and read back what the Game view presented (`viewport.capture {live}`), to judge
     motion. `--work <dir>` keeps the copies and their imported assets for the next run (`--fresh-work` makes them
     again); `run.json` reports the time each project took to make and open apart from the captures.
@@ -2908,12 +2910,14 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - **View commands** change no scene data and record no undo: `camera.get`, `camera.set {position, target, yaw, pitch,
   distance, fov, near, far, flySpeed}` (position + target looks from one at the other) and `camera.focus {entities?}`
   (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?,
-  fov?, overlays?, debugView?: "none" | "streaming" | "lod" | "mip" | "motion", quality?: "project" | "low" | "medium" |
+  fov?, overlays?, debugView?: "none" | "streaming" | "lod" | "mip" | "motion" | "shadows", quality?: "project" | "low" | "medium" |
   "high" | "ultra", waitForAssets?, path?, overwrite?}` renders on the
   next frame (again on the following frames, up to `c_MaxCaptureTextFrames`, while glyphs of the scene's text are still
   being rasterized, so text is never half drawn, up to `c_MaxCaptureExposureFrames` until its pre-exposure settled (the
   first frame starts it again from 1 with `ResetExposureAdaptation`, the later ones only jump the adaptation:
-  `PreExposureSettled`, "Light units and exposure"), for a scene drawn with temporal anti-aliasing until its history holds
+  `PreExposureSettled`, "Light units and exposure"), up to `c_MaxCaptureShadowFitFrames` (12) until the sun's cascades'
+  fit to the view settled (the first frame starts it again with `ResetShadowFit`: `ShadowFitSettled`, "Sun shadows"),
+  for a scene drawn with temporal anti-aliasing until its history holds
   `c_TemporalSettleFrames` frames of the complete view, up to `c_MaxCaptureTemporalFrames`, and with `waitForAssets`
   (default true) up to `c_MaxCaptureAssetFrames` while assets of the view are loading, so the first capture after
   opening or playing a scene shows its materials, and up
@@ -2926,14 +2930,20 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   the image back without stalling, encodes it on a job thread and returns `{"Image": {"MimeType": "image/png", "Data":
   <base64>}, "width", "height", "camera", "view": {"position", "forward", "fov"}, "waitedFrames", "temporalFrames", "overlays",
   "pendingAssets", "texturesBelowWanted", "stalePoses", "pendingTextGlyphs", "localShadowViewsPending",
-  "reflectionProbesPending", "preExposureSettled",
+  "reflectionProbesPending", "preExposureSettled", "shadowFitSettled",
   "previewLighting",
   "screenSpaceTexts", "hiddenScreenSpaceTexts", "ui": {"canvases",
   "hiddenCanvases", "elements", "drawCalls", "pendingGlyphs"}, "debugView":
   {"view", "tintedEntities", "pendingEntities", "failedEntities", "placeholderBoxes", "entitiesPerLOD",
-  "entitiesPerMipShortfall"}, "notice"?, "path"?}` (the mip view counts entities with textures by the mip levels their
-  worst texture lacks: none, 1, 2, 3 or more or still loading; the motion view colors pixels by their motion since the
-  capture renderer's previous frame, so it renders a second frame, and a still scene shows none); it defaults to the
+  "entitiesPerMipShortfall", "shadows"?}, "notice"?, "path"?}` (the mip view counts entities with textures by the mip levels
+  their worst texture lacks: none, 1, 2, 3 or more or still loading; the motion view colors pixels by their motion since the
+  capture renderer's previous frame, so it renders a second frame, and a still scene shows none; the shadows view colors
+  every receiver by screen pixels per shadow texel and adds `shadows: {complete, shadowMapSize, surfaceShare, skyShare,
+  uncoveredShare, medianPixelsPerTexel, p10PixelsPerTexel, p90PixelsPerTexel, aboveFourShare, cascades: [{index, near, far,
+  texelSize, screenShare, medianPixelsPerTexel, p10PixelsPerTexel, p90PixelsPerTexel, aboveFourShare}], note?}`: shares of
+  the image's pixels, ratios over the covered receivers (the metric: "Sun shadows"), read back from the captured frame,
+  which the capture waits for as for its GPU times, `complete` false when they did not come within
+  `c_MaxCaptureGPUStatsPolls`); it defaults to the
   viewport's size, camera, overlays and debug view and fails without a GPU. `position`, `target` and `fov` render through a camera of the capture's own (a copy
   of the editor camera with those changes; `camera.get` is unchanged, the result's camera is `"custom"`), so agents look
   around without moving the person's view. **Live captures** (`viewport.capture {live: true, camera, atFixedStep?,
@@ -3167,11 +3177,14 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | `LocalShadowMaxTile` | 512 | 1024 | 1024 | 2048 |
 | `MaxShadowedLocalLights` | 4 | 16 | 16 | 16 |
 | `LODErrorPixels` / `MinProjectedPixels` | 2 / 1 | 1 / 0.5 | 1 / 0.5 | 0.5 / 0.25 |
+| `ShadowFilterQuality` (taps of the sun's wide penumbrae) | 8 | 16 | 24 | 32 |
+| `ContactShadows` (steps of the sun's contact shadows; 0 off) | 0 | 0 | 12 | 16 |
 | Cascades' memory per view (D32) | 12 MiB | 64 MiB | 64 MiB, 256 MiB from 1440 rows | 256 MiB, 1 GiB from 1440 rows |
 | Atlas memory per view | 16 MiB | 64 MiB | 64 MiB | 256 MiB |
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
-  High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows (`Renderer.Quality` checks it).
+  High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for rows that cost per pixel
+  (`ShadowFilterQuality`, `ContactShadows`; `Renderer.Quality` checks it).
   Custom is the section's fields (High's values by default). `RendererQuality::Clamp` keeps every knob in its range.
 - **Auto by rows:** `RendererQuality::ResolveShadowMapSize` resolves Auto and AutoFine for the renderer's viewport rows
   (its output: the Scene and Game views' panel pixels, the window's back buffer, a capture's image), limited to
@@ -3497,9 +3510,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   where it calls `ResetExposureAdaptation`). It is counted in frames, never in time: slow frames never reset it. Tests
   may render many frames back to back without device frames: the renderer waits for its own oldest frames before its
   frame constants' versions run out (`SceneRenderer::ReserveFrameConstantVersions`; Architecture rules, NVRHI pitfalls).
-- With TAA, PCSS and GTAO turn their per-pixel noise by the golden ratio's fraction of a turn per frame of the history
-  (`TemporalParams.z`, counted from the reset so captures are deterministic), and the history averages it; without TAA the
-  turn is 0 and the images are unchanged.
+- With TAA, the local lights' shadow filter, GTAO and the screen-space reflections turn their per-pixel noise by the golden
+  ratio's fraction of a turn per frame of the history (`TemporalParams.z`, counted from the reset so captures are
+  deterministic), and the history averages it; without TAA the turn is 0 and the images are unchanged. The sun's shadow
+  filter turns nothing: a fixed blue-noise tile, whose grain the shadow mask's blur takes in the frame ("Sun shadows").
 - Renderers of single images settle or turn TAA off: `viewport.capture` and the project's picture render their still view
   again until the history holds `c_TemporalSettleFrames` (8) complete frames (a frame still incomplete for another reason
   starts it again while its own bounded wait lasts, so a view that stays incomplete still settles once that wait ended),
@@ -3601,8 +3615,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
 - Shadows: cascade depth ranges are fitted to the casters toward the light (casters beyond
   `c_MaxShadowCasterDistance` are pancaked onto the near plane), on the GPU on both paths (`Scene/CascadeFit.comp` writes
   `u_Cascades`, which the shadow and forward shaders read: never put cascade projections back into `FrameConstants`; the
-  CPU path hands it the nearest casters it found, the GPU-driven path's culling finds them the same frame); acne is handled by the rasterizer
-  depth bias, the light's depth and normal offsets and a receiver plane depth bias in the PCSS filter. A caster is
+  CPU path hands it the nearest casters it found, the GPU-driven path's culling finds them the same frame); the filter,
+  its depth ranges and its biases: "Sun shadows". A caster is
   drawn into a cascade only while its light-space extent (the larger of x and y) covers at least `c_MinCasterTexels`
   (1) of the cascade's texels (`SceneRendererStats::SubTexelCasters` counts those left out, per cascade): smaller ones
   only flicker in and out of texels. `FindShadowCasters` queries the cascades as one job each and tests the candidates
@@ -3610,10 +3624,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
 - Cascade blending (`DirectionalLightComponent::CascadeBlend`, 0 to 0.5, 0.1 by default and for scenes saved before
   it): each cascade's band is the last `CascadeBlend` of its slice's depth range, before its split (the first slice's
   range counted from the camera). `Include/Shadows.glsl` (`CascadeBlendWeight`) mixes a band's pixels with the next
-  cascade by depth, and the last cascade's with no shadow, so no seam shows between cascades and shadows fade out by the
-  shadow distance instead of stopping. `FindShadowCasters` starts each next slice at the previous band before fitting
+  cascade where that one holds them (a fitted square may not: "Sun shadows"), and the last cascade's with no shadow, so no
+  seam shows between cascades and shadows fade out by the shadow distance instead of stopping. `FindShadowCasters` starts each next slice at the previous band before fitting
   its sphere, so the next square covers the band; the CPU's caster test, the GPU's `CullConstants::CascadeBoxes`, the
-  fit and the cascade cache's keys all read those boxes. Its cost: a second PCSS evaluation in the bands' pixels, and
+  fit and the cascade cache's keys all read those boxes. Its cost: a second filter evaluation in the bands' pixels, and
   slightly larger squares (lower texel density, more casters) for cascades 1 to 3. 0 switches cascades at once, as 0.5.0
   did (`GPU.SceneRenderer.Shadows`: the seam, the bands' coverage at 0.5, the fade).
 - HDR targets are RGBA16F: shaders writing them clamp with `SanitizeHDR` (Inf and NaN would turn
@@ -3627,6 +3641,178 @@ lights, Post Process and the sky), and never a resolution below the output's.
   Multiply coverage into the result and discard once at the end, as `GameUI/UIQuad.frag` does, or sample every texture
   before the discards, as `Scene/Forward.frag` and `Scene/DepthPrepass.frag` do. `Architecture.Shaders` checks every
   fragment shader's source.
+
+### Sun shadows
+
+- **The filter** (`Include/Shadows.glsl`, `SampleCascadeShadow`) is percentage-closer soft shadows at the physical width:
+  a blocker at separation `s` under a disk of angular radius `a` (half the light's `ShadowSoftness`; the sun is 0.53
+  degrees across, the component's default) lights a straight edge from none to full over `2 s tan(a)`, which filtering
+  with a disk of radius `s tan(a)` reproduces (`ShadowParams.x` is `tan(a)`; its 10-90% width is `1.374 s tan(a)`, 2.5 cm
+  at 4 m). Per pixel, in its cascade: the normal offset and receiver plane bias as before; the **search region** (the
+  half-width of the penumbra of a blocker at the cascade's search distance, `Parameters.z`, at most 31 texels, at least
+  the tent's 1.5, plus a texel) read as at most 5 x 5 cells of the cascade's **depth ranges**; a region whose nearest
+  depth is no nearer than the lowest reference any tap compares with is **lit**, one whose farthest is nearer than the
+  highest is in **umbra**, both exactly (the ranges are rounded outward and every tap reads inside the region), and a
+  caster of any thinness raises the nearest depth, so the search never misses one. Otherwise the cells nearer than the
+  receiver plane over them give the blockers' mean separation (weighted by their overlap with the search square, so the
+  estimate is continuous as the receiver moves; no blocking cell: no penumbra), the **tent** (four bilinear comparisons
+  at +-0.5 texels: a trapezoid of +-1.5 texels, the same at every pixel) filters every edge, and where the penumbra's
+  radius exceeds a texel a **Vogel disk** of `RendererQualitySettings::ShadowFilterQuality` taps (8, 16, 24, 32;
+  `ShadowBias.z`), turned per pixel by the renderer's fixed 64x64 blue-noise tile (`Renderer::GetBlueNoiseTexture`,
+  `RenderData::c_BlueNoise`, made by `Tools/GenerateBlueNoise.py`: void and cluster, every byte 16 times), takes over
+  between 1 and 2 texels of radius. Nothing reads `TemporalParams.z` or a frame counter: a still view is the same image
+  in every frame with and without TAA (`GPU.SceneRenderer.ShadowFilter`). Lit ground under a sun below about 70 degrees
+  spans its own cells' ranges, so it takes the tent (4 taps) rather than leaving early; umbrae and ground facing the sun
+  leave after the range reads.
+- **The depth ranges** (`SceneRenderer::GetShadowRanges`): an R32_UINT array of a layer per cascade and three levels of
+  cells of 4, 8 and 16 texels, each `(ceil(nearest * 65535) << 16) | floor(farthest * 65535)` (reversed-Z: nearest is the
+  largest), rounded outward. `Scene/ShadowRanges.comp` builds level 0 from the shadow map and its `Downsample` variant
+  the others, in `GPU.Shadows` right after the layers are drawn: every layer on the CPU path, the drawn ones on the
+  GPU-driven path (`LayerMask`), so a kept layer keeps its ranges: they belong to the cascade cache, made and released
+  with the shadow map (`CreateShadowRanges` in `EnsureShadowMap`, `ReleaseShadowMap`; a failure fails the map). Scene
+  slots: SRV 32 the ranges, 33 the blue-noise tile (the shadow pass's sets bind a dummy at 32). The filter changes how
+  shadows are read, not how casters are drawn: no cache key changed.
+- **Biases** stay as they were: the rasterizer's slope bias, the light's 1-texel depth bias and 1.5-texel normal offset
+  (texel-relative, so they follow the resolution) and the receiver plane bias; `GPU.SceneRenderer.Shadows` checks for
+  acne at 1024, 2048 and 4096 texels with and without the light's biases, and `ShadowFilter` that contacts recede at
+  most 2.5 texels.
+- **The screen-space mask** (`SceneRendererScreenShadows.cpp`, GPU stage `GPU.ScreenShadows` right after `GPU.Prepass`):
+  opaque surfaces take the sun's shadow from a mask the frame draws after the depth prepass (after the GPU-driven path's
+  second occlusion phase), on both paths alike. `Effects/ScreenShadows.frag` evaluates the filter at every pixel of the
+  prepass, from its D32 depth (the camera-relative position through the frame's jittered `InverseViewProjection`: the
+  point the forward pass shades) and its geometric normal (RG16F octahedral, view space), into target A (RG8: red the
+  square root of the visibility, so the 8 bits are spent near the umbra where a step would show; green the pixel's blur
+  radius over `c_ScreenShadowMaxBlurPixels`, 8): no radius where the filter left early (lit, umbra), 0.35 of the
+  penumbra's half-width in pixels where the disk did (enough for the blue noise's grain, the penumbra widens by about 6%),
+  and where the tent left an edge partly lit on a receiver the light grazes (`|n.L|` under 0.5: a texel's step across the
+  light slides along its plane by `1 / |n.L|`, at least twice, while the tent smooths a step over a texel and a half of
+  the light's image) and a stretched texel covers more than 1.5 screen pixels (`ReceiverTexelPixels`), that footprint, at
+  most 4 pixels (`c_StairMaxBlurPixels`: the blur's taps cost), which takes the texels' stair steps (saw teeth under the Open World's pine tiers).
+  `Effects/ScreenShadowsBlur.frag` then blurs A into B horizontally and B into A vertically, a Gaussian whose taps are
+  weighted by their distance from the pixel's plane (1% of its view distance: exact for a plane at any
+  angle, nothing from another surface, so no light crosses a silhouette) and by their normals' agreement; it averages
+  visibility, not its encoding, and pixels without a radius keep their value exactly. `Forward.frag`'s opaque variants
+  read A at SRV 28 (white without a mask: visibility 1). The targets (33 MB at 3840x2160) are made by the first frame with
+  a shadowed sun and released with the render targets; a frame whose targets cannot be made renders without the sun's
+  shadows (`ShadowParams.w` 0, also for transparent surfaces), reported. `SceneRendererStats::ScreenShadows`,
+  `SceneRenderer::GetScreenShadowTexture`.
+- **Contact shadows** ground what lies below the cascades' texels (a 5 cm plate on the floor, a foot): a pass of their own
+  between the evaluation (which then writes B) and the blur, `Effects/ContactShadows.frag` (B into A; apart from the
+  evaluation so neither carries the other's registers), marches from each pixel the sun still reaches toward the sun over
+  the prepass's depth, `RendererQualitySettings::ContactShadows` steps (0 at Low and Medium: no march; 12 High, 16 Ultra; Custom 0 or 4-32)
+  over the light's `DirectionalLightComponent::ContactShadowLength` (meters, 0-2, default 0.3; 0 turns them off for the
+  light), shortened so the march spans at most 5% of the image's height on screen. It starts one pixel's footprint off
+  the surface, only where both the prepass's normal and the pixel's **own face** face the sun (`FaceNormal`: the plane
+  through the positions the depth buffer holds at the pixel and, on each axis, the neighbor nearer in depth; the
+  prepass's normal is the interpolated vertex normal, which leans off the faces of coarse smooth-shaded meshes, and a
+  ray from a face turned from the sun under a normal turned toward it enters its own object; asked once a step hits), so
+  convex objects never darken themselves. A step occludes when it lies between 2 mm and `0.02 m + 0.005 d` (its view
+  distance `d`) behind the face the depth buffer holds under it (that face's own plane again: exact for planes at any
+  angle, so a ray rising off a floor at a grazing sun never reads the floor as an occluder); steps more than two pixels'
+  footprint in front of that surface along the view end without the plane (which gives up contact shadows from surfaces
+  seen nearly edge-on). Steps are interpolated in clip space and read the depth four at a time, so the reads overlap.
+  They are offset by the fixed blue-noise tile (shifted apart from the disk's turn), not by the frame; the dither this
+  leaves where a hit depends on whether a step lands within the thickness (a contact shadow's far edge, rays passing
+  behind an object seen from the camera) is taken by the mask's blur, whose radius becomes half the step's length on
+  screen (1-4 pixels) where a march hit, passed behind a surface by more than the thickness or passed near an occluder (a
+  surface standing off the start's own plane toward the sun by more than the thickness: the pixels beside a contact
+  shadow's edge whose own marches missed, which would stay fully lit between blurred neighbors); hits fade over the
+  march's last 40%, from half the shadow distance to all of it, and within 5% of the screen's edges. The limit every screen-space method has: contact shadows come from every opaque surface of the depth
+  prepass, also from mesh renderers whose `CastShadows` is off, and from nothing off screen or hidden; transparent
+  surfaces neither cast nor receive them. `GPU.SceneRenderer.ContactShadows`; the GPU-driven comparison draws them.
+- **Cascades fitted to the view** (`SceneRendererSpecification::FitShadowsToView`, on by default; `ShadowFitTracker`,
+  `Strata/Renderer/ShadowFit.h`; `SceneRendererShadowFit.cpp`): the cascades go where the receivers are. In
+  `GPU.ScreenShadows`, after the mask, `Scene/ShadowFit.comp` reduces the complete prepass depth (both paths alike; the
+  GPU path's occlusion pyramid holds only the first phase's farthest depths, the sky included) to the receivers' nearest
+  and farthest view distance and, per quarter stop of view distance (`RenderData::c_ShadowFitBins` 80 from 6.25 cm), the
+  box of their positions in the camera's **view space** and their pixels (`ShadowFitResult`, 2,256 bytes; every box field
+  an ordered float reduced with `atomicMax`, minima complemented, the counts with `atomicAdd`; a thread reduces 4 x 4
+  pixels in registers, a group in shared memory).
+  A ring of `c_GPURecordCount` readbacks, each with the frame's camera, the tracker's epoch and layout version, is
+  submitted after the frame and polled (never waited for) by `UpdateShadowFit` at the start of a later frame's
+  extraction, before the visibility feedback is chosen; `FindShadowCasters` applies the tracker's layout to
+  `m_Cascades` and `CascadeSplits`, so the CPU's caster test, the GPU's culling, the depth fit and the cascade cache's
+  keys agree, and **cascade layouts come only from the tracker**. Its rules, in order:
+  - **Epochs:** the fit's first frame, `ResetShadowFit` (`GameRenderer` on scene loads, captures and the project thumbnail on
+    their first frame), a camera cut, another render scene (a clone, entering Play, keeps it), other cascades (size or
+    count) and a light that stopped casting start one; until a readback of the epoch arrives, and while the receivers
+    are none or all beyond the shadow distance, the layout is Strata 0.6.0's (0.8 logarithmic splits from the near clip,
+    spheres). The first readback of an epoch sets everything at once: 0.6.0's layout is no state to shrink from.
+  - **Bounds:** `N` is the receivers' nearest distance (or the previous frame's nearest transparent surface, which no
+    depth holds: where the view can see its bounds at the nearest, the larger of their nearest corner's depth and their
+    distance times the cosine of the view's half diagonal, so a sea's box around the camera does not reach it) over
+    2^0.5, quarter stops below, at least the near clip; the nearest receivers are left out while together
+    they hold less than 1% of the receiver pixels (`c_NearOutlierShare`: a leaf at a flying camera would otherwise spend
+    the first cascades on distances nothing else occupies), out of the squares too, and containment shades them from the
+    last cascade, whose sphere then holds every point of the view nearer than `D`; where it would not (the near bound they
+    give beyond `D k`, `k = tan^2(fovY/2) + tan^2(fovX/2)`, which only fields of view below about 45 degrees at 16:9 and
+    orthographic views, `k = 0`, allow) they are kept like any receiver; `F` their farthest times 2^0.5, quarter stops
+    above, at least `N` 2^0.5, and the shadow distance `D` from 0.7 `D` on (one cascade: always). A bound or side grows in
+    the frame it must and shrinks only after `ShadowFitTracker::c_ShrinkReadbacks` (8) readbacks in a row asked for less,
+    to the least shrunk of them.
+  - **Slices:** with `F = D` the `n` slices over `[N, D]`, else `n - 1` over `[N, F]` and the last one from the band before
+    `F` to `D`, splitting by the light's `CascadeDistribution` (0-1, 0.9: the logarithmic share). The **last cascade always
+    reaches `D` on its slice's sphere** (that of `[N, D]` where the field of view is so narrow that the sphere of `[a, D]`
+    would not hold the frustum's nearer points: `a > D (tan^2(fovY/2) + tan^2(fovX/2))`, and for orthographic views): a
+    receiver no readback saw (a camera turning from a wall to a vista, a door opening) has a cascade, coarser for 2-3
+    frames, never none.
+  - **Squares** (perspective views; every cascade but the last): the bins' boxes are re-projected through the readback's
+    camera into this frame's camera and light, in double, so neither a moving camera nor a turning sun (the Open World's
+    day cycle) costs a fallback frame; the union of the bins whose distance now overlaps a slice, grown by how far the
+    slice's corners moved with the camera's turn since the readback, by 5% and by `c_FilterReachTexels` (33) of its own
+    texels on each side, as a square of quarter stops (at least a sixteenth of the slice's sphere; the sphere once it would
+    be as large, or when no bin reaches the slice), centered on whole texels of absolute light space. Its depth stays the
+    sphere's (`FarZ`, `SphereNearZ`, `Radius`: the search distance), so every point of the slice is in its depth range.
+  - **Containment:** shaders select cascades with `SelectShadowCascade(viewDepth, position)` (`Include/Shadows.glsl`; the
+    only selection: never by depth alone): from the first cascade whose split lies beyond the depth, the first that holds
+    the position 33 texels inside its square (the last one to its edge, as 0.6.0) and in its depth range; a band blends
+    into the next cascade only where that one holds the pixel. The debug view selects alike.
+  - **Settled** (`SceneRendererStats::ShadowFitSettled`): since the latest change or epoch, a readback of a frame drawn with
+    the current layout arrived and kept it (true without a fit). `viewport.capture` and the project thumbnail render
+    again while it is not, for at most 12 frames (`c_MaxCaptureShadowFitFrames`, `ProjectThumbnail::c_MaxShadowFitFrames`);
+    tests render frames waited for (`ReadTexture`), so readbacks arrive the frame after on every machine.
+  Layout changes keep the visibility feedback (squares move texel by texel with the camera, as 0.6.0's spheres did): on
+  feedback frames every cascade gets the slots of every caster the feedback saw, and the last cascade holds every caster
+  of every receiver. `ForThumbnails()` and `ForBake()` turn the fit off (single frames), and so do tests of the layout's
+  texel sizes or 0.6.0's splits. Stats: `ShadowFit`, `ShadowFitSquares`, `ShadowFitSettled`, `ShadowFitNear`, `ShadowFitFar`,
+  `ShadowFitChanges`, `Cascades[c].Fitted`; `editor.perf`'s `renderStats` (and every `viewport.capture` result's) report
+  `shadowFit` and `cascades`. Tests:
+  `Renderer.ShadowFit` (the tracker alone, synthetic readbacks), `GPU.SceneRenderer.ShadowFit`.
+- **Costs** (look-dev A/B against 0.6.0's filter at cc9524a1, three interleaved pairs, medians, the samples' scene cameras
+  with TAA; RTX 5090): at 3840x2160 High `GPU.ScreenShadows` is 0.54-0.83 ms (mask, blur, contact shadows and the fit's
+  reduction) while `GPU.Opaque` loses the filter (0.06-0.19 ms less), GPU busy 1.32-1.42 times; at 1920x1080 Medium the
+  stage is 0.11-0.16 ms against 0.01-0.03 ms saved in `GPU.Opaque`, busy 1.15-1.24 times. Timed apart (temporary timers,
+  which add their own gaps) at Medium 1080 the evaluation takes 0.07-0.12 ms, the blur 0.035-0.046 ms and the reduction
+  0.011 ms, all of it fixed costs (reading every second pixel saved nothing). `PerfGPU.Renderer.ScreenShadows4K*` and
+  `ShadowRedraw4K*` (provisional) measure it on 100,000 shadowed cubes.
+- **Transparent surfaces** are not in the prepass: `Forward.frag`'s transparent and glass variants call
+  `SampleDirectionalShadow`, the same filter per pixel, without the blur (and without contact shadows). A change to how
+  the sun's shadow reaches surfaces changes both.
+- **The shadows debug view** (`SceneRenderOptions::ShowShadowView`; the editor's `debugView: "shadows"`) measures how fine
+  the sun's cascades are where the receivers are. Its metric is screen pixels per shadow texel: for each pixel the scene
+  drew, its camera-relative position is reconstructed from the depth through `InverseViewProjection`, it and its view
+  distance `d` select its cascade as the shading does (`SelectShadowCascade`), and the ratio is the cascade's texel size (`CascadeData::Parameters.x`)
+  over a screen pixel's world size facing the camera at that distance, `2 d / (Projection[1][1] * rows)` (`2 /
+  (Projection[1][1] * rows)` for orthographic views): independent of the surface's orientation, so it compares with the
+  shadows audit's numbers. About 1 or less is as fine as the screen; 2.2 at every split was 0.6.0's 2048-texel cascades at
+  2160 rows. `Include/ShadowView.glsl` computes it once for both users: `Overlay/ShadowView.frag` colors receivers
+  (green at most 1, yellow 2, red 4 and more, linear in stops; a checker of the texels where they span more than about
+  1.4 pixels; darkened by the sun's shadow, 0.4 + 0.6 times the visibility of the frame's mask at SRV 23 (white without
+  one), so the view shows where the shadows fall on the texels; white cascade edges; hatched blend bands; a gray veil
+  where no cascade covers a surface, the sky darkened),
+  and `Debug/ShadowViewStats.comp` counts every pixel as sky, uncovered surface or a cascade's bin of an eighth of a stop
+  over [1/16, 16) pixels per texel (`RenderData::ShadowViewCounts`, 1,040 bytes, shared-memory counts flushed with one
+  atomic add per non-empty entry and group). Both run in `GPU.Overlays` with the overlays' frame constants, and only in
+  frames that show the view: its pipelines and buffers are made by the first such frame, its binding sets (which name the
+  depth) are released with the targets, its counts' buffer and the ring of `c_GPURecordCount` readbacks stay with the
+  renderer, so a capture's counts survive the release of its targets.
+- `SceneRenderer::GetShadowViewStats()` (`ShadowViewStats`, `Strata/Renderer/ShadowView.h`) is the newest frame whose counts
+  came back (2-3 frames late, never waited for: `Render` resolves them at its start, `ResolveShadowViewStats` for tools
+  that wait without rendering, as `viewport.capture` does beside `ResolveGPUStats`): per cascade its layout (the frame's
+  `SceneRendererStats::Cascades`: slice from its near end, blend band included, to its split, and texel size), its bins,
+  pixels, median, 10th and 90th percentiles (the first bin where the cumulative count reaches the fraction, at its
+  geometric center) and pixels at 4 or more; the same over every covered pixel. `ShadowView::Summarize` is the one
+  summary the GPU tests compare a CPU histogram with (`GPU.SceneRenderer.ShadowView`).
 
 ### Local light shadows
 
@@ -3668,7 +3854,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   pancaking) from `RenderData::LocalShadowData` (scene set SRV 13, a slot per light: six camera-relative matrices, the
   tiles, the biases and the light's strength); a redrawn tile is first cleared by a quad at depth 0, since a clear would
   also clear the cached tiles. The forward passes sample the atlas (SRV 8; the shadow passes bind a dummy) through the
-  cascades' comparison sampler, 16 rotated taps kept inside the tile, for lights whose `LightData::SpotAngles.z` names their
+  cascades' comparison sampler, 16 taps kept inside the tile (`c_LocalShadowPoissonDisk`, turned per pixel by
+  `LocalShadowSampleRotation`, which still turns with the TAA frame: the sun's filter no longer does), for lights whose
+  `LightData::SpotAngles.z` names their
   slot plus one: the CPU path writes it with the frame's lights, `Scene/LightCompact.comp` from the renderer's slot table per
   light record (light-culling SRV 21). The depth bias moves the lookup toward the light and the normal bias off the surface,
   both in texels at the surface's depth.

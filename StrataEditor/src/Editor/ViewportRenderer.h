@@ -137,6 +137,8 @@ namespace Strata
 		uint32_t CountTexturesBelowWanted() const;
 		// What the debug view of the last Render found (empty without one).
 		const StreamingViewStats& GetDebugViewStats() const { return m_StreamingView.GetStats(); }
+		// What the shadows debug view counted in the newest frame whose counts came back (SceneRenderer::GetShadowViewStats).
+		const ShadowViewStats& GetShadowViewStats() const { return m_Renderer->GetShadowViewStats(); }
 		SceneRenderer& GetSceneRenderer() { return *m_Renderer; }
 		// Whether the renderer's overlay passes would draw screen-space content of the scene (its game UI).
 		bool HasOverlayContent(Scene& scene) const { return m_Renderer->HasOverlayContent(scene); }

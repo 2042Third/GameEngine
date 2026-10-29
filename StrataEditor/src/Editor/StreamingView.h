@@ -22,17 +22,19 @@ namespace Strata
 	class RenderScene;
 	class Scene;
 
-	// What the viewport shows: the scene as rendered, colored by what the streaming pillars do to it, or its motion.
+	// What the viewport shows: the scene as rendered, colored by what the streaming pillars do to it, its motion or its sun's
+	// shadow cascades.
 	enum class ViewportDebugView : uint8_t
 	{
 		None = 0,
 		Streaming, // Entities whose mesh, material or textures are still loading, or failed to
 		LOD,       // Entities by the level of detail their mesh is drawn at
 		Mip,       // Entities by how far their textures' resident mip levels are from those their view needs
-		Motion     // Every pixel's motion since the view's previous frame (SceneRenderOptions::ShowMotionVectors), not a tint
+		Motion,    // Every pixel's motion since the view's previous frame (SceneRenderOptions::ShowMotionVectors), not a tint
+		Shadows    // Every receiver pixel by screen pixels per shadow texel, with the cascades (SceneRenderOptions::ShowShadowView)
 	};
 
-	// "none", "streaming", "lod", "mip", "motion" (the names commands and the saved viewport state use).
+	// "none", "streaming", "lod", "mip", "motion", "shadows" (the names commands and the saved viewport state use).
 	const char* ViewportDebugViewToString(ViewportDebugView view);
 	std::optional<ViewportDebugView> ViewportDebugViewFromString(std::string_view name);
 
@@ -58,6 +60,12 @@ namespace Strata
 		glm::vec4 CellLoading = { 0.91f, 0.76f, 0.30f, 1.0f };
 		glm::vec4 CellLoaded = { 0.84f, 0.55f, 0.27f, 1.0f };
 		glm::vec4 CellUnloading = { 0.60f, 0.58f, 0.55f, 1.0f };
+		// The shadows view's ramp (SceneRenderOptions::ShadowViewColors): at most one screen pixel per shadow texel, two, and four
+		// or more (Malachite, Sulfur and Cinnabar).
+		std::array<glm::vec4, 3> ShadowRatio = { {
+			{ 0.24f, 0.75f, 0.55f, 1.0f },
+			{ 0.91f, 0.76f, 0.30f, 1.0f },
+			{ 0.90f, 0.33f, 0.29f, 1.0f } } };
 	};
 
 	// What a debug view found in the last Build, among the entities in the camera's view.

@@ -60,6 +60,54 @@ namespace Strata
 		constexpr float c_AgentFlashThicknessInFontSizes = 1.0f / 7.0f;
 		constexpr size_t c_MaxAgentFlashEntities = 64;
 
+		// A length of shadow texels for people: millimeters, centimeters or meters.
+		std::string FormatTexelSize(float meters)
+		{
+			if (meters < 0.01f)
+				return fmt::format("{:.1f} mm", meters * 1000.0f);
+			if (meters < 1.0f)
+				return fmt::format("{:.1f} cm", meters * 100.0f);
+			return fmt::format("{:.2f} m", meters);
+		}
+
+		// The shadows view's ramp color at a ratio of screen pixels per shadow texel (as Overlay/ShadowView.frag mixes it).
+		ImVec4 GetShadowRatioColor(const std::array<glm::vec4, 3>& ramp, float pixelsPerTexel)
+		{
+			const float t = std::clamp(std::log2(std::max(pixelsPerTexel, 1e-6f)), 0.0f, 2.0f);
+			const glm::vec4 color = t < 1.0f ? glm::mix(ramp[0], ramp[1], t) : glm::mix(ramp[1], ramp[2], t - 1.0f);
+			return ImVec4(color.r, color.g, color.b, 1.0f);
+		}
+
+		// The shadows view's legend: the ramp's three colors with their shares of the covered receivers (each pixel counted at
+		// the color nearest its ratio, half a stop either side), then a line per cascade with its slice, texel size and median.
+		void AddShadowViewLegend(const ShadowViewStats& stats, const std::array<glm::vec4, 3>& ramp, std::vector<UI::LegendLine>& lines)
+		{
+			// Bins from the ratio's half stops between the ramp's colors (1.41 and 2.83 pixels per texel).
+			constexpr uint32_t c_YellowFirstBin = (4 * 2 + 1) * RenderData::c_ShadowViewBinsPerStop / 2;
+			constexpr uint32_t c_RedFirstBin = (4 * 2 + 3) * RenderData::c_ShadowViewBinsPerStop / 2;
+			std::array<uint64_t, 3> pixels = {};
+			for (uint32_t cascade = 0; cascade < stats.CascadeCount; cascade++)
+			{
+				for (uint32_t bin = 0; bin < RenderData::c_ShadowViewBins; bin++)
+					pixels[bin < c_YellowFirstBin ? 0 : (bin < c_RedFirstBin ? 1 : 2)] += stats.Bins[cascade][bin];
+			}
+			const double covered = static_cast<double>(std::max(stats.Covered.Pixels, 1u));
+			constexpr std::array<const char*, 3> names = { "1 px per texel or finer", "2 px", "4 px or coarser" };
+			for (size_t step = 0; step < names.size(); step++)
+			{
+				const ImVec4 color(ramp[step].r, ramp[step].g, ramp[step].b, 1.0f);
+				lines.push_back({ color, names[step], fmt::format("{:.0f}%", 100.0 * static_cast<double>(pixels[step]) / covered) });
+			}
+			for (uint32_t cascade = 0; cascade < stats.CascadeCount; cascade++)
+			{
+				const ShadowCascadeStats& layout = stats.Cascades[cascade];
+				const ShadowViewRatioStats& ratio = stats.PerCascade[cascade];
+				lines.push_back({ GetShadowRatioColor(ramp, ratio.MedianPixelsPerTexel), fmt::format("C{} {:.1f}-{:.1f} m", cascade, layout.Near, layout.Far),
+					ratio.Pixels > 0 ? fmt::format("{}, median {:.2f}", FormatTexelSize(layout.WorldPerTexel), ratio.MedianPixelsPerTexel)
+						: fmt::format("{}, no receivers", FormatTexelSize(layout.WorldPerTexel)) });
+			}
+		}
+
 		ImGuizmo::OPERATION ToImGuizmo(GizmoOperation operation)
 		{
 			switch (operation)
@@ -582,9 +630,12 @@ namespace Strata
 			label = "Mip";
 		else if (settings.DebugView == ViewportDebugView::Motion)
 			label = "Motion";
+		else if (settings.DebugView == ViewportDebugView::Shadows)
+			label = "Shadows";
 		if (UI::ToggleChip("Viewport.DebugView", Icons::Layers, label, &clicked,
 			"Debug views: color the scene by streaming state (meshes, materials and textures still loading or failed), by the level of detail "
-			"meshes are drawn at, by the mip levels textures lack against what the view needs, or by how each pixel moved since the previous frame"))
+			"meshes are drawn at, by the mip levels textures lack against what the view needs, by how each pixel moved since the previous frame, "
+			"or by how many screen pixels a texel of the sun's shadow cascades spans"))
 		{
 			ImGui::OpenPopup("DebugView");
 		}
@@ -595,7 +646,8 @@ namespace Strata
 			{ ViewportDebugView::Streaming, "Streaming: loading and failed assets" },
 			{ ViewportDebugView::LOD, "LOD: level of detail drawn" },
 			{ ViewportDebugView::Mip, "Mip: texture levels resident against needed" },
-			{ ViewportDebugView::Motion, "Motion: movement since the previous frame" }
+			{ ViewportDebugView::Motion, "Motion: movement since the previous frame" },
+			{ ViewportDebugView::Shadows, "Shadows: cascades and pixels per texel" }
 		};
 		for (const auto& [view, name] : views)
 		{
@@ -695,11 +747,15 @@ namespace Strata
 			for (size_t shortfall = 0; shortfall < settings.DebugColors.Mip.size(); shortfall++)
 				lines.push_back({ toColor(settings.DebugColors.Mip[shortfall]), names[shortfall], std::to_string(stats.EntitiesPerMipShortfall[shortfall]) });
 		}
+		else if (settings.DebugView == ViewportDebugView::Shadows)
+			AddShadowViewLegend(renderer->GetShadowViewStats(), settings.DebugColors.ShadowRatio, lines);
 		std::string note;
 		if (settings.DebugView == ViewportDebugView::Streaming && stats.PlaceholderBoxes > 0)
 			note = fmt::format("{} boxes: meshes not there yet", stats.PlaceholderBoxes);
 		else if (settings.DebugView == ViewportDebugView::Motion)
 			note = "Hue: direction, strength: speed (full at 16 px)";
+		else if (settings.DebugView == ViewportDebugView::Shadows)
+			note = renderer->GetShadowViewStats().CascadeCount > 0 ? "White: cascade edges. Hatched: blend bands." : "No shadowed directional light";
 
 		// At the image's bottom left.
 		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);

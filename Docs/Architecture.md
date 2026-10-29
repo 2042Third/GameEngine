@@ -895,6 +895,7 @@ The renderer's stages, registered by `RegisterRendererModule` (`RendererGPUStage
 | `GPU.Setup` | a scene renderer's environment maps, scene data uploads and light clusters |
 | `GPU.Cull` | culling dispatches and depth pyramids |
 | `GPU.Shadows`, `GPU.Prepass`, `GPU.AO`, `GPU.Opaque` (with the sky), `GPU.Transparent` | the scene passes |
+| `GPU.ScreenShadows` | the sun's screen-space shadow mask, its blur, contact shadows and the reduction that fits the cascades to the view, between `GPU.Prepass` and `GPU.AO` (frames with a shadowed sun) |
 | `GPU.Reflections` | reflection probes' conversions and the screen-space reflections' trace, between `GPU.AO` and `GPU.Opaque` |
 | `GPU.TAA` | the motion history's copy (`Scene/MotionCopy.comp`) and the temporal anti-aliasing resolve |
 | `GPU.Post` | exposure, bloom, tone mapping and FXAA |

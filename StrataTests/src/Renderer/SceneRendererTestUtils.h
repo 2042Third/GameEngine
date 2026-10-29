@@ -121,6 +121,100 @@ namespace Strata::Tests
 		return camera;
 	}
 
+	// Direction a sun travels at an elevation above the horizon (degrees), coming from the given azimuth (degrees
+	// around +Y, 0 = from +X).
+	inline glm::vec3 SunDirection(float elevation, float azimuth)
+	{
+		const float e = glm::radians(elevation);
+		const float a = glm::radians(azimuth);
+		return -glm::vec3(std::cos(e) * std::cos(a), std::sin(e), std::cos(e) * std::sin(a));
+	}
+
+	// A camera at `position` looking along -Z, `pitch` degrees below the horizon, with a vertical field of view of `fov`
+	// degrees: its rows see the floor (y = 0) each at one view depth.
+	inline SceneCamera PitchedCamera(const glm::vec3& position, float pitch, float fov)
+	{
+		const float radians = glm::radians(pitch);
+		SceneCamera camera = LookAt(position, position + glm::vec3(0.0f, -std::sin(radians), -std::cos(radians)));
+		camera.Projection = Math::PerspectiveReverseZ(glm::radians(fov), 1.0f, 0.1f, 500.0f);
+		camera.VerticalFOV = glm::radians(fov);
+		camera.Far = 500.0f;
+		return camera;
+	}
+
+	// The view depth of the floor (y = 0) a row of a square image of the camera shows, or a negative value where it shows no
+	// floor (along a row of a camera without roll, it does not change).
+	inline float FloorRowDepth(const SceneCamera& camera, uint32_t row, uint32_t size)
+	{
+		const float ndcY = 1.0f - 2.0f * (static_cast<float>(row) + 0.5f) / static_cast<float>(size);
+		const glm::vec3 viewRay(0.0f, ndcY * std::tan(camera.VerticalFOV * 0.5f), -1.0f); // One unit of view depth
+		const glm::vec3 worldRay = glm::mat3(glm::inverse(camera.View)) * viewRay;
+		if (!(worldRay.y < 0.0f))
+			return -1.0f;
+		return camera.Position.y / -worldRay.y;
+	}
+
+	// How much of the sun reaches each pixel's surface (1 lit, 0 in full shadow; -1 where the sun lights nothing), from the
+	// HDR images (red) of the scene as it is, with the sun's shadows off (lit) and without the sun (dark): the scene's
+	// lighting is linear in the sun's. Square images. Stats are the shadowed frame's.
+	struct SunlightImage
+	{
+		uint32_t Size = 0;
+		std::vector<float> Fraction;
+		SceneRendererStats Stats;
+
+		float At(uint32_t x, uint32_t y) const { return Fraction[static_cast<size_t>(y) * Size + x]; }
+	};
+
+	inline SunlightImage RenderSunlight(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera, Entity sun)
+	{
+		const auto renderHDR = [&]()
+		{
+			REQUIRE(renderer.Render(scene, camera));
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
+			return image;
+		};
+		DirectionalLightComponent& light = sun.GetComponent<DirectionalLightComponent>();
+		const ReadbackImage shadowed = renderHDR();
+		const SceneRendererStats shadowedStats = renderer.GetStats();
+		const bool castShadows = light.CastShadows;
+		light.CastShadows = false;
+		sun.MarkModified<DirectionalLightComponent>();
+		const ReadbackImage lit = renderHDR();
+		const float intensity = light.Intensity;
+		light.Intensity = 0.0f;
+		sun.MarkModified<DirectionalLightComponent>();
+		const ReadbackImage dark = renderHDR();
+		light.CastShadows = castShadows;
+		light.Intensity = intensity;
+		sun.MarkModified<DirectionalLightComponent>();
+
+		for (const ReadbackImage* image : { &shadowed, &lit, &dark })
+		{
+			REQUIRE(image->Format == nvrhi::Format::RGBA16_FLOAT);
+			REQUIRE(image->Width == shadowed.Width);
+			REQUIRE(image->Height == shadowed.Width);
+		}
+		const auto red = [](const ReadbackImage& image, size_t pixel)
+		{
+			uint16_t value = 0;
+			std::memcpy(&value, image.Pixels.data() + pixel * image.BytesPerPixel, sizeof(value));
+			return glm::unpackHalf1x16(value);
+		};
+		SunlightImage result;
+		result.Stats = shadowedStats;
+		result.Size = shadowed.Width;
+		result.Fraction.resize(static_cast<size_t>(shadowed.Width) * shadowed.Height);
+		for (size_t pixel = 0; pixel < result.Fraction.size(); pixel++)
+		{
+			const float direct = red(lit, pixel) - red(dark, pixel);
+			const float reaching = red(shadowed, pixel) - red(dark, pixel);
+			result.Fraction[pixel] = direct > 1e-3f ? reaching / direct : -1.0f;
+		}
+		return result;
+	}
+
 	// Plain output: no tone curve, no vignette, no bloom, ambient occlusion or anti-aliasing, so unlit colors come out
 	// unchanged.
 	inline PostProcessComponent& AddNeutralPostProcess(Scene& scene)

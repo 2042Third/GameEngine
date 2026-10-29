@@ -98,12 +98,14 @@
 				"Components": {
 					"DirectionalLight": {
 						"CascadeBlend": 0.2,
+						"CascadeDistribution": 0.95,
 						"CastShadows": true,
 						"Color": [
 							1,
 							0.95,
 							0.85
 						],
+						"ContactShadowLength": 0.4,
 						"Intensity": 4,
 						"ShadowBias": 1.2,
 						"ShadowDistance": 40,

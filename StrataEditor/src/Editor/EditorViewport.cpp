@@ -99,7 +99,7 @@ namespace Strata
 		{
 			const std::optional<ViewportDebugView> view = it->is_string() ? ViewportDebugViewFromString(it->get<std::string>()) : std::nullopt;
 			if (!view)
-				return fail("'DebugView' must be \"none\", \"streaming\", \"lod\", \"mip\" or \"motion\"");
+				return fail("'DebugView' must be \"none\", \"streaming\", \"lod\", \"mip\", \"motion\" or \"shadows\"");
 			result.DebugView = *view;
 		}
 		if (const auto it = json.find("GameView"); it != json.end())

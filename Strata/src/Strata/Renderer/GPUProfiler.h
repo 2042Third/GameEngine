@@ -24,6 +24,7 @@ namespace Strata
 		FrameStageID Cull = c_InvalidFrameStage;        // Culling dispatches and depth pyramids
 		FrameStageID Shadows = c_InvalidFrameStage;
 		FrameStageID Prepass = c_InvalidFrameStage;
+		FrameStageID ScreenShadows = c_InvalidFrameStage; // The sun's screen-space shadow mask (SceneRenderer::RenderScreenShadows)
 		FrameStageID AO = c_InvalidFrameStage;
 		FrameStageID Reflections = c_InvalidFrameStage; // Reflection probes' conversions, the screen-space reflections' trace
 		FrameStageID Opaque = c_InvalidFrameStage;      // With the sky

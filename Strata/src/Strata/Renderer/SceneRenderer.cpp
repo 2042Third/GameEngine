@@ -215,6 +215,8 @@ namespace Strata
 		// every shadow view of every shadowed point and spot light is drawn in the frame (into a smaller atlas).
 		specification.TemporalAntiAliasing = false;
 		specification.SpreadLightingUpdates = false;
+		// A single frame has no readback to fit its cascades to: Strata 0.6.0's layout, the same for every thumbnail.
+		specification.FitShadowsToView = false;
 		RendererQualitySettings& quality = specification.Quality;
 		quality = RendererQuality::GetPreset(RendererQualityPreset::Medium);
 		quality.Preset = RendererQualityPreset::Custom;
@@ -227,7 +229,7 @@ namespace Strata
 	SceneRendererSpecification SceneRendererSpecification::ForBake()
 	{
 		// No entity IDs, temporal anti-aliasing or texture streaming (a bake waits for every level), every shadow view and
-		// probe conversion in its first frame, no fades.
+		// probe conversion in its first frame, no fades, Strata 0.6.0's cascades (a bake's views are single frames).
 		SceneRendererSpecification specification;
 		specification.DebugName = "ProbeBake";
 		specification.EntityIDs = false;
@@ -236,6 +238,7 @@ namespace Strata
 		specification.SpreadLightingUpdates = false;
 		specification.FadeTextureLevels = false;
 		specification.FadeLevelsOfDetail = false;
+		specification.FitShadowsToView = false;
 		RendererQualitySettings& quality = specification.Quality;
 		quality = RendererQuality::GetPreset(RendererQualityPreset::Medium);
 		quality.Preset = RendererQualityPreset::Custom;
@@ -350,6 +353,9 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(20),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(21),
 			nvrhi::BindingLayoutItem::Texture_SRV(27),          // The atmosphere's sky-view table (Include/Atmosphere.glsl)
+			nvrhi::BindingLayoutItem::Texture_SRV(28),          // The sun's screen-space shadow mask (Scene/Forward.frag)
+			nvrhi::BindingLayoutItem::Texture_SRV(32),          // The sun shadow cascades' depth ranges (Include/Shadows.glsl)
+			nvrhi::BindingLayoutItem::Texture_SRV(33),          // The blue-noise tile (Include/Shadows.glsl)
 			nvrhi::BindingLayoutItem::Sampler(0).setSize(RenderData::c_SamplerCount),
 			nvrhi::BindingLayoutItem::Sampler(8),
 			nvrhi::BindingLayoutItem::Sampler(9),
@@ -406,6 +412,15 @@ namespace Strata
 		dummyShadowDesc.initialState = nvrhi::ResourceStates::ShaderResource;
 		dummyShadowDesc.keepInitialState = true;
 		m_DummyShadowMap = m_Device->createTexture(dummyShadowDesc);
+		// The cascades' depth ranges while no shadows are rendered (never read then).
+		nvrhi::TextureDesc dummyRangesDesc;
+		dummyRangesDesc.arraySize = RenderData::c_MaxCascades;
+		dummyRangesDesc.dimension = nvrhi::TextureDimension::Texture2DArray;
+		dummyRangesDesc.format = nvrhi::Format::R32_UINT;
+		dummyRangesDesc.debugName = m_Specification.DebugName + ".NoShadowRanges";
+		dummyRangesDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+		dummyRangesDesc.keepInitialState = true;
+		m_DummyShadowRanges = m_Device->createTexture(dummyRangesDesc);
 		nvrhi::TextureDesc dummyAtlasDesc = dummyShadowDesc;
 		dummyAtlasDesc.arraySize = 1;
 		dummyAtlasDesc.dimension = nvrhi::TextureDimension::Texture2D;
@@ -524,7 +539,7 @@ namespace Strata
 		m_TemporalPipeline = CreateComputePipeline("PostProcess/TAA.comp", m_TemporalBindingLayout);
 
 		ST_CORE_VERIFY(m_InputLayout && m_SceneBindingLayout && m_FrameConstantBuffer && m_CommandList && m_ShadowPushBindingSet
-			&& m_PointClampSampler && m_LinearClampSampler && m_EquirectSampler && m_ShadowCompareSampler && m_DummyShadowMap && m_DummyLocalShadowAtlas
+			&& m_PointClampSampler && m_LinearClampSampler && m_EquirectSampler && m_ShadowCompareSampler && m_DummyShadowMap && m_DummyShadowRanges && m_DummyLocalShadowAtlas
 			&& m_LocalShadowBuffer && m_ReflectionProbeBuffer && m_ClusterBuffer
 			&& m_ClusterBindingLayout && m_ClusterPipeline
 			&& m_TemporalBindingLayout && m_TemporalPipeline, "SceneRenderer: failed to create GPU resources");
@@ -935,6 +950,7 @@ namespace Strata
 		nvrhi::ITexture* environmentCube = GetEnvironmentCube();
 		const bool hasEnvironment = environmentCube != nullptr;
 		nvrhi::ITexture* shadowMap = m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get();
+		nvrhi::ITexture* shadowRanges = m_ShadowRanges ? m_ShadowRanges.Get() : m_DummyShadowRanges.Get();
 		nvrhi::ITexture* localShadowAtlas = m_LocalShadowAtlas ? m_LocalShadowAtlas.Get() : m_DummyLocalShadowAtlas.Get();
 		// Without a motion history the scene's own buffers stand in (nothing reads them then).
 		nvrhi::IBuffer* previousInstances = m_PreviousInstances ? m_PreviousInstances.Get() : m_SceneGPU->GetInstanceBuffer();
@@ -945,7 +961,9 @@ namespace Strata
 		nvrhi::ITexture* sceneColor = GetBoundSceneColor();
 
 		// The shadow pass reads the same resources except for its own draw list (and never the shadow maps it draws into).
-		auto create = [&](nvrhi::IBuffer* drawList, nvrhi::ITexture* boundShadowMap, nvrhi::ITexture* boundAtlas)
+		nvrhi::ITexture* screenShadows = GetBoundScreenShadows();
+		auto create = [&](nvrhi::IBuffer* drawList, nvrhi::ITexture* boundShadowMap, nvrhi::ITexture* boundRanges, nvrhi::ITexture* boundAtlas,
+			nvrhi::ITexture* boundMask)
 		{
 			nvrhi::BindingSetDesc desc;
 			desc.bindings = {
@@ -960,6 +978,9 @@ namespace Strata
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(20, previousInstances),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(21, previousPalette),
 				nvrhi::BindingSetItem::Texture_SRV(27, skyView),
+				nvrhi::BindingSetItem::Texture_SRV(28, boundMask),
+				nvrhi::BindingSetItem::Texture_SRV(32, boundRanges),
+				nvrhi::BindingSetItem::Texture_SRV(33, Renderer::GetBlueNoiseTexture()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SceneGPU->GetMaterialBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment->Irradiance.Get() : blackCube),
@@ -981,12 +1002,13 @@ namespace Strata
 				desc.bindings.push_back(nvrhi::BindingSetItem::Sampler(0, m_MaterialSamplers[index]).setArrayElement(index));
 			return m_Device->createBindingSet(desc, m_SceneBindingLayout);
 		};
-		m_SceneBindingSet = create(m_DrawListBuffer, shadowMap, localShadowAtlas);
-		m_ShadowBindingSet = create(m_ShadowDrawListBuffer, m_DummyShadowMap, m_DummyLocalShadowAtlas);
+		m_SceneBindingSet = create(m_DrawListBuffer, shadowMap, shadowRanges, localShadowAtlas, screenShadows);
+		m_ShadowBindingSet = create(m_ShadowDrawListBuffer, m_DummyShadowMap, m_DummyShadowRanges, m_DummyLocalShadowAtlas, Renderer::GetWhiteTexture());
 		// The GPU-driven path's passes read the draw list its culling writes.
 		const bool gpuSets = m_GPUDrawListBuffer != nullptr;
-		m_GPUSceneBindingSet = gpuSets ? create(m_GPUDrawListBuffer, shadowMap, localShadowAtlas) : nullptr;
-		m_GPUShadowBindingSet = gpuSets ? create(m_GPUDrawListBuffer, m_DummyShadowMap, m_DummyLocalShadowAtlas) : nullptr;
+		m_GPUSceneBindingSet = gpuSets ? create(m_GPUDrawListBuffer, shadowMap, shadowRanges, localShadowAtlas, screenShadows) : nullptr;
+		m_GPUShadowBindingSet = gpuSets ? create(m_GPUDrawListBuffer, m_DummyShadowMap, m_DummyShadowRanges, m_DummyLocalShadowAtlas, Renderer::GetWhiteTexture())
+			: nullptr;
 
 		nvrhi::BindingSetDesc clusterSet;
 		clusterSet.bindings = {
@@ -1001,6 +1023,8 @@ namespace Strata
 		m_BoundIrradiance = GetIrradianceMap();
 		m_BoundPrefiltered = GetPrefilteredMap();
 		m_BoundShadowMap = shadowMap;
+		m_BoundShadowRanges = shadowRanges;
+		m_BoundScreenShadows = screenShadows;
 		m_BoundLocalShadowAtlas = localShadowAtlas;
 		m_BoundSceneGPUVersion = m_SceneGPU->GetBufferVersion();
 		m_BoundTextureTableVersion = Renderer::GetTextureTable().GetBufferVersion();
@@ -1589,6 +1613,9 @@ namespace Strata
 			if (!framebuffers.back())
 				return false;
 		}
+		// The cascades' depth ranges, which the filter needs: without them, no shadows.
+		if (!CreateShadowRanges(shadowMap, desc.width, layers))
+			return false;
 		m_ShadowMap = shadowMap;
 		m_ShadowMapLayers = layers;
 		m_ShadowFramebuffers = std::move(framebuffers);
@@ -1596,6 +1623,89 @@ namespace Strata
 		if (!EnsureShadowPyramid())
 			ST_CORE_WARN("{}: the shadow cascades' depth pyramids could not be created; the cascades are not occlusion culled", m_Specification.DebugName);
 		return true;
+	}
+
+	nvrhi::ITexture* SceneRenderer::GetBoundScreenShadows() const
+	{
+		return m_ScreenShadowTextures[0] ? m_ScreenShadowTextures[0].Get() : Renderer::GetWhiteTexture();
+	}
+
+	bool SceneRenderer::CreateShadowRanges(nvrhi::ITexture* shadowMap, uint32_t size, uint32_t layers)
+	{
+		if (!m_ShadowRangePipeline)
+		{
+			nvrhi::BindingLayoutDesc layout;
+			layout.visibility = nvrhi::ShaderType::Compute;
+			layout.bindings = {
+				nvrhi::BindingLayoutItem::Texture_SRV(0),
+				nvrhi::BindingLayoutItem::Texture_UAV(0),
+				nvrhi::BindingLayoutItem::PushConstants(0, sizeof(RenderData::ShadowRangeParameters))
+			};
+			m_ShadowRangeLayout = m_Device->createBindingLayout(layout);
+			ST_CORE_VERIFY(m_ShadowRangeLayout, "SceneRenderer: failed to create the shadow ranges' layout");
+			m_ShadowRangePipeline = CreateComputePipeline("Scene/ShadowRanges.comp", m_ShadowRangeLayout);
+			m_ShadowRangeDownsamplePipeline = CreateComputePipeline("Scene/ShadowRangesDownsample.comp", m_ShadowRangeLayout);
+			ST_CORE_VERIFY(m_ShadowRangePipeline && m_ShadowRangeDownsamplePipeline, "SceneRenderer: failed to create the shadow ranges' pipelines");
+		}
+		nvrhi::TextureDesc desc;
+		desc.width = std::max((size + RenderData::c_ShadowRangeCellTexels - 1) / RenderData::c_ShadowRangeCellTexels, 1u);
+		desc.height = desc.width;
+		desc.arraySize = layers;
+		desc.mipLevels = RenderData::c_ShadowRangeLevels;
+		desc.dimension = nvrhi::TextureDimension::Texture2DArray;
+		desc.format = nvrhi::Format::R32_UINT;
+		desc.isUAV = true;
+		desc.debugName = m_Specification.DebugName + ".ShadowRanges";
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
+		nvrhi::TextureHandle ranges = m_Device->createTexture(desc);
+		if (!ranges)
+			return false;
+		// A binding set per level, over every layer (a dispatch builds the level of each cascade): level 0 reads the shadow map.
+		std::vector<nvrhi::BindingSetHandle> sets;
+		for (uint32_t level = 0; level < RenderData::c_ShadowRangeLevels; level++)
+		{
+			nvrhi::BindingSetDesc set;
+			set.bindings = {
+				level == 0 ? nvrhi::BindingSetItem::Texture_SRV(0, shadowMap, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, layers))
+					: nvrhi::BindingSetItem::Texture_SRV(0, ranges, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(level - 1, 1, 0, layers)),
+				nvrhi::BindingSetItem::Texture_UAV(0, ranges, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(level, 1, 0, layers)),
+				nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::ShadowRangeParameters))
+			};
+			sets.push_back(m_Device->createBindingSet(set, m_ShadowRangeLayout));
+			if (!sets.back())
+				return false;
+		}
+		m_ShadowRanges = std::move(ranges);
+		m_ShadowRangeSets = std::move(sets);
+		return true;
+	}
+
+	void SceneRenderer::BuildShadowRanges(nvrhi::ICommandList* commandList, uint32_t layerMask)
+	{
+		if (layerMask == 0)
+			return;
+		commandList->beginMarker("ShadowRanges");
+		// Level by level, every layer of the mask in one dispatch; NVRHI places the barriers between the levels (each reads the
+		// one below through its own binding set).
+		glm::uvec2 source(m_ShadowMapSize);
+		glm::uvec2 destination(std::max((m_ShadowMapSize + RenderData::c_ShadowRangeCellTexels - 1) / RenderData::c_ShadowRangeCellTexels, 1u));
+		for (uint32_t level = 0; level < RenderData::c_ShadowRangeLevels; level++)
+		{
+			nvrhi::ComputeState state;
+			state.pipeline = level == 0 ? m_ShadowRangePipeline : m_ShadowRangeDownsamplePipeline;
+			state.bindings = { m_ShadowRangeSets[level] };
+			commandList->setComputeState(state);
+			RenderData::ShadowRangeParameters parameters = {};
+			parameters.SourceSize = source;
+			parameters.DestinationSize = destination;
+			parameters.LayerMask = layerMask;
+			commandList->setPushConstants(&parameters, sizeof(parameters));
+			commandList->dispatch((destination.x + 7) / 8, (destination.y + 7) / 8, m_CascadeCount);
+			source = destination;
+			destination = glm::max((destination + 1u) / 2u, glm::uvec2(1));
+		}
+		commandList->endMarker();
 	}
 
 	void SceneRenderer::ReleaseShadowMap()
@@ -1611,6 +1721,10 @@ namespace Strata
 		for (nvrhi::FramebufferHandle& framebuffer : m_ShadowFramebuffers)
 			release(framebuffer);
 		m_ShadowFramebuffers.clear();
+		release(m_ShadowRanges);
+		for (nvrhi::BindingSetHandle& set : m_ShadowRangeSets)
+			release(set);
+		m_ShadowRangeSets.clear();
 		m_ShadowMapLayers = 0;
 		release(m_ShadowPyramid);
 		for (nvrhi::BindingSetHandle& set : m_ShadowPyramidSets)
@@ -1619,11 +1733,17 @@ namespace Strata
 		m_ShadowPyramidSize = 0;
 		m_ShadowPyramidLevels = 0;
 		release(m_CullBindingSet); // References the pyramids
+		// The screen-space shadows' evaluation reads the cascades and their ranges: made again by the next frame with them, also
+		// when a new texture gets a released one's address.
+		release(m_ScreenShadowSet);
+		m_ScreenShadowBoundMap = nullptr;
+		m_ScreenShadowBoundRanges = nullptr;
 		Renderer::ReleaseDeferred(std::move(released));
 		InvalidateShadowCache();
 		// The scene's binding sets, which read the cascades, are made again by the next frame's comparison, even when a new
 		// texture gets the released one's address.
 		m_BoundShadowMap = nullptr;
+		m_BoundShadowRanges = nullptr;
 		// The cascades' occlusion culling starts again: its history named the released layers.
 		m_ShadowOcclusionPays = true;
 		m_ShadowOcclusionRender = 0;
@@ -1964,6 +2084,12 @@ namespace Strata
 		release(m_MotionPrepassFramebuffer);
 		release(m_GlassMotionFramebuffer);
 		release(m_MotionViewBindingSet);
+		ReleaseScreenShadowTargets(released);
+		// The shadows debug view's binding sets name the depth (its buffers and readbacks stay with the renderer).
+		release(m_ShadowViewBindingSet);
+		release(m_ShadowViewCountBindingSet);
+		// So does the cascades' fit's (its buffer and readbacks stay with the renderer, like its layout).
+		release(m_ShadowFitSet);
 		// Screen-space reflections' targets (made again by the next frame that traces them).
 		release(m_SurfaceTexture);
 		release(m_ScreenReflectionTexture);
@@ -2231,6 +2357,9 @@ namespace Strata
 			m_ShadowLight.Bias = light.ShadowBias;
 			m_ShadowLight.NormalBias = light.ShadowNormalBias;
 			m_ShadowLight.CascadeBlend = std::isfinite(light.CascadeBlend) ? std::clamp(light.CascadeBlend, 0.0f, DirectionalLightComponent::c_MaxCascadeBlend) : 0.0f;
+			m_ShadowLight.ContactLength = std::isfinite(light.ContactShadowLength)
+				? std::clamp(light.ContactShadowLength, 0.0f, DirectionalLightComponent::c_MaxContactShadowLength) : 0.0f;
+			m_ShadowLight.Distribution = std::isfinite(light.CascadeDistribution) ? std::clamp(light.CascadeDistribution, 0.0f, 1.0f) : 0.9f;
 		};
 		float brightest = -1.0f;
 		for (auto [entity, light, world] : registry.view<DirectionalLightComponent, WorldTransformComponent>().each())
@@ -2548,6 +2677,7 @@ namespace Strata
 	bool SceneRenderer::RenderFrame(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target, const SceneRenderOptions& options)
 	{
 		ResolveGPUStats(false);
+		ResolveShadowViewStats();
 		m_Stats = {};
 		if (m_ViewportSize.x == 0 || m_ViewportSize.y == 0)
 			return false; // Nothing to show (e.g. a minimized window); not an error
@@ -2741,6 +2871,10 @@ namespace Strata
 			m_LODFadeFrame++;         // And so do level-of-detail fades: a frame skipped draws every level at once
 		}
 		m_LODFadeFrame++;
+		// The sun's cascades' layout: fitted to the receivers a readback of an earlier frame saw, else Strata 0.6.0's. Layout
+		// changes keep the visibility feedback: on feedback frames every cascade gets the slots of every caster the feedback saw,
+		// and the last cascade, which reaches the shadow distance, holds every caster of every receiver.
+		UpdateShadowFit(renderScene, camera, cameraCut);
 		m_FeedbackFrame = UsesFeedback(renderScene);
 		m_Stats.FeedbackRequests = m_FeedbackFrame;
 		if (m_FeedbackFrame)
@@ -2799,6 +2933,15 @@ namespace Strata
 		{
 			m_Errors.Report("failed to create the shadow map; rendering without shadows");
 			frame.ShadowParams.w = 0.0f;
+			m_Stats.CascadeCount = 0;
+			degraded = true;
+		}
+		// Opaque surfaces take the sun's shadow from the screen-space mask: without it, no surface does (transparent ones neither).
+		if (frame.ShadowParams.w > 0.0f && !EnsureScreenShadowResources())
+		{
+			m_Errors.Report("failed to create the screen-space shadow targets; rendering without sun shadows");
+			frame.ShadowParams.w = 0.0f;
+			m_Stats.CascadeCount = 0;
 			degraded = true;
 		}
 		if (m_GPUDrivenFrame)
@@ -2809,6 +2952,7 @@ namespace Strata
 		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
 
 		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get())
+			|| m_BoundShadowRanges != (m_ShadowRanges ? m_ShadowRanges.Get() : m_DummyShadowRanges.Get()) || m_BoundScreenShadows != GetBoundScreenShadows()
 			|| m_BoundLocalShadowAtlas != (m_LocalShadowAtlas ? m_LocalShadowAtlas.Get() : m_DummyLocalShadowAtlas.Get())
 			|| m_BoundSceneGPUVersion != m_SceneGPU->GetBufferVersion()
 			|| m_BoundPreviousInstances != (m_PreviousInstances ? m_PreviousInstances.Get() : m_SceneGPU->GetInstanceBuffer())
@@ -2935,6 +3079,7 @@ namespace Strata
 				{
 					m_ShadowCacheValid = 0; // The CPU path redraws every layer
 					DrawShadows(commandList, static_cast<uint32_t>(frame.ShadowParams.w));
+					BuildShadowRanges(commandList, (1u << m_CascadeCount) - 1u);
 				}
 			}
 			if (!m_LocalShadowViews.empty())
@@ -2976,6 +3121,19 @@ namespace Strata
 		else
 			DrawBatches(commandList, Pass::Prepass, false);
 		commandList->endMarker();
+
+		// The sun's shadow on every opaque pixel of the prepass, before anything shades them.
+		if (frame.ShadowParams.w > 0.0f)
+		{
+			gpuTimer.Next(gpuStages.ScreenShadows);
+			commandList->beginMarker("ScreenShadows");
+			RenderScreenShadows(commandList, frame);
+			// The receivers of the complete prepass depth, for a later frame's cascades (SceneRendererSpecification::FitShadowsToView).
+			if (m_ShadowFitActive && !RecordShadowFit(commandList, camera))
+				degraded = true;
+			commandList->endMarker();
+			m_Stats.ScreenShadows = true;
+		}
 
 		if (postProcess.AmbientOcclusion)
 		{
@@ -3070,6 +3228,7 @@ namespace Strata
 			ExecuteFrame(commandList);
 			if (m_GPUDrivenFrame)
 				SubmitCullReadback();
+			SubmitShadowFitReadback();
 			CommitShadowCache();
 			CommitLocalShadows();
 			if (m_TemporalResolved)
@@ -3114,6 +3273,8 @@ namespace Strata
 			if (m_GPUDrivenFrame)
 				SubmitCullReadback();
 			SubmitExposureReadback();
+			SubmitShadowViewReadback();
+			SubmitShadowFitReadback();
 			m_Stats = {};
 			return false;
 		}
@@ -3155,6 +3316,8 @@ namespace Strata
 		if (m_GPUDrivenFrame)
 			SubmitCullReadback();
 		SubmitExposureReadback();
+		SubmitShadowViewReadback();
+		SubmitShadowFitReadback();
 		CommitShadowCache();
 		CommitLocalShadows();
 
@@ -3233,7 +3396,7 @@ namespace Strata
 	bool SceneRenderer::HasOverlays(const SceneRenderOptions& options)
 	{
 		return options.ShowGrid || !options.SelectedEntities.empty() || (options.DebugShapes && !options.DebugShapes->IsEmpty()) || !options.EntityTints.empty()
-			|| options.ShowMotionVectors;
+			|| options.ShowMotionVectors || options.ShowShadowView;
 	}
 
 	bool SceneRenderer::DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport)
@@ -3480,8 +3643,10 @@ namespace Strata
 			complete = false;
 		}
 
-		// The motion view and the tints color the scene itself: the other overlays go over them. Without motion vectors (they
-		// could not be made: reported) there is no motion view.
+		// The shadows and motion views and the tints color the scene itself: the other overlays go over them. Without motion
+		// vectors (they could not be made: reported) there is no motion view.
+		if (options.ShowShadowView && !DrawShadowView(commandList, options, viewport))
+			return false;
 		if (options.ShowMotionVectors && m_MotionFrame && !DrawMotionView(commandList, viewport))
 			return false;
 		if (entityIDs && !options.EntityTints.empty() && !DrawEntityTints(commandList, scene, options.EntityTints, viewport))

@@ -803,6 +803,68 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The project's picture waits for the sun's cascades to fit its view")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GPUThumbnailShadowFit") / "Game";
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		const auto run = [&](std::string_view name, const nlohmann::json& parameters)
+		{
+			return Tests::RunCommandToCompletion(context, commands, name, parameters);
+		};
+		const auto frameUntil = [&](const std::function<bool()>& condition)
+		{
+			for (int frame = 0; frame < 3000 && !condition(); frame++)
+			{
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				context.Update(Timestep(1.0f / 60.0f));
+				gpu.GetDevice().EndFrame();
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			return condition();
+		};
+		run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
+
+		// Nothing else to wait for (a fixed exposure, no temporal anti-aliasing, built-in meshes): only the fit keeps the picture
+		// from its first frame, whose cascades no readback has fitted yet.
+		Scene& scene = *context.GetActiveScene();
+		Entity postProcessEntity = scene.FindEntityByName("Post Process");
+		if (!postProcessEntity)
+		{
+			postProcessEntity = scene.CreateEntity("Post Process");
+			postProcessEntity.AddComponent<PostProcessComponent>();
+		}
+		PostProcessComponent& postProcess = postProcessEntity.GetComponent<PostProcessComponent>();
+		postProcess.AntiAliasing = false;
+		postProcess.AutoExposure = false;
+		uint32_t suns = 0;
+		for (auto [entity, light] : scene.GetRegistry().view<DirectionalLightComponent>().each())
+		{
+			light.CastShadows = true;
+			scene.GetRegistry().patch<DirectionalLightComponent>(entity);
+			suns++;
+		}
+		if (suns == 0)
+			Tests::AddSun(scene, glm::vec3(0.3f, -1.0f, 0.2f), 3.0f);
+		Tests::AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f), "Cube");
+		Tests::AddMesh(scene, BuiltinAssets::PlaneMesh, UUID::Null(), glm::vec3(0.0f, -0.5f, 0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(200.0f);
+		run("camera.set", { { "position", { 0.0, 1.0, 4.0 } }, { "target", { 0.0, 0.0, 0.0 } } });
+		run("scene.saveAs", { { "path", "Scenes/Main.stscene" } });
+		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
+		REQUIRE(FileSystem::Exists(ProjectThumbnail::GetFile(directory)));
+		ViewportRenderer* captureRenderer = context.GetViewport().GetCaptureRenderer();
+		REQUIRE(captureRenderer);
+		CHECK_FALSE(captureRenderer->GetStats().TemporalAntiAliasing);
+		CHECK(captureRenderer->GetStats().ShadowFit);
+		CHECK(captureRenderer->GetStats().ShadowFitSettled);
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A prefab's thumbnail draws every shadow view of its point and spot lights in the frame")
 	{
 		Tests::GPUContext gpu;

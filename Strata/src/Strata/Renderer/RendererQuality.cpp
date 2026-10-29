@@ -38,6 +38,8 @@ namespace Strata
 		constexpr PresetRow<uint32_t> c_MaxShadowedLocalLightsRow = { 4, 16, 16, 16 };
 		constexpr PresetRow<float> c_LODErrorPixelsRow = { 2.0f, 1.0f, 1.0f, 0.5f };
 		constexpr PresetRow<float> c_MinProjectedPixelsRow = { 1.0f, 0.5f, 0.5f, 0.25f };
+		constexpr PresetRow<uint32_t> c_ShadowFilterQualityRow = { 8, 16, 24, 32 };
+		constexpr PresetRow<uint32_t> c_ContactShadowsRow = { 0, 0, 12, 16 };
 
 		// GPU memory of the rows that allocate (RowTraits::MemoryBytes), as the renderer makes the resources.
 		uint64_t CascadeBytes(const RendererQualitySettings& settings, glm::uvec2 output)
@@ -63,16 +65,23 @@ namespace Strata
 			{ "MaxShadowedLocalLights", true, "GPU.Shadows", nullptr },
 			{ "LODErrorPixels", true, "GPU.Opaque", nullptr },
 			{ "MinProjectedPixels", true, "GPU.Opaque", nullptr },
+			{ "ShadowFilterQuality", true, "GPU.ScreenShadows", nullptr }, // The filter runs in the mask's pass; taps allocate nothing
+			{ "ContactShadows", true, "GPU.ScreenShadows", nullptr },      // Marches through the mask's own two targets
 		};
 
 		constexpr uint32_t c_MinLocalShadowAtlasSize = 512;
 		constexpr uint32_t c_MaxLocalShadowAtlasSize = 8192;
 		constexpr uint32_t c_MinLocalShadowTile = 128;
 		constexpr float c_MaxPixels = 8.0f;
+		// Contact shadows march no steps (off) or 4 to 32 (RendererQualitySettings::ContactShadows): fewer reach too little.
+		constexpr uint32_t c_MinContactShadowSteps = 4;
+		constexpr uint32_t c_MaxContactShadowSteps = 32;
 
 		// The sizes the section offers for the local shadows' atlas and its largest tile, stored as their names.
 		constexpr uint32_t c_AtlasSizeOptions[] = { 1024, 2048, 4096, 8192 };
 		constexpr uint32_t c_MaxTileOptions[] = { 256, 512, 1024, 2048 };
+		// The taps the sun's wide penumbrae may take (RendererQualitySettings::ShadowFilterQuality), stored as their names.
+		constexpr uint32_t c_ShadowFilterTapOptions[] = { 8, 16, 24, 32 };
 
 		struct PresetName
 		{
@@ -256,6 +265,8 @@ namespace Strata
 					settings.MaxShadowedLocalLights = c_MaxShadowedLocalLightsRow[index];
 					settings.LODErrorPixels = c_LODErrorPixelsRow[index];
 					settings.MinProjectedPixels = c_MinProjectedPixelsRow[index];
+					settings.ShadowFilterQuality = c_ShadowFilterQualityRow[index];
+					settings.ContactShadows = c_ContactShadowsRow[index];
 				}
 				return presets;
 			}();
@@ -281,6 +292,12 @@ namespace Strata
 			clamped.MaxShadowedLocalLights = std::min(clamped.MaxShadowedLocalLights, RenderData::c_MaxShadowedLocalLights);
 			clamped.LODErrorPixels = ClampPixels(clamped.LODErrorPixels, medium.LODErrorPixels);
 			clamped.MinProjectedPixels = ClampPixels(clamped.MinProjectedPixels, medium.MinProjectedPixels);
+			// The next option at or above the value, at most the largest.
+			const auto taps = std::find_if(std::begin(c_ShadowFilterTapOptions), std::end(c_ShadowFilterTapOptions),
+				[&](uint32_t option) { return option >= clamped.ShadowFilterQuality; });
+			clamped.ShadowFilterQuality = taps != std::end(c_ShadowFilterTapOptions) ? *taps : c_ShadowFilterTapOptions[std::size(c_ShadowFilterTapOptions) - 1];
+			clamped.ContactShadows = clamped.ContactShadows == 0 ? 0u
+				: std::clamp(clamped.ContactShadows, c_MinContactShadowSteps, c_MaxContactShadowSteps);
 			if (static_cast<uint8_t>(clamped.Preset) > static_cast<uint8_t>(RendererQualityPreset::Custom))
 				clamped.Preset = RendererQualityPreset::Custom;
 			return clamped;
@@ -350,8 +367,9 @@ namespace Strata
 			section.Title = "Graphics Quality";
 			section.Category = "Rendering";
 			section.Description = "The rendering quality of the project's games and of the editor's views and captures: the costly knobs every "
-				"renderer draws with, as a preset or as Custom values. Medium keeps Strata 0.6.0's costs; High, the default, draws 4096-texel "
-				"sun shadow cascades from 1440 output rows (as Medium below them). Scenes keep their look on lights, Post Process and the sky; "
+				"renderer draws with, as a preset or as Custom values. Medium keeps Strata 0.6.0's costs (its sample counts and resolutions); "
+				"High, the default, adds more sun shadow filter taps and contact shadows at every size and draws 4096-texel sun shadow "
+				"cascades from 1440 output rows. Scenes keep their look on lights, Post Process and the sky; "
 				"no setting renders below the output's resolution. Set it with project.setSettings; players may change it in games that offer "
 				"graphics options, and StrataRuntime --quality for one run.";
 			section.Scope = SettingsScope::Project;
@@ -388,6 +406,12 @@ namespace Strata
 				c_MaxPixels, high.LODErrorPixels));
 			section.Fields.push_back(NumberField("MinProjectedPixels", "Smallest drawn size (pixels)", "Meshes smaller on screen than this many "
 				"pixels are not drawn: higher draws fewer (0: all).", SettingsFieldType::Float, 0.0, c_MaxPixels, high.MinProjectedPixels));
+			section.Fields.push_back(EnumField("ShadowFilterQuality", "Shadow filter quality", "Taps of the sun's shadow edges where they are wider "
+				"than a shadow texel: more taps leave less grain in soft shadows for more GPU time (8, 16, 24 or 32).",
+				SizeOptions(c_ShadowFilterTapOptions), std::to_string(high.ShadowFilterQuality)));
+			section.Fields.push_back(NumberField("ContactShadows", "Contact shadows", "Steps of the sun's contact shadows, which ground small objects "
+				"below the shadow map's detail: more steps find thinner contacts for more GPU time (0: off; 1 to 3 count as 4).",
+				SettingsFieldType::Int, 0, c_MaxContactShadowSteps, high.ContactShadows));
 			return section;
 		}
 
@@ -413,6 +437,8 @@ namespace Strata
 				ReadField(*value, "MaxShadowedLocalLights", settings.MaxShadowedLocalLights);
 				ReadField(*value, "LODErrorPixels", settings.LODErrorPixels);
 				ReadField(*value, "MinProjectedPixels", settings.MinProjectedPixels);
+				ReadField(*value, "ShadowFilterQuality", settings.ShadowFilterQuality);
+				ReadField(*value, "ContactShadows", settings.ContactShadows);
 			}
 			// Knobs read under every preset (players' comfort rows) follow here, one line each.
 			return Clamp(settings);
@@ -428,7 +454,9 @@ namespace Strata
 				{ "LocalShadowMaxTile", std::to_string(settings.LocalShadowMaxTile) },
 				{ "MaxShadowedLocalLights", settings.MaxShadowedLocalLights },
 				{ "LODErrorPixels", settings.LODErrorPixels },
-				{ "MinProjectedPixels", settings.MinProjectedPixels }
+				{ "MinProjectedPixels", settings.MinProjectedPixels },
+				{ "ShadowFilterQuality", std::to_string(settings.ShadowFilterQuality) },
+				{ "ContactShadows", settings.ContactShadows }
 			};
 		}
 

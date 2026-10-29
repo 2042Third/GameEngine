@@ -4,7 +4,7 @@
 // Resources shared by the scene passes. Layouts mirror the structs in Strata/Renderer/SceneRenderData.h; keep them
 // in sync (std140 for the constant buffer, std430 for storage buffers, 16-byte aligned members).
 
-// The scene layout's slots (SceneRenderer::CreateResources): SRV 0-21 and 27, samplers 0-5 (materials), 8, 9 and 10, CBV 0.
+// The scene layout's slots (SceneRenderer::CreateResources): SRV 0-21, 27, 28, 32 and 33, samplers 0-5 (materials), 8, 9 and 10, CBV 0.
 // SRV 22-26 belong to the compute layouts of temporal anti-aliasing and screen-space reflections, never to this one.
 // Assigned for wave 7: SRV 28 the sun's screen-space shadow mask, 32 the cascades' depth ranges and 33 the shadows'
 // blue-noise tile (sun-shadows); 29 the aerial perspective volume, 30 and 31 the irradiance volume, 34 volumetric fog
@@ -61,15 +61,19 @@ struct FrameConstants
 	vec4 TimeParams;                // x: scene time in seconds
 	vec4 SkyParams;                 // x: background mip (blur), y: 1 when the environment is the background
 	vec4 CascadeSplits;             // View distance where each cascade ends (their projections: u_Cascades)
-	// x: 2 tan(light angular radius), y: 1 / shadow map size, z: the fraction of each cascade's depth range over which it blends
-	// into the next (DirectionalLightComponent::CascadeBlend), w: cascade count (0 = none)
+	// x: tan(light angular radius), the penumbra's half-width per unit of separation, y: 1 / shadow map size, z: the fraction of
+	// each cascade's depth range over which it blends into the next (DirectionalLightComponent::CascadeBlend), w: cascade count
+	// (0 = none)
 	vec4 ShadowParams;
-	vec4 ShadowBias;                // x: depth bias (texels), y: normal offset (texels)
+	// x: depth bias (texels), y: normal offset (texels), z: the wide penumbrae's taps (RendererQualitySettings::
+	// ShadowFilterQuality), w: unused (0)
+	vec4 ShadowBias;
 	vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
 	vec4 MaterialParams;            // x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels)
 	// x: 1 when u_PreviousInstances and u_PreviousJoints hold the renderer's previous frame; y: the pre-exposure, a power of two
 	// every writer of the HDR target multiplies its luminance by (SceneRenderer: values near 100,000 lux stay within half
-	// floats); z: the frame's rotation of per-pixel noise (PCSS, ambient occlusion) in turns, 0 without temporal anti-aliasing
+	// floats); z: the frame's rotation of per-pixel noise (local shadows' PCF, ambient occlusion) in turns, 0 without temporal
+	// anti-aliasing
 	vec4 TemporalParams;
 	// Temporal anti-aliasing's offset of the frame's samples in clip units (in Projection, ViewProjection and their inverses; 0
 	// without it): xy this frame's, zw the renderer's previous frame's

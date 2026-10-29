@@ -24,16 +24,25 @@ namespace Strata
 		float Intensity = 3.0f; // Illuminance in lux on a surface facing the light, times Color
 		bool CastShadows = true;
 		float ShadowDistance = 80.0f;   // Shadows are rendered up to this distance from the camera
-		float ShadowSoftness = 1.0f;    // Angular diameter of the light in degrees (the sun is about 0.5): penumbra size
+		float ShadowSoftness = 0.53f;   // Angular diameter of the light in degrees (the sun: 0.53, the default): penumbra size
 		float ShadowBias = 1.0f;        // Depth offset toward the light, in shadow map texels
 		float ShadowNormalBias = 1.5f;  // Offset along the surface normal, in shadow map texels
 		// Fraction of each shadow cascade's depth range, before its far end, over which it blends into the next cascade (the
 		// last one fades out, ending at ShadowDistance): hides the seams between cascades. 0 switches cascades at once.
 		float CascadeBlend = 0.1f;
+		// How far toward the light, in meters, the screen-space contact shadows look for what the cascades are too coarse to show
+		// (at High and Ultra: RendererQualitySettings::ContactShadows); 0 turns them off for this light.
+		float ContactShadowLength = 0.3f;
+		// How the shadow cascades share the distances from the nearest to the farthest surface the camera sees, once they are
+		// fitted to them (SceneRendererSpecification::FitShadowsToView): 0 evenly, 1 each cascade the same ratio farther than the
+		// previous one. Higher puts more of the shadows' detail near the camera.
+		float CascadeDistribution = 0.9f;
 
 		// At most half of a slice: a cascade's band then never reaches back into the previous one's, so a pixel blends two
 		// cascades at most.
 		static constexpr float c_MaxCascadeBlend = 0.5f;
+		// Contact shadows march at most this far (meters): beyond, the cascades show what the march could.
+		static constexpr float c_MaxContactShadowLength = 2.0f;
 	};
 
 	// Point and spot lights cast shadows with CastShadows (off by default): a renderer gives the most relevant ones in view
