@@ -7,11 +7,13 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 using namespace Strata;
@@ -92,6 +94,66 @@ namespace
 		return problems;
 	}
 
+	bool IncludesFullJson(std::string_view source)
+	{
+		const std::vector<Tests::Layering::IncludeDirective> includes = Tests::Layering::ParseIncludes(source);
+		return std::any_of(includes.begin(), includes.end(), [](const auto& include) { return include.Path == "nlohmann/json.hpp"; });
+	}
+
+	// The lines (outside line comments) where a header that does not include the complete JSON header names a std::span of
+	// nlohmann's JSON. Apple Clang 15's libc++ instantiates such a span's iterator functions, which need the complete element
+	// type, in files that never call them: every file that includes the header without the complete type fails CI's macOS
+	// build (RendererQuality::OptionModel did, in files that include SceneRenderer.h).
+	std::vector<std::string> FindForwardDeclaredJsonSpans(const std::vector<std::pair<std::string, std::string>>& headers)
+	{
+		std::vector<std::string> problems;
+		for (const auto& [path, source] : headers)
+		{
+			if (IncludesFullJson(source))
+				continue;
+			const std::string_view text = source;
+			uint32_t lineNumber = 0;
+			for (size_t lineStart = 0; lineStart < text.size();)
+			{
+				size_t lineEnd = text.find('\n', lineStart);
+				if (lineEnd == std::string_view::npos)
+					lineEnd = text.size();
+				lineNumber++;
+				std::string_view line = text.substr(lineStart, lineEnd - lineStart);
+				line = line.substr(0, line.find("//"));
+				for (size_t at = line.find("std::span<"); at != std::string_view::npos; at = line.find("std::span<", at + 1))
+				{
+					const std::string_view arguments = line.substr(at, line.find('>', at) - at);
+					if (arguments.find("nlohmann::") != std::string_view::npos)
+					{
+						problems.push_back(fmt::format("{}:{} names a std::span of JSON but includes only <nlohmann/json_fwd.hpp>: hold a pointer or a "
+							"reference to the container instead (Apple Clang 15's libc++ needs the complete type for the span in every file "
+							"that includes the header)", path, lineNumber));
+					}
+				}
+				lineStart = lineEnd + 1;
+			}
+		}
+		return problems;
+	}
+
+	// The headers (.h) under a folder, with their paths relative to it.
+	std::vector<std::pair<std::string, std::string>> ReadHeaders(const std::filesystem::path& folder)
+	{
+		std::vector<std::pair<std::string, std::string>> headers;
+		std::error_code error;
+		for (std::filesystem::recursive_directory_iterator it(folder, error), end; !error && it != end; it.increment(error))
+		{
+			if (!it->is_regular_file(error) || it->path().extension() != ".h")
+				continue;
+			const std::optional<std::string> source = FileSystem::ReadText(it->path());
+			REQUIRE(source);
+			headers.emplace_back(FileSystem::ToUTF8(it->path().lexically_relative(folder)), *source);
+		}
+		REQUIRE_FALSE(error);
+		return headers;
+	}
+
 }
 
 TEST_SUITE("Architecture.HeaderWeight")
@@ -110,18 +172,7 @@ TEST_SUITE("Architecture.HeaderWeight")
 
 	TEST_CASE("Engine headers include the complete JSON header only when they need the complete type")
 	{
-		const std::filesystem::path sourceRoot = FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "Strata" / "src";
-		std::vector<std::pair<std::string, std::string>> headers;
-		std::error_code error;
-		for (std::filesystem::recursive_directory_iterator it(sourceRoot, error), end; !error && it != end; it.increment(error))
-		{
-			if (!it->is_regular_file(error) || it->path().extension() != ".h")
-				continue;
-			const std::optional<std::string> source = FileSystem::ReadText(it->path());
-			REQUIRE(source);
-			headers.emplace_back(FileSystem::ToUTF8(it->path().lexically_relative(sourceRoot)), *source);
-		}
-		REQUIRE_FALSE(error);
+		const std::vector<std::pair<std::string, std::string>> headers = ReadHeaders(FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "Strata" / "src");
 		REQUIRE(headers.size() > 100);
 
 		for (const std::string& problem : FindHeavyJsonIncludes(headers))
@@ -135,6 +186,33 @@ TEST_SUITE("Architecture.HeaderWeight")
 			REQUIRE(it != headers.end());
 			const std::vector<Tests::Layering::IncludeDirective> includes = Tests::Layering::ParseIncludes(it->second);
 			CHECK(std::any_of(includes.begin(), includes.end(), [](const auto& include) { return include.Path == "nlohmann/json.hpp"; }));
+		}
+	}
+
+	TEST_CASE("A header that only declares JSON names no span of it")
+	{
+		const std::vector<std::pair<std::string, std::string>> headers = {
+			{ "Strata/Renderer/Member.h", "#pragma once\n\n#include <nlohmann/json_fwd.hpp>\n\n#include <span>\n\nstruct Model\n{\n\tstd::span<const nlohmann::json> Values;\n};\n" },
+			{ "Strata/Renderer/Return.h", "#include <nlohmann/json_fwd.hpp>\n\nstd::span<const nlohmann::json> GetValues(); // std::span<const nlohmann::json>\n" },
+			{ "Strata/Core/Complete.h", "#include <nlohmann/json.hpp>\n\nstd::span<const nlohmann::json> GetValues();\n" },
+			{ "Strata/Renderer/Rows.h", "#include <nlohmann/json_fwd.hpp>\n\nstd::span<const Row> GetRows(const nlohmann::json& value); // std::span<nlohmann::json>\n" },
+		};
+		const std::vector<std::string> problems = FindForwardDeclaredJsonSpans(headers);
+		REQUIRE(problems.size() == 2);
+		CHECK(problems[0].starts_with("Strata/Renderer/Member.h:9 names a std::span of JSON"));
+		CHECK(problems[1].starts_with("Strata/Renderer/Return.h:3 names a std::span of JSON"));
+	}
+
+	TEST_CASE("Engine and editor headers that only declare JSON name no span of it")
+	{
+		const std::filesystem::path root = FileSystem::FromUTF8(STRATA_SOURCE_DIR);
+		for (const std::filesystem::path& folder : { root / "Strata" / "src", root / "StrataEditor" / "src" })
+		{
+			CAPTURE(FileSystem::ToUTF8(folder));
+			const std::vector<std::pair<std::string, std::string>> headers = ReadHeaders(folder);
+			REQUIRE(headers.size() > 100);
+			for (const std::string& problem : FindForwardDeclaredJsonSpans(headers))
+				FAIL_CHECK(problem);
 		}
 	}
 

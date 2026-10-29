@@ -546,7 +546,7 @@ TEST_SUITE("Renderer.Quality")
 		REQUIRE(row != nullptr);
 		CHECK(row->Field == "ShadowResolution");
 		CHECK(row->GPUStage == "GPU.Shadows");
-		REQUIRE(model.PresetValues.size() == c_RendererQualityPresetCount);
+		REQUIRE(model.PresetValues == RendererQuality::GetPresetValues().data());
 		for (size_t index = 0; index < c_RendererQualityPresetCount; index++)
 			CHECK(model.PresetValues[index] == RendererQuality::ToSectionValue(RendererQuality::GetPreset(c_Presets[index])));
 	}

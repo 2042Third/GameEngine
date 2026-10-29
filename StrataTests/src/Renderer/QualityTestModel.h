@@ -75,7 +75,7 @@ namespace Strata::Tests
 			RendererQuality::OptionModel model;
 			model.Section = &Section;
 			model.Rows = Rows;
-			model.PresetValues = PresetValues;
+			model.PresetValues = PresetValues.data();
 			return model;
 		}
 	};

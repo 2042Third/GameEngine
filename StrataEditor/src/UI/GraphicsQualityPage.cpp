@@ -244,7 +244,7 @@ namespace Strata
 			const std::string& name = row.Field->Name;
 			for (size_t column = 0; column < c_PresetColumns; column++)
 			{
-				const nlohmann::json* member = column < data.Model.PresetValues.size() ? JsonUtils::Find(data.Model.PresetValues[column], name) : nullptr;
+				const nlohmann::json* member = data.Model.PresetValues ? JsonUtils::Find(data.Model.PresetValues[column], name) : nullptr;
 				row.Cells[column] = member ? FormatValue(*row.Field, *member, data.EngineModel) : std::string("-");
 			}
 			const nlohmann::json* member = JsonUtils::Find(data.CustomValue, name);

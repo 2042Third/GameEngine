@@ -369,7 +369,7 @@ namespace Strata
 			if (!preset || *preset == RendererQualityPreset::Custom)
 				return nullptr;
 			const size_t index = static_cast<size_t>(*preset);
-			return index < model.PresetValues.size() ? &model.PresetValues[index] : nullptr;
+			return model.PresetValues && index < c_RendererQualityPresetCount ? &model.PresetValues[index] : nullptr;
 		}
 
 		// Whether every row that follows the preset has the same value in `a` and `b` (a member missing from either differs).
@@ -826,7 +826,7 @@ namespace Strata
 			return c_RowTraits;
 		}
 
-		std::span<const nlohmann::json> GetPresetValues()
+		const std::array<nlohmann::json, c_RendererQualityPresetCount>& GetPresetValues()
 		{
 			static const std::array<nlohmann::json, c_RendererQualityPresetCount> s_Values = []()
 			{
@@ -843,7 +843,7 @@ namespace Strata
 			OptionModel model;
 			model.Section = &section;
 			model.Rows = GetRowTraits();
-			model.PresetValues = GetPresetValues();
+			model.PresetValues = GetPresetValues().data();
 			return model;
 		}
 
@@ -880,8 +880,11 @@ namespace Strata
 			// Rows that hold the defaults or a preset's values were not tuned (nobody chose them, or a preset's look was the
 			// start): Custom starts from the look in effect. Anything else is someone's tuning, kept.
 			bool tuned = model.Section && !HaveSameFollowingRows(stored, model.Section->GetDefault(), model);
-			for (const nlohmann::json& presetValue : model.PresetValues)
-				tuned = tuned && !HaveSameFollowingRows(stored, presetValue, model);
+			if (model.PresetValues)
+			{
+				for (size_t index = 0; index < c_RendererQualityPresetCount; index++)
+					tuned = tuned && !HaveSameFollowingRows(stored, model.PresetValues[index], model);
+			}
 			nlohmann::json result = tuned ? stored : Normalize(stored, model);
 			result["Preset"] = PresetToString(RendererQualityPreset::Custom);
 			return result;

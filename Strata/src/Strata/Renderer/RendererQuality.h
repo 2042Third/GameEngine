@@ -6,6 +6,7 @@
 #include <glm/vec2.hpp>
 #include <nlohmann/json_fwd.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -232,7 +233,7 @@ namespace Strata
 		// The engine's rows: one per field of MakeSection() but Preset, in field order.
 		std::span<const RowTraits> GetRowTraits();
 		// The section values of Low, Medium, High and Ultra, every field spelled out: ToSectionValue(GetPreset(p)), made once.
-		std::span<const nlohmann::json> GetPresetValues();
+		const std::array<nlohmann::json, c_RendererQualityPresetCount>& GetPresetValues();
 
 		// What the option logic works over: a simple quality section (its first field Preset, an Enum of Low, Medium, High,
 		// Ultra and Custom), its rows' traits and its four presets' values. The engine's is GetOptionModel(section); the
@@ -241,8 +242,10 @@ namespace Strata
 		struct OptionModel
 		{
 			const SettingsSection* Section = nullptr;
-			std::span<const RowTraits> Rows;              // One per field but Preset
-			std::span<const nlohmann::json> PresetValues; // Low, Medium, High, Ultra: c_RendererQualityPresetCount entries
+			std::span<const RowTraits> Rows; // One per field but Preset
+			// Low, Medium, High, Ultra: c_RendererQualityPresetCount values, or null for none. A pointer, not a span: this header
+			// only declares JSON (Docs/DeveloperGuide.md, "Precompiled headers").
+			const nlohmann::json* PresetValues = nullptr;
 		};
 		// The engine's rows and presets over `section` (the registered Renderer.Quality section).
 		OptionModel GetOptionModel(const SettingsSection& section);

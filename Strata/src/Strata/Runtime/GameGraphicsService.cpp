@@ -242,7 +242,7 @@ namespace Strata
 			{
 				effective["Preset"] = RendererQuality::PresetToString(*CommandLine);
 				const size_t index = static_cast<size_t>(*CommandLine);
-				if (index < Model.PresetValues.size())
+				if (Model.PresetValues && index < c_RendererQualityPresetCount)
 				{
 					for (const RendererQuality::RowTraits& row : Model.Rows)
 					{

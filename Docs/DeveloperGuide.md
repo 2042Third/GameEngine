@@ -227,7 +227,11 @@ compile time of the editor's and the tests' objects by about 40%.
   returns includes `<nlohmann/json_fwd.hpp>`; the files that read or build the values include `<nlohmann/json.hpp>`.
   Headers that need the complete type (JSON members, default arguments, inline code) are listed with the reason in
   `StrataTests/src/Architecture/HeaderWeightTests.cpp`, and `Architecture.HeaderWeight` fails on any other engine
-  header including the complete one.
+  header including the complete one. A header that only declares JSON names no `std::span` of it, as a member or a
+  return: Apple Clang 15's libc++ instantiates the span's iterator functions, which need the complete type, in every
+  file that includes the header (`RendererQuality::OptionModel` broke CI's macOS build so). It holds a pointer, or
+  returns a reference to the container, instead; `Architecture.HeaderWeight` checks the engine's and the editor's
+  headers.
 - A header that uses a type only by reference, pointer or owning pointer declares it instead of including its header, and
   holds values of it through `Scope<>` with the destructor in the `.cpp`: an edit of the declared header then rebuilds
   only its own users. `EditorContext.h`, included by about a hundred editor and test objects, does so for the command
