@@ -89,7 +89,8 @@ namespace Strata
 			postProcess.Tonemapper = TonemapOperator::Filmic;
 			postProcess.AutoExposure = true;
 			postProcess.Exposure = c_Basic3DExposure;
-			// Temporal anti-aliasing: steady edges, and the soft shadows' noise averaged away.
+			// Temporal anti-aliasing: steady edges and thin details (the sun's soft shadow needs none: it is the same in every frame
+			// with any method; point and spot lights' shadows a game adds get their grain averaged away).
 			postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
 		}
 

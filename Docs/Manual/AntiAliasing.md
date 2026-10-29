@@ -12,14 +12,14 @@ Method** chooses how.
 
 - **FXAA** smooths each frame on its own, by blurring along the edges it finds in the image. It costs little and never
   trails, but edges still crawl a little as things move, thin details (grass, rails, distant branches) flicker, and the
-  grain of soft shadows' edges stays. It is the component's default, and the right choice for 2D games and pixel art,
-  whose crisp pixels TAA would soften. Since 0.7.0 it smooths single-pixel details a third as much as before (its
-  subpixel blend went from 0.75 to 0.25): at 0.75 it took a fifth of the texture detail of an image without
-  anti-aliasing.
+  fine grain at the soft edges of point and spot lights' shadows stays. It is the component's default, and the right
+  choice for 2D games and pixel art, whose crisp pixels TAA would soften. Since 0.7.0 it smooths single-pixel details a
+  third as much as before (its subpixel blend went from 0.75 to 0.25): at 0.75 it took a fifth of the texture detail of
+  an image without anti-aliasing.
 - **TAA** (temporal anti-aliasing) moves every frame's samples by a different fraction of a pixel (eight positions in
   turn) and blends each frame with the image of the frames before it, fetched where each surface was in the previous
-  frame. Edges come out smooth and steady, thin details stop flickering, and the grain of soft shadows' edges averages
-  away. New projects made from the Basic 3D template and the 3D samples use it.
+  frame. Edges come out smooth and steady, thin details stop flickering, and the grain at the soft edges of point and
+  spot lights' shadows averages away. New projects made from the Basic 3D template and the 3D samples use it.
 - **Morphological** smooths each frame on its own too, but instead of blurring along edges it finds each edge's
   staircase, reconstructs the straight line the staircase stands for, and gives each pixel along it the share of the
   colors the line leaves it. Shallow edges come out close to their true coverage (within a tenth of a pixel's at 1:7),
@@ -27,7 +27,10 @@ Method** chooses how.
   steady edges that crawl in motion or thin details thinner than a pixel.
 
 Ambient occlusion looks the same with any method, and without anti-aliasing: it smooths its own pattern within each
-frame, so it needs no earlier frames.
+frame, so it needs no earlier frames. So does the sun's soft shadow: its filter's pattern is the same in every frame and
+smoothed within the frame, so its edges neither flicker nor keep a grain for TAA to average
+([Lighting.md](Lighting.md#shadows)). Only point and spot lights' soft shadows still turn their pattern every frame for
+TAA to average.
 
 Whatever the method, and without anti-aliasing, the image is dithered: a noise of one step of the display's 256 per
 color channel, the same every frame, so skies, fog and dark gradients show no bands. It is far below what the eye picks
@@ -35,9 +38,10 @@ out as a pattern, and black and white stay exact.
 
 ## Which method suits which look
 
-- **TAA with the Sharp preset** is the 3D default: the steadiest image, with the grain of soft shadows' edges averaged
-  away, and Sharp's sharpening giving back most of the texture detail slow pans would soften. Choose it for realistic 3D
-  scenes; screen-space reflections need it at Graphics Quality Medium (High and Ultra trace them with any method).
+- **TAA with the Sharp preset** is the 3D default: the steadiest image, with the grain of point and spot lights' soft
+  shadow edges averaged away, and Sharp's sharpening giving back most of the texture detail slow pans would soften.
+  Choose it for realistic 3D scenes; screen-space reflections need it at Graphics Quality Medium (High and Ultra trace
+  them with any method).
   Where motion blur blurs the image, TAA does not sharpen it.
 - **FXAA** suits games that must never trail and stylized 3D: it smooths each frame's edges and, with its lower subpixel
   blend, keeps most of the texture detail (0.87 of an image without anti-aliasing on a tiled floor at 3840x2160), but

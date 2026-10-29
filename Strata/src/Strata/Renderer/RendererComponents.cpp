@@ -462,7 +462,8 @@ namespace Strata
 			.Property("AntiAliasing", &PostProcessComponent::AntiAliasing, WithTooltip({}, "Smooths jagged edges, by the method below"))
 			.EnumProperty("AntiAliasingMethod", &PostProcessComponent::AntiAliasingMethod, { { "FXAA", 0 }, { "TAA", 1 }, { "Morphological", 2 } },
 				{ .Tooltip = "FXAA: fast approximate anti-aliasing of each frame; TAA: temporal anti-aliasing, each frame sampled at another "
-					"sub-pixel offset and blended with the earlier ones along their motion: smoother edges and soft shadows. "
+					"sub-pixel offset and blended with the earlier ones along their motion: smoother, steadier edges and thin details, and "
+					"point and spot lights' soft shadow edges without their grain (the sun's are the same with any method). "
 					"TAA Preset chooses how the TAA looks. Morphological: non-temporal, finds edges and blends along them, keeping texture "
 					"detail" })
 			.EnumProperty("TAAPreset", &PostProcessComponent::TAAPreset, { { "Sharp", 0 }, { "Original", 1 }, { "Custom", 2 } },
