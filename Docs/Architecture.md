@@ -305,7 +305,8 @@ and `SceneRenderer` extracts each frame's draws from it (`SceneRendererExtractio
 `AssetResolveCache`; see [Render scene](#render-scene)). `SceneRenderer` draws a scene (light clustering, the atmosphere's
 aerial perspective volume, shadow cascades and
 point and spot lights' shadow views, depth/normal/entity-ID prepass (with motion vectors and, for screen-space reflections, the
-surface target), GTAO and its denoiser, reflection probes' conversions and the screen-space reflections (the Checkerboard
+surface target), the sun's screen-space shadow mask (the cascades' filter at every opaque pixel, contact shadows, an
+edge-aware blur) and the cascades' fit's reduction of the prepass depth, GTAO and its denoiser, reflection probes' conversions and the screen-space reflections (the Checkerboard
 trace, or the Spatial modes' full-resolution trace and resolve), forward PBR (hazed by aerial perspective, then
 fogged), sky, a copy of the image so far for glass (and a full-resolution one for the next frame's Spatial reflections),
 transparents (glass first, hazed and fogged as well),

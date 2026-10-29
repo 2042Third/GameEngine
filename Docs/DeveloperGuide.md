@@ -3456,29 +3456,32 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 
 ### Scene renderer and lighting
 
-- `SceneRenderer` draws a `Scene` from a `SceneCamera` into its output texture or a given framebuffer:
-  light clustering, the atmosphere's aerial perspective volume (atmosphere skies only: "Fog and atmosphere"),
-  directional shadow cascades and point and spot lights' shadow views ("Local light shadows"),
-  depth/normal/entity-ID prepass (with motion vectors when asked or for
-  TAA: "Motion vectors and TAA"), ground-truth ambient occlusion and its denoiser, the reflection probes' conversions
-  and the screen-space reflections ("Reflections": the Checkerboard trace, or for the Spatial modes the full-resolution
-  trace and its resolve, which read the previous frame's color copy), forward PBR
-  (opaque surfaces with an EQUAL depth test
-  and forced early depth testing), sky, a copy of the image so far (for glass, and with a full-resolution one beside it
-  for the Spatial reflections of the next frame), transparent surfaces: glass first, then the blended ones back to front
-  ("Clear coat and glass"), every surface hazed by aerial perspective and then fogged by the scene's height fog ("Fog and
-  atmosphere"), the temporal anti-aliasing resolve when the scene chooses it, then
-  post-processing from the scene's `PostProcessComponent` (exposure, bloom, tone mapping and grading, FXAA without
-  TAA). A target framebuffer must match the viewport size and have a non-sRGB UNORM color format; `Render` returns false
-  (and logs once) instead of rescaling. The output
-  texture is created by the first frame that needs it (no target, or overlays or text to compose), so renderers that
-  draw into targets without overlays (games without text) never hold one.
+- `SceneRenderer` draws a `Scene` from a `SceneCamera` into its output texture or a given framebuffer: light clustering,
+  the atmosphere's aerial perspective volume (atmosphere skies only: "Fog and atmosphere"), directional shadow cascades
+  and point and spot lights' shadow views ("Local light shadows"), depth/normal/entity-ID prepass (with motion vectors
+  when asked or for TAA: "Motion vectors and TAA"), the sun's screen-space shadow mask (the cascades' filter at every
+  opaque pixel of the prepass, contact shadows and an edge-aware blur; the forward pass's opaque surfaces read it) and
+  the reduction of the prepass depth the cascades' fit reads back ("Sun shadows"), ground-truth ambient occlusion and
+  its denoiser, the reflection probes' conversions and the screen-space reflections ("Reflections": the Checkerboard
+  trace, or for the Spatial modes the full-resolution trace and its resolve, which read the previous frame's color
+  copy), forward PBR (opaque surfaces with an EQUAL depth test and forced early depth testing), sky, a copy of the image
+  so far (for glass, and with a full-resolution one beside it for the Spatial reflections of the next frame),
+  transparent surfaces: glass first, then the blended ones back to front ("Clear coat and glass"), every surface hazed
+  by aerial perspective and then fogged by the scene's height fog ("Fog and atmosphere"), the temporal anti-aliasing
+  resolve when the scene chooses it, then post-processing from the scene's `PostProcessComponent` ("Post-processing":
+  depth of field, motion blur, exposure, bloom, lens flares, tone mapping with grading, chromatic aberration, film grain
+  and the dither of the display image, then, without TAA, FXAA or the morphological anti-aliasing). A target framebuffer
+  must match the viewport size and have a non-sRGB UNORM color format; `Render` returns false (and logs once) instead of
+  rescaling. The output texture is created by the first frame that needs it (no target, or overlays or text to compose),
+  so renderers that draw into targets without overlays (games without text) never hold one.
 - `SceneRenderer.cpp` holds the frame (`RenderFrame`) and what its passes share; features live in files of their own:
   `SceneRendererPost.cpp` the post-processing from the HDR image to the display (depth of field and motion blur;
   `RenderPostHDR`: exposure, bloom and lens flares; `RenderPostDisplay`: tone mapping, then FXAA or the morphological
   anti-aliasing; their resources, targets and passes), `SceneRendererAmbientOcclusion.cpp`
   the ambient occlusion (GTAO and its denoiser, their resources and targets), `SceneRendererLightingView.cpp` the lighting
-  debug views, `SceneRendererGlass.cpp`,
+  debug views, `SceneRendererGlass.cpp`, `SceneRendererScreenShadows.cpp` the sun's screen-space shadow mask (its
+  evaluation, contact shadows and blur), `SceneRendererShadowFit.cpp` the cascades' fit to the view (the reduction of the
+  prepass depth and its readbacks), `SceneRendererShadowView.cpp` the shadows debug view,
   `SceneRendererScreenReflections.cpp`, `SceneRendererReflectionProbes.cpp`, `SceneRendererAtmosphere.cpp`,
   `SceneRendererLocalShadows.cpp`, `SceneRendererExtraction.cpp` and `SceneRendererGPUDriven.cpp`. Their members stay
   declared in `SceneRenderer.h`, grouped under a comment naming their file. A feature's new pass goes into its file
