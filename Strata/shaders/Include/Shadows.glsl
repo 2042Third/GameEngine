@@ -10,7 +10,7 @@
 // with the frame, so a still view is the same in every frame. Each cascade blends into the next one over a band before its
 // split (the last one fades out). Acne is prevented by the rasterizer's slope bias (shadow pass), a constant depth bias and a
 // normal offset (ShadowBias), and a receiver plane depth bias that follows the receiver's slope across the filter region.
-// Every shader that includes this file enables GL_EXT_samplerless_texture_functions.
+// Every shader that includes this file enables GL_EXT_samplerless_texture_functions and GL_EXT_texture_shadow_lod.
 
 #include "Include/BlueNoise.glsl"
 #include "Include/Scene.glsl"
@@ -103,10 +103,12 @@ vec2 UnpackShadowRange(uint packed)
 }
 
 // The share of a bilinear 2x2 footprint of the cascade's layer that blocks the light at `reference` (1 = in shadow). An
-// explicit level: the sun is shaded in non-uniform control flow (the classification returns early).
+// explicit level: the sun is shaded in non-uniform control flow (the classification returns early). Level 0 by LOD
+// (GL_EXT_texture_shadow_lod), not by zero gradients: the same texels and weights (the map has one level, magnified either
+// way), and the disk's taps cost less without the gradients each one would send.
 float CompareShadowMap(int cascade, vec2 uv, float reference)
 {
-	return textureGrad(sampler2DArrayShadow(u_ShadowMap, u_ShadowCompareSampler), vec4(uv, float(cascade), reference), vec2(0.0), vec2(0.0));
+	return textureLod(sampler2DArrayShadow(u_ShadowMap, u_ShadowCompareSampler), vec4(uv, float(cascade), reference), 0.0);
 }
 
 // What the filter found in one cascade, or blended over two (EvaluateDirectionalShadow).

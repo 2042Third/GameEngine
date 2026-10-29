@@ -1357,14 +1357,27 @@ within 1.15 times step 0's.
     it is shown (landed). `SceneOpenOver1MMaxFrame` fell to 0.295 of step 0's but stays over its budget in about half
     the opens: open, with the next hypotheses in the open items.
 - **Open at the integration (2026-10-28),** with the integration's rulings (`Docs/Plans/Wave7/specs/decisions.md`):
-  - The wave's perf pass and campaign. `GPU.ScreenShadows` costs 0.11-0.16 ms at 1920x1080 Medium, taking the samples'
-    small scenes to 1.15-1.24 times step 0's GPU busy time, and 0.54-0.83 ms at 3840x2160 High (targets 0.35 without
-    and 0.45 with contact shadows). It landed for its image (Medium keeps 0.6.0's sample counts and resolutions); the
-    pass cuts it on the integrated tree, through per-pass timers inside the stage, fewer depth-range reads per pixel,
-    fewer contact shadow steps at High and the fit at a lower resolution, to the targets of one budget for the whole
-    wave: Medium at 1920x1080 at most 1.15 times step 0's GPU busy time on the three samples' scene cameras, and
-    `GPU.ScreenShadows` at most 0.45 ms at 3840x2160 High; what it does not reach stays here with its numbers. The
-    campaign (`PerfStability.py --runs 5`, on the reference memory) then measures the streams' provisional metrics, the
+  - The wave's perf pass and campaign. The pass (interleaved look-dev A/Bs against cc9524a1, three pairs, medians, the
+    samples' scene cameras with TAA): the sun's shadow comparisons take level 0 by LOD instead of zero gradients, and the
+    contact march takes one step at a time, neither changing a pixel. `GPU.ScreenShadows` went from 0.11-0.16 to
+    0.06-0.10 ms at 1920x1080 Medium and from 0.53-0.83 to 0.35-0.52 ms at 3840x2160 High; GPU busy at Medium 1080 from
+    1.20-1.32 to 1.10-1.20 times step 0's (Third-Person 1.10, Open World 1.15, Physics Playground 1.20). Still open, with
+    their causes:
+    - The Physics Playground at 1920x1080 Medium: 1.20 times step 0's GPU busy time (0.590 against 0.491 ms; target 1.15).
+      The mask costs 0.062 ms (evaluation 0.027, blur 0.024, the fit's reduction 0.011), the post chain 0.014 more
+      (`camera-and-tone`), aerial perspective 0.009 (a fixed cost: each of 1,024 threads marches 64 segments in turn) and
+      ambient occlusion 0.008 more (`light-and-materials`' denoiser).
+    - `GPU.ScreenShadows` in the Third-Person view at 3840x2160 High: 0.52 ms (target 0.45; the Open World 0.35, the
+      Playground 0.39). The evaluation takes 0.20 ms (the disk's 24 taps and the range cells' loop; pixels in blend bands
+      sample two cascades), contact shadows 0.20 (12 steps), the blur 0.10, the reduction 0.02.
+    - Next levers: the blur as compute passes that read depth, normals and the mask once per tile (the fragment passes
+      read them again for every tap); the aerial volume integrated per slice in parallel; High's contact shadows at 10
+      steps (about 0.02 ms at 4K, an image change to judge); the reduction's clear, dispatch and copy. Measured and
+      dropped: gathering the range cells four at a time (slower), writing only the mask pixels a pass changes (no gain),
+      the reduction beside the mask's passes (graphics and compute work on one queue do not overlap).
+    - Met: the Open World's `GPU.Opaque` at 3840x2160 is 0.020 ms (Medium) and 0.032 ms (High) below step 0's for the
+      whole wave (the mask's saving holds `light-and-materials`' shading); `PerfGPU.Renderer.Post4K` 0.249 ms (target 0.25).
+    The campaign (`PerfStability.py --runs 5`, on the reference memory) then measures the streams' provisional metrics, the
     acceptance of plan section 1.1 (High at 3840x2160 measured 1.84-2.59 ms of GPU busy time after `sun-shadows`,
     against 5 ms), the Open World's opaque pass at High, and the budgets that may go down
     (`Performance600FramesP95`, `ThumbnailsMaxFrame`, `PerfGPU.Renderer.GPUTimerCost`).

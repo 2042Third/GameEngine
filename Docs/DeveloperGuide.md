@@ -4092,7 +4092,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
   distance `d`) behind the face the depth buffer holds under it (that face's own plane again: exact for planes at any
   angle, so a ray rising off a floor at a grazing sun never reads the floor as an occluder); steps more than two pixels'
   footprint in front of that surface along the view end without the plane (which gives up contact shadows from surfaces
-  seen nearly edge-on). Steps are interpolated in clip space and read the depth four at a time, so the reads overlap.
+  seen nearly edge-on). Steps are interpolated in clip space and judged one at a time (reading four steps' depths together
+  cost 10-20% more in registers than the overlap saved), the start's own neighborhood without a read.
   They are offset by the fixed blue-noise tile (shifted apart from the disk's turn), not by the frame; the dither this
   leaves where a hit depends on whether a step lands within the thickness (a contact shadow's far edge, rays passing
   behind an object seen from the camera) is taken by the mask's blur, whose radius becomes half the step's length on
@@ -4160,12 +4161,15 @@ lights, Post Process and the sky), and never a resolution below the output's.
   `ShadowFitChanges`, `Cascades[c].Fitted`; `editor.perf`'s `renderStats` (and every `viewport.capture` result's) report
   `shadowFit` and `cascades`. Tests:
   `Renderer.ShadowFit` (the tracker alone, synthetic readbacks), `GPU.SceneRenderer.ShadowFit`.
-- **Costs** (look-dev A/B against 0.6.0's filter at cc9524a1, three interleaved pairs, medians, the samples' scene cameras
-  with TAA; RTX 5090): at 3840x2160 High `GPU.ScreenShadows` is 0.54-0.83 ms (mask, blur, contact shadows and the fit's
-  reduction) while `GPU.Opaque` loses the filter (0.06-0.19 ms less), GPU busy 1.32-1.42 times; at 1920x1080 Medium the
-  stage is 0.11-0.16 ms against 0.01-0.03 ms saved in `GPU.Opaque`, busy 1.15-1.24 times. Timed apart (temporary timers,
-  which add their own gaps) at Medium 1080 the evaluation takes 0.07-0.12 ms, the blur 0.035-0.046 ms and the reduction
-  0.011 ms, all of it fixed costs (reading every second pixel saved nothing). `PerfGPU.Renderer.ScreenShadows4K*` and
+- **Costs** (look-dev A/B against cc9524a1, three interleaved pairs, medians, the samples' scene cameras with TAA; RTX
+  5090, after the wave's perf pass): at 3840x2160 High `GPU.ScreenShadows` is 0.35-0.52 ms (mask, contact shadows, blur
+  and the fit's reduction) while `GPU.Opaque` loses the filter; at 1920x1080 Medium it is 0.06-0.10 ms. Timed apart
+  (temporary timers) at 4K High in the Third-Person view: the evaluation 0.20 ms (the disk's taps, then the range cells'
+  loop; pixels in a blend band sample two cascades), contact shadows 0.20, the two blur passes 0.10 (the blurred pixels'
+  taps: writing only changed pixels saved nothing), the reduction 0.02. Measured and not kept: gathering the range cells
+  four at a time (5-16% slower in registers), the reduction beside the mask's passes (graphics and compute work on one
+  queue do not overlap). The comparisons take level 0 by LOD (`textureLod`, GL_EXT_texture_shadow_lod): sampling the
+  array with zero gradients made the evaluation cost 2.2-2.4 times as much. `PerfGPU.Renderer.ScreenShadows4K*` and
   `ShadowRedraw4K*` (provisional) measure it on 100,000 shadowed cubes.
 - **Transparent surfaces** are not in the prepass: `Forward.frag`'s transparent and glass variants call
   `SampleDirectionalShadow`, the same filter per pixel, without the blur (and without contact shadows). A change to how
