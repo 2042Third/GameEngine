@@ -1965,6 +1965,7 @@ namespace Strata
 		nvrhi::ShaderHandle m_SkinnedMeshVertexShader;
 		nvrhi::ShaderHandle m_SkinnedShadowVertexShader;
 		nvrhi::InputLayoutHandle m_SkinnedInputLayout; // m_InputLayout and the skin stream (joints, weights)
+		nvrhi::InputLayoutHandle m_SkinnedShadowInputLayout; // m_ShadowInputLayout and the skin stream
 		nvrhi::ShaderHandle m_PrepassPixelShader;
 		nvrhi::ShaderHandle m_ForwardPixelShader;
 		nvrhi::ShaderHandle m_ForwardTransparentPixelShader;
@@ -1974,6 +1975,7 @@ namespace Strata
 		nvrhi::ShaderHandle m_SkyboxPixelShader;
 		nvrhi::ShaderHandle m_AtmosphereSkyboxPixelShader;
 		nvrhi::InputLayoutHandle m_InputLayout;
+		nvrhi::InputLayoutHandle m_ShadowInputLayout; // Position and UV: what every shadow pass reads (Scene/ShadowMesh.vert)
 		nvrhi::GraphicsPipelineHandle m_SkyboxPipeline;
 		nvrhi::GraphicsPipelineHandle m_AtmosphereSkyboxPipeline;
 

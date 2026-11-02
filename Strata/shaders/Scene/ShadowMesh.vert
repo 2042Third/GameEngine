@@ -11,13 +11,13 @@
 // Scene/LocalShadowMeshSkinned.vert) the view is a point or spot light's shadow view instead: a perspective view whose near
 // plane clips (casters that close to a light are inside it).
 
+// Shadow passes read position, UV and the skin only: their own input layout (SceneRenderer), so that every attribute the
+// layout gives is read.
 layout(location = 0) in vec3 a_Position;
-layout(location = 1) in vec3 a_Normal;
-layout(location = 2) in vec4 a_Tangent;
-layout(location = 3) in vec2 a_TexCoord;
+layout(location = 1) in vec2 a_TexCoord;
 #ifdef ST_SKINNED
-layout(location = 4) in uvec4 a_Joints;
-layout(location = 5) in vec4 a_Weights;
+layout(location = 2) in uvec4 a_Joints;
+layout(location = 3) in vec4 a_Weights;
 #endif
 
 layout(location = 0) out vec2 v_TexCoord;

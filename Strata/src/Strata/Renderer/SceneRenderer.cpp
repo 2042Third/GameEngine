@@ -327,6 +327,14 @@ namespace Strata
 				.setOffset(offsetof(MeshSkinVertex, Weights)).setElementStride(sizeof(MeshSkinVertex))
 		};
 		m_SkinnedInputLayout = m_Device->createInputLayout(skinnedAttributes, static_cast<uint32_t>(std::size(skinnedAttributes)), m_SkinnedMeshVertexShader);
+		// Shadow passes read position, UV and the skin only (Scene/ShadowMesh.vert): layouts of just those, so that no
+		// attribute goes unread (the validation layer warns about one). NVRHI numbers a layout's attributes in order, so
+		// they are locations 0-1 and, skinned, 2-3. Draws still bind all three vertex buffers; a layout may leave one unread.
+		const nvrhi::VertexAttributeDesc shadowAttributes[] = { attributes[0], attributes[3] };
+		m_ShadowInputLayout = m_Device->createInputLayout(shadowAttributes, static_cast<uint32_t>(std::size(shadowAttributes)), m_ShadowVertexShader);
+		const nvrhi::VertexAttributeDesc skinnedShadowAttributes[] = { attributes[0], attributes[3], skinnedAttributes[4], skinnedAttributes[5] };
+		m_SkinnedShadowInputLayout = m_Device->createInputLayout(skinnedShadowAttributes, static_cast<uint32_t>(std::size(skinnedShadowAttributes)),
+			m_SkinnedShadowVertexShader);
 
 		nvrhi::BindingLayoutDesc sceneLayout;
 		sceneLayout.visibility = nvrhi::ShaderType::All;
@@ -542,7 +550,7 @@ namespace Strata
 		m_TemporalBindingLayout = m_Device->createBindingLayout(temporalLayout);
 		m_TemporalPipeline = CreateComputePipeline("PostProcess/TAA.comp", m_TemporalBindingLayout);
 
-		ST_CORE_VERIFY(m_InputLayout && m_SceneBindingLayout && m_FrameConstantBuffer && m_CommandList && m_ShadowPushBindingSet
+		ST_CORE_VERIFY(m_InputLayout && m_SkinnedInputLayout && m_ShadowInputLayout && m_SkinnedShadowInputLayout && m_SceneBindingLayout && m_FrameConstantBuffer && m_CommandList && m_ShadowPushBindingSet
 			&& m_PointClampSampler && m_LinearClampSampler && m_EquirectSampler && m_ShadowCompareSampler && m_DummyShadowMap && m_DummyShadowRanges && m_DummyLocalShadowAtlas
 			&& m_LocalShadowBuffer && m_ReflectionProbeBuffer && m_ClusterBuffer
 			&& m_ClusterBindingLayout && m_ClusterPipeline
@@ -2368,7 +2376,10 @@ namespace Strata
 		const bool selectionMask = key.PassType == Pass::SelectionMask;
 		nvrhi::GraphicsPipelineDesc desc;
 		desc.primType = nvrhi::PrimitiveType::TriangleList;
-		desc.inputLayout = key.Skinned ? m_SkinnedInputLayout : m_InputLayout;
+		if (shadowPass)
+			desc.inputLayout = key.Skinned ? m_SkinnedShadowInputLayout : m_ShadowInputLayout;
+		else
+			desc.inputLayout = key.Skinned ? m_SkinnedInputLayout : m_InputLayout;
 		if (localShadowPass)
 			desc.VS = key.Skinned ? m_SkinnedLocalShadowVertexShader : m_LocalShadowVertexShader;
 		else if (key.Skinned)
