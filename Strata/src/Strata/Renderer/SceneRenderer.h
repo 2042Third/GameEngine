@@ -239,6 +239,11 @@ namespace Strata
 		// scene or other cascades, and frames without receivers use Strata 0.6.0's layout (SceneRendererStats::ShadowFit).
 		// Off: always Strata 0.6.0's layout (renderers of single images: thumbnails, bakes; tests of the layout itself).
 		bool FitShadowsToView = true;
+		// The fitted cascades wait before they follow a near object or a wider square and shrink only after half a second
+		// (ShadowFitTracker's holds, counted in seconds). Off: Strata 0.7.0's rules, growths at once and shrinks after
+		// c_ShrinkReadbacks readbacks, so that pictures do not depend on how long frames take: renderers of single images
+		// (viewport.capture's renderer, project thumbnails).
+		bool ShadowFitHolds = true;
 		// Scenes whose PostProcessComponent chooses AntiAliasingMode::TAA are drawn with temporal anti-aliasing: each frame
 		// offsets its samples by a sub-pixel jitter (8 phases of a Halton (2, 3) sequence, from the history's latest reset on,
 		// in the frame's copy of the camera only: culling, levels of detail, the shadow cascades and the overlays keep the
@@ -419,8 +424,9 @@ namespace Strata
 		// and no target (Render fails with one). Tools that read the scene's light back (the reflection probe bake) set it with
 		// a forced PreExposure, which they divide out.
 		bool HDROutput = false;
-		// The time the automatic exposure adapts over since this renderer's previous frame; unset, the wall clock between its
-		// frames (at most 0.25 s, so pauses do not turn into one huge step). Tests and tools that step time set it.
+		// The time since this renderer's previous frame that automatic exposure adapts over and the sun cascades' fit counts its
+		// holds in (ShadowFitTracker); unset, the wall clock between its frames (at most 0.25 s, so pauses do not turn into one
+		// huge step). Tests and tools that step time, and tests that compare two renderers' frames, set it.
 		std::optional<float> AdaptationSeconds;
 		// The scene's motion blur applies (PostProcessComponent::MotionBlur, unless the quality turns it off). Editor views and
 		// renderers of single images (captures, thumbnails) turn it off: they never blur.
@@ -674,10 +680,12 @@ namespace Strata
 		// from a readback of the receivers (else Strata 0.6.0's layout), and some cascade's square was fitted to them; whether
 		// the layout settled (no readback is due that may change it: true without a fit); the range [ShadowFitNear,
 		// ShadowFitFar] the slices divide (the last cascade always reaches the shadow distance); layout changes since the
-		// renderer was made. Cascades[c].Fitted says which squares were fitted.
+		// renderer was made. Cascades[c].Fitted says which squares were fitted. ShadowFitHolding: a growth of the near bound or
+		// of a square waits (ShadowFitTracker::IsHolding), and the layout is not settled meanwhile.
 		bool ShadowFit = false;
 		bool ShadowFitSquares = false;
 		bool ShadowFitSettled = true;
+		bool ShadowFitHolding = false;
 		float ShadowFitNear = 0.0f;
 		float ShadowFitFar = 0.0f;
 		uint64_t ShadowFitChanges = 0;
@@ -1494,6 +1502,11 @@ namespace Strata
 		// manual exposure into the exposure buffer.
 		void UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, const SceneRenderOptions& options, nvrhi::IBindingSet* bindingSet,
 			std::optional<float> keyReferenceLog2);
+		// Seconds since `last`, which becomes now: the wall clock, at most c_MaxStepSeconds so that pauses (breakpoints, minimized
+		// windows) never become one long step, or SceneRenderOptions::AdaptationSeconds when set (a non-finite value: 0). 0 the
+		// first time.
+		static float StepSeconds(std::optional<std::chrono::steady_clock::time_point>& last, const SceneRenderOptions& options);
+		static constexpr float c_MaxStepSeconds = 0.25f;
 		// The frame's pre-exposure (m_PreExposure) from the options, the settings and the readbacks of earlier frames' metering.
 		// `hold` (frames of a lighting view whose values are not light): automatic exposure keeps the value it has, settled.
 		void ChoosePreExposure(const PostProcessComponent& settings, const SceneRenderOptions& options, bool hold);
@@ -1671,8 +1684,8 @@ namespace Strata
 		// The sun's cascade layout of the frame (SceneRendererShadowFit.cpp): the light's view, the newest readback of the
 		// receivers and the tracker's layout (m_ShadowFitLayout), which FindShadowCasters applies. A new epoch on a camera cut,
 		// another scene (not a clone), other cascades, ResetShadowFit, and when the fit stops; unfitted without a shadowed sun
-		// or with FitShadowsToView off.
-		void UpdateShadowFit(const RenderScene& renderScene, const SceneCamera& camera, bool cameraCut);
+		// or with FitShadowsToView off. The tracker counts its holds in the frame's StepSeconds (`options`).
+		void UpdateShadowFit(const RenderScene& renderScene, const SceneCamera& camera, bool cameraCut, const SceneRenderOptions& options);
 		// After the mask (GPU.ScreenShadows): reduces the prepass depth to the receivers (Scene/ShadowFit.comp) and records their
 		// copy into the readback ring, for frames whose cascades follow the view; false when its resources cannot be made
 		// (reported; the layout stays unfitted).
@@ -2120,6 +2133,7 @@ namespace Strata
 		// targets), and the ring of its readbacks, each with the camera and epoch of the frame it copied.
 		ShadowFitTracker m_ShadowFit;
 		ShadowFitLayout m_ShadowFitLayout;
+		std::optional<std::chrono::steady_clock::time_point> m_LastShadowFitTime; // StepSeconds' clock of the cascades' fit
 		bool m_ShadowFitActive = false;
 		bool m_ResetShadowFit = false;
 		uint64_t m_ShadowFitSceneId = 0;

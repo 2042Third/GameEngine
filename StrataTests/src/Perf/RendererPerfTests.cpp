@@ -811,8 +811,8 @@ TEST_SUITE("PerfGPU.Renderer")
 			CHECK(renderer.GetShadowMapSize() == (preset == RendererQualityPreset::High ? 4096u : 2048u));
 			const bool high = preset == RendererQualityPreset::High;
 			const std::string key = high ? "PerfGPU.Renderer.Render100kCubesShadowedHigh4K" : "PerfGPU.Renderer.Render100kCubesShadowed4K";
-			// The render cost of the sun's shadows: GPU.ScreenShadows (the mask, its blur, contact shadows at High and the
-			// cascades' fit to the view) and GPU.Shadows with every cascade drawn and its depth ranges built.
+			// The render cost of the sun's shadows: GPU.ScreenShadows (the mask, its blur and the cascades' fit to the view; no
+			// preset draws contact shadows) and GPU.Shadows with every cascade drawn and its depth ranges built.
 			const std::string screenKey = high ? "PerfGPU.Renderer.ScreenShadows4KHigh" : "PerfGPU.Renderer.ScreenShadows4KMedium";
 			const std::string redrawKey = high ? "PerfGPU.Renderer.ShadowRedraw4KHigh" : "PerfGPU.Renderer.ShadowRedraw4KMedium";
 			std::vector<std::string> keys = { key };

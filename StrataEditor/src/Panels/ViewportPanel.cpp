@@ -211,28 +211,12 @@ namespace Strata
 		}
 		m_Hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
 		UI::ItemProbe::RecordRect("Viewport.Image", imageMin, ImVec2(imageMin.x + available.x, imageMin.y + available.y));
-		AcceptAssetDrops(context, panelContext.Commands);
+		AcceptAssetDrops();
 
 		// The editor camera, on the edited scene and on the running game alike (the Game view shows the game as it is); or,
 		// with "Game camera", the scene's primary camera with the editor's overlays, which the editor camera's controls
 		// leave alone.
 		const float aspectRatio = static_cast<float>(screenSize.x) / static_cast<float>(screenSize.y);
-		const auto resolveView = [&context, &settings, aspectRatio]()
-		{
-			if (settings.PilotGameCamera)
-			{
-				if (std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Scene, aspectRatio))
-				{
-					view->EditorOverlays = true;
-					view->EditorView = true;
-					return view;
-				}
-			}
-			std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Editor, aspectRatio);
-			if (view && settings.PilotGameCamera)
-				view->Notice = "The scene has no primary camera: showing the editor camera";
-			return view;
-		};
 		std::optional<ViewportView> view;
 		if (canvasMode)
 		{
@@ -251,7 +235,7 @@ namespace Strata
 		}
 		else
 		{
-			view = resolveView();
+			view = ResolveSceneView(context, aspectRatio);
 			m_Piloting = view && view->FromScene;
 			HandleShortcuts(panelContext);
 			if (!m_Piloting)
@@ -279,8 +263,11 @@ namespace Strata
 				}
 			}
 			// The camera may have moved this frame.
-			view = resolveView();
+			view = ResolveSceneView(context, aspectRatio);
 		}
+		// An asset dragged over the image: where it would land through the view's final camera (the ghost the renderer draws
+		// next), and the drop.
+		UpdatePlacement(panelContext, view, canvasMode);
 
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -292,7 +279,7 @@ namespace Strata
 		// The editor camera at the Scene view's own quality setting (the project's by default), the scene's camera at the
 		// game's (the project's, with the players' options while playing).
 		const bool rendered = renderer && view && renderer->Render(context, size, *view, renderSettings, view->EditorOverlays && !canvasMode,
-			GetSceneViewQuality(*view, settings.Quality, context.GetGameQuality()));
+			GetSceneViewQuality(*view, settings.Quality, context.GetGameQuality()), &viewport.GetPlacementPreview());
 		if (rendered)
 		{
 			if (canvasMode)
@@ -335,6 +322,7 @@ namespace Strata
 			DrawDebugViewLegend(context);
 		if (view)
 			DrawOverlays(context, *view, panelContext.Frame);
+		DrawPlacementLabel(context, imageMin, imageMax);
 		if (context.IsSceneLoading())
 			DrawSceneLoadOverlay(context);
 	}
@@ -370,6 +358,8 @@ namespace Strata
 		EndCameraDrag();
 		EndGizmoDrag(context);
 		m_CanvasMode.Reset(context);
+		m_Drag.reset();
+		context.GetViewport().GetPlacementPreview().Clear();
 		context.GetViewport().SetSize(glm::uvec2(0, 0));
 	}
 
@@ -1050,68 +1040,91 @@ namespace Strata
 		UI::StrataProgressBar("Viewport.SceneLoad", progress, stage, contentWidth);
 	}
 
-	void ViewportPanel::AcceptAssetDrops(EditorContext& context, const EditorCommandRegistry& commands)
+	void ViewportPanel::AcceptAssetDrops()
 	{
+		m_Drag.reset();
 		if (!ImGui::BeginDragDropTarget())
 			return;
-		// A prefab or model dragged over the view: what resting it on a surface needs (its template, meshes and skeletons) is
-		// requested while it hovers, so the drop finds it resident.
-		if (const ImGuiPayload* hovering = ImGui::GetDragDropPayload(); hovering && hovering->IsDataType(DragDrop::c_Asset)
-			&& hovering->DataSize == static_cast<int>(sizeof(AssetHandle)) && !hovering->Delivery)
-		{
-			AssetHandle asset = UUID::Null();
-			std::memcpy(&asset, hovering->Data, sizeof(AssetHandle));
-			const AssetType type = AssetManager::GetAssetType(asset);
-			EditorAssetManager* assets = context.GetAssetManager();
-			if (assets && (type == AssetType::Prefab || type == AssetType::Model))
-				context.GetAssetBounds().Measure(*assets, asset);
-		}
-		const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(DragDrop::c_Asset);
+		// Accepted before the release, so that the view shows where it would land while it hovers: no rectangle around the
+		// whole view, and the view's label at the pointer instead of the source's tooltip. Every asset is accepted, so that a
+		// release over the view always ends the drag here; those that cannot be placed do nothing (the label said why).
+		const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(DragDrop::c_Asset,
+			ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect | ImGuiDragDropFlags_AcceptNoPreviewTooltip);
 		if (payload && payload->DataSize == static_cast<int>(sizeof(AssetHandle)) && m_Image.Size.x > 0.0f && m_Image.Size.y > 0.0f)
 		{
 			AssetHandle asset = UUID::Null();
 			std::memcpy(&asset, payload->Data, sizeof(AssetHandle));
-			const AssetType type = AssetManager::GetAssetType(asset);
-			// The cursor in normalized device coordinates of the editor camera's view.
-			const ImVec2 mouse = ImGui::GetIO().MousePos;
-			const glm::vec2 ndc((mouse.x - m_Image.Min.x) / m_Image.Size.x * 2.0f - 1.0f, 1.0f - (mouse.y - m_Image.Min.y) / m_Image.Size.y * 2.0f);
-			const float aspect = m_Image.Size.x / m_Image.Size.y;
-			Scene& scene = *context.GetActiveScene();
-			const EditorCamera& camera = context.GetViewport().GetCamera();
-			if (type == AssetType::Prefab || type == AssetType::Model)
-			{
-				// Resting on the surface under the cursor, else on the one under the view's pivot (the game's camera when
-				// piloting it: the editor camera's pivot there).
-				if (m_Piloting)
-				{
-					EditorActions::InstantiatePrefab(context, commands, asset);
-				}
-				else
-				{
-					const EditorPlacement::Surface surface = EditorPlacement::FindSurfaceAt(scene, camera, ndc, aspect);
-					EditorActions::InstantiatePrefab(context, commands, asset, UUID::Null(), &surface);
-				}
-			}
-			else if (type == AssetType::Material)
-			{
-				// Onto the mesh under the cursor: its renderer's material (one undo step).
-				const std::optional<SceneRayHit> hit = m_Piloting ? std::nullopt : EditorPlacement::CastAt(scene, camera, ndc, aspect);
-				if (hit && hit->HitEntity.HasComponent<MeshRendererComponent>())
-				{
-					RunEditorCommand(context, commands, "component.set", { { "entity", UUIDToJson(hit->HitEntity.GetUUID()) }, { "component", "MeshRenderer" },
-						{ "values", { { "Material", UUIDToJson(asset) } } } });
-				}
-				else
-				{
-					ST_WARN("Drop a material onto a mesh in the viewport to give it the material");
-				}
-			}
-			else
-			{
-				ST_WARN("Only prefabs, models and materials can be dropped into the viewport ({} is a {})", asset.ToString(), AssetTypeToString(type));
-			}
+			m_Drag = AssetDrag { asset, payload->IsDelivery() };
 		}
 		ImGui::EndDragDropTarget();
+	}
+
+	void ViewportPanel::UpdatePlacement(EditorPanelContext& panelContext, const std::optional<ViewportView>& view, bool canvasMode)
+	{
+		EditorContext& context = panelContext.Context;
+		PlacementPreview& preview = context.GetViewport().GetPlacementPreview();
+		if (!m_Drag || !view)
+		{
+			if (preview.IsActive())
+				preview.Clear();
+			return;
+		}
+		// The pointer's ray through the camera the view shows (the scene's with Game camera), snapping as the gizmo does: the
+		// toolbar's Snap, inverted while Ctrl is held.
+		const ViewportSettings& settings = context.GetViewport().GetSettings();
+		const ImGuiIO& io = ImGui::GetIO();
+		const glm::vec2 ndc((io.MousePos.x - m_Image.Min.x) / m_Image.Size.x * 2.0f - 1.0f, 1.0f - (io.MousePos.y - m_Image.Min.y) / m_Image.Size.y * 2.0f);
+		PlacementPointer pointer;
+		pointer.Asset = m_Drag->Asset;
+		pointer.PointerRay = EditorPlacement::MakeViewRay(view->Camera, ndc);
+		pointer.MaxDistance = view->Camera.Far;
+		pointer.FallbackDistance = EditorPlacement::GetFallbackDistance(view->FromScene ? nullptr : &context.GetViewport().GetCamera());
+		if (settings.Snap != io.KeyCtrl)
+			pointer.Snap = settings.TranslateSnap;
+		pointer.CanvasMode = canvasMode;
+		preview.Update(context, pointer);
+		if (!m_Drag->Delivered)
+			return;
+
+		// The drop: the same request the ghost was placed by, so it lands where the ghost stood.
+		if (preview.GetKind() == PlacementPreview::Kind::Place)
+		{
+			EditorActions::PlaceAsset(panelContext.Runner, context, panelContext.Commands, preview.MakeDropParameters());
+		}
+		else if (preview.GetKind() == PlacementPreview::Kind::Material && preview.GetTarget())
+		{
+			// Onto the mesh under the pointer: its renderer's material (one undo step).
+			RunEditorCommand(context, panelContext.Commands, "component.set", { { "entity", UUIDToJson(preview.GetTarget().GetUUID()) },
+				{ "component", "MeshRenderer" }, { "values", { { "Material", UUIDToJson(m_Drag->Asset) } } } });
+		}
+		preview.Clear();
+		m_Drag.reset();
+	}
+
+	void ViewportPanel::DrawPlacementLabel(EditorContext& context, const ImVec2& imageMin, const ImVec2& imageMax)
+	{
+		const PlacementPreview& preview = context.GetViewport().GetPlacementPreview();
+		if (!preview.IsActive() || preview.GetLabel().empty())
+			return;
+		// The box's lines are made again only when the label changed.
+		if (m_PlacementLabelVersion != preview.GetLabelVersion())
+		{
+			m_PlacementLabel.assign(1, preview.GetLabel());
+			m_PlacementLabelVersion = preview.GetLabelVersion();
+		}
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const ImVec4& color = preview.GetLabelStyle() == PlacementPreview::LabelStyle::Warning ? colors.Warning
+			: (preview.GetLabelStyle() == PlacementPreview::LabelStyle::Quiet ? colors.TextSecondary : colors.Text);
+		// Beside the pointer, kept inside the image.
+		const ImVec2 padding = ImGui::GetStyle().FramePadding;
+		const ImVec2 size(ImGui::CalcTextSize(preview.GetLabel().c_str()).x + padding.x * 2.0f, ImGui::GetTextLineHeightWithSpacing() + padding.y * 2.0f);
+		const ImVec2 mouse = ImGui::GetIO().MousePos;
+		const float offset = ImGui::GetFontSize();
+		const ImVec2 position(std::max(imageMin.x, std::min(mouse.x + offset, imageMax.x - size.x)),
+			std::max(imageMin.y, std::min(mouse.y + offset, imageMax.y - size.y)));
+		ViewportToolbar::DrawTextBox(ImGui::GetWindowDrawList(), position, m_PlacementLabel, color);
+		UI::ItemProbe::RecordRect("Viewport.PlacementLabel", position, ImVec2(position.x + size.x, position.y + size.y), true, ImGui::GetColorU32(color),
+			preview.GetLabel());
 	}
 
 }

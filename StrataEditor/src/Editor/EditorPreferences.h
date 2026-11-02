@@ -36,8 +36,8 @@ namespace Strata
 
 		// <user data>/Strata/Preferences.json, or nothing where the system has no per-user data directory.
 		static std::optional<std::filesystem::path> GetDefaultFile();
-		// Registers the editor's preference sections (Editor.ExternalEditor, Editor.Interface) in `registry`: the editor's registration through
-		// ModuleRegistrationOptions::Extra, and the tests'.
+		// Registers the editor's preference sections (Editor.ExternalEditor, Editor.Interface, Editor.FrameRate) in `registry`: the
+		// editor's registration through ModuleRegistrationOptions::Extra, and the tests'.
 		static void RegisterSections(SettingsRegistry& registry);
 
 		// Validates with `registry`'s user sections. `file` keeps the preferences (empty: in memory only, and nothing is

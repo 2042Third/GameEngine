@@ -322,13 +322,18 @@ namespace Strata::Tests
 		return sun;
 	}
 
-	inline ReadbackImage RenderToImage(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera)
+	inline ReadbackImage RenderToImage(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options)
 	{
-		REQUIRE(renderer.Render(scene, camera));
+		REQUIRE(renderer.Render(scene, camera, nullptr, options));
 		ReadbackImage image;
 		REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), image));
 		REQUIRE(image.Width == renderer.GetViewportSize().x);
 		return image;
+	}
+
+	inline ReadbackImage RenderToImage(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera)
+	{
+		return RenderToImage(renderer, scene, camera, SceneRenderOptions {});
 	}
 
 	// What a renderer's latest frame drew, whichever path drew it (SceneRendererStats::GPUDriven): the CPU path's

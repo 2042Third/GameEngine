@@ -115,7 +115,8 @@ nearest to the farthest surface in view, and each one but the farthest shrinks t
 detail goes where the surfaces are (a high camera looking down over a level gets several times finer shadows than
 cascades starting at the camera). The farthest cascade always reaches the Shadow Distance, so a surface that just came
 into view (the camera turned, a door opened) is shadowed at once, a little coarser for the few frames until the cascades
-follow. **Cascade Distribution** (0 to 1, 0.9 by default) decides how the cascades share those distances: 0 evenly, 1 each
+follow. Something passing close to the camera, such as a thrown ball, leaves them alone; something that stays close moves
+them once, after half a second. **Cascade Distribution** (0 to 1, 0.9 by default) decides how the cascades share those distances: 0 evenly, 1 each
 cascade the same ratio farther than the previous one; higher puts more of the detail near the camera.
 
 **Shadow Softness** is the light's apparent size in degrees: 0.53 is the sun's (the default; scenes saved with another
@@ -126,13 +127,14 @@ sun), 0 is a point light's hard edge. The soft edges are the same in every frame
 in them flickers or crawls. The filter never misses a caster the shadow map holds, however thin, but the map holds only
 what is at least about one of its texels wide: far from the camera, where the cascades' texels are a few centimetres
 across, a wire or a blade of grass can lose its shadow, and casters smaller than a texel are left out of those cascades.
-Near the camera, Contact Shadow Length grounds such small things at the High and Ultra graphics quality.
+Near the camera, Contact Shadow Length grounds such small things when the Graphics Quality's Custom Contact Shadows has
+steps (no preset draws them: they can shimmer in motion).
 
 **Shadow Bias** and **Shadow Normal Bias** remove the speckles ("acne") a surface can cast on itself: raise them a little
 when lit surfaces show dark stripes, lower them when shadows detach from their casters.
 
 **Contact Shadow Length** (meters, 0.3 by default, at most 2) grounds what is smaller than the cascades can show, such as a
-foot on the ground or a thin plate on a table: at the High and Ultra graphics quality the renderer looks this far toward
+foot on the ground or a thin plate on a table: with Custom Contact Shadows the renderer looks this far toward
 the sun over what the camera sees and shades where something is in the way. 0 turns them off for the light. Like every
 effect worked out from the image, they come from every opaque surface on screen, also from meshes whose **Cast Shadows**
 is off, and from nothing off screen or hidden behind something; they fade out toward the shadow distance and the image's
@@ -145,10 +147,11 @@ The project's **Graphics Quality** (Project Settings, [Graphics.md](Graphics.md)
 | Shadow resolution (texels each way of every cascade) | 1024 | 2048 | 2048, 4096 from 1440 output rows | 4096, 8192 from 1440 rows |
 | Shadow cascades | 3 | 4 | 4 | 4 |
 | Shadow Filter Quality (taps of the wide soft edges) | 8 | 16 | 24 | 32 |
-| Contact Shadows (steps; off at Low and Medium) | off | off | 12 | 16 |
+| Contact Shadows (steps; off in every preset) | off | off | off | off |
 
 More filter taps only matter where soft edges are wider than a shadow texel (a large Shadow Softness, tall casters): they
-cost a little more there and leave less grain for the screen-space blur to remove. Contact shadows cost a march of their
+cost a little more there and leave less grain for the screen-space blur to remove. Contact shadows, when Custom turns them
+on, cost a march of their
 steps for each lit pixel nearer than the shadow distance (about 0.2-0.3 ms at 3840x2160 on a current GPU).
 
 To see where the cascades are and how fine they are, choose **Shadows** in the Scene view's debug menu: every surface is

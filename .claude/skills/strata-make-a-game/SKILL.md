@@ -275,6 +275,8 @@ you can go on with `{"wait": false}` and watch `editor.status`'s `saving` (the s
   every instance at once, except values an instance overrides (those of other scenes when the scene opens next: save it
   then). `prefab.status` lists an instance's overrides; `prefab.apply` and `prefab.revert` take `component` and `property`
   to apply or revert one of them.
+- Props on uneven ground (rocks on terrain, barrels on a floor): `asset.place {asset, ray: {origin: [x, 200, z],
+  direction: [0, -1, 0]}}` rests each on what the ray hits first (the MCP `scene` toolset).
 
 - Collision layers keep groups apart (bullets that pass through their shooter, debris the player walks through): name
   them and set which pairs collide for the whole project with `project.setCollisionLayers {"layerNames": {"1":

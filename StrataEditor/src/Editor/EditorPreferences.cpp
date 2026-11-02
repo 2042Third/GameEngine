@@ -1,5 +1,6 @@
 #include "Editor/EditorPreferences.h"
 
+#include "Editor/EditorFrameRate.h"
 #include "Editor/EditorInterface.h"
 #include "Editor/ExternalEditor.h"
 #include "Editor/SettingsFileWriter.h"
@@ -69,6 +70,7 @@ namespace Strata
 	{
 		registry.Register(ExternalEditor::MakeSettingsSection());
 		registry.Register(EditorInterface::MakeSettingsSection());
+		registry.Register(EditorFrameRate::MakeSettingsSection());
 	}
 
 	EditorPreferences::EditorPreferences(const SettingsRegistry& registry, std::filesystem::path file, const std::filesystem::path& importFile,

@@ -7,6 +7,7 @@
 #include "Editor/EditorContext.h"
 #include "Editor/EditorViewport.h"
 #include "Editor/ImGuiHarness.h"
+#include "Editor/PlacementPreview.h"
 #include "Editor/ProjectThumbnail.h"
 #include "Editor/ViewportRenderer.h"
 #include "FeatureTest/FeatureTestUtils.h"
@@ -1946,8 +1947,13 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(first["waitedFrames"].get<int>() >= 1); // The first frame cannot know the receivers yet
 		CHECK(first["renderStats"]["shadowFit"]["fitted"] == true);
 		CHECK(first["renderStats"]["shadowFit"]["settled"] == true);
+		CHECK(first["renderStats"]["shadowFit"]["holding"] == false);
+		CHECK(first["renderStats"]["shadowFit"]["changes"].is_number_unsigned());
 		CHECK(first["renderStats"]["cascades"].size() == harness.Context.GetViewport().GetCaptureRenderer()->GetStats().CascadeCount);
 		CHECK(harness.Context.GetViewport().GetCaptureRenderer()->GetStats().ShadowFit);
+		// Single pictures keep Strata 0.7.0's fit rules: no holds counted in seconds, which would tie the picture to frame times.
+		CHECK_FALSE(harness.Context.GetViewport().GetCaptureRenderer()->GetSceneRenderer().GetSpecification().ShadowFitHolds);
+		CHECK(harness.Context.GetViewport().GetGameRenderer()->GetSceneRenderer().GetSpecification().ShadowFitHolds);
 		// Each capture starts the fit again (ResetShadowFit) and waits for it alike. How many frames that takes follows how soon the
 		// GPU finishes each frame's readback (polled, never waited for), so only its bounds are checked: the pictures are equal.
 		nlohmann::json second;
@@ -2686,6 +2692,85 @@ TEST_SUITE("GPU.Editor.GameGraphics")
 		CHECK(drawLine() == "Shadow maps: 4 x 4096 (Graphics Quality: High)");
 		scene.OnDetach(panelContext);
 		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The placement ghost shows in the Scene view's image and never in captures")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(Tests::CreateTemporaryDirectory("ViewportPlacementGhost") / "Game") }, { "name", "Game" },
+			{ "template", "empty" } });
+		harness.AddScene();
+		EditorContext& context = harness.Context;
+		EditorViewport& viewport = context.GetViewport();
+		// Pure magenta: no pixel of the scene has it.
+		viewport.GetSettings().Placement.Hit = glm::vec4(1.0f, 0.0f, 1.0f, 1.0f);
+
+		// A cube placed on the cube's top, from a ray straight down onto it.
+		PlacementPreview& preview = viewport.GetPlacementPreview();
+		PlacementPointer pointer;
+		pointer.Asset = BuiltinAssets::CubeMesh;
+		pointer.PointerRay = Ray(glm::vec3(0.3f, 5.0f, 0.2f), glm::vec3(0.0f, -1.0f, 0.0f));
+		pointer.MaxDistance = 1000.0f;
+		pointer.FallbackDistance = 10.0f;
+		preview.Update(context, pointer);
+		REQUIRE(preview.GetKind() == PlacementPreview::Kind::Place);
+		REQUIRE(preview.GetPlacement());
+		REQUIRE(preview.GetPlacement()->Source == EditorPlacement::PlacementSource::Surface);
+		REQUIRE_FALSE(preview.IsSizePending());
+		const EditorPlacement::Placement& placement = *preview.GetPlacement();
+		const AABB box(placement.PlacedBounds.Min + placement.Translation, placement.PlacedBounds.Max + placement.Translation);
+
+		// The Scene view's renderer draws it.
+		constexpr int c_Size = 64;
+		ViewportRenderer* renderer = viewport.GetRenderer();
+		REQUIRE(renderer);
+		const std::optional<ViewportView> view = ResolveSceneView(context, 1.0f);
+		REQUIRE(view);
+		REQUIRE(renderer->Render(context, glm::uvec2(c_Size), *view, viewport.GetSettings(), true, RendererQuality::GetProjectQuality(), &preview));
+		ReadbackImage readback;
+		REQUIRE(Renderer::ReadTexture(renderer->GetOutputTexture(), readback));
+		REQUIRE(readback.BytesPerPixel == 4);
+		// The box's rectangle on screen, a pixel wider for the lines' rasterization.
+		glm::vec2 low(std::numeric_limits<float>::max());
+		glm::vec2 high(std::numeric_limits<float>::lowest());
+		const glm::mat4 viewProjection = view->Camera.Projection * view->Camera.View;
+		for (int corner = 0; corner < 8; corner++)
+		{
+			const glm::vec3 point((corner & 1) ? box.Max.x : box.Min.x, (corner & 2) ? box.Max.y : box.Min.y, (corner & 4) ? box.Max.z : box.Min.z);
+			const glm::vec4 clip = viewProjection * glm::vec4(point, 1.0f);
+			const glm::vec2 ndc = glm::vec2(clip) / clip.w;
+			const glm::vec2 pixel((ndc.x * 0.5f + 0.5f) * c_Size, (0.5f - ndc.y * 0.5f) * c_Size);
+			low = glm::min(low, pixel);
+			high = glm::max(high, pixel);
+		}
+		const auto isMagenta = [](const uint8_t* rgba)
+		{
+			return rgba[0] >= 252 && rgba[1] <= 3 && rgba[2] >= 252;
+		};
+		int inside = 0;
+		int outside = 0;
+		for (int y = 0; y < c_Size; y++)
+		{
+			for (int x = 0; x < c_Size; x++)
+			{
+				if (!isMagenta(&readback.Pixels[(static_cast<size_t>(y) * c_Size + static_cast<size_t>(x)) * 4]))
+					continue;
+				const bool within = x >= low.x - 1.0f && x <= high.x + 1.0f && y >= low.y - 1.0f && y <= high.y + 1.0f;
+				(within ? inside : outside)++;
+			}
+		}
+		CHECK(inside >= 40);
+		CHECK(outside == 0);
+
+		// A capture of the same view never shows it.
+		const DecodedImage captured = harness.Capture({ { "width", c_Size }, { "height", c_Size } });
+		int captureMagenta = 0;
+		for (size_t index = 0; index + 3 < captured.Pixels.size(); index += 4)
+			captureMagenta += isMagenta(&captured.Pixels[index]) ? 1 : 0;
+		CHECK(captureMagenta == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

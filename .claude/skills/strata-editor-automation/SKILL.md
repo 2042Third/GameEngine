@@ -419,10 +419,17 @@ but cannot be applied to (unpack them, or make a prefab of the instance).
 
 **Placing**: `entity.create` and `prefab.instantiate` put an entity where its `Transform` says (the origin, or the
 prefab's own place, without one); the editor's own menus put new entities on the surface under the view's pivot (the
-camera's target) and send that translation, and prefabs dragged into the viewport rest on the surface under the cursor.
-To rest entities on what is below them,
-`entity.dropToGround {"entities": [...]}` moves each straight down until its bounds touch a surface (one undo step;
-`unchanged` lists those with nothing below).
+camera's target) and send that translation. To put a prefab, model or mesh where something lands, `asset.place {"asset":
+"Prefabs/Rock.stprefab", "ray": {"origin": [x, 200, z], "direction": [0, -1, 0]}}` rests it on the first surface the ray
+hits (one undo step; the drop into the Scene view runs the same command); `"viewport": {"x", "y"}` takes a pixel of the
+Scene view through its camera, `"point"` with `"normal"` a known spot (e.g. a `scene.raycast` hit). A miss lands on the
+grid plane y = 0 within 500 m, else in front of the camera (`placedOn` says which), or fails with `"requireSurface":
+true`; `snap`, `rotation` (degrees) and `scale` apply over the asset's own. `scene.raycast {origin, direction}` or
+`{viewport}` tells what is hit first (`entity`, `point`, `normal`). Both are in the MCP `scene` toolset (enable it with
+`strata_toolsets`). `asset.place` waits while the asset loads, so `editor.batch` refuses it: place many with one call
+each, or cast with `scene.raycast` and make them with `prefab.instantiate {instances}`. To rest entities on what is
+below them, `entity.dropToGround {"entities": [...]}` moves each straight down until its bounds touch a surface (one undo
+step; `unchanged` lists those with nothing below).
 
 **Edit**: `component.add` (adds if missing, then sets values), `component.set` (component must exist),
 `component.remove`, `entity.setActive`: each takes `"entities": [...]` instead of `"entity"` to change all of them in one
@@ -502,7 +509,8 @@ itself (`Game::LoadScene`), `play.state` (and `scene.info`, `editor.status`) nam
 `maxMs`): the CPU time of the frames that ran entirely during the wait, without the waits for the GPU and vsync (measure
 with a window, not `--no-gpu`, to include rendering). A command script can gate it:
 `{"command": "editor.wait", "parameters": {"frames": 120}, "expect": {"/frameTimes/medianMs": {"max": 5}}}`.
-`editor.perf {"frames": 120}` then says where the time went, per stage of the main thread (self times in ms:
+`editor.perf {"frames": 120}` then says where the time went (it stays live while a person pauses the Performance panel
+to read its frames; `interval` is the time between frames, which shows a frame-rate cap), per stage of the main thread (self times in ms:
 `Input`, `Assets.Update`, `Assets.Finalize` (GPU uploads of arriving assets), `Scene.Load` (swapping in a scene that
 finished loading, creating sub-scenes' entities), `Scene.UI` (the game UI's input), `Scene.Scripts`, `Scene.Animation` (animators: poses, root motion,
 attachments, events), `Scene.Physics`, `Scene.Audio`, `Scene.Transforms`, `Render.Extract`, `Render.Submit`, `Render.UI` (the game UI pass), `Editor.UI`,
@@ -513,7 +521,7 @@ time: presenting, and the wait for the display's image at the back buffer's firs
 **Render statistics and GPU time**: `editor.perf` also has `gpu` (`frames` with GPU times, `latencyFrames`: they arrive
 2-3 frames late, `busy`, `stages` per GPU stage: `GPU.Uploads`, `GPU.Setup`, `GPU.Aerial` (the atmosphere's aerial
 perspective), `GPU.Cull`, `GPU.Shadows`, `GPU.Prepass`, `GPU.ScreenShadows` (the sun's shadow mask, its blur, contact
-shadows and the cascades' fit to the view), `GPU.AO`, `GPU.Reflections` (reflection probes' conversions, screen-space
+shadows when a Custom quality draws them and the cascades' fit to the view), `GPU.AO`, `GPU.Reflections` (reflection probes' conversions, screen-space
 reflections), `GPU.Opaque` (with the sky), `GPU.Transparent`, `GPU.TAA` (motion vectors' history, temporal
 anti-aliasing), `GPU.MotionBlur`, `GPU.DepthOfField`, `GPU.Post`, `GPU.Overlays`, `GPU.UI` (the game UI), `GPU.ImGui`)
 and `boundBy`: `"gpu"`
@@ -525,7 +533,9 @@ captured frame) says what a frame drew: `quality` (the Graphics Quality it drew 
 it), `shadowMapSize` (the sun's cascades' texels), `cascades` (each sun cascade's slice `near`/`far` in meters of view
 distance, `texelSize` in meters and `fitted`: its square follows the receivers rather than its slice's sphere),
 `shadowFit` (`fitted`: the cascades are laid out over the receivers the frame's depth showed; `squaresFitted`, `settled`:
-no readback is due that may change them; `near`, `far`: the range the slices divide), `localShadowTileSizes` (each
+no readback is due that may change them; `near`, `far`: the range the slices divide; `changes`: the view renderer's layout
+changes since it was made, so the difference over a run counts re-cuts; `holding`: a near object or a wider square waits
+before it re-cuts the cascades), `localShadowTileSizes` (each
 shadowed point and spot light's tile),
 `exposure` (automatic exposure's metered `ev100`, its key's `keyStops` and the sun's gray card `cardEv100`; null with
 manual exposure), `motionBlur` (`samples`, `tileSize` on frames that blurred; editor views and captures never blur, only

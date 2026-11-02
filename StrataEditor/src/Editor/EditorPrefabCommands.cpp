@@ -309,6 +309,33 @@ namespace Strata
 
 	}
 
+	std::vector<Entity> CommandUtils::InstantiateTemplate(EditorContext& context, Scene& scene, SceneEditTransaction& transaction,
+		const EntityTemplate& entityTemplate, AssetHandle asset, Entity parent, std::string* outError)
+	{
+		// Instantiation fails as a whole, e.g. when the scene cannot hold the entities.
+		std::string error;
+		std::vector<Entity> roots = entityTemplate.Instantiate(scene, parent, &error);
+		if (!error.empty())
+		{
+			if (outError)
+				*outError = std::move(error);
+			return {};
+		}
+		for (const Entity root : roots)
+			transaction.TrackCreated(root.GetUUID());
+		// The new instance has its prefab's values: recorded on its roots (before any values given for the root, which make it
+		// differ), so that later changes of the prefab reach it also while its scene is closed.
+		if (EditorAssetManager* assets = context.GetAssetManager())
+		{
+			if (const std::optional<nlohmann::json> snapshot = PrefabSyncUtils::ReadTemplate(*assets, asset))
+			{
+				for (const Entity root : roots)
+					PrefabInstances::MarkSynced(scene, root, *snapshot);
+			}
+		}
+		return roots;
+	}
+
 	void RegisterPrefabCommands(EditorCommandRegistry& registry)
 	{
 		registry.Register({ "prefab.instantiate", "Instantiates a prefab or imported model, optionally under a parent and with component values on its root (undoable; "
@@ -345,26 +372,12 @@ namespace Strata
 
 				SceneEditTransaction transaction(scene, "Instantiate Prefab", {});
 				std::string instantiateError;
-				const std::vector<Entity> roots = asset->Instantiate(scene, parent, &instantiateError);
-				// Instantiation fails as a whole, e.g. when the scene cannot hold the entities.
+				const std::vector<Entity> roots = InstantiateTemplate(context, scene, transaction, *asset, handle, parent, &instantiateError);
 				if (!instantiateError.empty())
 					return RollBackEdit(transaction, fmt::format("Instantiating '{}' failed: {}", parameters["prefab"].get<std::string>(), instantiateError), EditorCommandError::Failed);
 				nlohmann::json ids = nlohmann::json::array();
 				for (Entity root : roots)
-				{
-					transaction.TrackCreated(root.GetUUID());
 					ids.push_back(UUIDToJson(root.GetUUID()));
-				}
-				// The new instance has its prefab's values: recorded on its roots (before the components given for the root, which
-				// make it differ), so that later changes of the prefab reach it also while its scene is closed.
-				if (EditorAssetManager* assets = context.GetAssetManager())
-				{
-					if (const std::optional<nlohmann::json> snapshot = PrefabSyncUtils::ReadTemplate(*assets, handle))
-					{
-						for (Entity root : roots)
-							PrefabInstances::MarkSynced(scene, root, *snapshot);
-					}
-				}
 				std::string error;
 				if (components && !roots.empty() && !ApplyComponents(roots.front(), *components, &error))
 					return RollBackEdit(transaction, error, EditorCommandError::InvalidParameters);

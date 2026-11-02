@@ -22,6 +22,7 @@ namespace Strata
 {
 
 	class EditorContext;
+	class PlacementPreview;
 	class Scene;
 	struct ViewportSettings;
 
@@ -58,6 +59,11 @@ namespace Strata
 	// play mode and uses the editor camera while editing and simulating; the panels pass Editor (the Scene view) or Scene
 	// (the Game view). Nullopt (with an error) only for ViewportCameraSource::Scene without a camera.
 	std::optional<ViewportView> ResolveViewportView(EditorContext& context, ViewportCameraSource source, float aspectRatio, std::string* outError = nullptr);
+	// The Scene view's 3D view at `aspectRatio`: through the scene's primary camera with Game camera on
+	// (ViewportSettings::PilotGameCamera; EditorOverlays and EditorView set), else the editor camera (with a notice when Game
+	// camera finds no primary camera). What the Scene view draws, and what scene.raycast and asset.place {viewport} cast
+	// through.
+	std::optional<ViewportView> ResolveSceneView(EditorContext& context, float aspectRatio);
 
 	class ViewportRenderer;
 
@@ -122,10 +128,11 @@ namespace Strata
 		// Renders into the output texture at `size` (render targets are recreated only when the size changes) at `quality`
 		// (SceneRenderer::SetQuality, applied after the size, so Auto resolves for the image's rows): the Scene view's
 		// GetSceneViewQuality, the game's for the Game view (EditorContext::GetGameQuality), the project's for the project's
-		// picture, the request's for captures. Returns false when nothing was rendered: a zero size, or a failure the scene
-		// renderer logged.
+		// picture, the request's for captures. `placement`: the ghost of an asset dragged over the Scene view, drawn with the
+		// overlays (the Scene view passes it; captures and every other view never do). Returns false when nothing was
+		// rendered: a zero size, or a failure the scene renderer logged.
 		bool Render(EditorContext& context, const glm::uvec2& size, const ViewportView& view, const ViewportSettings& settings, bool overlays,
-			const RendererQualitySettings& quality);
+			const RendererQualitySettings& quality, const PlacementPreview* placement = nullptr);
 
 		// Display-ready RGBA8 image of the last Render (null before the first one or after a failed resize).
 		nvrhi::ITexture* GetOutputTexture() const { return m_Renderer->GetOutputTexture(); }
@@ -171,6 +178,9 @@ namespace Strata
 		StreamingView m_StreamingView;
 		CellBoundsOverlay m_CellBounds;
 		std::vector<Entity> m_Outlined;
+		// The tints of a frame with a material's target: the target's first (the first color of an entity wins), then the
+		// debug view's (its capacity reused).
+		std::vector<SceneEntityTint> m_PlacementTints;
 		std::vector<UUID> m_OutlinedSelection;
 		std::weak_ptr<Scene> m_OutlinedScene;
 		uint64_t m_OutlinedHierarchyVersion = 0;

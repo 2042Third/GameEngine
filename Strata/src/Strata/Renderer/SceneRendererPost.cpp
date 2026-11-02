@@ -13,7 +13,6 @@
 #include "Strata/Scene/Scene.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -909,13 +908,9 @@ namespace Strata
 	void SceneRenderer::UpdateExposure(nvrhi::ICommandList* commandList, const PostProcessComponent& settings, const SceneRenderOptions& options,
 		nvrhi::IBindingSet* bindingSet, std::optional<float> keyReferenceLog2)
 	{
-		const auto now = std::chrono::steady_clock::now();
 		// Rendering pauses (breakpoints, minimized windows) must not turn into one huge adaptation step. Tools that step time
 		// give the time instead.
-		float deltaTime = m_LastExposureTime ? std::clamp(std::chrono::duration<float>(now - *m_LastExposureTime).count(), 0.0f, 0.25f) : 0.0f;
-		if (options.AdaptationSeconds)
-			deltaTime = std::isfinite(*options.AdaptationSeconds) ? std::max(*options.AdaptationSeconds, 0.0f) : 0.0f;
-		m_LastExposureTime = now;
+		const float deltaTime = StepSeconds(m_LastExposureTime, options);
 		const float compensation = std::exp2(std::clamp(settings.Exposure, -20.0f, 20.0f));
 
 		if (!settings.AutoExposure)

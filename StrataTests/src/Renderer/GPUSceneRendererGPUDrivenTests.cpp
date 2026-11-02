@@ -91,7 +91,7 @@ namespace
 			specification.GPUDriven = mode;
 			specification.IndirectMode = indirect;
 			specification.Quality.LODErrorPixels = lodErrorPixels;
-			// High's contact shadows: their march reads the depth both paths must write alike.
+			// Contact shadows (a Custom quality's 12 steps): their march reads the depth both paths must write alike.
 			specification.Quality.ContactShadows = 12;
 			specification.MaxDrawsPerIndirectCall = maxDrawsPerCall;
 			specification.TextureStreaming = false; // Every level of every texture, on both paths
@@ -118,6 +118,9 @@ namespace
 			SceneRenderOptions options;
 			options.MotionVectors = true;
 			options.PreExposure = 1.0f; // Both paths' images at one scale, whatever each one metered
+			// Both paths step the same time: the sun cascades' fit counts its holds in it (ShadowFitTracker), so neither path's
+			// layout follows its own frame times.
+			options.AdaptationSeconds = 1.0f / 60.0f;
 			REQUIRE(renderer.Render(scene, camera, nullptr, options));
 			REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), frame.Color));
 			REQUIRE(Renderer::ReadTexture(renderer.GetEntityIDTexture(), frame.IDs));
@@ -1136,6 +1139,7 @@ namespace
 		FadeFrame frame;
 		SceneRenderOptions options;
 		options.PreExposure = 1.0f; // Renderers compared with each other's images
+		options.AdaptationSeconds = 1.0f / 60.0f; // Their cascades' fits hold alike, whatever their frames take
 		REQUIRE(renderer.Render(scene, camera, nullptr, options));
 		REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), frame.Color));
 		REQUIRE(Renderer::ReadTexture(renderer.GetEntityIDTexture(), frame.IDs));

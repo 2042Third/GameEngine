@@ -589,11 +589,14 @@ namespace Strata
 		m_Camera.Reset();
 		m_SceneCameras.clear();
 		m_UnassignedCamera.reset();
-		// The selection color belongs to the editor's theme, not to a project.
+		// The selection and placement colors belong to the editor's theme, not to a project.
 		const glm::vec4 selectionColor = m_Settings.SelectionColor;
+		const PlacementColors placementColors = m_Settings.Placement;
 		m_Settings = ViewportSettings();
 		m_Settings.SelectionColor = selectionColor;
+		m_Settings.Placement = placementColors;
 		m_Pick.reset();
+		m_PlacementPreview.Clear();
 	}
 
 }
