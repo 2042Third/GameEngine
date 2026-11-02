@@ -7,6 +7,17 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 
 ## What's new
 
+**showcase**
+
+- A fifth sample, High Desert Outpost (`Samples/Showcase`, first in the launcher): a derelict fuel stop in a rocky
+  desert valley the day after rain, built from 22 CC0 Poly Haven scans and generated props, made to show the low sun's
+  highlights on sheet steel, a weathered oil tank and wet asphalt.
+- Two generators keep its ground and props reproducible: `Tools/GenerateShowcaseTerrain.py` (the valley, the apron with
+  its potholes and puddles, their water and mud; it checks that the golden sun clears the hills and computes where each
+  shot sees the sun reflected) and `Tools/GenerateShowcaseProps.py` (the bus, the tanks, the pipes, the hut, the bare
+  steel's maps, and the command scripts that make the sample's materials and prefabs). The CTests
+  `StrataTools.ShowcaseTerrain` and `StrataTools.ShowcaseProps` keep the committed files equal to what they write.
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and
