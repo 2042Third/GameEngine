@@ -786,6 +786,26 @@ Open items and deferrals later waves own:
   and macOS, or run only on Windows so far: `GetProcessMemory`, `GetProcessUptime`, `FindHomeDirectory`,
   `FindFallbackFontFiles`, `PosixFileReader`, `SetCurrentThreadPriority`, the window calls of `ImGuiPlatform` (layout
   keys, cursor shapes, the clipboard) and the Retina fix-up of `StrataRuntime --resolution`.
+- Frame pacing (wave 8's S0.6): vsync does not pace windows on the reference machine, focused or not. Third-Person
+  played in the Release editor (focused, visible, windowed 2400 x 1350) and in its exported game (focused, 1280 x 720)
+  on the 120 Hz display, 2026-11-02, instruments counting each `BeginFrame`'s waits over 600-frame windows:
+
+  | Run | Frames/s | Acquire p50 / p95 | Frames-in-flight wait p50 / p95 | Mode chosen |
+  | --- | --- | --- | --- | --- |
+  | Editor, playing (`editor.perf`: 1,100/s, `Present` p50 0.05 ms) | 1,230-1,280 | 0.002 / 0.003 ms | 0.15 / 0.8 ms | FIFO |
+  | Exported game | 1,340-1,550 | 0.002 / 0.003 ms | 0.13 / 1.1 ms | FIFO |
+  | The same without `VK_LAYER_RTSS`, without `VK_LAYER_NV_present`, without both | 1,580 / 1,470 / 1,490 | 0.002 / 0.003 ms | 0.2 / 1.0 ms | FIFO |
+  | The same with vsync off | 1,900-2,100 | 0.000 / 0.001 ms | 0.000 / 0.2 ms | MAILBOX |
+
+  The surface offers FIFO, FIFO_RELAXED, MAILBOX, IMMEDIATE and FIFO_LATEST_READY; each run made its swapchain once
+  (3 images; the surface allows 2 to 8). The loader inserts the implicit layers `VK_LAYER_NV_optimus`,
+  `VK_LAYER_NV_present` and `VK_LAYER_RTSS`; disabling them changed nothing. Windows' "Optimizations for windowed games"
+  is on (`SwapEffectUpgradeEnable=1`). So the engine asks for FIFO and the presentation engine hands every image back at
+  once: not the engine's code, not focus or occlusion, not those layers, but a driver or system setting, unconfirmed.
+  What NVIDIA Control Panel's "Vertical sync" and "Vulkan/OpenGL present method" say (globally and for
+  `StrataEditor.exe`) is the one fact an agent cannot read; the owner is asked. Until then only a frame-rate cap paces
+  windows here (`ActiveFrameRate`, S0.4), and the Performance panel and `physics-timing` assume the frame rates seen.
+  Not measured again: an unfocused or occluded editor (the audits saw 190-900 frames a second) and a borderless game.
 - The reference machine, not the engine: once in about 45 perf runs, under load, the editor failed to open
   `PerfGPU.Editor`'s generated million-entity scene ("Invalid JSON"; the test now describes the files on disk when that
   happens), and while `pack-v2` was measured a Release editor saving a 200,000-entity scene in a loop crashed once and

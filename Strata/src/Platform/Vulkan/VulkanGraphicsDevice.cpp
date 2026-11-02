@@ -46,6 +46,22 @@ namespace Strata
 			return fmt::format("{}.{}.{}", VK_API_VERSION_MAJOR(version), VK_API_VERSION_MINOR(version), VK_API_VERSION_PATCH(version));
 		}
 
+		// The swapchain's log names present modes as the Vulkan specification does, without the prefix.
+		const char* GetPresentModeName(VkPresentModeKHR mode)
+		{
+			switch (mode)
+			{
+				case VK_PRESENT_MODE_IMMEDIATE_KHR: return "IMMEDIATE";
+				case VK_PRESENT_MODE_MAILBOX_KHR: return "MAILBOX";
+				case VK_PRESENT_MODE_FIFO_KHR: return "FIFO";
+				case VK_PRESENT_MODE_FIFO_RELAXED_KHR: return "FIFO_RELAXED";
+				case VK_PRESENT_MODE_FIFO_LATEST_READY_KHR: return "FIFO_LATEST_READY";
+				case VK_PRESENT_MODE_SHARED_DEMAND_REFRESH_KHR: return "SHARED_DEMAND_REFRESH";
+				case VK_PRESENT_MODE_SHARED_CONTINUOUS_REFRESH_KHR: return "SHARED_CONTINUOUS_REFRESH";
+				default: return "another mode";
+			}
+		}
+
 		std::string FormatDriverVersion(uint32_t vendorId, uint32_t version)
 		{
 			if (vendorId == 0x10DE) // NVIDIA
@@ -1235,8 +1251,14 @@ namespace Strata
 		m_AcquireSemaphoreIndex = 0;
 		m_SwapchainDirty = false;
 
-		ST_CORE_INFO("Swapchain: {} x {}, {} images, {}", extent.width, extent.height, swapchainImageCount,
-			presentMode == VK_PRESENT_MODE_FIFO_KHR ? "vsync" : (presentMode == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox" : "immediate"));
+		// The modes the surface offers too: whether vsync paces the frames is the presentation engine's (a driver or the
+		// compositor may present FIFO without waiting), and the log is where a report starts.
+		std::string offeredModes;
+		for (const VkPresentModeKHR mode : presentModes)
+			offeredModes += fmt::format("{}{}", offeredModes.empty() ? "" : ", ", GetPresentModeName(mode));
+		ST_CORE_INFO("Swapchain: {} x {}, {} images, {} ({}; the surface offers {})", extent.width, extent.height, swapchainImageCount,
+			presentMode == VK_PRESENT_MODE_FIFO_KHR ? "vsync" : (presentMode == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox" : "immediate"),
+			GetPresentModeName(presentMode), offeredModes);
 		return true;
 	}
 

@@ -150,4 +150,26 @@ TEST_SUITE("GPU.Window")
 		CHECK(imgui.ExitCode == 1);
 		CHECK((imgui.Output + imgui.ErrorOutput).find("The ImGui module needs a window the Graphics module presents into") != std::string::npos);
 	}
+
+	TEST_CASE("A window of the backend gives a device that presents, and the swapchain's log names the offered modes")
+	{
+		// In a child, for the reason above: a hidden window, so that nothing shows on the desktop.
+		ProcessSpecification specification;
+		specification.Executable = Tests::GetTestExecutablePath();
+		specification.Arguments = { "--strata-test-helper=window-graphics" };
+		specification.Output = ProcessOutputMode::CaptureSeparate;
+		const Process::RunResult result = Process::Run(specification, std::chrono::seconds(120));
+		REQUIRE_MESSAGE(result.Started, result.Error);
+		REQUIRE_FALSE(result.TimedOut);
+		INFO(result.Output);
+		INFO(result.ErrorOutput);
+		CHECK(result.ExitCode == 0);
+		CHECK(result.Output.find("can present: yes, errors: 0") != std::string::npos);
+		// Whether vsync paces the frames is the presentation engine's: the line says which mode was chosen and which the
+		// surface offers (FIFO always), so a report of the frame rate starts from the log.
+		const std::string log = result.Output + result.ErrorOutput;
+		CHECK(log.find("Swapchain: ") != std::string::npos);
+		CHECK(log.find("images, vsync (FIFO; the surface offers ") != std::string::npos);
+		CHECK(log.find("[error]") == std::string::npos);
+	}
 }

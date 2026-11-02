@@ -349,16 +349,21 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		std::fflush(stdout);
 		return 0;
 	}
-	if (mode == "stub-window-graphics")
+	if (mode == "stub-window-graphics" || mode == "window-graphics")
 	{
-		// [--imgui]: an application with the Graphics module (and ImGui's after it) on a stand-in window, which cannot present:
-		// says how many of its 10 frames ran, whether its device can present and the device's errors, and ends with the
-		// application's exit code. Its own process: an application's Graphics module initializes the process-wide renderer.
-		Strata::Log::SetLevel(Strata::LogLevel::Info); // The device says at info level that it renders offscreen
+		// [--imgui]: an application with the Graphics module (and ImGui's after it) on a stand-in window, which cannot present,
+		// or (window-graphics) on a hidden window of the platform's backend, which presents: says how many of its 10 frames
+		// ran, whether its device can present and the device's errors, and ends with the application's exit code. Its own
+		// process: an application's Graphics module initializes the process-wide renderer.
+		Strata::Log::SetLevel(Strata::LogLevel::Info); // The device logs at info level how it presents
 		Strata::ApplicationSpecification specification;
 		specification.Name = "StubWindowGraphics";
 		specification.Headless = false;
-		specification.WindowFactory = [](const Strata::WindowSpecification&) -> Strata::Scope<Strata::Window> { return Strata::CreateScope<Strata::Tests::StubWindow>(); };
+		if (mode == "stub-window-graphics")
+			specification.WindowFactory = [](const Strata::WindowSpecification&) -> Strata::Scope<Strata::Window> { return Strata::CreateScope<Strata::Tests::StubWindow>(); };
+		specification.Window.Width = 320;
+		specification.Window.Height = 200;
+		specification.Window.Visible = false;
 		specification.Modules = { Strata::GraphicsModule::Factory({}) };
 		if (argc > 2 && std::string_view(argv[2]) == "--imgui")
 			specification.Modules.push_back(Strata::ImGuiModule::Factory({}));

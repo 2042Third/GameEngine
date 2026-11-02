@@ -31,6 +31,14 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - Tests drive the frame loop through `Tests::StubWindow`, a window without a display; `ApplicationSpecification::WindowFactory`
   lets a program or a test give the application its window.
 
+**Platform: why FIFO does not pace the editor (S0.6).**
+
+- The swapchain's log line names the present mode chosen and the modes the surface offers (`Swapchain: 2400 x 1350,
+  3 images, vsync (FIFO; the surface offers FIFO, MAILBOX, ...)`).
+- Measured: on the reference machine vsync paces no window, focused or not: FIFO is chosen and the presentation engine
+  hands every image back at once (1,200-1,500 frames a second). Not the engine's code, nor focus, nor the RTSS or NVIDIA
+  present layers: a driver or system setting, unconfirmed (Roadmap, open items). A frame-rate cap paces the editor there.
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and
@@ -51,3 +59,9 @@ projects, the template and scenes or projects without the value get.
 | `Window::Create` when no window can be opened | Aborted (`ST_CORE_VERIFY`) | Returns null, with the reason logged | Check the result |
 
 ## Known issues
+
+**Platform (S0.6).**
+
+- On the reference machine (NVIDIA RTX 5090, driver 621.1), vsync does not pace windows: FIFO presents without waiting,
+  so a windowed editor or game runs as fast as it can unless a frame-rate cap is set. The cause is a driver or system
+  setting, not confirmed yet.
