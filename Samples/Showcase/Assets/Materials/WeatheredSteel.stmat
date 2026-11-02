@@ -1,0 +1,56 @@
+{
+	"Material": {
+		"AlphaCutoff": 0.5,
+		"AlphaMode": "Opaque",
+		"AttenuationColor": [
+			1,
+			1,
+			1
+		],
+		"AttenuationDistance": 0,
+		"BaseColor": [
+			1,
+			1,
+			1,
+			1
+		],
+		"BaseColorMap": "A18026265C898436",
+		"Clearcoat": 0,
+		"ClearcoatMap": "0000000000000000",
+		"ClearcoatNormalMap": "0000000000000000",
+		"ClearcoatRoughness": 0,
+		"ClearcoatRoughnessMap": "0000000000000000",
+		"DoubleSided": false,
+		"EmissiveColor": [
+			0,
+			0,
+			0
+		],
+		"EmissiveIntensity": 1,
+		"EmissiveMap": "0000000000000000",
+		"IOR": 1.5,
+		"Metallic": 1,
+		"MetallicRoughnessMap": "CAA58AB49C5FCF59",
+		"NormalMap": "2A4781688EDC1FA5",
+		"NormalScale": 0.6,
+		"OcclusionMap": "0000000000000000",
+		"OcclusionStrength": 1,
+		"Roughness": 1,
+		"Thickness": 0,
+		"Transmission": 0,
+		"TransmissionMap": "0000000000000000",
+		"UVOffset": [
+			0,
+			0
+		],
+		"UVTiling": [
+			0.25,
+			0.25
+		],
+		"Unlit": false
+	},
+	"Strata": {
+		"Format": "Material",
+		"Version": 1
+	}
+}

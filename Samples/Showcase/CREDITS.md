@@ -6,6 +6,7 @@ Every file the importers read in this sample, where it comes from and what was c
 
 | Files | Source | Author | License | Attribution | Changes |
 | --- | --- | --- | --- | --- | --- |
+| `Assets/Generated/Props/` | `Tools/GenerateShowcaseProps.py` (props) | Strata | Strata | | none: the generator's output as it writes it |
 | `Assets/Generated/Terrain/` | `Tools/GenerateShowcaseTerrain.py` (terrain) | Strata | Strata | | none: the generator's output as it writes it |
 | `Assets/Scans/Barrel_01_1k/` | https://polyhaven.com/a/Barrel_01 (1K glTF) | Jorge Camacho | CC0-1.0 | | none: the glTF with its .bin and textures as downloaded |
 | `Assets/Scans/Barrel_02_1k/` | https://polyhaven.com/a/Barrel_02 (1K glTF) | Jorge Camacho | CC0-1.0 | | none: the glTF with its .bin and textures as downloaded |

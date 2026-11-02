@@ -39,7 +39,9 @@ check     evaluates the design's rules on the generated surfaces and exits 1 whe
              reaches at least 3 cm below it.
 stations  prints the three times of day (Dawn, Golden, Dusk) and, per shot of the tour, its cameras (key, from, to),
           look target, field of view, where its subjects fall in a 16:9 picture and the mirror points of shots 2-4
-          (where the camera sees the sun reflected); --json writes the same as JSON.
+          (where the camera sees the sun reflected: on the bus's letterboard and the oil tank's shell as
+          GenerateShowcaseProps.py builds them, measured from its meshes, and on the first puddle); --json writes the
+          same as JSON.
 selftest  check, terrain twice (byte-equal), each model byte-equal to the committed one (--committed), and shots 2-4's
           mirror relations within 1 cm and 0.1 degree. Exit codes: 0 done, 1 a check failed, 2 usage.
 """
@@ -88,7 +90,8 @@ APRON_PAD_GROWTH = 1.0  # The apron's footprint is its outline grown by 1 m
 
 # The layout's anchors (the showcase spec's D3; the props generator and the layout use the same numbers).
 BUS = {"center": (11.8, 0.1), "half": (1.22, 5.4), "yaw": 0}
-OIL_TANK = {"center": (2.7, 17.2), "radius": 4.0, "pad": 4.35, "pad_height": 0.3, "shell": 7.2}
+BUS_CORNER_REACH = 0.18  # The bus's front (+Z) beyond the letterboard's end: its corners' radius
+OIL_TANK = {"center": (2.7, 17.2), "pad": 4.35}  # The props generator builds the tank (radius 4.0) on its pad
 FUEL_TANK = {"center": (-10.0, -20.0), "half": (1.4, 3.9), "yaw": -45, "axis_height": 1.75}
 HUT = {"center": (-22.0, -18.0), "half": (2.6, 2.2), "yaw": 45}
 LEAN_TO = {"local": (3.9, 0.0), "half": (1.5, 2.6)}
@@ -99,8 +102,6 @@ POTHOLE_ORIGIN = (-10.0, -10.0)
 CLIFF_BAND = {"u": (-60.0, -36.0), "v": (-80.0, 60.0)}
 WALK_RADIUS = 140.0
 
-# Bus letterboard: the vertical band of the +X side where shot 2's highlight runs (the props generator builds it).
-LETTERBOARD = {"x": BUS["center"][0] + BUS["half"][0], "y": (2.25, 2.62), "z": (BUS["center"][1] - BUS["half"][1], BUS["center"][1] + BUS["half"][1])}
 
 # The three times of day (the showcase spec's D4): name, photo hour, sun elevation, elevation the light is drawn at,
 # azimuth, light scale, fog density, exposure compensation (EV), shadow distance (m), local lights on.
@@ -860,9 +861,9 @@ class Glb:
         self.materials = []
         self.index_accessors = {}
 
-    def material(self, name, color, roughness):
+    def material(self, name, color, roughness, metallic=0.0):
         self.materials.append({"name": name, "pbrMetallicRoughness": {"baseColorFactor": list(color) + [1.0],
-                                                                       "metallicFactor": 0.0, "roughnessFactor": roughness}})
+                                                                       "metallicFactor": metallic, "roughnessFactor": roughness}})
         return len(self.materials) - 1
 
     def _view(self, data, target, stride=None):
@@ -944,6 +945,29 @@ class World:
         self.layout = Layout()
         self.ground = Ground(self.layout)
         self.apron = Apron(self.layout, self.ground)
+        self._surfaces = None
+
+    def surfaces(self):
+        """Where the highlights of shots 2 and 3 lie, measured from the props generator's meshes (Tools/
+        GenerateShowcaseProps.py) and placed as the layout places them: the bus's letterboard and the oil tank's shell,
+        each standing on the apron's top."""
+        if self._surfaces is None:
+            tools = os.path.dirname(os.path.abspath(__file__))
+            if tools not in sys.path:
+                sys.path.insert(0, tools)
+            import GenerateShowcaseProps as props  # Imported here: it imports this module
+            bus = props.BUILDERS["Bus"]()
+            board = props.letterboard({name: bus[name].mesh() for name in ("Bus.Body", "Bus.BarePanels")})
+            shell = props.tank_shell({"OilTank.Shell": props.BUILDERS["OilTank"]()["OilTank.Shell"].mesh()})
+            bus_base = apron_plane(BUS["center"][0])
+            tank_base = apron_plane(OIL_TANK["center"][0])
+            self._surfaces = {
+                "letterboard": {"x": BUS["center"][0] + board["x"], "y": (bus_base + board["y"][0], bus_base + board["y"][1]),
+                                "z": (BUS["center"][1] + board["z"][0], BUS["center"][1] + board["z"][1]), "tilt": board["tilt"]},
+                "shell": {"center": OIL_TANK["center"], "radius": shell["radius"], "y": (tank_base + shell["y"][0], tank_base + shell["y"][1]),
+                          "deviation": shell["deviation"]},
+            }
+        return self._surfaces
 
 
 def grid_indices(n):
@@ -1273,8 +1297,10 @@ def mirror_on_cylinder(camera, sun, center, radius):
 
 
 def shots(world):
-    """The tour's six shots (and the macro bookmark's sun): cameras, targets, subjects and the mirror points."""
+    """The tour's six shots: cameras, targets, subjects and the mirror points."""
     ground = world.ground
+    board = world.surfaces()["letterboard"]
+    shell = world.surfaces()["shell"]
     golden = toward_sun(*station("Golden")[3:5])
     dawn = toward_sun(*station("Dawn")[3:5])
     dusk = toward_sun(*station("Dusk")[3:5])
@@ -1296,13 +1322,13 @@ def shots(world):
     view_back = reflect((-golden[0], -golden[1], -golden[2]), normal)   # From the mirror point toward the camera
     horizontal = math.sqrt(view_back[0] ** 2 + view_back[2] ** 2)
     point_y = eye_height + distance * golden[1] / horizontal
-    point = (LETTERBOARD["x"], point_y, mirror_z)
+    point = (board["x"], point_y, mirror_z)
     key = add(point, view_back, distance / horizontal)
     key = (key[0], eye_height, key[2])
     result.append({"shot": 2, "station": "Golden", "key": key, "from": add(key, (0.0, 0.0, 1.0), -1.5),
                    "to": add(key, (0.0, 0.0, 1.0), 1.5), "look": point, "fov": 40.0,
                    "mirror": {"surface": "Bus.Body letterboard", "point": point, "normal": normal},
-                   "subjects": {"highlight": point, "bus front": (LETTERBOARD["x"], 1.5, LETTERBOARD["z"][1])}})
+                   "subjects": {"highlight": point, "bus front": (board["x"], 1.5, board["z"][1] + BUS_CORNER_REACH)}})
 
     # 3. The oil tank at low sun: 16 m from the tank at its azimuth -40, 1.70 m up; dollies 6 degrees each way around it.
     center = OIL_TANK["center"]
@@ -1312,13 +1338,12 @@ def shots(world):
         return (center[0] + 16.0 * math.cos(a), 1.70, center[1] + 16.0 * math.sin(a))
 
     key = around(-40.0)
-    point, n = mirror_on_cylinder(key, golden, center, OIL_TANK["radius"])
-    pad = OIL_TANK["pad_height"]
+    point, n = mirror_on_cylinder(key, golden, center, shell["radius"])
     result.append({"shot": 3, "station": "Golden", "key": key, "from": around(-46.0), "to": around(-34.0),
                    "look": (center[0], 3.60, center[1]), "fov": 45.0,
                    "mirror": {"surface": "OilTank.Shell", "point": point, "normal": n},
-                   "subjects": {"streak": point, "streak bottom": (point[0], pad, point[2]),
-                                "streak top": (point[0], pad + OIL_TANK["shell"], point[2])}})
+                   "subjects": {"streak": point, "streak bottom": (point[0], shell["y"][0], point[2]),
+                                "streak top": (point[0], shell["y"][1], point[2])}})
 
     # 4. Wet apron into the sun from knee height: the glint's mirror point lies in the first shallow puddle.
     key = (POTHOLE_ORIGIN[0], 0.75, POTHOLE_ORIGIN[1])
@@ -1362,12 +1387,17 @@ def mirror_errors(world, shot):
     n = mirror["normal"]
     view = normalize(sub(point, shot["key"]))
     angle = angle_between(reflect(view, n), golden)
+    surfaces = world.surfaces()
     if shot["shot"] == 2:
-        off = abs(point[0] - LETTERBOARD["x"])
-        inside = LETTERBOARD["y"][0] <= point[1] <= LETTERBOARD["y"][1] and LETTERBOARD["z"][0] <= point[2] <= LETTERBOARD["z"][1]
+        board = surfaces["letterboard"]
+        off = abs(point[0] - board["x"])
+        # The letterboard's faces are vertical (their tilt adds to the reflection's error).
+        angle += board["tilt"] * 2.0
+        inside = board["y"][0] <= point[1] <= board["y"][1] and board["z"][0] <= point[2] <= board["z"][1]
     elif shot["shot"] == 3:
-        off = abs(math.sqrt((point[0] - OIL_TANK["center"][0]) ** 2 + (point[2] - OIL_TANK["center"][1]) ** 2) - OIL_TANK["radius"])
-        inside = OIL_TANK["pad_height"] <= point[1] <= OIL_TANK["pad_height"] + OIL_TANK["shell"]
+        shell = surfaces["shell"]
+        off = abs(math.sqrt((point[0] - shell["center"][0]) ** 2 + (point[2] - shell["center"][1]) ** 2) - shell["radius"])
+        inside = shell["y"][0] <= point[1] <= shell["y"][1] and shell["deviation"] < 1.0
     else:
         puddle = world.apron.holes[mirror["puddle"]]
         off = abs(point[1] - puddle.water_level)

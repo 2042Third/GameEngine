@@ -507,6 +507,18 @@ if(TARGET StrataEditor AND TARGET StrataCLI)
 			COMMAND "${CMAKE_COMMAND}" "-DTEST_NAME=StrataTools.ShowcaseTerrain" -P "${CMAKE_CURRENT_SOURCE_DIR}/Tools/PythonMissing.cmake")
 	endif()
 	set_tests_properties(StrataTools.ShowcaseTerrain PROPERTIES LABELS "tools" TIMEOUT 300)
+	# And its props: two runs write the same models and maps, the committed ones equal them (the maps by their pixels), the
+	# bus's letterboard is vertical, every node has its triangles and every collision hull is convex (GenerateShowcaseProps.py).
+	if(Python3_Interpreter_FOUND)
+		add_test(NAME StrataTools.ShowcaseProps
+			COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/Tools/GenerateShowcaseProps.py" selftest
+				--committed "${PROJECT_SOURCE_DIR}/Samples/Showcase/Assets/Generated/Props"
+				--work "${CMAKE_CURRENT_BINARY_DIR}/ShowcaseProps/$<CONFIG>")
+	else()
+		add_test(NAME StrataTools.ShowcaseProps
+			COMMAND "${CMAKE_COMMAND}" "-DTEST_NAME=StrataTools.ShowcaseProps" -P "${CMAKE_CURRENT_SOURCE_DIR}/Tools/PythonMissing.cmake")
+	endif()
+	set_tests_properties(StrataTools.ShowcaseProps PROPERTIES LABELS "tools" TIMEOUT 300)
 endif()
 
 # The runtime's command line, before any game is looked for: --help prints the usage and exits 0, an argument it does not
