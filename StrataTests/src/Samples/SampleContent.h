@@ -33,6 +33,8 @@ namespace Strata::Tests
 		uint64_t DocumentBytes = 20'000'000;     // Text documents of one sample (scenes, cells, prefabs, materials, .meta...)
 		uint64_t ScreenshotBytes = 3'000'000;    // Screenshots/, together
 		uint32_t MaxScreenshots = 3;
+		uint64_t ShowcaseScreenshotBytes = 8'000'000; // The same, of a showcase sample: one picture per shot of its tour
+		uint32_t ShowcaseMaxScreenshots = 6;
 		uint64_t TotalBinaryBytes = 55'000'000;  // Binary files of all standard samples (source assets, pictures, screenshots)
 		uint64_t ShowcaseTotalBinaryBytes = 85'000'000; // Binary files of the showcase samples, counted apart
 		uint64_t TotalDocumentBytes = 50'000'000; // Text documents of all samples

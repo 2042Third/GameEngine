@@ -350,10 +350,13 @@ namespace Strata::Tests
 			errors.push_back(fmt::format("the source assets take {} (at most {})", FormatMB(sourceBytes), FormatMB(sourceBudget)));
 		if (documentBytes > budgets.DocumentBytes)
 			errors.push_back(fmt::format("the documents take {} (at most {})", FormatMB(documentBytes), FormatMB(budgets.DocumentBytes)));
-		if (screenshots > budgets.MaxScreenshots)
-			errors.push_back(fmt::format("Screenshots/ holds {} files (at most {})", screenshots, budgets.MaxScreenshots));
-		if (screenshotBytes > budgets.ScreenshotBytes)
-			errors.push_back(fmt::format("Screenshots/ takes {} (at most {})", FormatMB(screenshotBytes), FormatMB(budgets.ScreenshotBytes)));
+		const bool showcase = budgetClass == SampleBudgetClass::Showcase;
+		const uint32_t maxScreenshots = showcase ? budgets.ShowcaseMaxScreenshots : budgets.MaxScreenshots;
+		const uint64_t screenshotBudget = showcase ? budgets.ShowcaseScreenshotBytes : budgets.ScreenshotBytes;
+		if (screenshots > maxScreenshots)
+			errors.push_back(fmt::format("Screenshots/ holds {} files (at most {})", screenshots, maxScreenshots));
+		if (screenshotBytes > screenshotBudget)
+			errors.push_back(fmt::format("Screenshots/ takes {} (at most {})", FormatMB(screenshotBytes), FormatMB(screenshotBudget)));
 		return errors;
 	}
 

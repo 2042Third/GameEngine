@@ -6,6 +6,7 @@ Every file the importers read in this sample, where it comes from and what was c
 
 | Files | Source | Author | License | Attribution | Changes |
 | --- | --- | --- | --- | --- | --- |
+| `Assets/Icon.png` | A render of the sample: a 256 x 256 `viewport.capture` of shot 2, the game's icon (`project.setGameInfo`) | Strata | Strata | | none: the capture as the editor writes it |
 | `Assets/Generated/Props/` | `Tools/GenerateShowcaseProps.py` (props) | Strata | Strata | | none: the generator's output as it writes it |
 | `Assets/Generated/Terrain/` | `Tools/GenerateShowcaseTerrain.py` (terrain) | Strata | Strata | | none: the generator's output as it writes it |
 | `Assets/Lighting/Outpost/` | Baked in the editor from `Scenes/Outpost.stscene` (`lighting.bakeProbes`, `Tools/GenerateShowcaseTerrain.py bake`): six probes, the yard and the hut at dawn, golden hour and dusk | Strata | Strata | | none: the bake's output as it writes it |

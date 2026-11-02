@@ -5,6 +5,13 @@
 			"AlwaysInclude": [],
 			"LoadingScene": "E9C051E8C0168F66"
 		},
+		"Game": {
+			"Company": "",
+			"Copyright": "",
+			"Icon": "970222DF975AE6CB",
+			"Title": "High Desert Outpost",
+			"Version": "1.0.0"
+		},
 		"Name": "Showcase",
 		"Scripts": {
 			"ModuleName": "ShowcaseScripts",
