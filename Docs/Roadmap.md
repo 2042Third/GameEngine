@@ -990,6 +990,12 @@ Open items and deferrals later waves own:
     of 553 GPU cases pass with Slang's modules and with glslang's alike, and the same 24 fail with both (editor viewport
     pictures and selection, on a CPU driver). AMD's and Intel's drivers have not run them; a permanent lavapipe job (its
     24 failures understood first) is later work.
+  - Slang's modules are not yet measured to cost what glslang's did. The lane's GPU-time gate (interleaved A/B captures of
+    the 4K look-dev 84-set, glslang's modules against Slang's) gave four readings, and in each the two A runs differed by
+    more than its 3% rule allows, so none counts. B/A was 1.011, 1.004, 1.045 and 1.003 for `gpuBusyMs` (the 1.045 from
+    a slow first B run), between 0.975 and 1.037 for `GPU.Opaque`, `GPU.Prepass` and `GPU.Post`, and between 0.87 and
+    0.95 for `GPU.Shadows` (Slang's faster, the pictures identical); Medium at 1080p 1.014. A reading on a quiet machine
+    settles it.
   - The converted files keep GLSL's stage variables as `st_*` globals that each entry point fills (`Include/Common.slang`'s
     last section): moving them into entry-point parameters, file by file, is later work (new shaders take parameters).
   - What a D3D-style target would still need: `SV_VulkanInstanceID`/`SV_VulkanVertexID` replaced, registers for the push
