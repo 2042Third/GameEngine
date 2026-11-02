@@ -13,6 +13,7 @@
 #include "Strata/Renderer/RenderSceneGPU.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/RendererComponents.h"
+#include "Strata/Renderer/SceneVertexLayouts.h"
 #include "Strata/Renderer/TextRenderer.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureStreamer.h"
@@ -31,6 +32,7 @@
 #include <memory>
 #include <mutex>
 #include <utility>
+#include <vector>
 
 namespace Strata
 {
@@ -60,6 +62,35 @@ namespace Strata
 		// smallest an allocation that failed falls back to (smaller ones fail as the size asked for).
 		constexpr uint32_t c_MinShadowMapSizeLimit = 256;
 		constexpr uint32_t c_MinFallbackShadowMapSize = 1024;
+
+		// Where a scene vertex attribute lives in the mesh's three vertex buffers: positions, MeshVertexAttributes and the
+		// skin stream (MeshSkinVertex: four joint indices and four weights in 1/65535ths).
+		nvrhi::VertexAttributeDesc GetVertexAttributeDesc(SceneVertexAttribute attribute)
+		{
+			switch (attribute)
+			{
+				case SceneVertexAttribute::Position:
+					return nvrhi::VertexAttributeDesc().setName("POSITION").setFormat(nvrhi::Format::RGB32_FLOAT).setBufferIndex(0).setOffset(0)
+						.setElementStride(sizeof(glm::vec3));
+				case SceneVertexAttribute::Normal:
+					return nvrhi::VertexAttributeDesc().setName("NORMAL").setFormat(nvrhi::Format::RGB32_FLOAT).setBufferIndex(1)
+						.setOffset(offsetof(MeshVertexAttributes, Normal)).setElementStride(sizeof(MeshVertexAttributes));
+				case SceneVertexAttribute::Tangent:
+					return nvrhi::VertexAttributeDesc().setName("TANGENT").setFormat(nvrhi::Format::RGBA32_FLOAT).setBufferIndex(1)
+						.setOffset(offsetof(MeshVertexAttributes, Tangent)).setElementStride(sizeof(MeshVertexAttributes));
+				case SceneVertexAttribute::TexCoord:
+					return nvrhi::VertexAttributeDesc().setName("TEXCOORD").setFormat(nvrhi::Format::RG32_FLOAT).setBufferIndex(1)
+						.setOffset(offsetof(MeshVertexAttributes, TexCoord)).setElementStride(sizeof(MeshVertexAttributes));
+				case SceneVertexAttribute::Joints:
+					return nvrhi::VertexAttributeDesc().setName("JOINTS").setFormat(nvrhi::Format::RGBA16_UINT).setBufferIndex(2)
+						.setOffset(offsetof(MeshSkinVertex, Joints)).setElementStride(sizeof(MeshSkinVertex));
+				case SceneVertexAttribute::Weights:
+					return nvrhi::VertexAttributeDesc().setName("WEIGHTS").setFormat(nvrhi::Format::RGBA16_UNORM).setBufferIndex(2)
+						.setOffset(offsetof(MeshSkinVertex, Weights)).setElementStride(sizeof(MeshSkinVertex));
+			}
+			ST_CORE_ASSERT(false, "Unknown scene vertex attribute {}", static_cast<int>(attribute));
+			return {};
+		}
 
 		// Light clusters: grid limits and the largest cluster buffer the renderer allocates.
 		constexpr uint32_t c_MaxClusterGridSize = 64;
@@ -308,33 +339,18 @@ namespace Strata
 			m_Specification.MaxLightsPerCluster = static_cast<uint32_t>(maxLightsPerCluster);
 		}
 
-		const nvrhi::VertexAttributeDesc attributes[] = {
-			nvrhi::VertexAttributeDesc().setName("POSITION").setFormat(nvrhi::Format::RGB32_FLOAT).setBufferIndex(0).setOffset(0).setElementStride(sizeof(glm::vec3)),
-			nvrhi::VertexAttributeDesc().setName("NORMAL").setFormat(nvrhi::Format::RGB32_FLOAT).setBufferIndex(1)
-				.setOffset(offsetof(MeshVertexAttributes, Normal)).setElementStride(sizeof(MeshVertexAttributes)),
-			nvrhi::VertexAttributeDesc().setName("TANGENT").setFormat(nvrhi::Format::RGBA32_FLOAT).setBufferIndex(1)
-				.setOffset(offsetof(MeshVertexAttributes, Tangent)).setElementStride(sizeof(MeshVertexAttributes)),
-			nvrhi::VertexAttributeDesc().setName("TEXCOORD").setFormat(nvrhi::Format::RG32_FLOAT).setBufferIndex(1)
-				.setOffset(offsetof(MeshVertexAttributes, TexCoord)).setElementStride(sizeof(MeshVertexAttributes))
-		};
-		m_InputLayout = m_Device->createInputLayout(attributes, static_cast<uint32_t>(std::size(attributes)), m_MeshVertexShader);
-		// Skinned meshes add their skin stream (MeshSkinVertex): four joint indices and four weights in 1/65535ths.
-		const nvrhi::VertexAttributeDesc skinnedAttributes[] = {
-			attributes[0], attributes[1], attributes[2], attributes[3],
-			nvrhi::VertexAttributeDesc().setName("JOINTS").setFormat(nvrhi::Format::RGBA16_UINT).setBufferIndex(2)
-				.setOffset(offsetof(MeshSkinVertex, Joints)).setElementStride(sizeof(MeshSkinVertex)),
-			nvrhi::VertexAttributeDesc().setName("WEIGHTS").setFormat(nvrhi::Format::RGBA16_UNORM).setBufferIndex(2)
-				.setOffset(offsetof(MeshSkinVertex, Weights)).setElementStride(sizeof(MeshSkinVertex))
-		};
-		m_SkinnedInputLayout = m_Device->createInputLayout(skinnedAttributes, static_cast<uint32_t>(std::size(skinnedAttributes)), m_SkinnedMeshVertexShader);
-		// Shadow passes read position, UV and the skin only (Scene/ShadowMesh.vert): layouts of just those, so that no
-		// attribute goes unread (the validation layer warns about one). NVRHI numbers a layout's attributes in order, so
-		// they are locations 0-1 and, skinned, 2-3. Draws still bind all three vertex buffers; a layout may leave one unread.
-		const nvrhi::VertexAttributeDesc shadowAttributes[] = { attributes[0], attributes[3] };
-		m_ShadowInputLayout = m_Device->createInputLayout(shadowAttributes, static_cast<uint32_t>(std::size(shadowAttributes)), m_ShadowVertexShader);
-		const nvrhi::VertexAttributeDesc skinnedShadowAttributes[] = { attributes[0], attributes[3], skinnedAttributes[4], skinnedAttributes[5] };
-		m_SkinnedShadowInputLayout = m_Device->createInputLayout(skinnedShadowAttributes, static_cast<uint32_t>(std::size(skinnedShadowAttributes)),
-			m_SkinnedShadowVertexShader);
+		// The scene's input layouts, each exactly what its vertex shaders read (SceneVertexLayouts.h; shadow passes read
+		// position, UV and the skin only). Draws still bind all three vertex buffers; a layout may leave one unread. A shader
+		// of each layout, in SceneVertexLayout's order, for createInputLayout.
+		const nvrhi::ShaderHandle layoutShaders[c_SceneVertexLayoutCount] = { m_MeshVertexShader, m_SkinnedMeshVertexShader, m_ShadowVertexShader,
+			m_SkinnedShadowVertexShader };
+		for (size_t layout = 0; layout < c_SceneVertexLayoutCount; layout++)
+		{
+			std::vector<nvrhi::VertexAttributeDesc> attributes;
+			for (SceneVertexAttribute attribute : GetSceneVertexAttributes(static_cast<SceneVertexLayout>(layout)))
+				attributes.push_back(GetVertexAttributeDesc(attribute));
+			m_SceneInputLayouts[layout] = m_Device->createInputLayout(attributes.data(), static_cast<uint32_t>(attributes.size()), layoutShaders[layout]);
+		}
 
 		nvrhi::BindingLayoutDesc sceneLayout;
 		sceneLayout.visibility = nvrhi::ShaderType::All;
@@ -550,7 +566,9 @@ namespace Strata
 		m_TemporalBindingLayout = m_Device->createBindingLayout(temporalLayout);
 		m_TemporalPipeline = CreateComputePipeline("PostProcess/TAA.comp", m_TemporalBindingLayout);
 
-		ST_CORE_VERIFY(m_InputLayout && m_SkinnedInputLayout && m_ShadowInputLayout && m_SkinnedShadowInputLayout && m_SceneBindingLayout && m_FrameConstantBuffer && m_CommandList && m_ShadowPushBindingSet
+		const bool inputLayoutsCreated = std::all_of(m_SceneInputLayouts.begin(), m_SceneInputLayouts.end(),
+			[](const nvrhi::InputLayoutHandle& layout) { return layout != nullptr; });
+		ST_CORE_VERIFY(inputLayoutsCreated && m_SceneBindingLayout && m_FrameConstantBuffer && m_CommandList && m_ShadowPushBindingSet
 			&& m_PointClampSampler && m_LinearClampSampler && m_EquirectSampler && m_ShadowCompareSampler && m_DummyShadowMap && m_DummyShadowRanges && m_DummyLocalShadowAtlas
 			&& m_LocalShadowBuffer && m_ReflectionProbeBuffer && m_ClusterBuffer
 			&& m_ClusterBindingLayout && m_ClusterPipeline
@@ -2376,16 +2394,18 @@ namespace Strata
 		const bool selectionMask = key.PassType == Pass::SelectionMask;
 		nvrhi::GraphicsPipelineDesc desc;
 		desc.primType = nvrhi::PrimitiveType::TriangleList;
-		if (shadowPass)
-			desc.inputLayout = key.Skinned ? m_SkinnedShadowInputLayout : m_ShadowInputLayout;
-		else
-			desc.inputLayout = key.Skinned ? m_SkinnedInputLayout : m_InputLayout;
 		if (localShadowPass)
 			desc.VS = key.Skinned ? m_SkinnedLocalShadowVertexShader : m_LocalShadowVertexShader;
 		else if (key.Skinned)
 			desc.VS = shadowPass ? m_SkinnedShadowVertexShader : (key.Velocity ? m_SkinnedMeshVelocityVertexShader : m_SkinnedMeshVertexShader);
 		else
 			desc.VS = shadowPass ? m_ShadowVertexShader : (key.Velocity ? m_MeshVelocityVertexShader : m_MeshVertexShader);
+		// The layout follows the vertex shader (the shader library names each shader by its entry), so that no pass
+		// can give a shader attributes it does not read.
+		const std::optional<SceneVertexLayout> vertexLayout = FindSceneVertexLayout(desc.VS->getDesc().debugName);
+		ST_CORE_VERIFY(vertexLayout.has_value(), "SceneRenderer: vertex shader '{}' has no entry in c_SceneVertexEntries",
+			desc.VS->getDesc().debugName);
+		desc.inputLayout = m_SceneInputLayouts[static_cast<size_t>(*vertexLayout)];
 		switch (key.PassType)
 		{
 			case Pass::Prepass:      desc.PS = key.Surface ? m_PrepassSurfacePixelShader : (key.Velocity ? m_PrepassVelocityPixelShader : m_PrepassPixelShader); break;

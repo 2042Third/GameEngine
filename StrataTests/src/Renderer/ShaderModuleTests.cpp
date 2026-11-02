@@ -2,9 +2,11 @@
 
 #include "SpirvModule.h"
 #include "Strata/Renderer/EmbeddedShaders.h"
+#include "Strata/Renderer/SceneVertexLayouts.h"
 
 #include <spdlog/fmt/fmt.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -150,6 +152,91 @@ namespace
 			invariantPosition = invariantPosition || invariantMembers.contains(member);
 		return { invariantPosition, !invariantVariables.empty() || !invariantMembers.empty() };
 	}
+
+	// SPIR-V numbers the input check reads besides SpirvModule.h's.
+	constexpr uint16_t c_OpTypeInt = 21;
+	constexpr uint16_t c_OpTypeFloat = 22;
+	constexpr uint16_t c_OpTypeVector = 23;
+	constexpr uint16_t c_OpTypePointer = 32;
+	constexpr uint32_t c_StorageClassInput = 1;
+
+	// The shape a vertex input has in the shader: its components and whether they are integers.
+	struct ShaderInputType
+	{
+		uint32_t Components = 0;
+		bool Integer = false;
+	};
+
+	// What each scene vertex attribute's format (SceneRenderer.cpp's GetVertexAttributeDesc) gives the shader.
+	ShaderInputType GetExpectedInputType(SceneVertexAttribute attribute)
+	{
+		switch (attribute)
+		{
+			case SceneVertexAttribute::Position: return { 3, false }; // RGB32_FLOAT
+			case SceneVertexAttribute::Normal:   return { 3, false }; // RGB32_FLOAT
+			case SceneVertexAttribute::Tangent:  return { 4, false }; // RGBA32_FLOAT
+			case SceneVertexAttribute::TexCoord: return { 2, false }; // RG32_FLOAT
+			case SceneVertexAttribute::Joints:   return { 4, true };  // RGBA16_UINT
+			case SceneVertexAttribute::Weights:  return { 4, false }; // RGBA16_UNORM
+		}
+		return {};
+	}
+
+	// The entry point's Input variables that carry a Location (built-ins carry none), by location, with their shapes. A
+	// type the module declares as neither a scalar nor a vector reads as 0 components.
+	std::map<uint32_t, ShaderInputType> FindInputLocations(const ParsedShader& shader)
+	{
+		std::set<uint32_t> interfaceVariables;
+		std::map<uint32_t, uint32_t> locations;      // Variable -> its Location
+		std::map<uint32_t, uint32_t> inputPointers;  // Input variable -> its pointer type
+		std::map<uint32_t, uint32_t> pointees;       // Pointer type -> the type it points to
+		std::map<uint32_t, ShaderInputType> shapes;  // Scalar or vector type -> its shape
+		for (const SpirvInstruction& instruction : shader.Instructions)
+		{
+			const std::span<const uint32_t> operands = instruction.Operands;
+			if (instruction.Opcode == Spirv::c_OpEntryPoint && operands.size() >= 3)
+			{
+				size_t nameWords = 0;
+				Spirv::ReadLiteralString(operands, 2, nameWords);
+				for (size_t index = 2 + nameWords; nameWords > 0 && index < operands.size(); index++)
+					interfaceVariables.insert(operands[index]);
+			}
+			else if (instruction.Opcode == Spirv::c_OpDecorate && operands.size() >= 3 && operands[1] == Spirv::c_DecorationLocation)
+				locations[operands[0]] = operands[2];
+			else if (instruction.Opcode == Spirv::c_OpVariable && operands.size() >= 3 && operands[2] == c_StorageClassInput)
+				inputPointers[operands[1]] = operands[0];
+			else if (instruction.Opcode == c_OpTypePointer && operands.size() >= 3)
+				pointees[operands[0]] = operands[2];
+			else if (instruction.Opcode == c_OpTypeInt && !operands.empty())
+				shapes[operands[0]] = { 1, true };
+			else if (instruction.Opcode == c_OpTypeFloat && !operands.empty())
+				shapes[operands[0]] = { 1, false };
+			else if (instruction.Opcode == c_OpTypeVector && operands.size() >= 3)
+			{
+				// SPIR-V declares a vector's component type before the vector.
+				const auto component = shapes.find(operands[1]);
+				if (component != shapes.end())
+					shapes[operands[0]] = { operands[2], component->second.Integer };
+			}
+		}
+		std::map<uint32_t, ShaderInputType> inputs;
+		for (const std::pair<const uint32_t, uint32_t>& variable : inputPointers)
+		{
+			const auto location = locations.find(variable.first);
+			if (!interfaceVariables.contains(variable.first) || location == locations.end())
+				continue;
+			ShaderInputType shape;
+			const auto pointee = pointees.find(variable.second);
+			if (pointee != pointees.end())
+			{
+				const auto found = shapes.find(pointee->second);
+				if (found != shapes.end())
+					shape = found->second;
+			}
+			inputs[location->second] = shape;
+		}
+		return inputs;
+	}
 }
 
 TEST_SUITE("Renderer.ShaderModules")
@@ -238,6 +325,47 @@ TEST_SUITE("Renderer.ShaderModules")
 			}
 		}
 		CHECK(meshEntries == 4);
+	}
+
+	TEST_CASE("Scene vertex shaders read exactly the attributes of their input layout")
+	{
+		// The validation layer only warns about an attribute no vertex shader consumes, and the GPU suites count errors:
+		// this keeps each scene pipeline's layout (SceneVertexLayouts.h, chosen by the pipeline's vertex shader) equal to
+		// what the shader reads, location by location (NVRHI numbers a layout's attributes in order).
+		const std::vector<ParsedShader> shaders = ParseEmbeddedShaders();
+		for (const SceneVertexEntry& entry : c_SceneVertexEntries)
+		{
+			INFO(std::string(entry.Shader));
+			const auto shader = std::find_if(shaders.begin(), shaders.end(), [&](const ParsedShader& parsed) { return parsed.Name == entry.Shader; });
+			REQUIRE(shader != shaders.end());
+			const std::map<uint32_t, ShaderInputType> inputs = FindInputLocations(*shader);
+			const std::span<const SceneVertexAttribute> attributes = GetSceneVertexAttributes(entry.Layout);
+			for (const std::pair<const uint32_t, ShaderInputType>& input : inputs)
+			{
+				if (input.first >= attributes.size())
+					FAIL_CHECK(fmt::format("{} reads location {}, which its layout does not provide", entry.Shader, input.first));
+			}
+			for (size_t location = 0; location < attributes.size(); location++)
+			{
+				INFO("location ", location);
+				const auto input = inputs.find(static_cast<uint32_t>(location));
+				if (input == inputs.end())
+				{
+					FAIL_CHECK(fmt::format("{} does not read location {} of its layout: the validation layer warns that the attribute is not "
+						"consumed by the vertex shader", entry.Shader, location));
+					continue;
+				}
+				const ShaderInputType expected = GetExpectedInputType(attributes[location]);
+				CHECK(input->second.Components == expected.Components);
+				CHECK(input->second.Integer == expected.Integer);
+			}
+		}
+		// Every scene vertex shader is listed, so that GetScenePipeline finds its layout.
+		for (const ParsedShader& shader : shaders)
+		{
+			if (StartsWith(shader.Name, "Scene/") && EndsWith(shader.Name, ".vert"))
+				CHECK_MESSAGE(FindSceneVertexLayout(shader.Name).has_value(), shader.Name, " is not in c_SceneVertexEntries");
+		}
 	}
 
 	TEST_CASE("No embedded shader binds two used variables to one slot")

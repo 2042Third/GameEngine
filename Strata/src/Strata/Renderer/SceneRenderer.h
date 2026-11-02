@@ -15,6 +15,7 @@
 #include "Strata/Renderer/RendererQuality.h"
 #include "Strata/Renderer/SceneOverlay.h"
 #include "Strata/Renderer/SceneRenderData.h"
+#include "Strata/Renderer/SceneVertexLayouts.h"
 #include "Strata/Renderer/ShadowAtlasAllocator.h"
 #include "Strata/Renderer/ShadowFit.h"
 #include "Strata/Renderer/ShadowView.h"
@@ -1977,8 +1978,6 @@ namespace Strata
 		nvrhi::ShaderHandle m_MeshVertexShader;
 		nvrhi::ShaderHandle m_SkinnedMeshVertexShader;
 		nvrhi::ShaderHandle m_SkinnedShadowVertexShader;
-		nvrhi::InputLayoutHandle m_SkinnedInputLayout; // m_InputLayout and the skin stream (joints, weights)
-		nvrhi::InputLayoutHandle m_SkinnedShadowInputLayout; // m_ShadowInputLayout and the skin stream
 		nvrhi::ShaderHandle m_PrepassPixelShader;
 		nvrhi::ShaderHandle m_ForwardPixelShader;
 		nvrhi::ShaderHandle m_ForwardTransparentPixelShader;
@@ -1987,8 +1986,9 @@ namespace Strata
 		nvrhi::ShaderHandle m_TonemapPixelShader;
 		nvrhi::ShaderHandle m_SkyboxPixelShader;
 		nvrhi::ShaderHandle m_AtmosphereSkyboxPixelShader;
-		nvrhi::InputLayoutHandle m_InputLayout;
-		nvrhi::InputLayoutHandle m_ShadowInputLayout; // Position and UV: what every shadow pass reads (Scene/ShadowMesh.vert)
+		// By SceneVertexLayout: each scene vertex shader's attributes (SceneVertexLayouts.h), chosen by GetScenePipeline
+		// from the pipeline's vertex shader.
+		std::array<nvrhi::InputLayoutHandle, c_SceneVertexLayoutCount> m_SceneInputLayouts;
 		nvrhi::GraphicsPipelineHandle m_SkyboxPipeline;
 		nvrhi::GraphicsPipelineHandle m_AtmosphereSkyboxPipeline;
 

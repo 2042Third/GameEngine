@@ -3665,7 +3665,10 @@ mechanical, so a lighting bug in code nobody changed may be a conversion slip (i
    allow-list grows only by a feature device selection requires; `StorageImageExtendedFormats` only per named entry with a
    fallback for devices without `shaderStorageImageExtendedFormats`, and a hint names the known traps: `f32tof16`'s 16-bit
    types, `Sample` in compute, storage images without a format, `SV_InstanceID`); the four `Scene/Mesh*.vert` entries
-   keep their position invariant; no module binds two used variables to one slot. `Renderer.ShaderTool` tests the tool.
+   keep their position invariant; no module binds two used variables to one slot; each scene vertex shader reads exactly
+   the locations and types of its input layout (`Renderer/SceneVertexLayouts.h`, from which `GetScenePipeline` takes a
+   pipeline's layout by its vertex shader: the validation layer only warns about an attribute no shader reads, and the
+   GPU suites count errors). A new scene vertex shader gets a line there. `Renderer.ShaderTool` tests the tool.
    `GPU.Renderer` creates every module under the validation layer. `StrataShaders.TargetHLSL` compiles every entry to
    HLSL on every CI job but the Dist build (which runs only the package tests), `StrataSlang.Fetch` checks the pin,
    `StrataTools.LookDevOffline` the look-dev compare. CI's
