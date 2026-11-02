@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Scene/Scene.h"
 
+#include "Strata/Core/Assert.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Math/Math.h"
 #include "Strata/Scene/Components.h"
@@ -244,11 +245,13 @@ namespace Strata
 		const entt::registry& registry = m_Registry;
 		const uint32_t count = static_cast<uint32_t>(m_Captures.size());
 		const uint32_t oldCount = static_cast<uint32_t>(m_InterpolatedEntities.size());
-		// Every captured entity has these (UpdateWorldTransforms computed it). Fetched once: a lookup through the registry costs
-		// more than the rest of an entry's work.
-		const auto& hierarchy = *registry.storage<HierarchyComponent>();
-		const auto& transforms = *registry.storage<TransformComponent>();
-		const auto& worlds = *registry.storage<WorldTransformComponent>();
+		// Every captured entity has these (UpdateWorldTransforms computed it), so they exist whenever there are records; a scene
+		// without entities may have none, so they are read only through records. Fetched once: a lookup through the registry
+		// costs more than the rest of an entry's work.
+		const auto* hierarchy = registry.storage<HierarchyComponent>();
+		const auto* transforms = registry.storage<TransformComponent>();
+		const auto* worlds = registry.storage<WorldTransformComponent>();
+		ST_CORE_ASSERT(count == 0 || (hierarchy && transforms && worlds), "Scene '{}' captured transforms without their storages", m_Name);
 		m_NextEntities.resize(count);
 		m_NextEntries.resize(count);
 		m_KeptSlots.assign(oldCount, 0);
@@ -279,11 +282,11 @@ namespace Strata
 					entry.Role = InterpolationRole::Compose;
 					continue;
 				}
-				const glm::mat4& world = worlds.get(capture.Entity).Matrix;
+				const glm::mat4& world = worlds->get(capture.Entity).Matrix;
 				if (SameMatrix(world, capture.Previous))
 					continue;
 				bool exactTo = false;
-				entry.To = hierarchy.get(capture.Entity).Parent == entt::null ? GetLocalPose(transforms.get(capture.Entity), exactTo)
+				entry.To = hierarchy->get(capture.Entity).Parent == entt::null ? GetLocalPose(transforms->get(capture.Entity), exactTo)
 					: DecomposePose(world, exactTo);
 				bool exactFrom = false;
 				// The per-frame rules keep a Blend entry's To equal to its world pose before the steps.
@@ -330,7 +333,7 @@ namespace Strata
 			for (uint32_t slot = begin; slot < end; slot++)
 			{
 				InterpolatedEntry& entry = m_InterpolatedEntries[slot];
-				entry.ParentSlot = FindInterpolationSlot(hierarchy.get(m_InterpolatedEntities[slot]).Parent);
+				entry.ParentSlot = FindInterpolationSlot(hierarchy->get(m_InterpolatedEntities[slot]).Parent);
 				if (m_SlotScratch[slot])
 					entry.Role = entry.ParentSlot != c_NoInterpolationSlot ? InterpolationRole::Compose : InterpolationRole::Exact;
 				else if (entry.Role == InterpolationRole::Compose && entry.ParentSlot == c_NoInterpolationSlot)

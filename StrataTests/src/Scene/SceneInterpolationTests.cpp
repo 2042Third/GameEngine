@@ -14,6 +14,7 @@
 #include <optional>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Interpolation of what is drawn (Scene::SetInterpolation, Scene/SceneInterpolation.cpp): what the fixed steps move is drawn
@@ -660,6 +661,25 @@ TEST_SUITE("Scene.Timing")
 			CHECK(scene.ValidateInterpolation());
 			scene.OnRuntimeStop();
 		}
+	}
+
+	TEST_CASE("A running scene without entities captures nothing on its stepping frames")
+	{
+		// Play of a new, empty scene: the capture runs on every stepping frame, before any entity created the storages it reads.
+		ScopedFixedMover moverScope;
+		Scene scene("Empty");
+		SetTestStep(scene);
+		scene.SetInterpolation(true);
+		scene.OnRuntimeStart();
+		CHECK(std::as_const(scene.GetRegistry()).storage<HierarchyComponent>() == nullptr);
+		for (int frame = 0; frame < 64; frame++)
+			scene.OnUpdateRuntime(Timestep(1.0f / 256.0f));
+		CHECK(scene.GetFixedStepCount() == 16);
+		CHECK(scene.IsInterpolating());
+		CHECK(scene.GetInterpolatedEntities().empty());
+		CHECK(scene.ValidateInterpolation());
+		scene.UpdateDrawnTransforms();
+		scene.OnRuntimeStop();
 	}
 }
 
