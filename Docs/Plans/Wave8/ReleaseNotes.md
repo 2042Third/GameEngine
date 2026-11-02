@@ -54,8 +54,12 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - Games and the editor's Play and Simulate draw bodies, characters and what scripts move in fixed updates between their
   last two physics steps, so motion is smooth at any frame rate: the Third-Person robot running across the view moved by
   up to 29.4 px (peak to peak, on a 4K screen) at 700 fps; now by 0.25 px at 731 fps and at most 0.37 px at 30, 60, 120,
-  144, 240 and 400-730 frames per second and at 30, 60, 120 and 240 steps per second. The simulation is unchanged. What you see is a constant step behind the game's clock, about half a step (8 ms at 60 steps per second)
-  more on average than before and no more at worst; Project Settings > Physics > Timing > Interpolation turns it off.
+  144, 240 and 400-730 frames per second and at 30, 60, 120 and 240 steps per second. The simulation is unchanged. What
+  you see is a constant step behind the game's clock, about half a step (8 ms at 60 steps per second) more on average
+  than before and no more at worst; Project Settings > Physics > Timing > Interpolation turns it off. Its cost is that
+  moving shadow casters redraw their shadows on every frame instead of every step: with about 2,000 balls rolling in the
+  Physics Playground the editor's Game view ran at 356 instead of 501 fps (GPU 2.4 instead of 1.6 ms a frame, on an
+  RTX 5090); with interpolation off it costs nothing measurable.
 - New script API: `Time::GetStepAlpha`, `TransformComponent::GetDrawnPosition`, `GetDrawnRotation`, `ResetInterpolation`.
 - The Third-Person camera follows the robot as it is drawn and lets its arm out smoothly after something passed between
   them.

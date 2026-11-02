@@ -2392,8 +2392,12 @@ tool, were rejected.
   machine (wave 8, temporary memory): 100,000 moving roots cost 0.29 ms a frame without a step (the blend on the job
   system) and 5.5 ms a step frame against 2.6 ms without interpolation (the capture rebuilds about 170 bytes per moving
   entity a step, so it is bound by memory: its ratio, 2.1, is above the 1.5 target); 32,768 moving cubes render a frame
-  without a step at 0.94 times a step frame's CPU time. Debug builds check the set with the caches
-  (`ValidateInterpolation`), and the feature runs after every frame.
+  without a step at 0.94 times a step frame's CPU time. In the editor, about 2,000 balls rolling in the Physics
+  Playground's pit ran at 356 fps with interpolation and 501 without: the GPU redraws the moving casters' shadow views
+  on every frame (`GPU.Shadows` 0.94 ms against 0.13, `GPU.Cull` 0.13 ms on frames without a step) and `Render.Extract`
+  places them (0.25 ms against 0.04). With it off, `Perf.Scene` and `Perf.Physics` measured against 0.7.0 showed no
+  difference beyond the runs' spread. Debug builds check the set with the caches (`ValidateInterpolation`), and the
+  feature runs after every frame.
 
 ## World partition
 
