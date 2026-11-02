@@ -103,8 +103,9 @@ namespace Strata
 		// its preparation did; null otherwise. Nothing may change it but the preparation.
 		const Scene* GetPreparedScene() const { return m_State == SceneLoadState::Preparing || m_State == SceneLoadState::Ready ? m_Prepared.get() : nullptr; }
 		// The prepared scene, once Ready: the first call takes it (the request keeps its pins), later calls return null. It
-		// carries the project's collision layers as they are now (Scene::ApplyProjectLayers: taken when the scene arrived,
-		// before its preparation, and again here when the table changed meanwhile).
+		// carries the project's collision layers and fixed rate as they are now (Scene::ApplyProjectLayers and
+		// ApplyProjectTiming: taken when the scene arrived, before its preparation, and again here when they changed
+		// meanwhile).
 		Ref<Scene> TakeScene();
 		// Abandons the load: releases every pin and abandons the loads the request started that have not finished
 		// (AssetGroupRequest::Cancel), and drops a scene prepared already (destroyed off the frame, Scene::ReleaseInBackground,

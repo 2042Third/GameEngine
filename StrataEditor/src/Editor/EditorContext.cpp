@@ -379,6 +379,9 @@ namespace Strata
 		m_Project = project;
 		m_ProjectGeneration++;
 		Project::SetActive(m_Project);
+		// The blank scene CloseProject left took the layers and fixed rate of no project. It stays the edited scene when the
+		// project has no start scene or it cannot be opened, so it takes this project's now.
+		ApplyProjectLayers();
 		m_ProjectFileWriter = CreateScope<SettingsFileWriter>([this](const std::string& error) { OnProjectFileWritten(error); });
 
 		// The editor camera and viewport settings continue where they were when the project was last closed.
@@ -549,12 +552,17 @@ namespace Strata
 	void EditorContext::ApplyProjectLayers()
 	{
 		m_EditScene->ApplyProjectLayers();
+		m_EditScene->ApplyProjectTiming();
 		if (m_RuntimeScene)
+		{
 			m_RuntimeScene->ApplyProjectLayers();
+			m_RuntimeScene->ApplyProjectTiming();
+		}
 	}
 
 	void EditorContext::AdoptProjectLayers(Scene& scene, AssetHandle handle)
 	{
+		scene.ApplyProjectTiming();
 		scene.ApplyProjectLayers();
 		if (!scene.DoStoredLayersDiffer() || !handle.IsValid() || !m_StoredLayersWarned.insert(handle).second)
 			return;
@@ -666,7 +674,7 @@ namespace Strata
 			m_ProjectFileWriter.reset();
 			m_Project.reset();
 			m_ProjectGeneration++;
-			// The scene that stays takes the layers of no project.
+			// The scene that stays takes the layers and fixed rate of no project.
 			ApplyProjectLayers();
 		}
 		if (activateBuiltinAssets)

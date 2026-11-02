@@ -24,6 +24,7 @@
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/ProjectCollisionLayers.h"
+#include "Strata/Scene/ProjectSceneTiming.h"
 #include "Strata/Scene/SceneServices.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/World/WorldComponents.h"
@@ -337,6 +338,70 @@ TEST_SUITE("Runtime.Game")
 			game->Update(Timestep(0.1f));
 			CHECK(game->GetScene()->GetTime() - time == doctest::Approx(0.1));
 			CHECK(game->GetScene()->GetDroppedFixedStepCount() == 0);
+		}
+	}
+
+	TEST_CASE("A game at 240 steps per second keeps every step of long frames")
+	{
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeFixedRate");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 10) } }, UUID(0x1010));
+		RewriteManifest(manifest, 5, { { ProjectSceneTiming::c_SectionId, { { "Version", 1 }, { "Value", { { "FixedRate", "240" } } } } } });
+		const double step = static_cast<double>(1.0f / 240.0f);
+		auto start = [&](bool keepEveryFixedStep)
+		{
+			GameRuntimeOptions options;
+			options.KeepEveryFixedStep = keepEveryFixedStep;
+			std::string error;
+			Scope<GameRuntime> game = GameRuntime::Create(manifest, &error, options);
+			REQUIRE_MESSAGE(game, error);
+			UpdateUntil(*game, [&]() { return game->HasStarted(); });
+			// The manifest's rate, not the scene's 1/60 s, and the steps of 2/15 s at it.
+			REQUIRE(game->GetScene()->GetFixedTimestep() == 1.0f / 240.0f);
+			REQUIRE(game->GetScene()->GetMaxFixedSteps() == 32);
+			return game;
+		};
+
+		SUBCASE("A tenth of a second runs all its steps")
+		{
+			Scope<GameRuntime> game = start(false);
+			Scene& scene = *game->GetScene();
+			const uint64_t steps = scene.GetFixedStepCount();
+			const uint64_t dropped = scene.GetDroppedFixedStepCount();
+			game->Update(Timestep(0.1f));
+			// 24 steps of a 240th; float rounding may leave the last one due at the next update. At the scene's own 8 steps an
+			// update, 33 ms, the frame would drop most of them.
+			CHECK(scene.GetFixedStepCount() - steps >= 23);
+			CHECK(scene.GetDroppedFixedStepCount() == dropped);
+		}
+		SUBCASE("With KeepEveryFixedStep, a quarter second plays the 32 steps of 2/15 s and drops none")
+		{
+			Scope<GameRuntime> game = start(true);
+			Scene& scene = *game->GetScene();
+			const uint64_t steps = scene.GetFixedStepCount();
+			const uint64_t dropped = scene.GetDroppedFixedStepCount();
+			const double played = game->GetPlayedSeconds();
+			game->Update(Timestep(0.25f));
+			// The frame is limited to exactly 32 steps of time, but the accumulator is a float that loses a few ulps over 32
+			// subtractions, so the 32nd step may fall due at the next update.
+			const uint64_t first = scene.GetFixedStepCount() - steps;
+			CHECK(first >= 31);
+			CHECK(first <= 32);
+			CHECK(scene.GetDroppedFixedStepCount() == dropped);
+			CHECK(game->GetPlayedSeconds() - played == doctest::Approx(static_cast<double>(first) * step));
+			game->Update(Timestep(0.25f));
+			CHECK(scene.GetFixedStepCount() - steps - first >= 32);
+			CHECK(scene.GetFixedStepCount() - steps >= 63);
+			CHECK(scene.GetDroppedFixedStepCount() == dropped);
+		}
+		SUBCASE("Without it, a quarter second runs the 32 steps and drops the rest")
+		{
+			Scope<GameRuntime> game = start(false);
+			Scene& scene = *game->GetScene();
+			const uint64_t steps = scene.GetFixedStepCount();
+			const uint64_t dropped = scene.GetDroppedFixedStepCount();
+			game->Update(Timestep(0.25f));
+			CHECK(scene.GetFixedStepCount() - steps == 32);
+			CHECK(scene.GetDroppedFixedStepCount() > dropped);
 		}
 	}
 

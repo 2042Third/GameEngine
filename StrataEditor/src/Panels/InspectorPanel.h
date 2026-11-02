@@ -135,6 +135,8 @@ namespace Strata
 		void DrawSceneSettings(EditorPanelContext& panelContext);
 		// The collision layers the scene runs with: how many the project names, and a link to their page in Project Settings.
 		void DrawCollisionLayersLink(EditorPanelContext& panelContext);
+		// The fixed rate the scene runs at, the project's or its own, and a link to the project's Timing page.
+		void DrawFixedRateLink(EditorPanelContext& panelContext);
 		void DrawSky(EditorPanelContext& panelContext);
 		// The Bake button of reflection probes (lighting.bakeProbes for the selected ones).
 		void DrawReflectionProbeBake(EditorPanelContext& panelContext, std::span<const Entity> entities);
@@ -147,12 +149,16 @@ namespace Strata
 		std::string m_NameText;
 		// Scene settings being dragged: applied with one scene.setSettings when the drag ends.
 		std::optional<SceneSettings> m_SettingsDraft;
-		// The physics section's summary, formatted again only when the values it shows change.
+		// The physics section's summary, formatted again only when the values it shows change, with what the project's fixed
+		// rate makes of the scene's step: the reason its rows are inactive and the rate the link names.
 		struct PhysicsSummary
 		{
 			glm::vec3 Gravity = glm::vec3(0.0f);
 			float FixedTimestep = 0.0f;
+			uint32_t ProjectRate = 0; // Scene::GetProjectFixedRate (0: the scene's own step)
 			std::string Text;
+			std::string InactiveReason; // Of the Fixed Timestep and Max Steps per Frame rows; empty without a project rate
+			std::string RateText;       // The fixed rate link's text
 		};
 		std::optional<PhysicsSummary> m_PhysicsSummary;
 		// The streaming section's summary, likewise.

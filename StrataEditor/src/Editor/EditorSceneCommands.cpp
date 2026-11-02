@@ -35,9 +35,12 @@ namespace Strata
 	namespace
 	{
 
-		// The scene's settings and the collision layers it runs with (its copy of the project's).
-		nlohmann::json DescribeSettings(const SceneSettings& settings, const PhysicsLayerSettings& layers)
+		// The scene's settings, the step it runs (fixedRate: the project's or its own) and the collision layers it runs with
+		// (its copy of the project's). fixedTimestep and maxFixedStepsPerFrame are the scene's stored values.
+		nlohmann::json DescribeSettings(const Scene& scene)
 		{
+			const SceneSettings& settings = scene.GetSettings();
+			const float fixedTimestep = scene.GetFixedTimestep();
 			return {
 				{ "gravity", { settings.Gravity.x, settings.Gravity.y, settings.Gravity.z } },
 				{ "fixedTimestep", settings.FixedTimestep },
@@ -47,7 +50,12 @@ namespace Strata
 				{ "physicsCapacity", {
 					{ "maxBodies", settings.PhysicsCapacity.MaxBodies },
 					{ "maxContactConstraints", settings.PhysicsCapacity.MaxContactConstraints } } },
-				{ "physicsLayers", DescribePhysicsLayers(layers) }
+				{ "fixedRate", {
+					{ "stepsPerSecond", std::round(1000.0 / static_cast<double>(fixedTimestep)) / 1000.0 },
+					{ "fixedTimestep", fixedTimestep },
+					{ "maxFixedSteps", scene.GetMaxFixedSteps() },
+					{ "source", scene.GetProjectFixedRate() > 0 ? "project" : "scene" } } },
+				{ "physicsLayers", DescribePhysicsLayers(scene.GetPhysicsLayers()) }
 			};
 		}
 
@@ -314,7 +322,8 @@ namespace Strata
 		registry.Register({ "scene.info", "Name, asset, modification and play state, entity count and settings of the edited scene, and what runs "
 			"while playing (running: the running scene, which a game's scene switch makes another than the edited one; null in edit mode; see "
 			"play.state). entityCount counts the active scene's entities (the running one while playing); settings.physicsLayers are the "
-			"project's collision layers as the active scene runs them.", ObjectSchema({}),
+			"project's collision layers as the active scene runs them. settings.fixedRate is the step the active scene runs: source project when "
+			"the project's Scene.Timing FixedRate sets it (project.setSettings), scene for its own fixedTimestep.", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				const Ref<Scene>& scene = context.GetActiveScene();
@@ -325,7 +334,7 @@ namespace Strata
 					{ "state", SceneStateToString(context.GetSceneState()) },
 					{ "paused", context.IsPaused() },
 					{ "entityCount", scene->GetEntityCount() },
-					{ "settings", DescribeSettings(scene->GetSettings(), scene->GetPhysicsLayers()) },
+					{ "settings", DescribeSettings(*scene) },
 					{ "running", DescribeRunningScene(context) } });
 			}, EditorCommandKind::Query });
 
@@ -561,8 +570,10 @@ namespace Strata
 			"Changes settings of the edited scene: gravity, the fixed step, the physics world's capacities, and how many entities additive loads "
 			"(sub-scenes) create per frame (undoable, one step). Capacities take effect when a physics world is created, at the next play start, "
 			"so set them in edit mode. While playing, changes go to the running copy only and play.stop discards them (the result then has a "
-			"warning). Collision layers are the project's: set them with project.setCollisionLayers. Returns the settings with the collision "
-			"layers the scene runs with (scene.info shows them too).",
+			"warning). Collision layers are the project's: set them with project.setCollisionLayers. The project's fixed rate (Scene.Timing, "
+			"project.setSettings) overrides fixedTimestep and maxFixedStepsPerFrame; they apply when its FixedRate is Scene (a change is stored "
+			"either way, with a warning). Returns the settings with the step the scene runs (fixedRate) and the collision layers it runs with "
+			"(scene.info shows them too).",
 			ObjectSchema({
 				{ "gravity", Vec3Schema("Gravity in m/s^2") },
 				{ "fixedTimestep", NumberSchema("Fixed simulation step in seconds (1/1000 to 1/10)") },
@@ -630,20 +641,31 @@ namespace Strata
 				scene.GetSettings() = after;
 				if (changed && !context.IsPlaying())
 					context.GetUndoStack().Record(CreateScope<SceneSettingsAction>(scene, before, after));
-				nlohmann::json result = { { "settings", DescribeSettings(after, scene.GetPhysicsLayers()) } };
+				nlohmann::json result = { { "settings", DescribeSettings(scene) } };
+				std::vector<std::string> warnings;
 				if (context.IsPlaying())
 				{
 					// Like the other mutating commands; capacities do not even reach the running copy's world, which exists already.
-					std::string warning = GetRunningCopyWarning(context);
+					warnings.push_back(GetRunningCopyWarning(context));
 					if (after.PhysicsCapacity != before.PhysicsCapacity)
-						warning += "; physics capacities apply to worlds created later, not to the running one, so set them in edit mode";
-					if (!capacityWarning.empty())
-						warning += "; " + capacityWarning;
-					result["warning"] = std::move(warning);
+						warnings.push_back("physics capacities apply to worlds created later, not to the running one, so set them in edit mode");
 				}
-				else if (!capacityWarning.empty())
+				if (!capacityWarning.empty())
+					warnings.push_back(std::move(capacityWarning));
+				// A changed step or cap is stored, but the project's rate is what runs until the project's FixedRate is Scene again.
+				// (Only a change warns: the Inspector sends every setting with each edit, a gravity's too.)
+				if (scene.GetProjectFixedRate() > 0
+					&& (after.FixedTimestep != before.FixedTimestep || after.MaxFixedStepsPerFrame != before.MaxFixedStepsPerFrame))
 				{
-					result["warning"] = std::move(capacityWarning);
+					warnings.push_back(fmt::format("The project's fixed rate (Scene.Timing, {} steps/s) overrides fixedTimestep and maxFixedStepsPerFrame; "
+						"they apply when its FixedRate is Scene", scene.GetProjectFixedRate()));
+				}
+				if (!warnings.empty())
+				{
+					std::string warning = warnings.front();
+					for (size_t index = 1; index < warnings.size(); index++)
+						warning += "; " + warnings[index];
+					result["warning"] = std::move(warning);
 				}
 				EditorCommandResult outcome = EditorCommandResult::Ok(std::move(result));
 				outcome.RunningCopy = context.IsPlaying();

@@ -135,7 +135,8 @@ ST_SCRIPT_CLASS(Turret)
   sticks) is fine in either. Simulated input (`input.*`, `input.sequence`) lasts whole fixed steps of the game, and
   `play.step` and `input.sequence` run one step per frame: a script that applies held input per fixed step (or scales by
   the frame's `deltaTime`) behaves the same in tests at any frame rate.
-- `Time`: `GetDeltaTime`, `GetFixedDeltaTime`, `GetElapsedTime`, `GetFrameIndex`, `Get/SetTimeScale`,
+- `Time`: `GetDeltaTime`, `GetFixedDeltaTime` (the scene's step: the project's `Scene.Timing` rate when it sets one),
+  `GetElapsedTime`, `GetFrameIndex`, `Get/SetTimeScale`,
   `GetUnscaledDeltaTime` and `GetRealTime` (they go on at time scale 0: pause menus, fades).
 - `Input::GetTypedText()`: the UTF-8 text typed this frame (name entry, chat).
 - Input actions (the project's named controls, rebindable by players): `Input::IsActionDown/Pressed/Released("Jump")`,
