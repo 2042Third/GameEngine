@@ -50,6 +50,24 @@ namespace Strata
 		return view;
 	}
 
+	std::optional<ViewportView> ResolveSceneView(EditorContext& context, float aspectRatio)
+	{
+		const ViewportSettings& settings = context.GetViewport().GetSettings();
+		if (settings.PilotGameCamera)
+		{
+			if (std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Scene, aspectRatio))
+			{
+				view->EditorOverlays = true;
+				view->EditorView = true;
+				return view;
+			}
+		}
+		std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Editor, aspectRatio);
+		if (view && settings.PilotGameCamera)
+			view->Notice = "The scene has no primary camera: showing the editor camera";
+		return view;
+	}
+
 	std::optional<ViewportView> ResolveGameView(EditorContext& context, ViewportRenderer& renderer, float aspectRatio, std::string* outError)
 	{
 		if (std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Scene, aspectRatio, outError))

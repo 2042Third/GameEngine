@@ -103,6 +103,14 @@ TEST_SUITE("CLI.McpToolsets")
 		CHECK(toolsetCommands("settings") == std::set<std::string> { "graphics.resetPlayerOptions", "inputActions.resetPlayerBindings", "inputActions.setAction",
 			"inputActions.setMap", "preferences.get", "preferences.save", "preferences.set", "project.save", "project.setCollisionLayers",
 			"project.setGameInfo", "project.setSettings", "project.settings" });
+		// Placing props: scene.raycast (by its prefix) and asset.place (by its exact name) come with the scene toolset, beside
+		// prefab.instantiate and entity.dropToGround; neither is in core.
+		CHECK(McpToolsets::GetGroupToolset("asset.place") == "scene");
+		CHECK(McpToolsets::GetGroupToolset("scene.raycast") == "scene");
+		const std::set<std::string> sceneCommands = toolsetCommands("scene");
+		for (const char* placing : { "scene.raycast", "asset.place", "prefab.instantiate", "entity.dropToGround" })
+			CHECK_MESSAGE(sceneCommands.contains(placing), placing);
+		CHECK(McpToolsets::GetCoreCommands().size() == 27);
 		const std::set<std::string> playCommands = toolsetCommands("play");
 		CHECK(playCommands.contains("input.click"));
 		CHECK(playCommands.contains("input.type"));

@@ -26,6 +26,7 @@ namespace Strata
 
 	class EditorAssetManager;
 	class EditorContext;
+	class EntityTemplate;
 	class Scene;
 	class SceneEditTransaction;
 	struct AssetManagerStats;
@@ -86,6 +87,11 @@ namespace Strata
 		// inspector: unknown components or properties, read-only properties, invalid values and references to missing
 		// assets or entities fail (values before the failure may have been applied: roll back).
 		bool ApplyComponents(Entity entity, const nlohmann::json& components, std::string* outError);
+		// Instantiates a prefab or model as prefab.instantiate makes one instance (EditorPrefabCommands.cpp): under `parent`
+		// (null: the top level), its roots tracked as created by `transaction` and linked to the stored prefab
+		// (PrefabInstances::MarkSynced). Returns the roots; on failure none and the error (roll the transaction back).
+		std::vector<Entity> InstantiateTemplate(EditorContext& context, Scene& scene, SceneEditTransaction& transaction, const EntityTemplate& entityTemplate,
+			AssetHandle asset, Entity parent, std::string* outError);
 
 		// The totals of AssetManagerBase::GetStats as asset.stats and editor.status report them (EditorStreamingCommands.cpp).
 		nlohmann::json DescribeAssetStats(const AssetManagerStats& stats);

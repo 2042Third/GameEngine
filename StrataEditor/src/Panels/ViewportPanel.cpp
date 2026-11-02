@@ -217,22 +217,6 @@ namespace Strata
 		// with "Game camera", the scene's primary camera with the editor's overlays, which the editor camera's controls
 		// leave alone.
 		const float aspectRatio = static_cast<float>(screenSize.x) / static_cast<float>(screenSize.y);
-		const auto resolveView = [&context, &settings, aspectRatio]()
-		{
-			if (settings.PilotGameCamera)
-			{
-				if (std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Scene, aspectRatio))
-				{
-					view->EditorOverlays = true;
-					view->EditorView = true;
-					return view;
-				}
-			}
-			std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Editor, aspectRatio);
-			if (view && settings.PilotGameCamera)
-				view->Notice = "The scene has no primary camera: showing the editor camera";
-			return view;
-		};
 		std::optional<ViewportView> view;
 		if (canvasMode)
 		{
@@ -251,7 +235,7 @@ namespace Strata
 		}
 		else
 		{
-			view = resolveView();
+			view = ResolveSceneView(context, aspectRatio);
 			m_Piloting = view && view->FromScene;
 			HandleShortcuts(panelContext);
 			if (!m_Piloting)
@@ -279,7 +263,7 @@ namespace Strata
 				}
 			}
 			// The camera may have moved this frame.
-			view = resolveView();
+			view = ResolveSceneView(context, aspectRatio);
 		}
 
 		const UI::ThemeColors& colors = UI::GetThemeColors();
@@ -1078,6 +1062,10 @@ namespace Strata
 			const float aspect = m_Image.Size.x / m_Image.Size.y;
 			Scene& scene = *context.GetActiveScene();
 			const EditorCamera& camera = context.GetViewport().GetCamera();
+			const auto castAtCursor = [&]()
+			{
+				return SceneRaycast::Cast(scene, EditorPlacement::MakeViewRay(camera.GetSceneCamera(aspect), ndc), camera.GetFar());
+			};
 			if (type == AssetType::Prefab || type == AssetType::Model)
 			{
 				// Resting on the surface under the cursor, else on the one under the view's pivot (the game's camera when
@@ -1088,14 +1076,16 @@ namespace Strata
 				}
 				else
 				{
-					const EditorPlacement::Surface surface = EditorPlacement::FindSurfaceAt(scene, camera, ndc, aspect);
+					const std::optional<SceneRayHit> hit = castAtCursor();
+					const EditorPlacement::Surface surface = hit ? EditorPlacement::Surface { hit->Point, hit->Normal, true }
+						: EditorPlacement::FindPivotSurface(scene, camera);
 					EditorActions::InstantiatePrefab(context, commands, asset, UUID::Null(), &surface);
 				}
 			}
 			else if (type == AssetType::Material)
 			{
 				// Onto the mesh under the cursor: its renderer's material (one undo step).
-				const std::optional<SceneRayHit> hit = m_Piloting ? std::nullopt : EditorPlacement::CastAt(scene, camera, ndc, aspect);
+				const std::optional<SceneRayHit> hit = m_Piloting ? std::nullopt : castAtCursor();
 				if (hit && hit->HitEntity.HasComponent<MeshRendererComponent>())
 				{
 					RunEditorCommand(context, commands, "component.set", { { "entity", UUIDToJson(hit->HitEntity.GetUUID()) }, { "component", "MeshRenderer" },

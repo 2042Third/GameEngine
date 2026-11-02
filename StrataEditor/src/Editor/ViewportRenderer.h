@@ -58,6 +58,11 @@ namespace Strata
 	// play mode and uses the editor camera while editing and simulating; the panels pass Editor (the Scene view) or Scene
 	// (the Game view). Nullopt (with an error) only for ViewportCameraSource::Scene without a camera.
 	std::optional<ViewportView> ResolveViewportView(EditorContext& context, ViewportCameraSource source, float aspectRatio, std::string* outError = nullptr);
+	// The Scene view's 3D view at `aspectRatio`: through the scene's primary camera with Game camera on
+	// (ViewportSettings::PilotGameCamera; EditorOverlays and EditorView set), else the editor camera (with a notice when Game
+	// camera finds no primary camera). What the Scene view draws, and what scene.raycast and asset.place {viewport} cast
+	// through.
+	std::optional<ViewportView> ResolveSceneView(EditorContext& context, float aspectRatio);
 
 	class ViewportRenderer;
 
