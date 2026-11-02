@@ -652,6 +652,14 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     windowed editors play the scene and read back what the Game view presented (`viewport.capture {live}`), to judge
     motion. `--work <dir>` keeps the copies and their imported assets for the next run (`--fresh-work` makes them
     again); `run.json` reports the time each project took to make and open apart from the captures.
+  - The `Showcase` project ([The showcase](#the-showcase)) holds the `showcase.*` shots: the six shots and the rock macro
+    at their times of day (their `Setup` is `GenerateShowcaseTerrain.py setup --format lookdev`), debug views, shot 3
+    without the yard's probe, the measurement views of the hut's darkness, and twelve live shots of shots 2, 3, 4 and 6
+    in TAA, FXAA and off (`showcase.live.*`: the tour started at the shot, exposure held, four frames 600 steps in).
+    `GenerateShowcaseTerrain.py checkshots --capture <output>` checks a capture: shot 2's highlight on the letterboard
+    within 40 px of the computed mirror point, shot 3's streak within 30 px, the yard's probe changing the shell beside
+    the streak by 8 codes; with `--live`, the highlights' shimmer: the second differences of 32 px block means of the
+    encoded luma over the four frames, mean at most 1% and 99th percentile at most 3% (a steady dolly cancels out).
   - Outputs (`--output`, default `<temp>/StrataLookDev/<date>-<label>`, never inside the tracked tree: build trees and
     `.worktrees` are allowed): `shots/<shot>-<W>x<H>-<aa>.png` (the first repeat), `crops/` (each shot's regions of
     interest enlarged 4 times), `stats/` (every repeat's `renderStats` with `gpuMs` and the repeats' differing pixels from
@@ -815,6 +823,10 @@ exercised by it.
   `PerfGPU.Samples`, Release and Dist) starts the exported Open World (`STRATA_OPEN_WORLD_GAME`) once per attempt,
   windowed at 1920 x 1080 with the display's vsync, and measures its tour from the first frame with a cell loaded for
   8 s: the frames' `WorkMs` (median and 95th percentile; the frame interval is the display's and only reported) and `GPUBusyMs`.
+  It also starts the exported showcase (`STRATA_SHOWCASE_GAME`) at High and Ultra, windowed at 2560 x 1440 (a 4K window
+  does not fit a 4K display with its caption, and the runtime has no exclusive fullscreen), and measures 70 s of the tour
+  from the first frame drawn with nothing loading: `GPUBusyMs` (median and 95th percentile) and, at High, `WorkMs`
+  (`PerfGPU.Samples.ShowcaseHigh1440.*`, `.ShowcaseUltra1440.*`, provisional).
   `StrataEditor.Install` (`Editor/InstallEndToEnd.cmake`) installs the build into
   a fresh prefix, checks the layout (exactly the top-level entries a release holds), and makes a game with the installed
   editor alone: `project.create` from `basic3d`, `script.build` (whose cache must name the installation as
@@ -5579,6 +5591,39 @@ documents over all samples (about tenfold smaller in archives), so that the stan
 at most about 60 MB. A graphical
 showcase's entry in `Samples.json` says `"Budget": "Showcase"` (any other value is refused): it may hold 80 MB of source
 assets, and the showcases' binary files count against 85 MB of their own, apart from the others' 55 MB
-(`SampleBudgetClass`, `SampleBudgets::ShowcaseSourceAssetBytes`, `ShowcaseTotalBinaryBytes`), so that with showcases
-release archives grow by at most about 145 MB (140 MB of binary files over all samples). Textures are 1K (2K only
-where 1K visibly fails; showcase scans 2K), JPEG for color and PNG where alpha or exact palettes need it.
+(`SampleBudgetClass`, `SampleBudgets::ShowcaseSourceAssetBytes`, `ShowcaseTotalBinaryBytes`), and up to six screenshots
+in 8 MB, one per shot of its tour (`ShowcaseScreenshotBytes`, `ShowcaseMaxScreenshots`), so that with showcases release
+archives grow by at most about 145 MB (140 MB of binary files over all samples). Textures are 1K (2K only where 1K
+visibly fails; showcase scans 1K, 2K only for the surfaces its key shots frame within 10 m), JPEG for color and PNG
+where alpha or exact palettes need it.
+
+#### The showcase
+
+`Samples/Showcase` (High Desert Outpost) is the presets' reference scene: wave 8's look is judged on its six shots, and
+every later change to rendering is measured on them. Two standard-library generators make everything that is not a scan
+and keep it reproducible: `Tools/GenerateShowcaseTerrain.py` (the valley, the apron, its water and mud) and
+`Tools/GenerateShowcaseProps.py` (the bus, the tanks, the pipes, the hut, the bare steel's maps). Both seed their noise,
+use no transcendental functions where a vertex depends on them and quantize every attribute, so every platform writes
+the same bytes; `selftest` (CTests `StrataTools.ShowcaseTerrain` and `.ShowcaseProps`, label `tools`) writes twice, compares
+with the committed files (the maps by their pixels), checks the design's rules (the golden sun clears the hills from the
+apron, the pads are flat, the letterboard is vertical, the shots' mirror points lie on their surfaces) and that the
+scripts' `Scripts/Stations.h` rows equal the generator's table. To change the ground or a prop, change the generator,
+write in place (`terrain` or `props --output Samples/Showcase/Assets/Generated/...`): the editor reimports and keeps the
+handles. The generators' command scripts (`materials`, `prefabs`, `layout`, `controls`, `bake`) are run once with
+`StrataEditor --quit-after-commands`; `layout` builds a fresh scene only, later edits are commands of their own.
+
+The three times of day are stations: the sun's direction and the values that go with it (`Stations.h`, `setup --station`).
+Each has two reflection probe entities, `Probe.<Dawn, Golden or Dusk>.<Yard or Hut>`, never two probes baked three times
+(a bake trashes the capture an earlier bake made for that entity). `bake` sets each station with only its own probes
+active and bakes them twice (the second pass adds a bounce), Golden last, the saved station; rebake after any change the
+probes see, and never bake in a session that does not save (the old captures would be trashed under the saved scene).
+The director switches stations with `SetActive`, holding the old probes on for a second with the new ones' priority raised,
+so a box never falls to the sky while its capture converts; `Assets::GetLoadProgress` in `OnCreate` keeps all six loaded.
+
+`StrataEditor.Showcase` plays the tour four times faster through its six shots, walks, flies, opens the photo mode and
+exports; `StrataEditor.ShowcaseRender` (label `gpu`) renders the six shots at their times of day expecting nothing pending,
+the dawn cascades at 550 m and the hut a third of the yard's light (the yard's EV is pinned: a change of the yard's light
+measures it again); `StrataRuntime.ShowcaseWindowed` checks the exported game's shot 2 in a window. The LookDev project
+`Showcase` holds the `showcase.*` shots ([Look-dev harness](#look-dev-harness)), and `PerfGPU.Samples` measures the tour at
+High and Ultra ([Perf tests](#perf-tests)). A change to the showcase's look retakes its screenshots, `Picture.png`, its
+icon and its look-dev shots.

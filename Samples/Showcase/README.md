@@ -47,6 +47,14 @@ and the director's controls were made by the generators' command scripts (`Gener
 `prefabs`, `GenerateShowcaseTerrain.py layout`, `controls` and `bake`), run in the editor; the exported game shows a
 loading scene while the outpost streams in.
 
+## Known limits
+
+- No grass (masked grass vanishes by 30 m at 4K without coverage-preserving alpha), no people, no sound.
+- In the photo mode the light follows the hour, but reflections snap to the nearest of the three baked times of day.
+- At Medium, screen-space reflections are traced in a checkerboard that needs TAA: with FXAA or no anti-aliasing the
+  puddles reflect only the probes.
+- Graybox materials: the bare steel and the bus's paint are first values, tuned in the next step.
+
 ## Credits
 
 Every scan is CC0 1.0 from [Poly Haven](https://polyhaven.com); `CREDITS.md` names each one's source and authors.

@@ -64,6 +64,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   Each time of day has its own baked reflection probes, switched on under the fade between shots.
 - Any key takes the tour over into a first-person walk; Tab flies, P opens a photo mode (time of day, exposure, field of
   view, focus, f-number, depth of field, the quality preset and anti-aliasing, seven bookmarks), H hides the UI.
+- Samples: a showcase may hold six screenshots in 8 MB (the others three in 3 MB).
+- Manual, Lighting: "Times of day with baked probes".
 
 ## Defaults that change
 

@@ -1423,16 +1423,17 @@ engine has (like unreal) is completely the opposite of what this engine is plann
 Strata never renders below native resolution: no render scaling below 1, no dynamic resolution, no TAA or other temporal
 upscaling, and nothing may need temporal accumulation to look right (TAA stays one anti-aliasing choice).
 
-- **Wave 8 starts with `showcase`: a graphical showcase sample, asked for by the owner after wave 7.** "High Desert
-  Outpost": a rocky valley of about 300 m with a hut, crates, barrels, a covered car, a lantern and a fire pit among
-  boulders and cliffs, made through the editor from Poly Haven's CC0 scans (about 60 MB of source assets, in a showcase
-  budget class of its own) under the physical atmosphere through a time of day. Five shots with a camera tour between
-  them: a dawn vista, the outpost's contact detail, the hut's interior with light shafts, dusk to night with the lantern
-  and the fire, and a macro of a rock; a photo mode with free camera, time of day, exposure, focus and the Graphics
-  options; High by default, screenshots at Ultra and supersampled. `PerfGPU.Samples.Showcase.{High,Ultra}` at
-  3840x2160 and image checks at its fixed shots. It needs wave 7's streams, the items below their cut lines that the
-  shots use (depth of field, light shafts, the irradiance volume, alpha cutouts, distant shadows, supersampled stills),
-  terrain material blending or detail normal maps, and one baked time of day for its probes or run-time probe capture.
+- **Wave 8's `showcase`: High Desert Outpost (`Samples/Showcase`), landed on its branch.** A derelict fuel stop in a
+  rocky desert valley the day after rain, made through the editor from 22 Poly Haven CC0 scans (56 MB) and terrain and
+  props written by committed generators (`Tools/GenerateShowcase*.py`), in the showcase budget class: an 80 s camera tour
+  of six shots at three baked times of day (dawn over the valley, the low sun sliding along a bus's painted and bare
+  sheet steel, the streak on a weathered oil tank, the glint column on a wet apron, the hut's interior, dusk with the fire
+  and lanterns), each time of day with its own reflection probe entities; a first-person walk, free flight and a photo
+  mode (time of day, exposure, lens, the Graphics options, seven bookmarks); High by default.
+  `PerfGPU.Samples.ShowcaseHigh1440` and `.ShowcaseUltra1440` record the tour at 2560 x 1440 (a 4K window does not fit
+  a 4K display). Later: grass with coverage-preserving alpha, people, the B-list of scans, sound, the walk on a
+  character controller (after `physics-timing`), supersampled stills, and sunlight thrown off a sheet onto nearby
+  surfaces (after `radiance-cascades`).
 - **Rendering after wave 7:** what fell below wave 7's cut lines (supersampled stills,
   `viewport.capture {supersample: 2}`: rendered at twice the size and filtered down with the output's dither, for the
   showcase's screenshots; point and spot lights with a source radius and the sun's physical filter, up to 8 sun

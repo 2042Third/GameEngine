@@ -40,7 +40,7 @@ the work: checklist item 5.
 | `StrataScriptCore/` | Script ABI (C header) and the header-only C++ SDK game scripts are written against. Script modules never link the engine. |
 | `StrataCLI/` | Command-line client for the editor automation API; also an MCP server (`StrataCLI mcp`). |
 | `StrataTests/` | doctest unit tests, test helpers, the feature test project, and the layer table (`Architecture/Layers.json`, `LayeringAllowlist.txt`). |
-| `Samples/` | Games an AI agent made through the editor (`ThirdPerson`, `OpenWorld`, `PhysicsPlayground`, `Tetris`), offered as copies by the launcher; open one in place only to change it ([details](Docs/DeveloperGuide.md#samples)). |
+| `Samples/` | Games an AI agent made through the editor (`Showcase`, `ThirdPerson`, `OpenWorld`, `PhysicsPlayground`, `Tetris`), offered as copies by the launcher; open one in place only to change it ([details](Docs/DeveloperGuide.md#samples)). |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest, the build's git commit). |
 | `Tools/` | Standard-library Python tools: generators whose outputs are committed, perf, lint and CI helpers ([details](Docs/DeveloperGuide.md#repository-layout)). |
 | `Docs/` | `README.md` (index), `DeveloperGuide.md` (this file's details), `Architecture.md`, `Roadmap.md` (update its Status when a wave lands), `Manual/`, `Releases/` ([details](Docs/DeveloperGuide.md#repository-layout)). |
@@ -234,6 +234,8 @@ These rules in full: [Architecture rules](Docs/DeveloperGuide.md#architecture-ru
 Details: [Asset pipeline](Docs/DeveloperGuide.md#asset-pipeline).
 
 - Sample assets are CC0 or CC-BY, credited in the sample's `CREDITS.md` and `ThirdPartyNotices.md` (`Samples.Content`).
+- The showcase (`Samples/Showcase`) is the presets' reference scene: its terrain, props and stations change only through
+  `Tools/GenerateShowcase*.py`; a change to its look retakes its shots ([Samples](Docs/DeveloperGuide.md#samples)).
 - Every asset file has a committed `<file>.meta` (its handle): move or rename through
   `EditorAssetManager::MoveAsset`/`MoveFolder`, delete through `MoveToTrash`, and read folders and referencers from the
   manager's indexes, never from the disk per frame.
