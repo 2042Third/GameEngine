@@ -1948,6 +1948,9 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(first["renderStats"]["shadowFit"]["settled"] == true);
 		CHECK(first["renderStats"]["cascades"].size() == harness.Context.GetViewport().GetCaptureRenderer()->GetStats().CascadeCount);
 		CHECK(harness.Context.GetViewport().GetCaptureRenderer()->GetStats().ShadowFit);
+		// Single pictures keep Strata 0.7.0's fit rules: no holds counted in seconds, which would tie the picture to frame times.
+		CHECK_FALSE(harness.Context.GetViewport().GetCaptureRenderer()->GetSceneRenderer().GetSpecification().ShadowFitHolds);
+		CHECK(harness.Context.GetViewport().GetGameRenderer()->GetSceneRenderer().GetSpecification().ShadowFitHolds);
 		// Each capture starts the fit again (ResetShadowFit) and waits for it alike. How many frames that takes follows how soon the
 		// GPU finishes each frame's readback (polled, never waited for), so only its bounds are checked: the pictures are equal.
 		nlohmann::json second;

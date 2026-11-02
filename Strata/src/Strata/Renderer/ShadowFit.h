@@ -34,6 +34,10 @@ namespace Strata
 		// The view distance of the nearest transparent surface the previous frame drew (transparent surfaces are not in the depth
 		// the readbacks measure); infinity without one.
 		float NearestTransparent = std::numeric_limits<float>::infinity();
+		float Seconds = 0.0f; // Since the previous Update, from SceneRenderer::StepSeconds: what the tracker's holds count
+		// False: Strata 0.7.0's rules (growths at once, shrinks after c_ShrinkReadbacks readbacks), for renderers of single
+		// images (SceneRendererSpecification::ShadowFitHolds).
+		bool Holds = true;
 	};
 
 	// Scene/ShadowFit.comp's result for a frame, with the camera that frame was drawn from: its view-space boxes are re-projected
