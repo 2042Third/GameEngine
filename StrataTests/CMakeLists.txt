@@ -482,18 +482,26 @@ if(TARGET StrataEditor AND TARGET StrataCLI)
 	set_tests_properties(StrataEditor.Automation PROPERTIES ENVIRONMENT "${STRATA_END_TO_END_ENVIRONMENT}" TIMEOUT 600)
 
 	# The look-dev harness (Tools/LookDev.py) keeps working: it builds the look-dev project with this build's editor,
-	# captures one shot small twice and checks every output (Docs/DeveloperGuide.md, "Look-dev harness"). The StrataTools.*
-	# tests need Python 3; without it at configure time the test still exists and fails saying so.
+	# captures one shot small twice and checks every output (Docs/DeveloperGuide.md, "Look-dev harness").
+	# StrataTools.LookDevOffline runs only the checks that need no editor (PNG, signed differences, the per-mode summary),
+	# so every CI job runs them; StrataTools.LookDev needs a GPU. The StrataTools.* tests need Python 3; without it at
+	# configure time the tests still exist and fail saying so.
 	find_package(Python3 3.10 COMPONENTS Interpreter)
 	if(Python3_Interpreter_FOUND)
 		add_test(NAME StrataTools.LookDev
 			COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/Tools/LookDev.py" selftest --build "$<TARGET_FILE_DIR:StrataEditor>"
 				--output "${CMAKE_CURRENT_BINARY_DIR}/LookDevSelfTest/$<CONFIG>")
+		add_test(NAME StrataTools.LookDevOffline
+			COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/Tools/LookDev.py" selftest
+				--output "${CMAKE_CURRENT_BINARY_DIR}/LookDevOffline/$<CONFIG>")
 	else()
 		add_test(NAME StrataTools.LookDev
 			COMMAND "${CMAKE_COMMAND}" "-DTEST_NAME=StrataTools.LookDev" -P "${CMAKE_CURRENT_SOURCE_DIR}/Tools/PythonMissing.cmake")
+		add_test(NAME StrataTools.LookDevOffline
+			COMMAND "${CMAKE_COMMAND}" "-DTEST_NAME=StrataTools.LookDevOffline" -P "${CMAKE_CURRENT_SOURCE_DIR}/Tools/PythonMissing.cmake")
 	endif()
 	set_tests_properties(StrataTools.LookDev PROPERTIES LABELS "gpu;tools" TIMEOUT 900)
+	set_tests_properties(StrataTools.LookDevOffline PROPERTIES LABELS "tools" TIMEOUT 120)
 endif()
 
 # The runtime's command line, before any game is looked for: --help prints the usage and exits 0, an argument it does not

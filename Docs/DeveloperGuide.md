@@ -659,10 +659,16 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     draws, shadow draws, cached cascades and, where the build reports them, the quality preset and shadow map size),
     `index.html` and `run.json` (the build's version line, the editor's GPU, every shot's outcome). Exit code 1 when a
     shot failed.
-  - `compare <before> <after> --output <dir>`: per picture the two sets share, the differing pixels, the largest and the
-    mean channel difference and a difference image (eight times the difference), the crops side by side, and per picture
-    the ratio of the GPU times; `compare.json` and `index.html`. It reports differences without failing; exit code 1 only
-    when one side has a picture the other lacks.
+  - `compare <before> <after> --output <dir> [--signed-gain <gain>]`: per picture the two sets share, the differing
+    pixels, the largest and the mean channel difference, a difference image (eight times the difference) and a signed
+    one in `signed/` (the mean of the three channels' after minus before times the gain, default 32, 0 writes none: red
+    where the after picture is brighter, blue where it is darker), the crops side by side, and per picture the ratio of
+    the GPU times; `compare.json` and `index.html`, which shows the two images side by side. `compare.json`'s `summary`
+    and one printed line per anti-aliasing mode give the pictures, how many differ, the median of differing pixels over
+    all of them, the median largest difference over the differing ones, the largest difference and the largest mean. A
+    region of one sign that follows geometry, a light's footprint, a shadow's edge or a material is a change of the
+    image, not rounding: look at the signed images of every differing picture. It reports differences without failing;
+    exit code 1 only when one side has a picture the other lacks.
   - A shot's `Setup` runs editor commands on its scene before the captures; a step's `entityName` names the entity, and
     `repoFile` (a path in the repository) gives `asset.import` the file to copy in (`tp.lut` imports the feature project's
     `Warm.cube`).
@@ -674,8 +680,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     editors quit.
   - `StrataTools.LookDev` (labels `gpu` and `tools`) runs `selftest` with the build's editor: the look-dev project from its
     command script, one shot at 320x180 with FXAA twice, every output checked (sizes, crops, stats with no pending asset,
-    no difference between the repeats, the page, `compare` of the set with itself), and the PNG reader and writer round
-    trip. It needs Python 3.10 or later found at configure time; without it the test fails saying so.
+    no difference between the repeats, the page, `compare` of the set with itself), and the offline checks: the PNG
+    reader and writer round trip, the signed difference and the per-mode summary. `selftest` without `--build` runs only
+    the offline checks, which `StrataTools.LookDevOffline` (label `tools`, no GPU) runs on every CI job. Both need Python
+    3.10 or later found at configure time; without it the tests fail saying so.
   - Baselines: Strata 0.6.0's set (bc6ee123's Release build, every shot, both sizes, all modes, 5 repeats) lies in
     `.worktrees/wave7-plan/lookdev/0.6.0/` on the reference machine, outside the repository, with wave 7's step 0 beside it.
     Strata 0.7.0's set (76f28a21's Release build, every shot, both sizes, all modes, 5 repeats, live) lies in

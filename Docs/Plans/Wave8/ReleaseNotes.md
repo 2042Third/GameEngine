@@ -7,6 +7,12 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 
 ## What's new
 
+**Slang (S0.10)**
+
+- `Tools/LookDev.py compare` writes a signed difference image for every picture that differs (red where the new build
+  is brighter, blue where it is darker) and a per-mode summary, so a change that shifts a region one way stands out from
+  rounding; `selftest` runs its offline checks without an editor (`StrataTools.LookDevOffline`, on every CI job).
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and
