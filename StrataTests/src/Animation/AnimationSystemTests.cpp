@@ -1696,3 +1696,53 @@ TEST_SUITE("Animation.Preview")
 		AssetManager::SetActive(nullptr);
 	}
 }
+
+#if ST_WITH_PHYSICS
+// Interpolation (Scene::SetInterpolation): what rides a character moved by fixed steps is drawn with it on every frame.
+TEST_SUITE("Animation.Interpolation")
+{
+	TEST_CASE("An attachment under an interpolated character stays on its joint on frames without a step")
+	{
+		AnimationScene scene;
+		Scene& world = *scene.SceneRef;
+		world.GetSettings().FixedTimestep = 1.0f / 64.0f;
+		CreateStaticBox(world, "Ground", glm::vec3(0.0f, -0.5f, 0.0f), glm::vec3(50.0f, 0.5f, 50.0f));
+		// A waving arm on a character controller, with a sword on its wrist that PlaceAttachments writes every update.
+		Entity walker = scene.CreateAnimator("Walker", c_WaveHandle);
+		walker.GetTransform().Translation = glm::vec3(-10.0f, 0.0f, 0.0f);
+		CharacterControllerComponent& controller = walker.AddComponent<CharacterControllerComponent>();
+		controller.Height = 1.8f;
+		controller.Radius = 0.3f;
+		Entity sword = world.CreateChildEntity(walker, "Sword");
+		sword.AddComponent<AttachToJointComponent>() = AttachToJointComponent { walker.GetUUID(), "Wrist" };
+		world.SetInterpolation(true);
+		scene.Start();
+		ICharacterControl* characters = world.GetService<ICharacterControl>();
+		REQUIRE(characters);
+
+		uint32_t between = 0;
+		uint32_t wrong = 0;
+		float worst = 0.0f;
+		for (int update = 0; update < 300; update++)
+		{
+			REQUIRE(characters->MoveCharacter(walker, glm::vec3(6.5f, 0.0f, 0.0f)));
+			const uint64_t steps = world.GetFixedStepCount();
+			scene.Update(0.001f);
+			world.UpdateDrawnTransforms();
+			const glm::mat4* walkerDrawn = world.FindDrawnTransform(walker.GetHandle());
+			const glm::mat4* swordDrawn = world.FindDrawnTransform(sword.GetHandle());
+			if (!walkerDrawn)
+				continue;
+			REQUIRE(swordDrawn);
+			const glm::vec3 expected((*walkerDrawn * scene.GetJoint(walker, 2))[3]);
+			const float error = glm::length(glm::vec3((*swordDrawn)[3]) - expected);
+			worst = std::max(worst, error);
+			wrong += error <= 1.0e-4f ? 0u : 1u;
+			between += world.GetFixedStepCount() == steps ? 1u : 0u;
+		}
+		MESSAGE("Largest distance of the drawn sword from its drawn wrist: ", worst, " m");
+		CHECK(wrong == 0);
+		CHECK(between > 200);
+	}
+}
+#endif

@@ -116,6 +116,9 @@ TEST_SUITE("Physics.Settings")
 		CHECK(defaults.ContactHertz == world.contactHertz);
 		CHECK(defaults.ContactDampingRatio == world.contactDampingRatio);
 		CHECK(defaults.ContactPushSpeed == world.contactSpeed);
+		// Interpolation draws a step faster than box3d's maximum speed exactly, as a teleport: the two must agree (worlds keep
+		// box3d's default speed).
+		CHECK(Scene::c_MaxInterpolatedSpeed == world.maximumLinearSpeed);
 		// Out of range, refused.
 		std::string error;
 		CHECK_FALSE(section->Validate({ { "ContactRecycleDistance", 1.5 }, { "SleepThreshold", 0.05 } }, 1, &error).has_value());
