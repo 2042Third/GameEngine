@@ -556,6 +556,26 @@ namespace Strata
 #endif
 	}
 
+	bool GLFWWindow::GetRequiredInstanceExtensions(std::vector<std::string>& outExtensions) const
+	{
+		uint32_t count = 0;
+		const char** names = glfwGetRequiredInstanceExtensions(&count);
+		if (!names)
+			return false; // GLFW reported why through its error callback
+		outExtensions.insert(outExtensions.end(), names, names + count);
+		return true;
+	}
+
+	bool GLFWWindow::SupportsPresentation(VkInstance instance, VkPhysicalDevice physicalDevice, uint32_t queueFamily) const
+	{
+		return glfwGetPhysicalDevicePresentationSupport(instance, physicalDevice, queueFamily) == GLFW_TRUE;
+	}
+
+	VkResult GLFWWindow::CreateSurface(VkInstance instance, VkSurfaceKHR& outSurface) const
+	{
+		return glfwCreateWindowSurface(instance, m_Window, nullptr, &outSurface);
+	}
+
 	void GLFWWindow::Maximize()
 	{
 		glfwMaximizeWindow(m_Window);

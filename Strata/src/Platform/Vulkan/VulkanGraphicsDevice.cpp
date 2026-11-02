@@ -4,6 +4,7 @@
 #include "Platform/Vulkan/VulkanBindlessSupport.h"
 #include "Platform/Vulkan/VulkanDebugMessages.h"
 #include "Platform/Vulkan/VulkanLoader.h"
+#include "Platform/Vulkan/VulkanPresentation.h"
 #include "Strata/Core/Window.h"
 
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
@@ -16,9 +17,6 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 	#include <nvrhi/validation.h>
 #endif
 #include <nvrhi/vulkan.h>
-
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
 
 #include <atomic>
 #include <optional>
@@ -256,6 +254,16 @@ namespace Strata
 			: m_Specification(specification)
 		{
 			m_Specification.MaxFramesInFlight = std::clamp(m_Specification.MaxFramesInFlight, 1u, 4u);
+			if (!m_Specification.Headless)
+			{
+				m_Presentation = m_Specification.PresentationWindow ? m_Specification.PresentationWindow->GetVulkanPresentation() : nullptr;
+				if (!m_Presentation)
+				{
+					// The defined behavior of such a window (a test's stand-in), not a fault: the device works offscreen.
+					ST_CORE_INFO("Graphics device: the window cannot present through Vulkan; rendering offscreen only");
+					m_Specification.Headless = true;
+				}
+			}
 		}
 
 		~VulkanGraphicsDevice() override
@@ -305,6 +313,7 @@ namespace Strata
 		bool CreateSwapchain(Window& window, bool vsync) override;
 		void DestroySwapchain() override;
 		bool HasSwapchain() const override { return m_Window != nullptr; }
+		bool CanPresent() const override { return !m_Specification.Headless; }
 
 		void SetVSync(bool vsync) override
 		{
@@ -407,6 +416,9 @@ namespace Strata
 			bool Initialized = false;
 		};
 
+		// What the presentation window gives the instance and the queue family (null when headless); the surface comes from
+		// the window CreateSwapchain is given.
+		const VulkanPresentation* m_Presentation = nullptr;
 		Window* m_Window = nullptr;
 		VkSurfaceKHR m_Surface = VK_NULL_HANDLE;
 		VkSwapchainKHR m_Swapchain = VK_NULL_HANDLE;
@@ -476,15 +488,13 @@ namespace Strata
 
 		if (!m_Specification.Headless)
 		{
-			uint32_t glfwExtensionCount = 0;
-			const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-			if (!glfwExtensions)
+			std::vector<std::string> extensions;
+			if (!m_Presentation->GetRequiredInstanceExtensions(extensions))
 			{
-				ST_CORE_ERROR("GLFW reports no Vulkan presentation support on this system");
+				ST_CORE_ERROR("The window system reports no Vulkan presentation support on this system");
 				return false;
 			}
-			for (uint32_t index = 0; index < glfwExtensionCount; index++)
-				m_InstanceExtensions.emplace_back(glfwExtensions[index]);
+			m_InstanceExtensions.insert(m_InstanceExtensions.end(), extensions.begin(), extensions.end());
 		}
 
 		VkInstanceCreateFlags createFlags = 0;
@@ -696,7 +706,7 @@ namespace Strata
 			{
 				if (!(families[family].queueFlags & VK_QUEUE_GRAPHICS_BIT) || !(families[family].queueFlags & VK_QUEUE_COMPUTE_BIT))
 					continue;
-				if (!m_Specification.Headless && !glfwGetPhysicalDevicePresentationSupport(m_Instance, physicalDevice, family))
+				if (!m_Specification.Headless && !m_Presentation->SupportsPresentation(m_Instance, physicalDevice, family))
 					continue;
 				graphicsFamily = static_cast<int32_t>(family);
 				break;
@@ -1032,7 +1042,13 @@ namespace Strata
 
 	bool VulkanGraphicsDevice::CreateSurface()
 	{
-		const VkResult result = glfwCreateWindowSurface(m_Instance, static_cast<GLFWwindow*>(m_Window->GetNativeWindow()), nullptr, &m_Surface);
+		const VulkanPresentation* presentation = m_Window->GetVulkanPresentation();
+		if (!presentation)
+		{
+			ST_CORE_ERROR("The window cannot present through Vulkan");
+			return false;
+		}
+		const VkResult result = presentation->CreateSurface(m_Instance, m_Surface);
 		if (result != VK_SUCCESS)
 		{
 			ST_CORE_ERROR("Failed to create the window surface: {}", nvrhi::vulkan::resultToString(result));

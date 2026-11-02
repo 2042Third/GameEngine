@@ -99,7 +99,6 @@ namespace
 		KeyCode GetLayoutKey(KeyCode key) const override { return key; }
 		void* GetPlatformHandle() const override { return nullptr; }
 		void SetIcon(std::span<const WindowIconImage>) override {}
-		void* GetNativeWindow() const override { return nullptr; }
 
 		glm::uvec2 Framebuffer = glm::uvec2(640, 360);
 		WindowMode Mode = WindowMode::Windowed;

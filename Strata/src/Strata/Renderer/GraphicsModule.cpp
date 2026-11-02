@@ -31,6 +31,7 @@ namespace Strata
 		GraphicsDeviceSpecification deviceSpecification;
 		deviceSpecification.ApplicationName = name;
 		deviceSpecification.Headless = m_Window == nullptr;
+		deviceSpecification.PresentationWindow = m_Window;
 #if defined(ST_DEBUG)
 		deviceSpecification.EnableValidation = m_Specification.Validation.value_or(true);
 #else
@@ -39,7 +40,8 @@ namespace Strata
 
 		m_Device = GraphicsDevice::Create(deviceSpecification);
 		bool started = m_Device != nullptr;
-		if (started && m_Window)
+		// A window that cannot present (a test's stand-in) gets a device that renders offscreen, and no swapchain.
+		if (started && m_Window && m_Device->CanPresent())
 			started = m_Device->CreateSwapchain(*m_Window, m_Window->IsVSync());
 		if (started)
 		{

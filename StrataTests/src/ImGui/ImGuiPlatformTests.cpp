@@ -54,7 +54,6 @@ namespace
 		}
 		void* GetPlatformHandle() const override { return Handle; }
 		void SetIcon(std::span<const WindowIconImage>) override {}
-		void* GetNativeWindow() const override { return nullptr; }
 
 		uint32_t Width = 1280;
 		uint32_t Height = 720;
