@@ -40,3 +40,6 @@ projects, the template and scenes or projects without the value get.
 
 - An object that stays close to the camera still re-fits the cascades once, coarsening far shadows; one that covers under
   a tenth of the view waits up to half a second in a coarser cascade.
+- With contact shadows off, a thin object's shadow near the camera (a 5 cm plate on the floor) stays solid at High, but
+  its edge shows the shadow map's texel steps, as Medium's did in 0.7.0. Graphics Quality Custom with Contact Shadows 12
+  smooths it again, at the cost of shimmer in motion.
