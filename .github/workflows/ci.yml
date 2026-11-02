@@ -156,7 +156,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          bash .github/scripts/convert_shaders_to_metal.sh build/${{ matrix.preset }}/Strata/EmbeddedShaders "${{ runner.temp }}/metal" --report-only 2>&1 | tee metal.log
+          bash .github/scripts/convert_shaders_to_metal.sh build/${{ matrix.preset }}/Strata/EmbeddedShaders "${{ runner.temp }}/metal" 2>&1 | tee metal.log
 
       - name: Compiler cache statistics
         if: ${{ !cancelled() }}
