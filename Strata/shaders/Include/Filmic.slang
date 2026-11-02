@@ -35,7 +35,7 @@ float3 TonemapFilmic(float3 color, float toeSlope, float whiteStops, float shoul
 	float3 perChannel = float3(FilmicCurve(inset.r, toeSlope, whiteStops, shoulderPower), FilmicCurve(inset.g, toeSlope, whiteStops, shoulderPower),
 		FilmicCurve(inset.b, toeSlope, whiteStops, shoulderPower));
 	float channel = smoothstep(c_FilmicChannelStart, c_FilmicChannelEnd, log2(largest / c_FilmicMiddleGray));
-	float3 curved = lerp(mul(inset, (largestCurved / largest)), perChannel, channel);
+	float3 curved = lerp(inset * (largestCurved / largest), perChannel, channel);
 	return clamp(mul(c_FilmicOutset, curved), float3(0.0), float3(1.0));
 }
 
