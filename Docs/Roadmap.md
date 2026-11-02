@@ -985,8 +985,10 @@ Open items and deferrals later waves own:
     offline conversion whatever compiled them (`c_KnownFailures` of `.github/scripts/convert_shaders_to_metal.sh`:
     "Runtime sized variables must be in device storage argument buffers"); the first `ctest -L gpu` through MoltenVK is
     the release's Mac gate.
-  - Only NVIDIA's driver has run Slang's modules; AMD's, Intel's and Mesa's have not (the lavapipe try of the lane is in
-    the release notes).
+  - Besides NVIDIA's driver only Mesa's lavapipe has run Slang's modules, in a CI try of the lane (`ci/slang-mesa*`): 529
+    of 553 GPU cases pass with Slang's modules and with glslang's alike, and the same 24 fail with both (editor viewport
+    pictures and selection, on a CPU driver). AMD's and Intel's drivers have not run them; a permanent lavapipe job (its
+    24 failures understood first) is later work.
   - The converted files keep GLSL's stage variables as `st_*` globals that each entry point fills (`Include/Common.slang`'s
     last section): moving them into entry-point parameters, file by file, is later work (new shaders take parameters).
   - What a D3D-style target would still need: `SV_VulkanInstanceID`/`SV_VulkanVertexID` replaced, registers for the push

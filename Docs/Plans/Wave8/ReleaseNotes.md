@@ -42,4 +42,6 @@ projects, the template and scenes or projects without the value get.
 
 - Platforms: this release changes every shader. Its GPU tests ran on Windows with an NVIDIA GPU. On the Mac, CI converted
   every shader to Metal and compiled it (the 15 that read the bindless table only at run time, through MoltenVK's
-  argument buffers, as before), but no GPU test ran through MoltenVK.
+  argument buffers, as before), but no GPU test ran through MoltenVK. On Mesa's lavapipe (a CPU driver, tried on CI), 529
+  of 553 GPU tests pass with the new shaders as with the old, and the same 24 fail with both; AMD and Intel GPUs have not
+  run them.
