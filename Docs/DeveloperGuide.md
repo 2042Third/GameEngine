@@ -1343,8 +1343,10 @@ project's deliberate choice is not an incident.
   Timestep and Max Steps per Frame rows inactive with the reason (probes `Inspector.Scene.FixedTimestep.Inactive`,
   `Inspector.Scene.MaxFixedStepsPerFrame.Inactive`) and links the Timing page under the collision layers'
   (`Inspector.FixedRate`, `Inspector.FixedRate.Open`). The settings window draws the section with its generic page.
-- **Not a cure for jitter.** A higher rate halves the step-to-step motion a character moving above the step rate shows,
-  but does not remove it: that is drawing fixed poses between steps, which drawing interpolated poses solves.
+- **Not a cure for jitter.** With `Interpolation` off a higher rate halves the step-to-step motion a character moving
+  above the step rate shows, but does not remove it: that is drawing fixed poses between steps, which drawing
+  interpolated poses solves ([Interpolation](#interpolation)). With it on (the default) a higher rate halves the half step
+  of latency interpolation adds.
 - **Tests.** `Scene.Timing` (precedence, reset, no provider, copies and a change while running, 60 against a default
   scene, the section's validation, every hand-over), `Runtime.Game` (240 steps/s keeps every step of long frames),
   `Editor.Commands` (`project.setSettings`, `scene.info`, the warning, the contact stiffness at 30, undo), `Editor.Input`,

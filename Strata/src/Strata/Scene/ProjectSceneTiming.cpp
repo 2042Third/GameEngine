@@ -52,7 +52,9 @@ namespace Strata::ProjectSceneTiming
 			"60 unless changed). A rate here overrides it in every scene and in the exported game, and an update then runs at most 2/15 s of steps "
 			"(4, 8, 16 or 32), dropping a longer backlog. Physics costs at least grow with the rate: 240 runs four times the steps of 60. 30 makes "
 			"contacts soft: box3d stiffens contacts at most to an eighth of its substep rate, 15 Hz at 30 steps/s against 30 Hz at 60, so stacks sag "
-			"and settle more slowly. A higher rate halves the step-to-step motion a moving character shows above the step rate, but does not remove it.";
+			"and settle more slowly. With Interpolation on (the default) motion is smooth at any rate, and a higher rate halves the half step of "
+			"latency interpolation adds; with it off, a higher rate halves the step-to-step motion a moving character shows above the step rate, "
+			"but does not remove it.";
 		fixedRate.Type = SettingsFieldType::Enum;
 		fixedRate.Options.push_back(c_SceneRate);
 		for (const uint32_t rate : c_Rates)
