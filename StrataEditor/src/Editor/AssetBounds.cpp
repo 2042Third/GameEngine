@@ -20,12 +20,16 @@ namespace Strata
 		const AssetType type = assets.GetAssetType(asset);
 		if (type != AssetType::Mesh && type != AssetType::Model && type != AssetType::Prefab)
 			return {};
+		// A pending result answers before the stamp is worked out: asset.place's wait and a drag's hover ask every frame, and
+		// the stamp allocates (GetContentStamp formats the import's state). A re-import that changes the stamp publishes the
+		// asset, which IsPendingCurrent sees, and a change that publishes nothing is caught by its safety net.
+		const auto cached = m_Cache.find(asset);
+		if (cached != m_Cache.end() && cached->second.Pending && IsPendingCurrent(assets, asset, cached->second))
+			return Result { cached->second.Bounds, true };
 		const uint64_t stamp = assets.GetContentStamp(asset);
-		if (auto cached = m_Cache.find(asset); cached != m_Cache.end() && cached->second.Stamp == stamp)
-		{
-			if (!cached->second.Pending || IsPendingCurrent(assets, asset, cached->second))
-				return Result { cached->second.Bounds, cached->second.Pending };
-		}
+		m_StampCount++;
+		if (cached != m_Cache.end() && !cached->second.Pending && cached->second.Stamp == stamp)
+			return Result { cached->second.Bounds, false };
 		m_MeasureCount++;
 
 		// Read before measuring: a load published while it measures counts as a change it may have missed.

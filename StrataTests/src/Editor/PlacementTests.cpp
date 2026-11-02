@@ -327,9 +327,12 @@ TEST_SUITE("Editor.Placement")
 
 		AssetBounds& bounds = harness.Context.GetAssetBounds();
 		const uint64_t before = bounds.GetMeasureCount();
+		const uint64_t stamps = bounds.GetStampCount();
 		CHECK(bounds.Measure(assets, model).Pending);
 		CHECK(bounds.Measure(assets, model).Pending);
 		CHECK(bounds.GetMeasureCount() == before + 1);
+		// A pending answer works out no content stamp, which allocates.
+		CHECK(bounds.GetStampCount() == stamps + 1);
 		// Another asset published (the content version moves): still answered from the cache.
 		const uint64_t version = assets.GetContentVersion();
 		AssetMetadata metadata;
@@ -339,13 +342,24 @@ TEST_SUITE("Editor.Placement")
 		REQUIRE(assets.GetContentVersion() != version);
 		CHECK(bounds.Measure(assets, model).Pending);
 		CHECK(bounds.GetMeasureCount() == before + 1);
-		// Once the mesh is in, the next call measures and completes.
+		CHECK(bounds.GetStampCount() == stamps + 1);
+		// asset.place waiting for the model's size: its polls answer from the cache, measuring nothing and allocating no stamp.
+		EditorCommandResult place = harness.Commands.Execute(harness.Context, "asset.place", { { "asset", UUIDToJson(model) },
+			{ "point", { 0.0, 0.0, 0.0 } } });
+		REQUIRE(place.IsPending());
+		for (int poll = 0; poll < 3; poll++)
+			CHECK_FALSE(place.Pending(harness.Context).has_value());
+		CHECK(bounds.GetMeasureCount() == before + 1);
+		CHECK(bounds.GetStampCount() == stamps + 1);
+		// Once the mesh is in, the next call measures and completes, and the wait places the model.
 		harness.Settle();
 		REQUIRE(assets.GetAssetState(mesh) == AssetState::Ready);
 		const AssetBounds::Result complete = bounds.Measure(assets, model);
 		CHECK_FALSE(complete.Pending);
 		CHECK(complete.Bounds.IsValid());
 		CHECK(bounds.GetMeasureCount() == before + 2);
+		place = Tests::CompleteCommand(harness.Context, std::move(place));
+		CHECK(place.Success);
 	}
 
 	TEST_CASE("scene.raycast hits what the scene draws from a ray or a Scene view pixel, and misses cleanly")

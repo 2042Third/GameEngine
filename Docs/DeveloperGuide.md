@@ -3234,7 +3234,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   selecting the root once placed; it waits while the asset loads instead of blocking the frame), a material
   `component.set` on its target. Escape cancels any drag of the editor's payloads (`UI::CancelDragDropOnEscape`, before
   the panels). `AssetBounds` keeps pending results and measures again only once the asset or something it waits for
-  was published (or after a second), so a drag over a streaming scene does not instantiate its template every frame.
+  was published (or after a second), so a drag over a streaming scene does not instantiate its template every frame. It
+  answers a pending result before working out the content stamp, which allocates, so `asset.place`'s poll allocates
+  nothing.
 
 ### Viewport panel
 

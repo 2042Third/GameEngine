@@ -21,7 +21,8 @@ namespace Strata
 	// Results are cached per content stamp (EditorAssetManager::GetContentStamp), so they are worked out again only when
 	// the asset or what it uses changed. A pending result is kept too: it measures a pending asset again once something it
 	// waits for was published (or the asset itself), or after a second (c_PendingRemeasureSeconds), so that a drag hovering
-	// over the view while unrelated assets stream in does not instantiate its template every frame. Main thread only.
+	// over the view while unrelated assets stream in does not instantiate its template every frame; it answers without
+	// working out the stamp, so that asset.place's poll allocates nothing while it waits. Main thread only.
 	class AssetBounds
 	{
 	public:
@@ -36,6 +37,8 @@ namespace Strata
 		Result Measure(EditorAssetManager& assets, AssetHandle asset);
 		// Measurements taken (not answered from the cache), for tests.
 		uint64_t GetMeasureCount() const { return m_MeasureCount; }
+		// Content stamps worked out (they allocate; a pending result answers without one), for tests.
+		uint64_t GetStampCount() const { return m_StampCount; }
 		void Clear() { m_Cache.clear(); }
 	private:
 		struct CacheEntry
@@ -54,6 +57,7 @@ namespace Strata
 		std::unordered_map<AssetHandle, CacheEntry> m_Cache;
 		std::vector<AssetHandle> m_Changes; // GetContentChanges' answer, its capacity reused
 		uint64_t m_MeasureCount = 0;
+		uint64_t m_StampCount = 0;
 	};
 
 }
