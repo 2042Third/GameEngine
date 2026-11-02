@@ -49,6 +49,26 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   eighth while the camera moves), and shrink only after half a second. Something that stays close still moves them once.
   `editor.perf` and `viewport.capture` report the fit's layout `changes` and whether a growth is `holding`.
 
+**Platform: GLFW sealed behind the window (S0.8).**
+
+- GLFW is sealed behind the window: only `Platform/GLFW` includes it, which the layer table's `ExternalOwners` enforces
+  with Vulkan's and the OS headers; the Vulkan device presents through `Window::GetVulkanPresentation`.
+- A window that cannot be opened ends the program through the fatal-error path (a dialog for a person, exit code 1)
+  instead of aborting.
+- `-DSTRATA_WITH_GLFW=OFF` builds the engine without a window backend: its programs run headless only. CI builds it.
+- Tests drive the frame loop through `Tests::StubWindow`, a window without a display; `ApplicationSpecification::WindowFactory`
+  lets a program or a test give the application its window.
+
+**Platform: why FIFO does not pace the editor (S0.6).**
+
+- The swapchain's log line names the present mode chosen and the modes the surface offers (`Swapchain: 2400 x 1350,
+  3 images, vsync (FIFO; the surface offers FIFO, MAILBOX, ...)`).
+- Measured: on the reference machine vsync paces no window in windowed mode, focused or not: FIFO is chosen and the
+  presentation engine hands every image back at once (1,200-1,500 frames a second). Not the engine's code, nor focus,
+  nor the RTSS or NVIDIA present layers: a driver or system setting, unconfirmed (Roadmap, open items). Borderless and
+  fullscreen windows were not measured. There only a frame-rate cap paces the editor: File > Preferences > Frame Rate >
+  Active frame rate (Unlimited by default).
+
 **showcase**
 
 - A fifth sample, High Desert Outpost (`Samples/Showcase`, first in the launcher): a derelict fuel stop in a rocky
@@ -94,6 +114,9 @@ projects, the template and scenes or projects without the value get.
 | Contact shadows | drawn at High (12 steps) and Ultra (16) | off in every preset | Graphics Quality Custom, Contact Shadows 12 (or 16) |
 | A Custom quality saved before contact shadows existed (a development build of wave 7) | read High's 12 steps | reads 0 steps | Graphics Quality Custom, Contact Shadows 12 |
 | The cascades' near end | follows any near object above 1% of the view at once | waits 0.5 s (0.12 s moving) below 10% of the view; transparent surfaces and narrow views at once | nothing to keep: settled views are unchanged |
+| **Platform (S0.8)** | | | |
+| `Window::GetNativeWindow` | The `void*` the Vulkan device made its surface from | Gone | A `Window` of your own drops its override; code that needed the OS window uses `GetPlatformHandle`, code that presents through Vulkan `GetVulkanPresentation` |
+| `Window::Create` when no window can be opened | Aborted (`ST_CORE_VERIFY`) | Returns null, with the reason logged | Check the result |
 
 ## Known issues
 
@@ -104,3 +127,9 @@ projects, the template and scenes or projects without the value get.
 - With contact shadows off, a thin object's shadow near the camera (a 5 cm plate on the floor) stays solid at High, but
   its edge shows the shadow map's texel steps, as Medium's did in 0.7.0. Graphics Quality Custom with Contact Shadows 12
   smooths it again, at the cost of shimmer in motion.
+
+**Platform (S0.6).**
+
+- On the reference machine (NVIDIA RTX 5090, driver 621.1), vsync does not pace windows in windowed mode: FIFO presents
+  without waiting, so a windowed editor or game runs as fast as it can unless a frame-rate cap is set. The cause is a
+  driver or system setting, not confirmed yet. Borderless and fullscreen windows were not measured.

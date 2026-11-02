@@ -47,16 +47,16 @@ jobs:
             config: release
             cache: ccache
             key: macos-release
-          # A game without the audio and physics modules (Docs/DeveloperGuide.md, "Optional modules"): no editor, and no
-          # package tests (they build games of every module).
-          - name: Linux (no Audio, no Physics)
+          # A game without the audio and physics modules and without a window backend (Docs/DeveloperGuide.md, "Optional
+          # modules", "Platform seams"): no editor, and no package tests (they build games of every module).
+          - name: Linux (no Audio, no Physics, no GLFW)
             os: ubuntu-24.04
             preset: linux
             config: release
             cache: ccache
             # Not prefixed by the Linux job's key: restoring by prefix must not cross between the two configurations.
             key: linux-without-modules-release
-            options: -DSTRATA_WITH_AUDIO=OFF -DSTRATA_WITH_PHYSICS=OFF -DSTRATA_BUILD_EDITOR=OFF
+            options: -DSTRATA_WITH_AUDIO=OFF -DSTRATA_WITH_PHYSICS=OFF -DSTRATA_WITH_GLFW=OFF -DSTRATA_BUILD_EDITOR=OFF
             exclude: package
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120

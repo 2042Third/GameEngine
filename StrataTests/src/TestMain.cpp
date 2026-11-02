@@ -14,6 +14,7 @@
 #include "Renderer/GPUTestUtils.h"
 #include "Runtime/PerfLogReader.h"
 #include "Strata/Asset/AssetImporter.h"
+#include "Strata/Core/Application.h"
 #include "Strata/Core/BackgroundLogSink.h"
 #include "Strata/Core/CommandLine.h"
 #include "Strata/Core/CrashGuard.h"
@@ -26,15 +27,19 @@
 #include "Strata/Core/Process.h"
 #include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Core/StringUtils.h"
+#include "Strata/Core/Window.h"
 #include "Strata/Engine/BuiltinModules.h"
+#include "Strata/ImGui/ImGuiModule.h"
 #include "Strata/Project/GameManifest.h"
 #include "Strata/Renderer/GraphicsDevice.h"
+#include "Strata/Renderer/GraphicsModule.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scripting/ScriptEngine.h"
 #include "Strata/Scripting/ScriptModule.h"
 #include "Strata/Scripting/ScriptingComponents.h"
+#include "StubWindow.h"
 #include "TestHelpers.h"
 #include "World/WorldDriveGame.h"
 #include "World/WorldDriveProcess.h"
@@ -329,6 +334,54 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 			std::printf("No graphics device\n");
 		std::fflush(stdout);
 		return device ? 0 : 1;
+	}
+	if (mode == "open-window")
+	{
+		// Opens a hidden window through the platform's window backend and says whether it could: a crash or an abort, not
+		// "No window", is the failure (Core.WindowBackend runs it without a display).
+		Strata::WindowSpecification specification;
+		specification.Title = "StrataTests.Helper";
+		specification.Width = 320;
+		specification.Height = 200;
+		specification.Visible = false;
+		const Strata::Scope<Strata::Window> window = Strata::Window::Create(specification);
+		std::printf("%s\n", window ? "Window opened" : "No window");
+		std::fflush(stdout);
+		return 0;
+	}
+	if (mode == "stub-window-graphics" || mode == "window-graphics")
+	{
+		// [--imgui]: an application with the Graphics module (and ImGui's after it) on a stand-in window, which cannot present,
+		// or (window-graphics) on a hidden window of the platform's backend, which presents: says how many of its 10 frames
+		// ran, whether its device can present and the device's errors, and ends with the application's exit code. Its own
+		// process: an application's Graphics module initializes the process-wide renderer.
+		Strata::Log::SetLevel(Strata::LogLevel::Info); // The device logs at info level how it presents
+		Strata::ApplicationSpecification specification;
+		specification.Name = "StubWindowGraphics";
+		specification.Headless = false;
+		if (mode == "stub-window-graphics")
+			specification.WindowFactory = [](const Strata::WindowSpecification&) -> Strata::Scope<Strata::Window> { return Strata::CreateScope<Strata::Tests::StubWindow>(); };
+		specification.Window.Width = 320;
+		specification.Window.Height = 200;
+		specification.Window.Visible = false;
+		specification.Modules = { Strata::GraphicsModule::Factory({}) };
+		if (argc > 2 && std::string_view(argv[2]) == "--imgui")
+			specification.Modules.push_back(Strata::ImGuiModule::Factory({}));
+		specification.MaxFrames = 10;
+		specification.Jobs.WorkerThreadCount = 1;
+		specification.Jobs.IOThreadCount = 1;
+		Strata::Application application(specification);
+		application.Run();
+		const Strata::GraphicsModule* graphics = application.GetModules().Find<Strata::GraphicsModule>();
+		const Strata::GraphicsDevice* device = graphics ? graphics->GetDevice() : nullptr;
+		if (device)
+			std::printf("Frames: %llu, can present: %s, errors: %u\n", static_cast<unsigned long long>(application.GetFrameCount()),
+				device->CanPresent() ? "yes" : "no", device->GetErrorCount());
+		else
+			std::printf("Frames: %llu, no device\n", static_cast<unsigned long long>(application.GetFrameCount()));
+		std::fflush(stdout);
+		Strata::Log::Flush();
+		return application.GetExitCode();
 	}
 	if (mode == "echo")
 	{

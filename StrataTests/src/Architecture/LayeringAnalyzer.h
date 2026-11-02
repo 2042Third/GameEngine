@@ -47,14 +47,26 @@ namespace Strata::Tests::Layering
 		std::vector<std::string> MayNotIncludeExternal;
 	};
 
+	// Third-party and system headers only some files may include, whatever their layer (Layers.json "ExternalOwners"): an
+	// include whose path, resolved from the source root as MayNotIncludeExternal's prefixes are matched, starts with one of
+	// Prefixes ignoring ASCII case (Windows' file systems ignore it: <windows.h> is <Windows.h>), from a file that none of
+	// Paths matches.
+	struct ExternalOwner
+	{
+		std::vector<std::string> Prefixes;
+		std::vector<std::string> Paths; // Globs relative to the source root
+	};
+
 	struct LayerTable
 	{
 		std::vector<Layer> Layers; // Bottom up
 		size_t MaxAllowlistEntries = 0;
+		std::vector<ExternalOwner> ExternalOwners;
 	};
 
 	// Reads a Layers.json document. Returns false (with the problems) for a malformed table, a duplicate layer name, a
-	// layer without paths, or an allowed layer that is not listed below the one that includes it.
+	// layer without paths, an allowed layer that is not listed below the one that includes it, or an ExternalOwners entry
+	// without prefixes or paths, or whose prefix another entry's prefix also matches (each include has one owner).
 	bool ParseLayerTable(const nlohmann::json& json, LayerTable& outTable, std::vector<std::string>& outErrors);
 
 	struct AllowlistEntry
@@ -80,6 +92,8 @@ namespace Strata::Tests::Layering
 		std::string FileLayer;
 		std::string HeaderLayer;
 		bool External = false;
+		// External headers with owners: the Paths that may include them (empty for a layer's MayNotIncludeExternal)
+		std::vector<std::string> Owners;
 	};
 
 	struct LayeringReport
@@ -94,12 +108,14 @@ namespace Strata::Tests::Layering
 	// Checks every include of `files` (path relative to the source root -> contents). Includes resolve like the
 	// preprocessor's: a quoted one next to the including file first, then from the source root; an angle-bracket one from
 	// the source root only. Includes of files outside the set are still checked when a layer's paths match them (generated
-	// headers); other targets', standard and third-party headers are checked only against the including layer's
-	// MayNotIncludeExternal prefixes.
+	// headers); other targets', standard and third-party headers are checked against the table's ExternalOwners first (a
+	// header with an owner only from the owner's paths), then against the including layer's MayNotIncludeExternal prefixes
+	// (an owned header in its owner's folder still meets its layer's prefixes).
 	LayeringReport CheckLayering(const LayerTable& table, const std::map<std::string, std::string>& files, const std::vector<AllowlistEntry>& allowlist);
 
-	// "<file>(<line>): includes <header>, but layer <A> may not include layer <B>", or for a third-party header "..., but layer
-	// <A> may not include third-party headers <prefix>*"
+	// "<file>(<line>): includes <header>, but layer <A> may not include layer <B>", for a third-party header "..., but layer
+	// <A> may not include third-party headers <prefix>*", or for a header with owners "..., but only <paths> may include
+	// <prefix>*"
 	std::string Describe(const Violation& violation);
 
 }

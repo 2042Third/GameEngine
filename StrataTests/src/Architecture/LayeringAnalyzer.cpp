@@ -178,6 +178,29 @@ namespace Strata::Tests::Layering
 			return std::any_of(patterns.begin(), patterns.end(), [&](const std::string& pattern) { return MatchesGlob(pattern, path); });
 		}
 
+		// ASCII case only: include paths are ASCII, and Windows' file systems find <windows.h> as <Windows.h>.
+		bool StartsWithIgnoringCase(std::string_view text, std::string_view prefix)
+		{
+			return text.size() >= prefix.size() && StringUtils::EqualsIgnoreCase(text.substr(0, prefix.size()), prefix);
+		}
+
+		// The owner of an external header and the prefix of it that matched, or null: ParseLayerTable makes it unique.
+		const ExternalOwner* FindExternalOwner(const LayerTable& table, std::string_view header, std::string& outPrefix)
+		{
+			for (const ExternalOwner& owner : table.ExternalOwners)
+			{
+				for (const std::string& prefix : owner.Prefixes)
+				{
+					if (StartsWithIgnoringCase(header, prefix))
+					{
+						outPrefix = prefix;
+						return &owner;
+					}
+				}
+			}
+			return nullptr;
+		}
+
 		// The layers whose paths hold `path`.
 		std::vector<const Layer*> FindLayers(const LayerTable& table, std::string_view path)
 		{
@@ -346,6 +369,53 @@ namespace Strata::Tests::Layering
 				outErrors.push_back(named + " is listed twice");
 			outTable.Layers.push_back(std::move(layer));
 		}
+
+		const auto owners = json.find("ExternalOwners");
+		if (owners != json.end())
+		{
+			if (!owners->is_array())
+			{
+				outErrors.push_back("ExternalOwners must be an array of objects with 'Prefixes' and 'Paths'");
+			}
+			else
+			{
+				for (size_t index = 0; index < owners->size(); index++)
+				{
+					const nlohmann::json& ownerJson = (*owners)[index];
+					const std::string context = fmt::format("ExternalOwners entry {}", index);
+					ExternalOwner owner;
+					const bool valid = ownerJson.is_object() && ReadStringArray(ownerJson, "Prefixes", owner.Prefixes, context, outErrors)
+						&& ReadStringArray(ownerJson, "Paths", owner.Paths, context, outErrors);
+					if (!valid || owner.Prefixes.empty() || owner.Paths.empty())
+					{
+						outErrors.push_back(fmt::format("{} needs 'Prefixes' and 'Paths'", context));
+						continue;
+					}
+					outTable.ExternalOwners.push_back(std::move(owner));
+				}
+			}
+		}
+		// The owner of an include must be unique: no prefix may equal or start another, in the same entry or another.
+		std::vector<const std::string*> prefixes;
+		for (const ExternalOwner& owner : outTable.ExternalOwners)
+		{
+			for (const std::string& prefix : owner.Prefixes)
+				prefixes.push_back(&prefix);
+		}
+		for (size_t first = 0; first < prefixes.size(); first++)
+		{
+			for (size_t second = first + 1; second < prefixes.size(); second++)
+			{
+				const std::string& a = *prefixes[first];
+				const std::string& b = *prefixes[second];
+				if (StringUtils::EqualsIgnoreCase(a, b))
+					outErrors.push_back(fmt::format("ExternalOwners: the prefix '{}' is listed twice", b));
+				else if (StartsWithIgnoringCase(a, b))
+					outErrors.push_back(fmt::format("ExternalOwners: the prefix '{}' starts with '{}'", a, b));
+				else if (StartsWithIgnoringCase(b, a))
+					outErrors.push_back(fmt::format("ExternalOwners: the prefix '{}' starts with '{}'", b, a));
+			}
+		}
 		return outErrors.size() == errorCount;
 	}
 
@@ -455,14 +525,27 @@ namespace Strata::Tests::Layering
 				Violation violation;
 				if (!headerLayer)
 				{
-					// Another target's, a standard or a third-party header: forbidden only by the layer's prefixes.
+					// Another target's, a standard or a third-party header: forbidden outside its owner's folders, then by the
+					// layer's prefixes.
 					const std::string external = fromRoot ? *fromRoot : include.Path;
-					const auto prefix = std::find_if(from.MayNotIncludeExternal.begin(), from.MayNotIncludeExternal.end(),
-						[&external](const std::string& forbidden) { return external.starts_with(forbidden); });
-					if (prefix == from.MayNotIncludeExternal.end())
-						continue;
-					report.CheckedIncludes++;
-					violation = Violation { path, include.Line, external, from.Name, *prefix, true };
+					std::string ownedPrefix;
+					const ExternalOwner* owner = FindExternalOwner(table, external, ownedPrefix);
+					if (owner)
+						report.CheckedIncludes++;
+					if (owner && !MatchesAny(owner->Paths, path))
+					{
+						violation = Violation { path, include.Line, external, from.Name, ownedPrefix, true, owner->Paths };
+					}
+					else
+					{
+						const auto prefix = std::find_if(from.MayNotIncludeExternal.begin(), from.MayNotIncludeExternal.end(),
+							[&external](const std::string& forbidden) { return external.starts_with(forbidden); });
+						if (prefix == from.MayNotIncludeExternal.end())
+							continue;
+						if (!owner)
+							report.CheckedIncludes++;
+						violation = Violation { path, include.Line, external, from.Name, *prefix, true, {} };
+					}
 				}
 				else
 				{
@@ -471,7 +554,7 @@ namespace Strata::Tests::Layering
 						|| std::find(from.MayInclude.begin(), from.MayInclude.end(), headerLayer->Name) != from.MayInclude.end();
 					if (allowed)
 						continue;
-					violation = Violation { path, include.Line, header, from.Name, headerLayer->Name, false };
+					violation = Violation { path, include.Line, header, from.Name, headerLayer->Name, false, {} };
 				}
 				auto entry = allowlistUse.find(std::pair(path, violation.Header));
 				if (entry != allowlistUse.end())
@@ -496,6 +579,14 @@ namespace Strata::Tests::Layering
 
 	std::string Describe(const Violation& violation)
 	{
+		if (violation.External && !violation.Owners.empty())
+		{
+			std::string owners;
+			for (const std::string& owner : violation.Owners)
+				owners += (owners.empty() ? "" : " and ") + owner;
+			return fmt::format("{}({}): includes {}, but only {} may include {}*", violation.File, violation.Line, violation.Header, owners,
+				violation.HeaderLayer);
+		}
 		if (violation.External)
 		{
 			return fmt::format("{}({}): includes {}, but layer {} may not include third-party headers {}*", violation.File, violation.Line, violation.Header,
