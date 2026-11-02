@@ -50,6 +50,15 @@ to find a page or a field), the selected page on the right:
   at 120, so higher values change nothing. Changes apply to the running game at once. Character controllers and
   kinematic bodies (moving platforms, doors) never reuse contacts, so what they carry or push always meets them where
   they are.
+- **Timing** (under Physics): **Fixed Rate** is how many fixed steps the game runs per second, whatever its frame rate:
+  physics, character controllers, scripts' fixed updates and root motion advance at it. **Scene** (the default) keeps
+  each scene's own **Fixed Timestep** (60 steps per second unless you changed it in the Inspector's scene settings); 30,
+  60, 120 or 240 sets the rate of every scene and of the exported game. With a rate, a frame catches up at most 2/15 of a
+  second of steps (8 at 60, 32 at 240) and a longer delay is dropped. The physics costs grow with the rate: 240 runs four
+  times the steps of 60. At 30 contacts are soft: stiffness can reach only 15 instead of 30, so stacks sag and settle more
+  slowly. A higher rate halves the small step-to-step stutter a fast character shows on a high refresh rate display, but
+  does not remove it. While a rate is set, the Inspector shows the scene's Fixed Timestep and Max Steps per Frame greyed
+  out, and "Fixed rate: the project's" with a link to this page.
 - **Input Actions** (under Input): the game's named controls, which scripts read by name and players can rebind. Actions
   sit in maps (a set the game turns on and off together, such as Gameplay or Vehicle): **Add Map** adds one, and the
   selected map's name, whether it works when the game starts, and the bin to remove it are below the list. **Add Action**

@@ -37,6 +37,7 @@
 #include <Strata/Scene/PrefabInstances.h>
 #include <Strata/Scene/PrefabOverrides.h>
 #include <Strata/Scene/ProjectCollisionLayers.h>
+#include <Strata/Scene/ProjectSceneTiming.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scripting/ScriptSystem.h>
 #include <Strata/Scripting/ScriptingComponents.h>
@@ -252,13 +253,34 @@ namespace Strata
 			return s_Header.c_str();
 		}
 
-		// The physics section's summary: the gravity's strength and the fixed steps per second ("Gravity 9.81 m/s² · 60 steps/s").
-		std::string DescribePhysics(const SceneSettings& settings)
+		// The physics section's summary: the gravity's strength and the fixed steps per second ("Gravity 9.81 m/s² · 60 steps/s"),
+		// the project's when it sets the rate ("120 steps/s (project)").
+		std::string DescribePhysics(const SceneSettings& settings, uint32_t projectRate)
 		{
 			const float gravity = glm::length(settings.Gravity);
 			const std::string strength = gravity > 0.0f ? fmt::format("Gravity {:.3g} m/s\xC2\xB2", gravity) : std::string("No gravity");
+			if (projectRate > 0)
+				return fmt::format("{} \xC2\xB7 {} steps/s (project)", strength, projectRate);
 			const float stepsPerSecond = settings.FixedTimestep > 0.0f ? 1.0f / settings.FixedTimestep : 0.0f;
 			return fmt::format("{} \xC2\xB7 {:.4g} steps/s", strength, stepsPerSecond);
+		}
+
+		// Why the scene's step rows change nothing while the project sets the rate; empty when they apply.
+		std::string DescribeStepInactiveReason(uint32_t projectRate)
+		{
+			if (projectRate == 0)
+				return {};
+			return fmt::format("The project's Fixed Rate (Project Settings > Physics > Timing: {} steps/s) overrides it; it applies when the Fixed Rate "
+				"is Scene", projectRate);
+		}
+
+		// The fixed rate link's text: the project's rate, or the scene's own from its step.
+		std::string DescribeFixedRate(const SceneSettings& settings, uint32_t projectRate)
+		{
+			if (projectRate > 0)
+				return fmt::format("Fixed rate: the project's, {} steps/s", projectRate);
+			const float stepsPerSecond = settings.FixedTimestep > 0.0f ? 1.0f / settings.FixedTimestep : 60.0f;
+			return fmt::format("Fixed rate: the scene's, {:.4g} steps/s", stepsPerSecond);
 		}
 
 		// The sky section's summary: where the sky's light comes from.
@@ -1291,8 +1313,13 @@ namespace Strata
 		// The sections start closed, their headers summing up what they hold: their rows are live widgets, which cost frame
 		// time while they are drawn, and they are opened to be edited (each keeps its state while the editor runs).
 		SceneSettings shown = m_SettingsDraft.value_or(scene.GetSettings());
-		if (!m_PhysicsSummary || m_PhysicsSummary->Gravity != shown.Gravity || m_PhysicsSummary->FixedTimestep != shown.FixedTimestep)
-			m_PhysicsSummary = PhysicsSummary { shown.Gravity, shown.FixedTimestep, DescribePhysics(shown) };
+		const uint32_t projectRate = scene.GetProjectFixedRate();
+		if (!m_PhysicsSummary || m_PhysicsSummary->Gravity != shown.Gravity || m_PhysicsSummary->FixedTimestep != shown.FixedTimestep
+			|| m_PhysicsSummary->ProjectRate != projectRate)
+		{
+			m_PhysicsSummary = PhysicsSummary { shown.Gravity, shown.FixedTimestep, projectRate, DescribePhysics(shown, projectRate),
+				DescribeStepInactiveReason(projectRate), DescribeFixedRate(shown, projectRate) };
+		}
 		if (!m_StreamingSummary || m_StreamingSummary->MaxEntitiesInstantiatedPerFrame != shown.MaxEntitiesInstantiatedPerFrame
 			|| m_StreamingSummary->MaxEntitiesDestroyedPerFrame != shown.MaxEntitiesDestroyedPerFrame)
 		{
@@ -1302,14 +1329,21 @@ namespace Strata
 		const SceneSettings defaults;
 		bool changed = false;
 		bool finished = false;
-		auto draw = [&](const SceneSettingRow& row, PropertyValue value, const PropertyValue& fallback, std::string_view zeroLabel, auto&& apply)
+		// A row with an inactive reason shows its value disabled, as component properties with one do: changing it would change
+		// nothing now (its label says why).
+		auto draw = [&](const SceneSettingRow& row, PropertyValue value, const PropertyValue& fallback, std::string_view zeroLabel, std::string_view inactiveReason,
+			auto&& apply)
 		{
-			UI::PropertyLabel(row.Property.DisplayName, row.Property.Tooltip, row.ProbeKey);
+			UI::PropertyLabelOptions labelOptions;
+			labelOptions.InactiveReason = inactiveReason;
+			UI::PropertyLabel(row.Property.DisplayName, row.Property.Tooltip, row.ProbeKey, labelOptions);
 			PropertyWidgetOptions options;
 			options.DefaultValue = &fallback;
 			options.ProbeKey = row.ProbeKey;
 			options.ZeroLabel = zeroLabel;
+			ImGui::BeginDisabled(!inactiveReason.empty());
 			const PropertyEditResult result = DrawPropertyWidget(row.Property, value, scene, options);
+			ImGui::EndDisabled();
 			if (result.Changed)
 				apply(value);
 			changed |= result.Changed;
@@ -1319,35 +1353,40 @@ namespace Strata
 		{
 			if (UI::BeginPropertyTable("Settings"))
 			{
-				draw(properties.Gravity, shown.Gravity, PropertyValue(defaults.Gravity), {}, [&](const PropertyValue& value) { shown.Gravity = std::get<glm::vec3>(value); });
-				draw(properties.FixedTimestep, shown.FixedTimestep, PropertyValue(defaults.FixedTimestep), {},
+				draw(properties.Gravity, shown.Gravity, PropertyValue(defaults.Gravity), {}, {},
+					[&](const PropertyValue& value) { shown.Gravity = std::get<glm::vec3>(value); });
+				// The project's fixed rate, when it sets one, overrides the scene's step and its cap.
+				const std::string_view stepInactive = m_PhysicsSummary->InactiveReason;
+				draw(properties.FixedTimestep, shown.FixedTimestep, PropertyValue(defaults.FixedTimestep), {}, stepInactive,
 					[&](const PropertyValue& value) { shown.FixedTimestep = std::get<float>(value); });
-				draw(properties.MaxFixedSteps, shown.MaxFixedStepsPerFrame, PropertyValue(defaults.MaxFixedStepsPerFrame), {},
+				draw(properties.MaxFixedSteps, shown.MaxFixedStepsPerFrame, PropertyValue(defaults.MaxFixedStepsPerFrame), {}, stepInactive,
 					[&](const PropertyValue& value) { shown.MaxFixedStepsPerFrame = std::get<uint32_t>(value); });
 				// Capacities take effect when a physics world is created (the next play start); 0, the default, sizes them from the
 				// scene (shown as "Auto"). A typed value is not clamped by the field, and scene.setSettings refuses one over the
 				// limit: it becomes the limit.
 				PhysicsCapacitySettings& capacity = shown.PhysicsCapacity;
-				draw(properties.MaxBodies, capacity.MaxBodies, PropertyValue(defaults.PhysicsCapacity.MaxBodies), c_AutomaticCapacity, [&](const PropertyValue& value)
+				draw(properties.MaxBodies, capacity.MaxBodies, PropertyValue(defaults.PhysicsCapacity.MaxBodies), c_AutomaticCapacity, {}, [&](const PropertyValue& value)
 					{ capacity.MaxBodies = std::min(std::get<uint32_t>(value), PhysicsCapacitySettings::c_MaxBodiesLimit); });
 				draw(properties.MaxContactConstraints, capacity.MaxContactConstraints, PropertyValue(defaults.PhysicsCapacity.MaxContactConstraints), c_AutomaticCapacity,
-					[&](const PropertyValue& value)
+					{}, [&](const PropertyValue& value)
 					{ capacity.MaxContactConstraints = std::min(std::get<uint32_t>(value), PhysicsCapacitySettings::c_MaxContactConstraintsLimit); });
 				UI::EndPropertyTable();
 			}
 		}
-		// The collision layers the scene runs with are the project's, edited in Project Settings, and so is its quality.
+		// The collision layers the scene runs with are the project's, edited in Project Settings, and so are its fixed rate (when
+		// the project sets one) and its quality.
 		DrawCollisionLayersLink(panelContext);
+		DrawFixedRateLink(panelContext);
 		DrawGraphicsQualityLink(panelContext);
 		if (UI::SectionHeader("Inspector.Streaming", GetStreamingHeader(), ImGuiTreeNodeFlags_None, m_StreamingSummary->Text))
 		{
 			if (UI::BeginPropertyTable("StreamingSettings"))
 			{
 				// A typed value is not clamped by the field, and scene.setSettings refuses one out of range: it is clamped here.
-				draw(properties.MaxEntitiesInstantiated, shown.MaxEntitiesInstantiatedPerFrame, PropertyValue(defaults.MaxEntitiesInstantiatedPerFrame), {},
+				draw(properties.MaxEntitiesInstantiated, shown.MaxEntitiesInstantiatedPerFrame, PropertyValue(defaults.MaxEntitiesInstantiatedPerFrame), {}, {},
 					[&](const PropertyValue& value)
 					{ shown.MaxEntitiesInstantiatedPerFrame = std::clamp(std::get<uint32_t>(value), 1u, SceneSettings::c_MaxEntitiesInstantiatedLimit); });
-				draw(properties.MaxEntitiesDestroyed, shown.MaxEntitiesDestroyedPerFrame, PropertyValue(defaults.MaxEntitiesDestroyedPerFrame), {},
+				draw(properties.MaxEntitiesDestroyed, shown.MaxEntitiesDestroyedPerFrame, PropertyValue(defaults.MaxEntitiesDestroyedPerFrame), {}, {},
 					[&](const PropertyValue& value)
 					{ shown.MaxEntitiesDestroyedPerFrame = std::clamp(std::get<uint32_t>(value), 1u, SceneSettings::c_MaxEntitiesDestroyedLimit); });
 				UI::EndPropertyTable();
@@ -1385,6 +1424,18 @@ namespace Strata
 		{
 			panelContext.Shell->ShowProjectSettings(ProjectCollisionLayers::c_SectionId);
 		}
+	}
+
+	void InspectorPanel::DrawFixedRateLink(EditorPanelContext& panelContext)
+	{
+		// DrawSceneSettings formatted the text this frame, from the rate the scene runs at.
+		const std::string& text = m_PhysicsSummary->RateText;
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextUnformatted(text.c_str());
+		UI::ItemProbe::Record("Inspector.FixedRate", true, 0, text);
+		ImGui::SameLine();
+		if (UI::LinkButton("Inspector.FixedRate.Open", "Project Settings", Icons::ExternalLink, "Choose the project's fixed rate") && panelContext.Shell)
+			panelContext.Shell->ShowProjectSettings(ProjectSceneTiming::c_SectionId);
 	}
 
 	void InspectorPanel::DrawSunShadowQuality(EditorPanelContext& panelContext, std::span<const Entity> entities)

@@ -904,8 +904,9 @@ Open items and deferrals later waves own:
   chords, and mouse motion and scroll as action sources; binding names that follow the keyboard layout in games
   (`Window::GetLayoutKey` is out of scripts' reach); scripts reading the game's title and version; moving the Physics
   Playground, the Open World and Tetris onto actions, and a rebinding row in the Third-Person Adventure's Settings menu;
-  copying settings sections between projects, rebinding editor shortcuts and theme variants; the fixed timestep and
-  gravity as project settings (they change every scene's behaviour: the owner's choice). Opening a scene clears the undo
+  copying settings sections between projects, rebinding editor shortcuts and theme variants; gravity as a project
+  setting (it changes every scene's behaviour: the owner's choice; the fixed rate is the project's `Scene.Timing` since
+  0.8.0). Opening a scene clears the undo
   history, the project's steps with it (the project file was written at each step, so nothing is lost).
   `Platform.DockIcon` needs a window server, so it runs on the Mac only (`StrataTests.DockIcon`, label `gpu`) and CI
   never runs it; no Linux desktop has listed an exported game's desktop entry yet (CI's Linux jobs check the file).

@@ -432,8 +432,21 @@ namespace Strata
 		// Fixed steps run since OnRuntimeStart, stepped (Step) or due on the clock: the game's own time base, which tools
 		// that must be exact (play.step, simulated input) count in instead of frames.
 		uint64_t GetFixedStepCount() const { return m_FixedSteps; }
-		// The simulation time of one fixed step: SceneSettings::FixedTimestep, or 1/60 s when that is not positive.
-		float GetFixedTimestep() const { return m_Settings.FixedTimestep > 0.0f ? m_Settings.FixedTimestep : 1.0f / 60.0f; }
+		// The simulation time of one fixed step: the project's (Scene.Timing's FixedRate, taken by ApplyProjectTiming) when it
+		// sets one, else SceneSettings::FixedTimestep, or 1/60 s when that is not positive. Read the step here, never from
+		// GetSettings(): the project's rate wins over the scene's setting.
+		float GetFixedTimestep() const
+		{
+			if (m_ProjectFixedRate > 0)
+				return 1.0f / static_cast<float>(m_ProjectFixedRate);
+			return m_Settings.FixedTimestep > 0.0f ? m_Settings.FixedTimestep : 1.0f / 60.0f;
+		}
+		// The most fixed steps one update runs before it drops the backlog: at the project's rate the steps of 2/15 s
+		// (ProjectSceneTiming::GetMaxSteps), else SceneSettings::MaxFixedStepsPerFrame (at least 1). Read the cap here, never
+		// from GetSettings().
+		uint32_t GetMaxFixedSteps() const;
+		// Steps per second the project imposes (0: the scene's own FixedTimestep applies).
+		uint32_t GetProjectFixedRate() const { return m_ProjectFixedRate; }
 
 		// Simulation time since OnRuntimeStart (seconds) and number of runtime updates.
 		double GetTime() const { return m_Time; }
@@ -446,7 +459,7 @@ namespace Strata
 		void SetTimeScale(float timeScale) { m_TimeScale = std::max(0.0f, timeScale); }
 
 		// How an update that is behind runs its fixed steps. Without time dilation (the default, so that tests and tools step
-		// deterministically) it runs every step that is due, up to MaxFixedStepsPerFrame, and drops the rest of the backlog.
+		// deterministically) it runs every step that is due, up to GetMaxFixedSteps(), and drops the rest of the backlog.
 		// With it (what owners driven by the wall clock use: the editor's play mode, exported games), an update stops
 		// running catch-up steps once the steps it ran took longer, in wall time, than the time they simulated: a simulation
 		// that cannot keep up with real time slows down instead of spending ever longer frames catching up (a frame running
@@ -454,7 +467,7 @@ namespace Strata
 		void SetTimeDilation(bool enabled) { m_TimeDilation = enabled; }
 		bool IsTimeDilated() const { return m_TimeDilation; }
 		// Fixed steps whose time was dropped since the scene started running: skipped by time dilation, or beyond
-		// MaxFixedStepsPerFrame.
+		// GetMaxFixedSteps().
 		uint64_t GetDroppedFixedStepCount() const { return m_DroppedFixedSteps; }
 
 		// The running system of class T (registered with MakeSceneSystemDescriptor<T>), or null: not running, not created
@@ -593,6 +606,11 @@ namespace Strata
 		// hand-over (SceneAsset::TakePreparedScene and CreateScene, so every SceneLoader load before its preparation) and
 		// SceneLoadRequest::TakeScene call it, and the editor for every scene it adopts and after every change of the table.
 		bool ApplyProjectLayers();
+		// Makes the project's fixed rate (ProjectSceneTiming::Find) the scene's unless it came from that value already.
+		// Returns whether the rate the scene runs at changed; without a project (no IProjectSettings) nothing changes. Main
+		// thread: everywhere ApplyProjectLayers is called (the scene asset's hand-over, SceneLoadRequest::TakeScene, the
+		// editor's adoption of a scene and every change of the project's settings). Not saved; Copy keeps it.
+		bool ApplyProjectTiming();
 		// Whether the document stores layers (GetStoredPhysicsLayers) other than the project's table the working copy came from:
 		// a 0.5.0 scene whose layers the project's replaced. The editor warns of it once per scene and session.
 		bool DoStoredLayersDiffer() const { return m_StoredLayersDiffer; }
@@ -741,6 +759,8 @@ namespace Strata
 		std::optional<PhysicsLayerSettings> m_StoredPhysicsLayers;
 		uint64_t m_ProjectLayersVersion = 0; // The ProjectCollisionLayers table the working copy came from (0: none)
 		bool m_StoredLayersDiffer = false;
+		uint32_t m_ProjectFixedRate = 0;     // Steps per second of the project's Scene.Timing (0: the scene's own step)
+		uint64_t m_ProjectTimingVersion = 0; // The ProjectSceneTiming value the rate came from (0: none)
 
 		// Hierarchy links of the root list (the roots' HierarchyComponents link the rest).
 		entt::entity m_FirstRoot = entt::null;

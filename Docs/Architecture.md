@@ -368,9 +368,9 @@ to 32 layers and a symmetric matrix of which collide, everything by default), th
 `Scene.CollisionLayers` (`Scene/ProjectCollisionLayers`), of which each scene runs a working copy
 (`Scene::GetPhysicsLayers`). The copy is taken on the main thread when a scene is handed over (`Scene::ApplyProjectLayers`:
 the scene asset's hand-over, so every `SceneLoader` load before its preparation, `SceneLoadRequest::TakeScene`, the editor's
-adopted scenes and every change of the project's settings); the loader's worker never reads `IProjectSettings`, and a
-program without a project keeps what a 0.5.0 scene document stores. Scripts change the copy for as long as their scene
-runs; sub-scenes and world cells collide by their host's. `PhysicsSystem` gives its world that matrix, restricted by the
+adopted scenes, a project's opening and closing, and every change of the project's settings); the loader's worker never
+reads `IProjectSettings`, and a program without a project keeps what a 0.5.0 scene document stores. Scripts change the
+copy for as long as their scene runs; sub-scenes and world cells collide by their host's. `PhysicsSystem` gives its world that matrix, restricted by the
 default settings' (`GetDefaultSettings`), when it creates the world and before every step after it changed (the project's
 table applied again, scripts' `Physics::SetLayersCollide`, `PhysicsSystem::SetLayersCollide`;
 `PhysicsWorld::SetLayerCollisionMasks` gives the shapes
@@ -989,10 +989,10 @@ OnRuntimeStart(mode)   reset time, pause, steps and requests; create the systems
                        every OnRuntimeStart, then every OnRuntimeStarted (scripts' OnCreate: physics already runs)
 OnUpdateRuntime(dt)    paused without steps: only world transforms
                        dt = timestep * time scale (one fixed step while stepping)
-                       OnUpdate -> OnFixedUpdate x N (accumulator, at most MaxFixedStepsPerFrame = 8, backlog
-                       dropped; with time dilation catch-up steps stop once the update's steps took longer than
-                       they simulated) -> OnLateUpdate, each on the systems that take part in it -> flush
-                       deferred destruction -> world transforms
+                       OnUpdate -> OnFixedUpdate x N (accumulator, at most GetMaxFixedSteps(): MaxFixedStepsPerFrame,
+                       8, or 2/15 s at the project's rate; backlog dropped; with time dilation catch-up steps
+                       stop once the update's steps took longer than they simulated) -> OnLateUpdate, each on
+                       the systems that take part in it -> flush deferred destruction -> world transforms
 SetPaused(bool)        OnPausedChanged on every system; Step(n) runs n single fixed steps while paused
 OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reverse order, destruction flushed
 ```
@@ -1034,7 +1034,7 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   `GameRuntimeOptions::TimeDilation`) let a simulation that cannot keep up with real time slow down: an update stops its
   catch-up fixed steps once they took longer, in wall time, than the time they simulated, and drops the steps still due
   (`GetDroppedFixedStepCount`, also `PhysicsStats::DroppedSteps`). Otherwise a frame that runs eight expensive steps
-  makes the next one owe even more. Tests and tools keep the default, every due step up to `MaxFixedStepsPerFrame`;
+  makes the next one owe even more. Tests and tools keep the default, every due step up to `Scene::GetMaxFixedSteps()`;
   exported games' `--frames` and `--seconds` runs also limit each update's timestep to what those steps simulate
   (`GameRuntimeOptions::KeepEveryFixedStep`), so they drop no step and their scenes' clocks keep up with the steps.
 - `SceneSettings` holds gravity, the fixed timestep (1/60 s), `MaxFixedStepsPerFrame`, `MaxEntitiesInstantiatedPerFrame` (see
@@ -1044,7 +1044,9 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   `scene.setSettings` (one undo step); capacities apply when a world is created, at play start. The collision layers left
   the scene settings for the project's (`Scene.CollisionLayers`, above): a 0.5.0 scene's `"PhysicsLayers"` is still read
   (`Scene::GetStoredPhysicsLayers`), never written, and the editor migrates 0.5.0 projects' tables into the project when it
-  opens them (`Editor/ProjectMigration`).
+  opens them (`Editor/ProjectMigration`). The project's fixed rate (`Scene.Timing`'s `FixedRate`, taken at hand-over by
+  `Scene::ApplyProjectTiming` like the layers) overrides the step and its cap when it is not `Scene`: code reads them
+  through `Scene::GetFixedTimestep` and `GetMaxFixedSteps`, never from `SceneSettings` (DeveloperGuide, "Fixed rate").
 - **Scene assets are read once.** The scene loader (`SceneAsset::Deserialize`, on the loading worker) reads the
   document into a scene, which validates it, and keeps that *prepared scene* instead of the parsed JSON, which is dropped
   at once. `SceneAsset::TakePreparedScene` hands it over without a copy (the first call; the asset is spent afterwards,
@@ -4077,8 +4079,8 @@ the window and the renderer and paces at 60 frames per second; `--windowed` over
 window size is in screen coordinates, which the display's scale multiplies: 1280x720 is 1920x1080 pixels at 150%;
 `WindowSpecification::SizeInPixels`), so perf logs and screenshots compare across displays, `--frames N` or `--seconds S`
 (the frame by which the game played S seconds of game time in fixed steps, `GameRuntime::GetPlayedSeconds`, so that
-what it shows does not depend on the frame rate: such runs drop no step, a frame longer than its scene's
-`MaxFixedStepsPerFrame` steps playing only the time they simulate) with `--screenshot out.png` saves the last frame,
+what it shows does not depend on the frame rate: such runs drop no step, a frame longer than its scene's most steps per
+update, `Scene::GetMaxFixedSteps`, playing only the time they simulate) with `--screenshot out.png` saves the last frame,
 `--asset-budget-mb <n>` sets the GPU texture budget of the game's assets (the other budgets keep their defaults), and
 `--perf-log <csv>` writes a row for every frame, also headless (`Runtime/FramePerfLog`, a frame profiler listener, so
 writing costs the measured frame nothing): the frame's

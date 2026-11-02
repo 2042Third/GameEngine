@@ -1065,6 +1065,40 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK(label("Inspector.UICanvas.ReferenceResolution").Enabled);
 	}
 
+	TEST_CASE("The scene's step rows are inactive while the project sets the fixed rate")
+	{
+		AuthoringEditor editor({ ImVec2(1600.0f, 1400.0f), 1.0f });
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(CreateTemporaryDirectory("InspectorFixedRate") / "Game") }, { "name", "Game" } });
+		editor.Run("project.setSettings", { { "section", "Scene.Timing" }, { "value", { { "FixedRate", "120" } } } });
+		editor.Context().ClearSelection();
+		editor.Frames(2);
+		// The Physics section starts closed, its header summing it up.
+		CHECK(editor.ProbeText("Inspector.Physics") == "Gravity 9.81 m/s\xC2\xB2 \xC2\xB7 120 steps/s (project)");
+		CHECK(editor.ProbeText("Inspector.FixedRate") == "Fixed rate: the project's, 120 steps/s");
+		REQUIRE(editor.Click("Inspector.Physics"));
+		editor.Frames(1);
+		const std::string reason = "The project's Fixed Rate (Project Settings > Physics > Timing: 120 steps/s) overrides it; it applies when the Fixed Rate is Scene";
+		for (const char* row : { "Inspector.Scene.FixedTimestep", "Inspector.Scene.MaxFixedStepsPerFrame" })
+		{
+			INFO(row);
+			const std::optional<UI::ItemProbe::Item> inactive = UI::ItemProbe::Find(std::string(row) + ".Inactive");
+			REQUIRE(inactive.has_value());
+			CHECK(inactive->Text == reason);
+			CHECK_FALSE(UI::ItemProbe::Find(std::string(row) + ".Label")->Enabled);
+		}
+		// Gravity is the scene's whatever the rate.
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.Scene.Gravity.Inactive").has_value());
+
+		// At Scene the rows apply again, and the link names the scene's own rate.
+		editor.Run("project.setSettings", { { "section", "Scene.Timing" }, { "value", { { "FixedRate", "Scene" } } } });
+		editor.Frames(1);
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.Scene.FixedTimestep.Inactive").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.Scene.MaxFixedStepsPerFrame.Inactive").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.Scene.FixedTimestep.Label")->Enabled);
+		CHECK(editor.ProbeText("Inspector.Physics") == "Gravity 9.81 m/s\xC2\xB2 \xC2\xB7 60 steps/s");
+		CHECK(editor.ProbeText("Inspector.FixedRate") == "Fixed rate: the scene's, 60 steps/s");
+	}
+
 	TEST_CASE("Choosing Custom as TAA Preset starts from the look in effect in one undo step, and keeps a tuning")
 	{
 		AuthoringEditor editor({ ImVec2(1600.0f, 1600.0f), 1.0f });
