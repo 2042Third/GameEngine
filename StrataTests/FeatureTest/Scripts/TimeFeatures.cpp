@@ -56,6 +56,9 @@ public:
 	void OnLateUpdate(float deltaTime) override
 	{
 		Expect(deltaTime == Time::GetDeltaTime(), "OnLateUpdate receives the frame's delta time");
+		// How far between the last two steps' poses the frame draws (InterpolationFeatures checks the poses).
+		const float alpha = Time::GetStepAlpha();
+		Expect(alpha >= 0.0f && alpha <= 1.0f, "GetStepAlpha is a fraction");
 	}
 };
 

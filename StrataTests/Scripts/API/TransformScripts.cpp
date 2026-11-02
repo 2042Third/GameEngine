@@ -2,6 +2,7 @@
 
 #include "TestScripts.h"
 
+#include <cstddef>
 #include <limits>
 
 using namespace Strata;
@@ -55,4 +56,75 @@ ST_SCRIPT_CLASS(TransformAPI)
 {
 	ST_SCRIPT_FIELD(Checks);
 	ST_SCRIPT_FIELD(Failure);
+}
+
+// Interpolation (Time::GetStepAlpha, TransformComponent::GetDrawnPosition, GetDrawnRotation, ResetInterpolation): moves itself
+// in OnFixedUpdate, records in OnLateUpdate what it sees of its drawn pose (the test compares it with the scene's), resets its
+// interpolation when the test asks, and checks once what an older engine gives.
+class InterpolationProbe : public CheckingScript
+{
+public:
+	float Alpha = -1.0f;                        // Time::GetStepAlpha in the latest OnLateUpdate
+	glm::vec3 DrawnPosition = glm::vec3(0.0f);   // GetDrawnPosition there
+	glm::quat DrawnRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+	bool ResetRequested = false;                // The next OnLateUpdate resets the interpolation
+	bool ResetDone = false;
+
+	void OnFixedUpdate(float step) override
+	{
+		TransformComponent transform = GetTransform();
+		transform.SetTranslation(transform.GetTranslation() + glm::vec3(2.0f * step, 0.0f, 0.0f));
+		transform.SetRotation(glm::angleAxis(step, glm::vec3(0.0f, 1.0f, 0.0f)) * transform.GetRotation());
+	}
+
+	void OnLateUpdate(float) override
+	{
+		TransformComponent transform = GetTransform();
+		Alpha = Time::GetStepAlpha();
+		DrawnPosition = transform.GetDrawnPosition();
+		DrawnRotation = transform.GetDrawnRotation();
+		if (ResetRequested)
+		{
+			ResetRequested = false;
+			Expect(transform.ResetInterpolation(), "ResetInterpolation");
+			Expect(Near(transform.GetDrawnPosition(), transform.GetWorldPosition()), "a reset draws the world position");
+			ResetDone = true;
+		}
+		if (!m_OlderChecked)
+		{
+			m_OlderChecked = true;
+			StrataScriptHostAPI older = *Detail::GetHost();
+			older.StructSize = static_cast<uint32_t>(offsetof(StrataScriptHostAPI, GetStepAlpha));
+			CheckUnavailable(older, "an older engine");
+			StrataScriptHostAPI missing = *Detail::GetHost();
+			missing.GetStepAlpha = nullptr;
+			missing.GetDrawnTransform = nullptr;
+			missing.ResetInterpolation = nullptr;
+			CheckUnavailable(missing, "null entries");
+			Expect(!TransformComponent(Entity(0x5151)).ResetInterpolation(), "a missing entity cannot be reset");
+		}
+	}
+private:
+	// Without the functions: nothing interpolates, the drawn pose is the world pose, and nothing resets.
+	void CheckUnavailable(const StrataScriptHostAPI& host, const char* what)
+	{
+		const ScopedHost scoped(&host);
+		TransformComponent transform = GetTransform();
+		Expect(Time::GetStepAlpha() == 1.0f, what);
+		Expect(Near(transform.GetDrawnPosition(), transform.GetWorldPosition()) && Near(transform.GetDrawnRotation(), transform.GetWorldRotation()), what);
+		Expect(!transform.ResetInterpolation(), what);
+	}
+
+	bool m_OlderChecked = false;
+};
+
+ST_SCRIPT_CLASS(InterpolationProbe)
+{
+	ST_SCRIPT_FIELD(Checks);
+	ST_SCRIPT_FIELD(Failure);
+	ST_SCRIPT_FIELD(Alpha);
+	ST_SCRIPT_FIELD(DrawnPosition);
+	ST_SCRIPT_FIELD(DrawnRotation);
+	ST_SCRIPT_FIELD(ResetRequested);
+	ST_SCRIPT_FIELD(ResetDone);
 }

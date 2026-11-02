@@ -234,12 +234,14 @@ so mouse look reads `Input::GetMouseDelta()`. The map `UI` already holds the men
   	float Smoothing = 8.0f; // Higher follows faster
   	float Yaw = 0.0f;       // Degrees around the target; the Look action turns it
 
-  	void OnUpdate(float deltaTime) override
+  	// After the frame's fixed steps, following where the target is drawn (between its physics steps while the game
+  	// interpolates): a camera that follows the world position sees a moving body judder above the step rate.
+  	void OnLateUpdate(float deltaTime) override
   	{
   		if (!Target)
   			return;
   		Yaw -= Input::GetActionValue("Gameplay/Look").x * 120.0f * deltaTime;
-  		const glm::vec3 target = Target.GetTransform().GetWorldPosition() + glm::vec3(0.0f, 1.0f, 0.0f);
+  		const glm::vec3 target = Target.GetTransform().GetDrawnPosition() + glm::vec3(0.0f, 1.0f, 0.0f);
   		const float yaw = glm::radians(Yaw);
   		const glm::vec3 wanted = target + glm::vec3(std::sin(yaw) * Distance, Height, std::cos(yaw) * Distance);
   		TransformComponent transform = GetTransform();

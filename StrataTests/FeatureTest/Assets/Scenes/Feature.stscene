@@ -2267,6 +2267,40 @@
 			{
 				"Components": {
 					"Name": {
+						"Name": "Interpolation Features"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "InterpolationFeatures",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							40,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000090"
+			},
+			{
+				"Components": {
+					"Name": {
 						"Name": "Input Features"
 					},
 					"Script": {

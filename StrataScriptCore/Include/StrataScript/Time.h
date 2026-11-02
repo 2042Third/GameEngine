@@ -66,6 +66,14 @@ namespace Strata
 			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(GetRealTime);
 			return host ? host->GetRealTime(Detail::GetContext()) : 0.0;
 		}
+
+		// How far between the poses before and after the latest fixed steps this frame draws what they moved (0 to 1; 1 while
+		// nothing interpolates). Final in OnLateUpdate.
+		static float GetStepAlpha()
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(GetStepAlpha);
+			return host ? host->GetStepAlpha(Detail::GetContext()) : 1.0f;
+		}
 	};
 
 }

@@ -1783,7 +1783,11 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
   (`CharacterMove` to `PhysicsGetLayerIndex`) are appended to ABI version 1 after the Animator functions, then wave 4's
   world streaming functions (`WorldRequestCellsAround` to `WorldIsLayerEnabled`), then wave 6's input action functions
   (`InputIsActionDown` to `InputSaveBindings`, then the capture's `InputBeginBindingCapture` to
-  `InputCancelBindingCapture`), then wave 7's graphics options (`GraphicsGetOptionCount` to `GraphicsSaveOptions`).
+  `InputCancelBindingCapture`), then wave 7's graphics options (`GraphicsGetOptionCount` to `GraphicsSaveOptions`), then
+  wave 8's interpolation functions (`GetStepAlpha` to `ResetInterpolation`).
+- Drawn poses: `Time::GetStepAlpha`, `TransformComponent::GetDrawnPosition`, `GetDrawnRotation` (between the last two
+  fixed poses while the scene interpolates, else the world pose; read them in `OnLateUpdate` to follow a moving body)
+  and `ResetInterpolation` (after moving an entity far by setting its transform in `OnFixedUpdate`).
 - World streaming: `World::RequestCellsAround` (a `WorldCellRequest`, released with `Release`), `IsLoadedAround`,
   `SetLayerEnabled` and `IsLayerEnabled` (`StrataScript/World.h`) go through the scene service `IWorldStreaming` the
   World system offers in every running scene; in a scene that streams no world (`IWorldStreaming::IsStreaming` false)
