@@ -573,8 +573,8 @@ same time on the Mac (Apple M2 Max), the Windows reference machine still away. `
 
 **Wave 7 landed (2026-10-29); release 0.7.0 holds it.** The owner asked for the wave on 2026-10-26
 ("### Wave 7" below, with what each stream landed and what was open at the integration on 2026-10-28); its plan,
-reviewed specs and release notes are in `Docs/Plans/Wave7/` until it lands. Step 0 ran on the Windows reference
-machine, back with a replaced CPU, and landed on main before the wave's streams branch from its tip:
+reviewed specs and release notes are in `Docs/Plans/Wave7/`, kept while wave 8 builds on them. Step 0 ran on the
+Windows reference machine, back with a replaced CPU, and landed on main before the wave's streams branch from its tip:
 
 - The GPU suites ran on NVIDIA under the validation layer for the first time since wave 3: the atmosphere's
   environment cube, irradiance and prefiltered maps lost their earlier levels when made in a frame whose multiple
@@ -605,6 +605,30 @@ machine, back with a replaced CPU, and landed on main before the wave's streams 
   captures' atlas changed (shots with shadowed point and spot lights) and under the physical sky (the atmosphere's
   fix), their GPU busy time at a median ratio of 1.003. High at 3840x2160 costs the samples' scene cameras 0 to 0.52 ms
   of GPU time over Medium.
+
+**Wave 8 in progress (step 0 landed, 2026-11-02).** The owner asked for the wave on 2026-11-01 ("### Wave 8" below,
+with what each step 0 lane landed); its plan, reviewed specs, the orchestrator's rulings and the release notes that each
+landing adds to are in `Docs/Plans/Wave8/`. Step 0's lanes landed on main one by one, and the rendering streams branch
+from its tip:
+
+- The 0.7.0 baseline: every look-dev shot of 76f28a21's Release build, both sizes, all three anti-aliasing modes, 5
+  repeats and the live shots, is kept on the reference machine in `.worktrees/wave8-plan/lookdev/0.7.0`, its Medium
+  stills in `lookdev/0.7.0-medium`. `.worktrees/wave8-base` keeps that build for interleaved A/Bs (its 4K 84-set in
+  `lookdev/wave8-base-84`): on the reference machine's temporary memory costs are judged only that way, and no budget
+  changes.
+- The object store, damaged by the crash of 2026-10-28 (7 corrupt and 12 missing loose objects; history walks stopped at
+  f99f3a41), was repaired from a mirror of origin: `git fsck` is clean and every tracked file hashes equal to its index.
+- `AGENTS.md` made room for the streams: 37,663 of its 40,000 code points after step 0's lanes, and each stream adds
+  one digest bullet of at most 250.
+- Golden rule 1 now forbids only other folders of the machine (the owner, 2026-11-01): open-source projects are read as
+  much as helps, and their code is copied or ported only under a permissive license (MIT, BSD, Apache-2.0, zlib, Boost,
+  public domain or CC0), with its notice in `ThirdPartyNotices.md`'s "Code derived from other projects" and its source
+  named in the commit message; copyleft code is read for ideas only.
+- Left open by step 0: Slang's modules are not yet measured to cost what glslang's did, nor run on a Mac's GPU (open
+  items, "Shaders in Slang"); vsync does not pace windowed mode on the reference machine (open items, "Frame pacing");
+  an object that stays near the camera still re-fits the sun cascades once, and one under a tenth of the view waits up
+  to 0.5 s in a coarser cascade; without contact shadows the 5 cm plate's shadow edge shows the shadow map's texel
+  steps at High (wave 7's `sun-shadows` line).
 
 Open items and deferrals later waves own:
 
@@ -907,6 +931,9 @@ Open items and deferrals later waves own:
   for transparent surfaces; volumetric fog and light shafts, the atmosphere from altitude (wave 7 added aerial
   perspective); thickness maps, sheen, specular, iridescence and anisotropy, EXR import and area lights; shadows of a
   second directional light (the moon).
+- Medium's Checkerboard screen-space reflections are the one effect that needs TAA to look right (they leave their noise
+  to its history, as Strata 0.6.0's did): the named exception to the owner's direction in "Later", kept for Medium's
+  costs.
 - Spatial screen-space reflections (wave 7's `light-and-materials`, High and Ultra) are not always repeatable on the
   integration machine (RTX 5090, driver 617.42). `Tools/LookDev.py`'s `lookdev.mirror` at 3840x2160, captured again
   and again in one editor after the look-dev scene's debug views, comes out as one of two images (12-60% of the
@@ -1328,7 +1355,9 @@ within 1.15 times step 0's.
   - Landed: at 3840x2160 on High the samples' scene cameras and editor views have a median of 0.31-1.35 screen pixels
     per shadow texel, none above 4 (0.6.0: 2.2 at splits, 5.5-8.7 at near ends); the same capture twice gives the same
     pixels without TAA; the contact strip under the look-dev scene's 5 cm plate at 2.6 m gets at most half the sun on
-    92.5% of its points without anti-aliasing (a solid contact shadow); the penumbra's grain is 0.95% by the RMS of its
+    92.5% of its points without anti-aliasing (a solid contact shadow; since 0.8.0 contact shadows are off in every
+    preset and the fitted cascades give the strip, still solid at High, its edge showing the shadow map's texel steps,
+    about ten teeth at 3840x2160, as Medium's did in 0.7.0); the penumbra's grain is 0.95% by the RMS of its
     second difference (the integration's metric; the shadows audit's 9-pixel moving average reads 1.6% in every
     anti-aliasing mode, the profile of a physically narrow penumbra). Its cost is the wave's open item below.
   - Below the cut, not started and moved to "Later": sized point and spot lights with the same filter, up to 8
@@ -1462,12 +1491,113 @@ within 1.15 times step 0's.
     integrated branch's CI is the first build of the wave on Linux GCC, macOS Apple Clang with libc++ and the
     configuration without physics (the local lint ran Clang against libstdc++).
   - Smaller: morphological anti-aliasing keeps 0.88 of the texture detail (target 0.95); `Post4K` sits at its 0.25 ms
-    provisional target; contact shadows can leave 1-pixel fringes beside thin foliage; a face exactly parallel to the
-    sun gets a visibility of 0.5 (unseen: such faces get no direct sun); the Open World scene's captures with TAA differ
-    between repeats (also in 0.6.0's); the ambient occlusion debug view shows dashed streaks at High that the lit
-    image does not; the Graphics Quality page was checked by the UI harness, not yet by eye in an editor window.
+    provisional target; contact shadows' 1-pixel fringes beside thin foliage moved to "Later" with their replacement;
+    a face exactly parallel to the sun gets a visibility of 0.5 (unseen: such faces get no direct sun); the Open World
+    scene's captures with TAA differ between repeats (also in 0.6.0's); the ambient occlusion debug view shows dashed
+    streaks at High that the lit image does not; the Graphics Quality page was checked by the UI harness, not yet by
+    eye in an editor window.
 
-### Later (wave 8 and beyond)
+### Wave 8
+
+Asked for by the owner on 2026-11-01, after judging 0.7.0: "Make prioritization yourself, but showcase needs to land
+this wave, you can update the showcase later if there are more things", with fifteen items, and the same day Esoterica
+as the engine the animation system "should be based on". Eleven audits measured each item on 0.7.0 and planned the
+wave from their numbers: a ball passing the camera re-cut every sun cascade and sent half the receivers to a cascade 3
+to 4.5 times coarser for up to 354 ms; contact shadows shimmered from binary hits in a thin shell; the specular shading
+held up in stills, but screen-space reflections left a fixed screen door on metal at every quality; a plain unlock of
+shadowed lights left some light without a shadow in 28% to 57% of frames; a character moved on 60 Hz steps under a
+camera sliding every frame, a 29 pixel sawtooth; all 103 shaders went through a Slang spike with 553 of 554 GPU test
+cases passing, as 0.7.0's build does; two objects reference GLFW; the owner's three metal and wet shots already work on
+0.7.0 as highlights on blocks, with the right sun and materials. Plan: `Docs/Plans/Wave8/plan.md`.
+
+Wave 7 is the only measured capacity, and its integration was cut short at 99% of the owner's weekly usage, so this wave
+runs in tranches gated on usage. Tranche 1 is committed and ends with landing 1, after which main is releasable.
+Tranche 2 is intended. Tranche 3 is wave 9 unless usage remains. Each landing keeps a quarter of a week's usage, and no
+integration starts without it.
+
+**Step 0** ran on main first, in parallel lanes that landed one by one (2026-11-02):
+
+- Lane Render: contact shadows off in every Graphics Quality preset (the row stays for Custom; `ScreenShadows4KHigh`
+  went from 0.2335 to 0.1761 ms in three interleaved pairs against 0.7.0, Medium's unchanged). The sun cascades' fit
+  counts seconds, and its near end follows a near object only once it has stayed for 0.5 s (0.12 s while the camera or
+  the sun moves); receivers holding a tenth of the receiver pixels, the nearest transparent surface and narrow or
+  orthographic views move it at once, and every bound shrinks only after 0.5 s. The Physics Playground's ball, 6.85% of
+  the pixels at its spawn, pulled the near end from 11.31 to 0.84 m and sent half the receivers to a cascade 3.2 to 4.5
+  times coarser for 116 to 354 ms; it now leaves the layout alone at 60, 240 and 1000 frames per second. Captures and
+  thumbnails keep 0.7.0's fit rules.
+- Lane Editor: `scene.raycast`, `asset.place` and a box ghost where a prefab, model or mesh dragged from the Content
+  Browser will land; the editor's frame rate preferences (idle timeout with 0 for never, idle and background rates, a
+  cap while busy), with a frame pacer that waits on a high-resolution timer (a 120 Hz cap had run 20% slow); a pause in
+  the Performance panel that holds the frame breakdown still while the profiler keeps recording.
+- Lane Platform: the project's `Scene.Timing` section with `FixedRate` (30, 60, 120 or 240 steps a second, or each
+  scene's own); GLFW sealed behind `Window` by the layer table's `ExternalOwners`, with a build without it on CI; why
+  FIFO does not pace the editor: on the reference machine vsync paces no window in windowed mode, focused or not, a
+  driver or system setting not yet confirmed (open items).
+- Lane Slang landed within its box: every shader in Slang's HLSL syntax through slangc 2026.20, pinned by SHA-256 in a
+  per-user cache, with pictures that differ from 0.7.0's by rounding only; CI checks every module with spirv-val and
+  converts it to Metal, and Mesa's lavapipe passes 529 of 553 GPU cases with the new modules as with the old. Its
+  GPU-time gate got no reading within its noise rule (open items).
+- Last: the forward shader's indirect light split into a diffuse and a specular gather over shared inputs
+  (`Include/IndirectLight.slang`), so that `reflections` and `radiance-cascades` each change their own: the 4K look-dev
+  84-set is identical but for the two Open World TAA shots whose pictures differ between runs of one build; wave 8's
+  scene slots, GPU stages and debug views assigned; this entry.
+
+What every rendering stream keeps from wave 7: native resolution only, nothing that needs TAA to look right (Medium's
+Checkerboard reflections are the named exception), nothing that costs anything when off, the two draw paths and the
+shadow caches in agreement, and Medium at 0.6.0's costs. Wave 7 rejected screen-space global illumination for needing
+temporal accumulation; the cascades here accumulate nothing and keep no history buffer. Their input from the past is
+the previous frame's lit color, as screen-space reflections' is.
+
+**Tranche 1:**
+
+- **`showcase`: High Desert Outpost.** A derelict fuel stop in a rocky high-desert valley the morning after rain, made
+  through the editor from Poly Haven's CC0 scans and committed generators (no bus or oil tank exists in the sources),
+  72.2 MB of source assets in the 80 MB class. Six shots with a camera tour between them: a dawn vista, the side of a
+  weathered steel bus, an oil tank at low sun, the wet apron, the hut's interior, dusk to night. Three baked stations of
+  the sun on six probe entities, a first-person walk and a photo mode. It needs nothing from the streams: each has a
+  stated fallback and an adoption pass when it lands, and its graybox checks all six shots on main before the dressing
+  starts. `PerfGPU.Samples.Showcase.{High,Ultra}`, `showcase.*` look-dev shots, `StrataEditor.Showcase`.
+- **`reflections`: metal and wet ground.** At High and Ultra: a direction-aware edge fade, a resolve that cancels the
+  screen door, hits validated after the march, specular occlusion off screen-space hits, the misplaced probe patch,
+  landing alone before the showcase tunes its materials; then F0 from the IOR, the night sky's bands, 256-texel probe
+  slots. Proposed targets: under 1% noise in a sheet's reflection (3.5-5.0% today) and at most 1% flicker in motion.
+  Highlights lead R2 (the owner: "highlights are extremely important just like in a drawing, because they should be
+  cheap"): the sun's size in specular, lantern and fire highlights on metal and wet ground, and a source radius for
+  highlights only, each judged with no AA, FXAA and TAA. Below the cut: keyframed probe captures, hit-distance blur, a
+  wet-surface model, normal-map-aware filtering, anisotropy, SSR on clear coat.
+- **`physics-timing`: smooth at any frame rate.** Drawn transforms between the last two fixed poses, on in games and
+  editor Play, with the simulation untouched: roots blend and what hangs under them composes, so attachments stay on
+  their joints. Target: at most 1 pixel of sawtooth from 30 to 1000 fps (29.4 at 702 fps today). Stepping with the
+  frame's delta is rejected on its measured cost and repeatability.
+- **`radiance-cascades`, through its gate.** The Path of Exile 2 technique, adapted for a free camera from its published
+  paper: image-plane wedges with an elevation bitmask, a spatial filter, with today's probes and sky for what the screen
+  does not show. Numeric gate G1 behind a debug view: at most 1.2 and 2.5 times `GPU.AO` at 3840x2160, at most 0.5%
+  flicker over blocks, 1% on foliage, with a degrade path that is expected. A foliage miss alone does not stop the join.
+
+**Tranche 2:**
+
+- **`animation-graph`: the animation graph, first slice.** First claim on the tranche. Strata's own module on
+  Esoterica's architecture, reading Esoterica's source at c99a946 and porting its runtime semantics under its MIT notice
+  (the owner allowed open-source code on 2026-11-01): pose tasks apart from graph update, sync tracks, Blend1D, masked
+  layers and state machines as nodes, authored by agents in `.stanimator` version 2 and proved on the Third-Person
+  robot, whose walk and run are 27% of a cycle apart in their cross-fade today. No graph canvas yet: wave 9.
+- **`radiance-cascades`: join and hardening.** Shading from the gathers, a settle stat for captures, and the owner's live
+  look in motion before any sample adopts it. Below the cut: the Ultra layout, bent direction, and a baked irradiance
+  volume, which moves above the cut if G1 fails.
+- **`local-lights`: many shadowed lights.** No fixed limit, 64 at High and 256 at Ultra at the same atlas sizes; tiles
+  that keep their shadow while they resize, no global layouts, a scheduler that starves nothing, a grid for change
+  tracking, the filter on fixed noise. Below the cut: a time governor.
+
+**Tranche 3, wave 9 unless usage remains:**
+
+- **`editor-ux`: the rest of drag and drop.** A mesh ghost in an overlay pass and a live material preview. Below the
+  cut: a per-mesh ray structure, pause on spike, HDRI drops.
+- **`volumetric`: fog with shafts and cones.** A froxel grid without history that reads shadows coarsely, lit indoors by
+  probes, with point and spot lights. It joins only with its cones.
+- **`showcase-engine`: layers on materials, stills.** One blended material layer with wetness on both draw paths. Below
+  the cut: supersampled stills.
+
+### Later (wave 9 and beyond)
 
 The owner's direction for rendering (2026-10-26): realistic, filmic images at native resolution, with the Fox Engine of
 Metal Gear Solid V as the baseline look; neither the smear of temporal upscaling ("The blurry mess that current gen
@@ -1475,27 +1605,36 @@ engine has (like unreal) is completely the opposite of what this engine is plann
 Strata never renders below native resolution: no render scaling below 1, no dynamic resolution, no TAA or other temporal
 upscaling, and nothing may need temporal accumulation to look right (TAA stays one anti-aliasing choice).
 
-- **Wave 8 starts with `showcase`: a graphical showcase sample, asked for by the owner after wave 7.** "High Desert
-  Outpost": a rocky valley of about 300 m with a hut, crates, barrels, a covered car, a lantern and a fire pit among
-  boulders and cliffs, made through the editor from Poly Haven's CC0 scans (about 60 MB of source assets, in a showcase
-  budget class of its own) under the physical atmosphere through a time of day. Five shots with a camera tour between
-  them: a dawn vista, the outpost's contact detail, the hut's interior with light shafts, dusk to night with the lantern
-  and the fire, and a macro of a rock; a photo mode with free camera, time of day, exposure, focus and the Graphics
-  options; High by default, screenshots at Ultra and supersampled. `PerfGPU.Samples.Showcase.{High,Ultra}` at
-  3840x2160 and image checks at its fixed shots. It needs wave 7's streams, the items below their cut lines that the
-  shots use (depth of field, light shafts, the irradiance volume, alpha cutouts, distant shadows, supersampled stills),
-  terrain material blending or detail normal maps, and one baked time of day for its probes or run-time probe capture.
-- **Rendering after wave 7:** what fell below wave 7's cut lines (supersampled stills,
+- **Wave 9, recorded in wave 8's step 0** (`Docs/Plans/Wave8/plan.md`, section 11). These stand whatever happens to
+  `animation-graph`:
+  - **`animation-tools`:** the node canvas through `EditorPanelRegistry` with every edit a command, live debugging and a
+    task view, a clip timeline for events and sync markers, a mask editor, recording.
+  - **`animation-runtime-2`:** Blend2D with Strata's own triangulation, selectors, referenced and external graphs,
+    variations, typed clip events, additive clips, float curves, two-bone and foot IK grounded through
+    `IPhysicsQueries`, warps, forced transitions, skeleton LOD, compressed clips if measured to help, and whether version
+    1 controllers move onto the graph path.
+  - **Ragdoll nodes,** after a physics joints stream.
+  - **Skin and a character** (the owner's subsurface scattering): pre-integrated skin, thin translucency if `volumetric`
+    did not land it, screen-space scattering only for close-ups of faces, and a distant figure in the showcase if a
+    realistic CC0 or CC-BY body is found.
+  - What tranche 3 and the streams' cut lines leave.
+- **Rendering after wave 8:** what fell below wave 7's cut lines (supersampled stills,
   `viewport.capture {supersample: 2}`: rendered at twice the size and filtered down with the output's dither, for the
   showcase's screenshots; point and spot lights with a source radius and the sun's physical filter, up to 8 sun
   cascades, distant shadows for open worlds, 16-bit depth for far cascades, per-cascade cache keys that keep cascades
-  while the camera moves; volumetric fog and light shafts, a baked irradiance volume for sky visibility and bounce
-  light, bent normals with cone specular occlusion and reflection probes' "Fit to Room", coverage-preserving alpha mips
-  for cutouts; the Open World's real sun and moon values, its DayNight's 3 lux sun and 0.05 lux moon under automatic
-  exposure; motion blur in the template and the samples once the owner's sheet clears it); MSAA; virtual shadow maps if
-  the shadows debug view shows cascades falling short; frame-level variants of the forward shader if `GPU.Opaque` shows
-  the need; more shadowed lights with occlusion culling of their views; run-time probe capture for moving suns; render
-  scale above 1 for live views; area lights; the rest of the open items' list.
+  while the camera moves; bent normals with cone specular occlusion and reflection probes' "Fit to Room",
+  coverage-preserving alpha mips for cutouts; the Open World's real sun and moon values, its DayNight's 3 lux sun and
+  0.05 lux moon under automatic exposure; motion blur in the template and the samples once the owner's sheet clears it);
+  a replacement for contact shadows, off in every preset since 0.8.0 (a crossing test instead of a thin shell, noise
+  not locked to the screen, look-dev in every sample; 0.7.0's could also leave 1-pixel fringes beside thin foliage);
+  gap-aware cascade slices for a near object that stays (with hysteresis of their own: since 0.8.0 such an object still
+  re-fits the cascades once); the Physics Playground's empty first cascade (its nearest receiver at 18.9 m, the first
+  split at 18.66 m); MSAA; virtual shadow maps if the shadows debug view shows cascades falling short; frame-level
+  variants of the forward shader if `GPU.Opaque` shows the need; more shadowed lights with occlusion culling of their
+  views; run-time probe capture for moving suns; render scale above 1 for live views; area lights; the rest of the open
+  items' list.
+- **Sunlight thrown off bright metal onto nearby surfaces** (the owner wants it, "not a priority"), planned after
+  `radiance-cascades` lands, its technique chosen then.
 - **Physics after wave 7:** what fell below `physics-runtime`'s cut line or did not land ("Physics at runtime" in the
   open items has the measurements): the scene's world matrices written from physics (a Scene API whose cache contract
   the Scene module decides), a per-scene override of `Physics.Simulation`, poses written back from box3d's move events
@@ -1514,8 +1653,7 @@ upscaling, and nothing may need temporal accumulation to look right (TAA stays o
 - **HLOD:** merged, simplified cells with baked atlases for distant parts of a world.
 - **`world-environment`:** terrain cooked into world cells, with height-field colliders (box3d's height-field shapes)
   and sculpt and paint tools.
-- **`animation-authoring`:** previews and scrubbing of animators, clips and transitions in the Inspector and the Asset
-  tab.
+- **Animation authoring:** wave 9's `animation-tools` and `animation-runtime-2` above.
 - **Exported-game automation:** command scripts, simulated input and expectations in StrataRuntime.
 
 Further:
