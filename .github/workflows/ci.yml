@@ -133,6 +133,7 @@ jobs:
           cmake --preset ${{ matrix.preset }} -DSTRATA_COMPILER_CACHE=ON ${{ matrix.options }} 2>&1 | tee configure.log
 
       - name: Build
+        id: build
         shell: bash
         run: |
           set -o pipefail
@@ -194,8 +195,10 @@ jobs:
       # Hosted runners have no GPU: suites that need one carry the "gpu" label. Perf budgets (label "perf") hold for the
       # reference machine (StrataTests/Perf/Budgets.json); shared runners of other speeds would fail or pass them at
       # random, so the perf gate runs on the reference machine (Docs/DeveloperGuide.md, "Perf tests"). The Core suites run
-      # in shards (StrataTests/CoreShards.json), four at a time.
+      # in shards (StrataTests/CoreShards.json), four at a time. The tests run whenever the build succeeded, also after a
+      # failed shader step, so that a shader finding (or a new MoltenVK release) never hides the test results.
       - name: Test
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         shell: bash
         env:
           STRATA_TEST_TRACE: "1" # Tests print each test case as it starts, so a crash names its test

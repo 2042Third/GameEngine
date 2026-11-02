@@ -205,7 +205,9 @@ Dist build of every target on Windows uses the Visual Studio generator people bu
 `package` tests, so that the Visual Studio generator's script builds stay tested. Every job that runs
 `ctest -LE "gpu|perf"` (all but the Dist build) runs `StrataShaders.TargetHLSL` (every shader also compiles to HLSL) and
 `StrataTools.LookDevOffline`, also without the editor; the Linux job validates the embedded shaders with `spirv-val`, and
-the macOS job converts them to Metal and compiles them ([Shaders](#shaders), "The checks"). Older compilers and other standard
+the macOS job converts them to Metal and compiles them ([Shaders](#shaders), "The checks"). A failed shader step does
+not skip the job's tests (they run whenever the build succeeded), and the macOS log names the converter's version, since
+Homebrew's `molten-vk` is not pinned. Older compilers and other standard
 libraries reject code that the local ones accept (Apple Clang 15's libc++ has no floating-point `std::from_chars`;
 `size_t` and `uint64_t` are different types on macOS; GCC 14 warns where newer GCCs do not), so a branch that lands many
 changes (a wave's integration) is pushed as `ci/<name>` and waits for green CI before it moves `main`

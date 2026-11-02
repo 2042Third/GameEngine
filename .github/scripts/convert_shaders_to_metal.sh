@@ -56,6 +56,13 @@ if ! command -v MoltenVKShaderConverter >/dev/null 2>&1; then
 	fi
 	converter=spirv-cross
 fi
+# Homebrew's molten-vk and spirv-cross are not pinned: a new release can change which entries convert (and so fail this
+# step with no change in the repository), so the log names the converter's version beside the results.
+if [ "$converter" = "MoltenVKShaderConverter" ]; then
+	echo "Converter: $(brew list --versions molten-vk 2>/dev/null || echo "MoltenVKShaderConverter, not from Homebrew (version unknown)")"
+else
+	echo "Converter: spirv-cross $(spirv-cross --revision 2>&1 | head -1)"
+fi
 
 # Images with Xcode 26 install the Metal toolchain as a separate component.
 if ! xcrun -sdk macosx metal --version >/dev/null 2>&1; then
