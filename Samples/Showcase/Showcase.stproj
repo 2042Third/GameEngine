@@ -1,0 +1,15 @@
+{
+	"Project": {
+		"AssetDirectory": "Assets",
+		"Name": "Showcase",
+		"Scripts": {
+			"ModuleName": "ShowcaseScripts",
+			"SourceDirectory": "Scripts"
+		},
+		"StartScene": "6F344C100157C0F5"
+	},
+	"Strata": {
+		"Format": "Project",
+		"Version": 3
+	}
+}
