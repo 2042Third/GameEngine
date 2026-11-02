@@ -1,0 +1,20 @@
+{
+	"Handle": "1FB50D9B14D5A834",
+	"ImportSettings": {
+		"Compression": "Auto",
+		"Filter": "Linear",
+		"FlipGreen": false,
+		"FlipVertically": false,
+		"GenerateMips": true,
+		"MaxSize": 0,
+		"Quality": "High",
+		"RemoveSun": false,
+		"Usage": "HDR",
+		"Wrap": "Clamp"
+	},
+	"Strata": {
+		"Format": "AssetMeta",
+		"Version": 1
+	},
+	"Type": "Texture"
+}

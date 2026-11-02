@@ -8,6 +8,7 @@ Every file the importers read in this sample, where it comes from and what was c
 | --- | --- | --- | --- | --- | --- |
 | `Assets/Generated/Props/` | `Tools/GenerateShowcaseProps.py` (props) | Strata | Strata | | none: the generator's output as it writes it |
 | `Assets/Generated/Terrain/` | `Tools/GenerateShowcaseTerrain.py` (terrain) | Strata | Strata | | none: the generator's output as it writes it |
+| `Assets/Lighting/Outpost/` | Baked in the editor from `Scenes/Outpost.stscene` (`lighting.bakeProbes`, `Tools/GenerateShowcaseTerrain.py bake`): six probes, the yard and the hut at dawn, golden hour and dusk | Strata | Strata | | none: the bake's output as it writes it |
 | `Assets/Scans/Barrel_01_1k/` | https://polyhaven.com/a/Barrel_01 (1K glTF) | Jorge Camacho | CC0-1.0 | | none: the glTF with its .bin and textures as downloaded |
 | `Assets/Scans/Barrel_02_1k/` | https://polyhaven.com/a/Barrel_02 (1K glTF) | Jorge Camacho | CC0-1.0 | | none: the glTF with its .bin and textures as downloaded |
 | `Assets/Scans/barrel_03_1k/` | https://polyhaven.com/a/barrel_03 (1K glTF) | Serhii Khromov | CC0-1.0 | | none: the glTF with its .bin and textures as downloaded |

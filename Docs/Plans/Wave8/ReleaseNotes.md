@@ -59,6 +59,9 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   shot sees the sun reflected) and `Tools/GenerateShowcaseProps.py` (the bus, the tanks, the pipes, the hut, the bare
   steel's maps, and the command scripts that make the sample's materials and prefabs). The CTests
   `StrataTools.ShowcaseTerrain` and `StrataTools.ShowcaseProps` keep the committed files equal to what they write.
+- Play it and a camera tour of about 80 seconds shows six shots: dawn over the valley, the low sun sliding along the
+  bus's side and down the oil tank, its glint in the puddles, the hut's interior and dusk with the fire and lanterns lit.
+  Each time of day has its own baked reflection probes, switched on under the fade between shots.
 
 ## Defaults that change
 

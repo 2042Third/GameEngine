@@ -496,11 +496,13 @@ if(TARGET StrataEditor AND TARGET StrataCLI)
 	set_tests_properties(StrataTools.LookDev PROPERTIES LABELS "gpu;tools" TIMEOUT 900)
 
 	# The showcase sample's ground is what its generator writes: the design's checks pass, two runs write the same bytes,
-	# the committed models equal them and shots 2-4 see the sun where the layout says (Tools/GenerateShowcaseTerrain.py).
+	# the committed models equal them, shots 2-4 see the sun where the layout says and the scripts' times of day
+	# (Samples/Showcase/Scripts/Stations.h) are the generator's (Tools/GenerateShowcaseTerrain.py).
 	if(Python3_Interpreter_FOUND)
 		add_test(NAME StrataTools.ShowcaseTerrain
 			COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/Tools/GenerateShowcaseTerrain.py" selftest
 				--committed "${PROJECT_SOURCE_DIR}/Samples/Showcase/Assets/Generated/Terrain"
+				--stations "${PROJECT_SOURCE_DIR}/Samples/Showcase/Scripts/Stations.h"
 				--work "${CMAKE_CURRENT_BINARY_DIR}/ShowcaseTerrain/$<CONFIG>")
 	else()
 		add_test(NAME StrataTools.ShowcaseTerrain
@@ -927,6 +929,30 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DARGUMENTS=--headless|--no-automation|--quit-after-commands|--frames|36000|--project|${STRATA_OPEN_WORLD_DIR}/Project|--commands|${CMAKE_CURRENT_SOURCE_DIR}/Editor/OpenWorldRenderCommands.json"
 			"-DEXPECT=Command script finished (" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
 	set_tests_properties(StrataEditor.OpenWorldRender PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldExport)
+	# High Desert Outpost: its six probe stations are found, and the tour (four times faster, started with T once every
+	# collider is built) shows shot 1 at dawn with the dawn probes on, switches to the golden ones for shot 2 (the dawn ones
+	# off a second later) and reaches its sixth shot at dusk with the fire lit; the exported games start the tour from the
+	# cooked pack, the pruned one with every capture the inactive stations name.
+	add_test(NAME StrataEditor.Showcase
+		COMMAND "${CMAKE_COMMAND}"
+			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
+			"-DSAMPLE_DIR=${PROJECT_SOURCE_DIR}/Samples/Showcase"
+			"-DPROJECT_FILE=Showcase.stproj"
+			"-DGAME=Showcase"
+			# Debug runs only the pruned game: the full one runs the same scripts (Release, Dist and the other platforms run both).
+			"-DGAME_RUNS=$<IF:$<CONFIG:Debug>,pruned,full|pruned>"
+			"-DCOMMANDS=${CMAKE_CURRENT_SOURCE_DIR}/Editor/ShowcaseCommands.json.in"
+			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/Samples/Showcase/$<CONFIG>"
+			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+			"-DEDITOR_EXPECT=Showcase: stations ready (found 6|Showcase: tour started|Showcase: shot 1 (dawn vista)|Showcase: shot 6 (dusk)"
+			"-DGAME_EXPECT=Loaded script module 'ShowcaseScripts'|Showcase: stations ready (found 6|Showcase: tour started|Showcase: shot 1"
+			"-DGAME_FRAMES=600"
+			# A fresh copy has never built its scripts: opening its scene says so, and play.start builds them. Poly Haven's
+			# covered_car uses KHR_materials_specular, which the importer leaves out (GltfImporter.cpp's supported extensions):
+			# its import says so, and the car's paint keeps the base material's specular.
+			"-DALLOWED_MESSAGES=\\[warning\\] App: The scripts of 'Showcase' are not built yet|\\[warning\\] Strata: Import 'Scans/covered_car_1k/covered_car_1k.gltf': Not imported: extension KHR_materials_specular"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
+	set_tests_properties(StrataEditor.Showcase PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain FIXTURES_SETUP StrataShowcaseExport)
 	# The tour's frames at 1920 x 1080 (Release and Dist, PerfGPU.Samples): the exported game started once per attempt, its
 	# metrics provisional while the reference machine is away (StrataTests/Perf/Budgets.json).
 	add_test(NAME StrataTests.PerfGPU.Samples

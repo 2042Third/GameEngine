@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-"""Generates the Showcase sample's ground (High Desert Outpost) and checks the design that its shots rest on.
+"""Generates the Showcase sample's ground (High Desert Outpost), lays out its scene and checks the shots it rests on.
 
 The outputs are committed and a CTest (StrataTools.ShowcaseTerrain) keeps them equal to what this script writes:
 
     python3 -I Tools/GenerateShowcaseTerrain.py terrain --output Samples/Showcase/Assets/Generated/Terrain
     python3 -I Tools/GenerateShowcaseTerrain.py check
     python3 -I Tools/GenerateShowcaseTerrain.py stations [--json <file>]
-    python3 -I Tools/GenerateShowcaseTerrain.py selftest --committed Samples/Showcase/Assets/Generated/Terrain --work <dir>
+    python3 -I Tools/GenerateShowcaseTerrain.py selftest --committed Samples/Showcase/Assets/Generated/Terrain
+        --stations Samples/Showcase/Scripts/Stations.h --work <dir>
+    python3 -I Tools/GenerateShowcaseTerrain.py layout --output <Layout.json>
+    python3 -I Tools/GenerateShowcaseTerrain.py bake --output <Bake.json>
+    python3 -I Tools/GenerateShowcaseTerrain.py setup --station Dawn|Golden|Dusk --format lookdev|script [--output <file>]
+    python3 -I Tools/GenerateShowcaseTerrain.py checkshots --capture <LookDev output directory> [--live]
 
 Everything follows from one height function, seeded by SEED and built from the standard library only. It uses only
 + - * /, floor, sqrt and integer hashing (value noise with smoothstep polynomials), never sin, cos, exp or atan, and every
@@ -42,8 +47,24 @@ stations  prints the three times of day (Dawn, Golden, Dusk) and, per shot of th
           (where the camera sees the sun reflected: on the bus's letterboard and the oil tank's shell as
           GenerateShowcaseProps.py builds them, measured from its meshes, and on the first puddle); --json writes the
           same as JSON.
-selftest  check, terrain twice (byte-equal), each model byte-equal to the committed one (--committed), and shots 2-4's
-          mirror relations within 1 cm and 0.1 degree. Exit codes: 0 done, 1 a check failed, 2 usage.
+selftest  check, terrain twice (byte-equal), each model byte-equal to the committed one (--committed), shots 2-4's
+          mirror relations within 1 cm and 0.1 degree, and the rows of c_Stations in the scripts' Stations.h (--stations)
+          equal to this file's STATIONS.
+layout    writes the editor command script that builds the scene's entities in Scenes/Outpost.stscene (which holds the
+          sky, the sun, the terrain and the Post Process, and with the materials and prefabs of GenerateShowcaseProps.py
+          present): the ground's materials, the fog, the camera rig, the props on the surfaces under them, the seeded rocks
+          and brush, the six reflection probes, the tour's markers, the overlay, the director and the Golden station; it
+          is run once (StrataEditor --quit-after-commands), later edits are commands of their own.
+bake      writes the command script that bakes the six probes: per station (Dawn, Dusk, Golden last, the saved one) its
+          edit-mode steps with only its two probes on, then lighting.bakeProbes of them twice (the second adds a bounce).
+setup     prints a station's edit-mode steps: the GoldenHour preset turned to its sun, the sun's intensity and shadow
+          distance, the fog, the exposure, the local lights, the embers and wicks, and its probes on (LookDev Setup
+          entries naming entities, or command steps that find them).
+checkshots reads a LookDev capture: the brightest 0.1% of shot 2's letterboard within 40 px of the computed highlight, the
+          brightest column of shot 3's tank within 30 px of the computed streak, and the shell beside the streak with
+          and without the yard's probe (at least 8 codes apart; at 1920 x 1080 with TAA); with --live the highlights' shimmer in the live shots (the
+          second differences of 32 px block means over four frames: mean at most 1%, 99th percentile at most 3%).
+Exit codes: 0 done, 1 a check failed, 2 usage.
 """
 
 import argparse
@@ -51,6 +72,7 @@ import json
 import math
 import os
 import random
+import re
 import struct
 import sys
 
@@ -108,7 +130,7 @@ WALK_RADIUS = 140.0
 STATIONS = (
     ("Dawn", 6.5, 5.0, 5.0, 140.0, 1.0, 0.006, 0.0, 600.0, False),
     ("Golden", 17.75, 6.0, 6.0, 45.0, 1.0, 0.0006, 0.0, 200.0, False),
-    ("Dusk", 19.0, 1.0, 2.0, 32.0, 0.5, 0.0015, -0.7, 150.0, True),
+    ("Dusk", 19.0, 1.0, 2.0, 32.0, 0.002, 0.0015, -1.0, 150.0, True),
 )
 SUN_LUX = 120000.0
 
@@ -938,6 +960,12 @@ class Glb:
 # ---------------------------------------------------------------------------------------------------------------------
 # Building everything
 
+def letterboard_sections(props, z_range):
+    """The letterboard's painted and bare sections along the bus (world z), split where its bare steel begins and ends."""
+    edges = sorted({z_range[0], z_range[1]} | {z for section in props.BUS_BARE_LETTERBOARD for z in section})
+    return [(BUS["center"][1] + a, BUS["center"][1] + b) for a, b in zip(edges, edges[1:])]
+
+
 class World:
     """The layout, the sampled ground, the apron and its holes: what the models and the checks are made from."""
 
@@ -963,7 +991,8 @@ class World:
             tank_base = apron_plane(OIL_TANK["center"][0])
             self._surfaces = {
                 "letterboard": {"x": BUS["center"][0] + board["x"], "y": (bus_base + board["y"][0], bus_base + board["y"][1]),
-                                "z": (BUS["center"][1] + board["z"][0], BUS["center"][1] + board["z"][1]), "tilt": board["tilt"]},
+                                "z": (BUS["center"][1] + board["z"][0], BUS["center"][1] + board["z"][1]), "tilt": board["tilt"],
+                                "sections": letterboard_sections(props, (board["z"][0], board["z"][1]))},
                 "shell": {"center": OIL_TANK["center"], "radius": shell["radius"], "y": (tank_base + shell["y"][0], tank_base + shell["y"][1]),
                           "deviation": shell["deviation"]},
             }
@@ -1438,6 +1467,614 @@ def print_stations(report):
 
 
 # ---------------------------------------------------------------------------------------------------------------------
+# The scene: its layout, the stations' edit-mode steps and the checks of the captured shots
+
+SCENE = "Scenes/Outpost.stscene"
+PREFABS = "Prefabs"
+
+# The scans' extents in their own frames (meters, the min and max of their vertices, read from their glTF accessors):
+# where drums and tyres stand and how big the rocks' box colliders are (80% of the extents).
+SCAN_BOUNDS = {
+    "namaqualand_boulder_02": ((-1.184, -0.059, -0.609), (1.348, 0.823, 0.626)),
+    "namaqualand_boulder_03": ((-1.055, -0.015, -1.390), (1.352, 1.458, 1.676)),
+    "namaqualand_cliff_01": ((-3.872, -0.419, -3.611), (4.407, 4.542, 0.780)),
+    "barrel_03": ((-0.317, 0.0, -0.319), (0.317, 0.930, 0.319)),
+    "Barrel_01": ((-0.282, -0.007, -0.282), (0.282, 0.873, 0.282)),
+    "Barrel_02": ((-0.244, 0.005, -0.242), (0.244, 0.885, 0.242)),
+    "old_tyre": ((-0.300, -0.300, -0.083), (0.300, 0.300, 0.082)),
+    "covered_car": ((-0.847, 0.0, -2.166), (0.942, 1.411, 2.214)),
+}
+DRUMS = ("barrel_03", "Barrel_01", "Barrel_02")
+LANTERN_B_DRUM = (9.6, 7.4)
+TYRE_STACK = (9.5, -7.0)
+TYRES_SCATTERED = ((-6.5, 19.5), (21.5, -9.0), (-17.0, -9.5))
+CLIFFS = 8
+BOULDERS = {"namaqualand_boulder_02": 25, "namaqualand_boulder_03": 20}
+BRUSH = (40, 20)  # Near the apron's edge, at the slopes' feet
+
+# The probes (the showcase spec's D10): (part, position, yaw, half extents, blend distance, priority). The hut's captures
+# its interior from beside the door's and the window's sun beams (hut-local (1.9, 0.7, -1.3)): from the hut's middle the
+# capture sees the low sun through the door, whose disk floods the box's irradiance. Its box is centered on the capture,
+# so it reaches from the hut's door wall and left wall over the lean-to and 2.4 m behind the hut.
+HUT_PROBE_LOCAL = (1.9, 0.7, -1.3)
+PROBES = (
+    ("Yard", (2.0, 1.6, 4.0), 0, (34.0, 14.0, 34.0), 8.0, 0),
+    ("Hut", (local_to_world(HUT["center"], HUT["yaw"], HUT_PROBE_LOCAL[0], HUT_PROBE_LOCAL[2])[0], HUT_PROBE_LOCAL[1],
+             local_to_world(HUT["center"], HUT["yaw"], HUT_PROBE_LOCAL[0], HUT_PROBE_LOCAL[2])[1]), HUT["yaw"], (4.35, 1.35, 3.35), 0.3, 2),
+)
+# The local lights at dusk (candela) and the glowing embers and wicks, which only burn at dusk.
+LOCAL_LIGHTS = (("Fire", 250.0), ("LanternA.Light", 40.0), ("LanternB.Light", 25.0))
+GLOWS = ("FirePit.Embers", "LanternA.Wick", "LanternB.Wick")
+FOG = {"BaseHeight": -8.0, "HeightFalloff": 0.10, "StartDistance": 80.0, "MaxOpacity": 0.7, "ColorFromSky": True, "SunScattering": 0.6}
+EYE_HEIGHT = 1.6
+FIRE_LIGHT_HEIGHT = 0.9
+
+# The graybox's measurement views of shot 5's check (D15): the sunlit apron, and the hut's dark corner away from the sun
+# patches of the door and the window (hut-local x right, z toward the door).
+MEASURE_YARD = ((-9.5, 1.5, -9.5), (-12.0, None, -12.0), 25.0)
+MEASURE_HUT_LOCAL = ((-1.9, 1.5, 1.5), (-2.25, 0.6, -1.7), 15.0)
+
+# Highlight crops of the live shots (the showcase spec's D14) and where checkshots looks for each subject.
+LIVE_CROPS = {2: ("highlight", (0.42, 0.40, 0.58, 0.60)), 3: ("streak", (0.30, 0.15, 0.42, 0.80)),
+              4: ("glint", (0.48, 0.55, 0.62, 0.75)), 6: ("lantern", (0.34, 0.38, 0.46, 0.54))}
+STREAK_CROP = (0.30, 0.15, 0.42, 0.80)
+BESIDE_STREAK_CROP = (0.50, 0.15, 0.66, 0.75)
+LIVE_MODES = ("", ".fxaa", ".off")
+SHIMMER_LIMITS = (1.0, 3.0)  # Mean and 99th percentile of the second differences (percent of full scale)
+
+
+def surface_at(world, x, z):
+    """The height a prop stands on at (x, z): the apron's top inside its outline, else the terrain."""
+    if world.layout.outline.inside(x, z):
+        return world.apron.top(x, z)
+    return world.ground.surface(x, z)
+
+
+def rounded(values, digits=4):
+    return [round(v, digits) for v in values]
+
+
+def bind_name(text):
+    """A command script's binding name for an entity's name (letters, digits, '_', '-' and '.')."""
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", text)
+
+
+def look_angles(eye, target):
+    """The yaw (about +Y, 0 looking along -Z) and pitch (positive up) in degrees of a camera at eye looking at target."""
+    d = sub(target, eye)
+    return math.degrees(math.atan2(-d[0], -d[2])), math.degrees(math.atan2(d[1], math.sqrt(d[0] * d[0] + d[2] * d[2])))
+
+
+def ground_at_image(world, eye, look, fov, ix, iy):
+    """The terrain's point seen at image position (ix, iy) of a 16:9 picture (0-1, y down)."""
+    forward = normalize(sub(look, eye))
+    right = normalize(cross(forward, (0.0, 1.0, 0.0)))
+    up = cross(right, forward)
+    tangent = math.tan(math.radians(fov) * 0.5)
+    ray = normalize(add(add(forward, right, (2.0 * ix - 1.0) * tangent * 16.0 / 9.0), up, (1.0 - 2.0 * iy) * tangent))
+    t = 0.5
+    while t < 400.0:
+        p = add(eye, ray, t)
+        if p[1] <= world.ground.surface(p[0], p[2]):
+            return (p[0], world.ground.surface(p[0], p[2]), p[2])
+        t += 0.1
+    raise CheckFailed("the ray at image (%.2f, %.2f) meets no ground" % (ix, iy))
+
+
+class SceneScript:
+    """An editor command script: steps that find entities by name and refer to them by bound names."""
+
+    def __init__(self):
+        self.steps = []
+
+    def add(self, command, parameters=None, bind=None, expect=None):
+        step = {"command": command}
+        if parameters is not None:
+            step["parameters"] = parameters
+        if bind is not None:
+            step["bind"] = bind
+        if expect is not None:
+            step["expect"] = expect
+        self.steps.append(step)
+
+    def find(self, name, bind=None):
+        self.add("entity.find", {"name": name}, {bind or name: "/entities/0"})
+        return {"$ref": bind or name}
+
+    def create(self, name, parent=None, components=None):
+        parameters = {"name": name}
+        if parent is not None:
+            parameters["parent"] = parent
+        if components:
+            parameters["components"] = components
+        self.add("entity.create", parameters, {name: "/id"})
+        return {"$ref": name}
+
+    def instantiate(self, prefab, bind, parent, components):
+        self.add("prefab.instantiate", {"prefab": prefab, "parent": parent, "components": components}, {bind: "/id"})
+        return {"$ref": bind}
+
+    def rename(self, entity, name):
+        self.add("entity.rename", {"entity": entity, "name": name})
+
+
+def transform(position, yaw=0.0, scale=None, pitch=0.0):
+    values = {"Translation": rounded(position), "Rotation": [round(pitch, 3), round(yaw, 3), 0.0]}
+    if scale is not None:
+        values["Scale"] = rounded(scale if isinstance(scale, (list, tuple)) else (scale, scale, scale))
+    return values
+
+
+def box_collider(bounds, share=0.8, scale=1.0):
+    low, high = bounds
+    return {"HalfExtents": rounded([(high[k] - low[k]) * 0.5 * share for k in range(3)]),
+            "Offset": rounded([(high[k] + low[k]) * 0.5 for k in range(3)])}
+
+
+def scan_path(name):
+    return "Scans/%s_1k/%s_1k.gltf" % (name, name)
+
+
+def station_steps(name, script_form):
+    """A station's edit-mode steps (D4): the sky preset turned to its sun, the sun's intensity and shadow distance, the
+    fog, the exposure, the local lights, the embers and wicks, and its two probes on (the other four off). As command
+    steps that find their entities (script_form) or as LookDev Setup entries naming them (entityName)."""
+    _, _, elevation, drawn, azimuth, scale, fog, exposure, shadow, local = station(name)
+    steps = []
+
+    def step(command, entity, parameters):
+        parameters = dict(parameters)
+        if script_form:
+            if entity is not None:
+                parameters["entity"] = {"$ref": "station_" + bind_name(entity)}
+            steps.append({"command": command, "parameters": parameters})
+        else:
+            if entity is not None:
+                parameters = dict({"entityName": entity}, **parameters)
+            steps.append({"Command": command, "Parameters": parameters})
+
+    names = ["Sun", "Fog", "Post Process"] + [light for light, _ in LOCAL_LIGHTS] + list(GLOWS)
+    names += ["Probe.%s.%s" % (s[0], part[0]) for s in STATIONS for part in PROBES]
+    if script_form:
+        for entity in names:
+            steps.append({"command": "entity.find", "parameters": {"name": entity}, "bind": {"station_" + bind_name(entity): "/entities/0"}})
+    preset = {"preset": "GoldenHour", "sunElevation": drawn, "sunAzimuth": azimuth}
+    if script_form:
+        preset["light"] = {"$ref": "station_Sun"}
+    step("lighting.applySkyPreset", None, preset)
+    step("component.set", "Sun", {"component": "DirectionalLight", "values": {"Intensity": SUN_LUX * scale, "ShadowDistance": shadow}})
+    step("component.set", "Fog", {"component": "HeightFog", "values": {"Density": fog}})
+    step("component.set", "Post Process", {"component": "PostProcess", "values": {"Exposure": exposure}})
+    for light, candela in LOCAL_LIGHTS:
+        step("component.set", light, {"component": "PointLight", "values": {"Intensity": candela if local else 0.0}})
+    for glow in GLOWS:
+        step("entity.setActive", glow, {"active": local})
+    for other in STATIONS:
+        for part in PROBES:
+            step("entity.setActive", "Probe.%s.%s" % (other[0], part[0]), {"active": other[0] == name})
+    return steps
+
+
+def ground_material_steps(world):
+    """Steps that put the sample's materials on the ground's nodes: the inner terrain, the ring, the apron, the puddles and
+    the mud patches (the models carry factor-only stand-ins)."""
+    groups = [("Ground", ["Ground_%d_%d" % (i, j) for j in range(INNER_TILES) for i in range(INNER_TILES)]),
+              ("RingGround", ["Ring_%d" % k for k in range(RING_TILES * RING_TILES - 1)]),
+              ("Asphalt", ["Apron", "ApronFine"]),
+              ("Water", ["Puddle_%d" % k for k in range(len(world.apron.holes))]),
+              ("Mud", ["Mud_%d" % k for k in range(len(mud_meshes(world.layout, world.ground, world.apron)))])]
+    script = SceneScript()
+    for material, names in groups:
+        entities = [script.find(name, "node_" + bind_name(name)) for name in names]
+        script.add("component.set", {"entities": entities, "component": "MeshRenderer", "values": {"Material": "Materials/%s.stmat" % material}})
+    return script.steps
+
+
+def layout_script(world):
+    """The editor command script that builds the scene's entities (D9) in Scenes/Outpost.stscene, which holds the sky,
+    the sun, the terrain and the Post Process: the fog, the camera rig, the props at the heights of the surfaces they
+    stand on, the seeded rocks and brush, the six probes, the tour's markers, the overlay and the director."""
+    script = SceneScript()
+    rng = random.Random(SEED + 300)
+    layout = world.layout
+    report = shots(world)
+    s = script
+    s.add("scene.open", {"scene": SCENE})
+    s.add("script.build", expect={"/success": {"equals": True}})
+    sky = s.find("Sky")
+    s.add("component.set", {"entity": sky, "component": "SkyLight", "values": {"AerialPerspectiveScale": 4.0}})
+    s.steps += ground_material_steps(world)
+    s.create("Fog", components={"HeightFog": dict(FOG, Density=station("Golden")[6])})
+
+    # The camera rig at shot 2's key: the body turns with the yaw, the eye with the pitch.
+    shot2 = report[1]
+    yaw, pitch = look_angles(shot2["key"], shot2["look"])
+    player = s.create("Player", components={
+        "Transform": transform((shot2["key"][0], shot2["key"][1] - EYE_HEIGHT, shot2["key"][2]), yaw),
+        "CharacterController": {"Height": 1.8, "Radius": 0.3, "Layer": 3, "Enabled": False}})
+    eye = s.create("Eye", player, {"Transform": transform((0.0, EYE_HEIGHT, 0.0), pitch=pitch),
+                                   "Camera": {"Primary": True, "PerspectiveFOV": shot2["fov"], "PerspectiveNear": 0.1,
+                                              "PerspectiveFar": 3000.0, "DepthOfField": False, "Aperture": 2.8}})
+
+    # The props: static, on the Props layer, each standing on the surface under its footprint's center.
+    props = s.create("Props", components={"RigidBody": {"Type": "Static", "Layer": 2}})
+
+    def place(prefab, bind, x, z, yaw_degrees=0.0, y=None, extra=None):
+        components = {"Transform": transform((x, surface_at(world, x, z) if y is None else y, z), yaw_degrees)}
+        if extra:
+            components.update(extra)
+        return s.instantiate(prefab, bind, props, components)
+
+    place("%s/Bus.stprefab" % PREFABS, "Bus", BUS["center"][0], BUS["center"][1], BUS["yaw"])
+    place("%s/OilTank.stprefab" % PREFABS, "OilTank", OIL_TANK["center"][0], OIL_TANK["center"][1])
+    place("%s/FuelTank.stprefab" % PREFABS, "FuelTank", FUEL_TANK["center"][0], FUEL_TANK["center"][1], FUEL_TANK["yaw"])
+    place("%s/Hut.stprefab" % PREFABS, "Hut", HUT["center"][0], HUT["center"][1], HUT["yaw"])
+    car = local_to_world(HUT["center"], HUT["yaw"], *LEAN_TO["local"])
+    place(scan_path("covered_car"), "CoveredCar", car[0], car[1], HUT["yaw"], extra={"BoxCollider": box_collider(SCAN_BOUNDS["covered_car"], 0.9)})
+    s.rename({"$ref": "CoveredCar"}, "CoveredCar")
+    # The fire pit and the two lanterns: renamed so that each light, ember and wick has a name of its own (D9).
+    place("%s/FirePit.stprefab" % PREFABS, "FirePit", FIRE_PIT["center"][0], FIRE_PIT["center"][1])
+    s.rename(s.find("Embers", "FirePitEmbers"), "FirePit.Embers")
+    # The fire's light where its flames are, above the stones: at the prefab's 0.35 m the ring of stones shadows the ground.
+    s.add("component.set", {"entity": s.find("Fire", "FireLight"), "component": "Transform", "values": {"Translation": [0.0, FIRE_LIGHT_HEIGHT, 0.0]}})
+    lantern_b_y = surface_at(world, *LANTERN_B_DRUM) + SCAN_BOUNDS["Barrel_01"][1][1]
+    for lantern, (x, y, z) in (("LanternA", LANTERN_A), ("LanternB", (LANTERN_B_DRUM[0], lantern_b_y, LANTERN_B_DRUM[1]))):
+        place("%s/Lantern.stprefab" % PREFABS, lantern, x, z, y=y)
+        s.rename({"$ref": lantern}, lantern)
+        s.rename(s.find("Light", lantern + "Light"), lantern + ".Light")
+        s.rename(s.find("Wick", lantern + "Wick"), lantern + ".Wick")
+        # The scan's glass is see-through: it must not shut the flame's light in.
+        glass = s.find("Lantern_01_glass", lantern + "Glass")
+        s.rename(glass, lantern + ".Glass")
+        s.add("component.set", {"entity": glass, "component": "MeshRenderer", "values": {"CastShadows": False}})
+    s.add("component.set", {"entity": {"$ref": "LanternBLight"}, "component": "PointLight", "values": {"CastShadows": False}})
+
+    # Drums in three clusters (seeded, at least 0.7 m apart), Lantern B's drum first at its place.
+    clusters = ((DRUM_CLUSTERS[0], 5), (DRUM_CLUSTERS[1], 3), (DRUM_CLUSTERS[2], 3))
+    drums = []
+    for (center, radius), count in clusters:
+        placed = [LANTERN_B_DRUM] if center == DRUM_CLUSTERS[2][0] else []
+        if placed:
+            drums.append(("Barrel_01", LANTERN_B_DRUM[0], LANTERN_B_DRUM[1], 0.0))
+        while len(placed) < count:
+            angle = rng.uniform(0.0, 2.0 * math.pi)
+            r = radius * math.sqrt(rng.uniform(0.0, 1.0))
+            x, z = center[0] + r * math.cos(angle), center[1] + r * math.sin(angle)
+            if all((x - px) ** 2 + (z - pz) ** 2 >= 0.7 ** 2 for px, pz in placed):
+                placed.append((x, z))
+                drums.append((DRUMS[len(drums) % len(DRUMS)], x, z, rng.uniform(0.0, 360.0)))
+    for index, (model, x, z, yaw_degrees) in enumerate(drums):
+        low, high = SCAN_BOUNDS[model]
+        radius = 0.5 * (high[0] - low[0])
+        place(scan_path(model), "Drum%d" % index, x, z, yaw_degrees,
+              extra={"BoxCollider": {"HalfExtents": rounded([radius * 0.9, high[1] * 0.5, radius * 0.9]), "Offset": [0.0, round(high[1] * 0.5, 4), 0.0]}})
+        s.rename({"$ref": "Drum%d" % index}, "Drum%d" % index)
+    # Tyres lying flat: a stack of four and three alone (their axis, local Z, turned up).
+    low, high = SCAN_BOUNDS["old_tyre"]
+    half_width = 0.5 * (high[2] - low[2])
+    tyres = [(TYRE_STACK[0], TYRE_STACK[1], k) for k in range(4)] + [(x, z, 0) for x, z in TYRES_SCATTERED]
+    for index, (x, z, level) in enumerate(tyres):
+        y = surface_at(world, x, z) + half_width * (2 * level + 1)
+        s.instantiate(scan_path("old_tyre"), "Tyre%d" % index, props, {"Transform": transform((x, y, z), pitch=90.0)})
+        s.rename({"$ref": "Tyre%d" % index}, "Tyre%d" % index)
+
+    # Rocks: the cliff band in the rim's face (left open in front of shot 1's camera), talus at its foot, boulders at the
+    # feet of the valley's walls, and shot 1's hero boulder.
+    rocks = s.create("Rocks", components={"RigidBody": {"Type": "Static", "Layer": 2}})
+    shot1 = report[0]
+    camera_v = valley_axes(shot1["key"][0], shot1["key"][2])[1]
+    rock_instances = {}
+
+    def add_rock(model, x, z, yaw_degrees, scale, sink):
+        low, high = SCAN_BOUNDS[model]
+        y = world.ground.surface(x, z) - sink * (high[1] - low[1]) * scale
+        rock_instances.setdefault(model, []).append({"parent": rocks, "components": {
+            "Transform": transform((x, y, z), yaw_degrees, scale), "BoxCollider": box_collider(SCAN_BOUNDS[model])}})
+
+    vs = [v for v in [-80.0 + 140.0 * (k + 0.5) / 12.0 for k in range(12)] if abs(v - camera_v) > 22.0][:CLIFFS]
+    for v in vs:
+        u = -43.0 + rng.uniform(-2.0, 2.0)
+        scale = rng.uniform(1.8, 3.0)
+        x, z = (u - v) * SQRT_HALF, (u + v) * SQRT_HALF
+        # Its face (local +Z) looks down the valley; the front's foot is buried in the slope.
+        front = (x + 0.78 * scale * SQRT_HALF, z + 0.78 * scale * SQRT_HALF)
+        y = world.ground.surface(*front) - 0.2 * scale
+        rock_instances.setdefault("namaqualand_cliff_01", []).append({"parent": rocks, "components": {
+            "Transform": transform((x, y, z), 45.0 + rng.uniform(-20.0, 20.0), scale), "BoxCollider": box_collider(SCAN_BOUNDS["namaqualand_cliff_01"])}})
+    hero = ground_at_image(world, shot1["key"], shot1["look"], shot1["fov"], 0.2, 0.86)
+    remaining = dict(BOULDERS)
+    remaining["namaqualand_boulder_03"] -= 1
+    talus = 18
+    for model in sorted(remaining):
+        for index in range(remaining[model]):
+            for _ in range(200):
+                if talus > 0:
+                    u, v = rng.uniform(-38.0, -30.0), rng.uniform(-80.0, 60.0)
+                else:
+                    u = rng.uniform(-30.0, 70.0)
+                    v = rng.choice((1.0, -1.0)) * rng.uniform(52.0, 75.0)
+                x, z = (u - v) * SQRT_HALF, (u + v) * SQRT_HALF
+                if layout.pad_distance(x, z) > 2.0:
+                    break
+            talus -= 1
+            add_rock(model, x, z, rng.uniform(0.0, 360.0), rng.uniform(0.8, 1.6), 0.15)
+    s.instantiate(scan_path("namaqualand_boulder_03"), "HeroBoulder", rocks, {
+        "Transform": transform((hero[0], hero[1] - 0.2, hero[2]), 30.0, 1.4), "BoxCollider": box_collider(SCAN_BOUNDS["namaqualand_boulder_03"])})
+    s.rename({"$ref": "HeroBoulder"}, "HeroBoulder")
+    for model, instances in sorted(rock_instances.items()):
+        s.add("prefab.instantiate", {"prefab": scan_path(model), "instances": instances})
+
+    # Dead brush on the dirt: most near the apron's edge, the rest at the feet of the slopes; never on a pad or in front
+    # of a shot's camera.
+    brush = s.create("Brush")
+    cameras = [p for shot in report for p in (shot["key"], shot["from"], shot["to"])]
+    instances = []
+    near, feet = BRUSH
+    while len(instances) < near + feet:
+        if len(instances) < near:
+            x, z = rng.uniform(APRON_X[0] - 14.0, APRON_X[1] + 14.0), rng.uniform(APRON_Z[0] - 14.0, APRON_Z[1] + 14.0)
+            d = layout.outline.signed_distance(x, z)
+            if d < 1.0 or rng.random() > math.exp(-(d - 1.0) / 6.0):
+                continue
+        else:
+            u, v = rng.uniform(-36.0, -26.0), rng.uniform(-70.0, 50.0)
+            x, z = (u - v) * SQRT_HALF, (u + v) * SQRT_HALF
+        if any(name != "Apron" and distance(x, z) < 1.0 for name, distance, _ in layout.pads):
+            continue
+        if any((x - c[0]) ** 2 + (z - c[2]) ** 2 < 5.0 ** 2 for c in cameras):
+            continue
+        scale = rng.uniform(0.8, 1.4)
+        instances.append({"parent": brush, "components": {"Transform": transform((x, world.ground.surface(x, z) - 0.02, z),
+                                                                                   rng.uniform(0.0, 360.0), scale)}})
+    s.add("prefab.instantiate", {"prefab": scan_path("dry_branches_medium_01"), "instances": instances})
+
+    # The six probes: Golden's on (the saved station), the others off.
+    stations_parent = s.create("Stations")
+    for name, *_ in STATIONS:
+        for part, position, yaw_degrees, extents, blend, priority in PROBES:
+            probe = "Probe.%s.%s" % (name, part)
+            s.create(probe, stations_parent, {"Transform": transform(position, yaw_degrees),
+                                              "ReflectionProbe": {"Extents": list(extents), "BlendDistance": blend, "BoxProjection": True,
+                                                                  "Priority": priority, "Intensity": 1.0}})
+            if name != "Golden":
+                s.add("entity.setActive", {"entity": {"$ref": probe}, "active": False})
+
+    # The tour's markers, the bookmark of the rock macro and the measurement views.
+    tour = s.create("Tour")
+    for shot in report:
+        for part in ("from", "key", "to", "look"):
+            s.create("Shot%d.%s" % (shot["shot"], part.capitalize()), tour, {"Transform": transform(shot[part])})
+    toward = normalize((toward_sun(*station("Golden")[3:5])[0], 0.0, toward_sun(*station("Golden")[3:5])[2]))
+    surface = (hero[0] + toward[0] * 1.2 * 1.4, hero[1] + 0.6, hero[2] + toward[2] * 1.2 * 1.4)
+    s.create("Macro.Key", tour, {"Transform": transform(add(surface, toward, 0.45))})
+    s.create("Macro.Look", tour, {"Transform": transform(surface)})
+    yard_eye, yard_look, _ = MEASURE_YARD
+    yard_look = (yard_look[0], surface_at(world, yard_look[0], yard_look[2]), yard_look[2])
+    hut_eye_local, hut_look_local, _ = MEASURE_HUT_LOCAL
+    hut_eye = local_to_world(HUT["center"], HUT["yaw"], hut_eye_local[0], hut_eye_local[2])
+    hut_look = local_to_world(HUT["center"], HUT["yaw"], hut_look_local[0], hut_look_local[2])
+    for name, position in (("Measure.Yard", yard_eye), ("Measure.YardLook", yard_look),
+                           ("Measure.Hut", (hut_eye[0], hut_eye_local[1], hut_eye[1])),
+                           ("Measure.HutLook", (hut_look[0], hut_look_local[1], hut_look[1]))):
+        s.create(name, tour, {"Transform": transform(position)})
+
+    # The overlay: the tour's fade and caption (the director shows them while it plays).
+    s.add("ui.create", {"type": "canvas", "name": "Overlay"}, {"Overlay": "/entity"})
+    s.add("component.set", {"entity": {"$ref": "Overlay"}, "component": "UICanvas", "values": {"ReceivesInput": False, "SortOrder": 10}})
+    s.add("ui.create", {"type": "image", "parent": {"$ref": "Overlay"}, "name": "Fade", "anchor": "stretch"}, {"Fade": "/entity"})
+    s.add("component.set", {"entity": {"$ref": "Fade"}, "component": "UIImage", "values": {"Color": [0.0, 0.0, 0.0, 1.0]}})
+    s.add("ui.create", {"type": "text", "parent": {"$ref": "Overlay"}, "name": "Caption", "text": "", "anchor": "bottomCenter",
+                        "position": [0, -64], "size": [1200, 64]}, {"Caption": "/entity"})
+    s.add("component.set", {"entity": {"$ref": "Caption"}, "component": "UIText", "values": {"FontSize": 36}})
+    s.add("entity.setActive", {"entities": [{"$ref": "Fade"}, {"$ref": "Caption"}], "active": False})
+
+    # The director, and the flicker of the fire's and the lanterns' flames.
+    for light, _ in LOCAL_LIGHTS:
+        s.add("script.add", {"entity": s.find(light, "flicker_" + bind_name(light)), "class": "Flicker"})
+    fields = {"Sun": s.find("Sun"), "Fog": {"$ref": "Fog"}, "PostProcess": s.find("Post Process", "PostProcess"),
+              "Player": player, "Eye": eye, "FadeImage": {"$ref": "Fade"}, "Caption": {"$ref": "Caption"},
+              "FireLight": {"$ref": "flicker_Fire"}, "LanternALight": {"$ref": "flicker_LanternA.Light"},
+              "LanternBLight": {"$ref": "flicker_LanternB.Light"}, "Embers": s.find("FirePit.Embers", "EmbersGlow"),
+              "WickA": s.find("LanternA.Wick", "WickA"), "WickB": s.find("LanternB.Wick", "WickB")}
+    for name, *_ in STATIONS:
+        for part, *_ in PROBES:
+            fields[name + part] = {"$ref": "Probe.%s.%s" % (name, part)}
+    outpost = s.create("Outpost")
+    s.add("script.add", {"entity": outpost, "class": "Outpost", "fields": fields})
+
+    # Golden, the saved station, then save.
+    s.steps += station_steps("Golden", True)
+    s.add("scene.save")
+    return s.steps
+
+
+def bake_script():
+    """The probes' bake (D10): each station's edit-mode steps with only its own probes on, then lighting.bakeProbes of its
+    two twice (the second pass adds the bounce the first gives), Golden last so the saved scene is Golden's."""
+    steps = [{"command": "scene.open", "parameters": {"scene": SCENE}}]
+    for name in ("Dawn", "Dusk", "Golden"):
+        steps += station_steps(name, True)
+        probes = [{"$ref": "station_Probe.%s.%s" % (name, part[0])} for part in PROBES]
+        for _ in range(2):
+            steps.append({"command": "lighting.bakeProbes", "parameters": {"entities": probes}})
+    steps.append({"command": "scene.save"})
+    return steps
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Checking captured shots (LookDev's output)
+
+def read_capture(directory, name):
+    tools = os.path.dirname(os.path.abspath(__file__))
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    import LookDev  # Its PNG reader (8-bit RGB and RGBA, all five filters)
+    path = os.path.join(directory, "shots", name)
+    if not os.path.isfile(path):
+        return None
+    return LookDev.read_png(path)
+
+
+def luma(image, x, y):
+    i = (y * image.width + x) * image.channels
+    d = image.data
+    return 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]
+
+
+def pixel_rect(image, rect):
+    x0, y0, x1, y1 = rect
+    return (max(0, int(x0 * image.width)), max(0, int(y0 * image.height)),
+            min(image.width, int(math.ceil(x1 * image.width))), min(image.height, int(math.ceil(y1 * image.height))))
+
+
+def crop_mean(image, rect):
+    x0, y0, x1, y1 = pixel_rect(image, rect)
+    total = sum(luma(image, x, y) for y in range(y0, y1) for x in range(x0, x1))
+    return total / max(1, (x1 - x0) * (y1 - y0))
+
+
+def image_bounds(points):
+    xs = [p[0] for p in points if p is not None]
+    ys = [p[1] for p in points if p is not None]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def check_stills(world, directory):
+    """Shots 2 and 3 at 1920 x 1080 with TAA: the highlight and the streak where the mirror condition puts them."""
+    results = []
+    report = {shot["shot"]: shot for shot in shots(world)}
+    surfaces = world.surfaces()
+    shot2 = report[2]
+    image = read_capture(directory, "showcase.shot2-1920x1080-taa.png")
+    if image is None:
+        results.append(("shot 2 highlight", False, "showcase.shot2-1920x1080-taa.png was not captured"))
+    else:
+        board = surfaces["letterboard"]
+        expected = shot2["image"]["highlight"]
+        point = shot2["mirror"]["point"]
+
+        def centroid(z_range):
+            corners = [project(shot2["key"], shot2["look"], shot2["fov"], (board["x"], y, z)) for y in board["y"] for z in z_range]
+            x0, y0, x1, y1 = pixel_rect(image, image_bounds(corners))
+            pixels = sorted(((luma(image, x, y), x, y) for y in range(y0, y1) for x in range(x0, x1)), reverse=True)
+            brightest = pixels[:max(1, len(pixels) // 1000)]
+            cx = sum(p[1] for p in brightest) / len(brightest) + 0.5
+            cy = sum(p[2] for p in brightest) / len(brightest) + 0.5
+            return cx, cy, math.hypot(cx - expected[0] * image.width, cy - expected[1] * image.height)
+
+        # The highlight is measured on the letterboard's section under the mirror point (painted at the key, between the
+        # two bare ones): bare steel beside it reflects more of everything and would outshine a correctly placed highlight.
+        panel = board["z"]
+        for low, high in board["sections"]:
+            if low <= point[2] <= high:
+                panel = (low, high)
+        cx, cy, off = centroid(panel)
+        wx, wy, whole = centroid(board["z"])
+        results.append(("shot 2 highlight", off <= 40.0, "the brightest 0.1%% of the letterboard's section at z %.2f..%.2f centered at "
+                        "(%.0f, %.0f), %.1f px from the computed (%.0f, %.0f) (at most 40); of the whole letterboard at (%.0f, %.0f), %.1f px"
+                        % (panel[0], panel[1], cx, cy, off, expected[0] * image.width, expected[1] * image.height, wx, wy, whole)))
+    shot3 = report[3]
+    image = read_capture(directory, "showcase.shot3-1920x1080-taa.png")
+    if image is None:
+        results.append(("shot 3 streak", False, "showcase.shot3-1920x1080-taa.png was not captured"))
+    else:
+        shell = surfaces["shell"]
+        center = shell["center"]
+        radius = shell["radius"]
+        silhouette = []
+        for degrees in range(0, 360, 5):
+            a = math.radians(degrees)
+            for y in shell["y"]:
+                silhouette.append(project(shot3["key"], shot3["look"], shot3["fov"], (center[0] + radius * math.cos(a), y, center[1] + radius * math.sin(a))))
+        bottom = shot3["image"]["streak bottom"]
+        top = shot3["image"]["streak top"]
+        left, _, right, _ = image_bounds(silhouette)
+        x0, y0, x1, y1 = pixel_rect(image, (left + 0.01, min(top[1], bottom[1]) + 0.02, right - 0.01, max(top[1], bottom[1]) - 0.02))
+        columns = [(sum(luma(image, x, y) for y in range(y0, y1)) / max(1, y1 - y0), x) for x in range(x0, x1)]
+        brightest = max(columns)[1] + 0.5
+        expected = shot3["image"]["streak"][0] * image.width
+        off = abs(brightest - expected)
+        results.append(("shot 3 streak", off <= 30.0, "the brightest column of the tank at x %.0f, %.1f px from the computed %.0f (at most 30)"
+                        % (brightest, off, expected)))
+        noprobe = read_capture(directory, "showcase.shot3.noprobe-1920x1080-taa.png")
+        if noprobe is not None:
+            # The streak itself is the sun's reflection, which no probe changes: the world shows in the shell beside it.
+            streak = crop_mean(image, STREAK_CROP) - crop_mean(noprobe, STREAK_CROP)
+            beside = crop_mean(image, BESIDE_STREAK_CROP) - crop_mean(noprobe, BESIDE_STREAK_CROP)
+            results.append(("shot 3 probe", abs(beside) >= 8.0, "the shell beside the streak differs by %.1f codes with and without "
+                            "Probe.Golden.Yard (at least 8), the streak crop by %.1f" % (beside, streak)))
+    return results
+
+
+def check_live(directory):
+    """Highlight shimmer in the live shots: the second differences of 32 px block means of the encoded luma over four
+    frames (a steady dolly moves the image at a constant rate, which they cancel), per shot and anti-aliasing mode."""
+    results = []
+    for number, (crop, rect) in sorted(LIVE_CROPS.items()):
+        for mode in LIVE_MODES:
+            name = "showcase.live.shot%d%s" % (number, mode)
+            frames = [read_capture(directory, "%s-1920x1080-live-%d.png" % (name, k)) for k in range(1, 5)]
+            if any(frame is None for frame in frames):
+                results.append((name, False, "its four live frames were not captured"))
+                continue
+            x0, y0, x1, y1 = pixel_rect(frames[0], rect)
+            blocks = [(bx, by) for by in range(y0, y1 - 31, 32) for bx in range(x0, x1 - 31, 32)]
+            means = []
+            for frame in frames:
+                row = []
+                for bx, by in blocks:
+                    total = sum(luma(frame, x, y) for y in range(by, by + 32) for x in range(bx, bx + 32))
+                    row.append(total / (32 * 32 * 255.0))
+                means.append(row)
+            differences = sorted(abs(means[k + 1][b] - 2.0 * means[k][b] + means[k - 1][b]) * 100.0
+                                 for k in (1, 2) for b in range(len(blocks)))
+            if not differences:
+                results.append((name, False, "the %s crop holds no 32 px block" % crop))
+                continue
+            mean = sum(differences) / len(differences)
+            p99 = differences[min(len(differences) - 1, int(math.ceil(0.99 * len(differences))) - 1)]
+            passed = mean <= SHIMMER_LIMITS[0] and p99 <= SHIMMER_LIMITS[1]
+            results.append((name, passed, "%s crop, %d blocks: mean %.3f%%, p99 %.3f%% (at most %.1f and %.1f)"
+                            % (crop, len(blocks), mean, p99, SHIMMER_LIMITS[0], SHIMMER_LIMITS[1])))
+    return results
+
+
+STATIONS_ROW = re.compile(r"^\s*\{\s*([^{}]+)\},\s*$")
+
+
+def read_station_rows(path):
+    """The rows of c_Stations in the scripts' Stations.h: one line per station."""
+    with open(path, encoding="utf-8") as file:
+        text = file.read()
+    start = text.find("c_Stations")
+    end = text.find("} };", start)
+    if start < 0 or end < 0:
+        raise CheckFailed("%s has no c_Stations table" % path)
+    rows = []
+    for line in text[start:end].splitlines():
+        match = STATIONS_ROW.match(line)
+        if not match:
+            continue
+        values = [v.strip() for v in match.group(1).split(",")]
+        if len(values) != 9:
+            raise CheckFailed("%s: a c_Stations row has %d values, not 9: %s" % (path, len(values), line.strip()))
+        rows.append(tuple(float(v.rstrip("f")) for v in values[:8]) + (values[8] == "true",))
+    return rows
+
+
+def check_station_rows(path):
+    failures = []
+    rows = read_station_rows(path)
+    if len(rows) != len(STATIONS):
+        return ["%s holds %d stations, not %d" % (path, len(rows), len(STATIONS))]
+    for row, expected in zip(rows, STATIONS):
+        own = expected[1:]
+        if any(abs(a - b) > 1e-6 * max(1.0, abs(b)) for a, b in zip(row[:8], own[:8])) or row[8] != own[8]:
+            failures.append("%s's %s row %s differs from the generator's %s" % (path, expected[0], row, own))
+    return failures
+
+
+# ---------------------------------------------------------------------------------------------------------------------
 # Commands
 
 def write_models(models, output):
@@ -1499,8 +2136,48 @@ def command_selftest(arguments):
               % (shot["shot"], off, angle, "on the surface" if inside else "OFF the surface"))
         if off > 0.01 or angle > 0.1 or not inside:
             failures.append("shot %d's mirror relation" % shot["shot"])
+    station_failures = check_station_rows(arguments.stations)
+    print("Stations.h: %s" % ("; ".join(station_failures) if station_failures else "its c_Stations rows equal the generator's"))
+    failures += station_failures
     print("FAIL: %s" % "; ".join(failures) if failures else "PASS")
     return 1 if failures else 0
+
+
+def write_steps(steps, output):
+    directory = os.path.dirname(os.path.abspath(output))
+    os.makedirs(directory, exist_ok=True)
+    with open(output, "w", encoding="utf-8", newline="\n") as file:
+        json.dump(steps, file, indent=1)
+        file.write("\n")
+    print("%s: %d steps" % (output, len(steps)))
+
+
+def command_layout(arguments):
+    write_steps(layout_script(World()), arguments.output)
+    return 0
+
+
+def command_bake(arguments):
+    write_steps(bake_script(), arguments.output)
+    return 0
+
+
+def command_setup(arguments):
+    steps = station_steps(arguments.station, arguments.format == "script")
+    if arguments.output:
+        write_steps(steps, arguments.output)
+    else:
+        print(json.dumps(steps, separators=(", ", ": ")))
+    return 0
+
+
+def command_checkshots(arguments):
+    results = check_live(arguments.capture) if arguments.live else check_stills(World(), arguments.capture)
+    for name, passed, text in results:
+        print("%s %s: %s" % ("PASS" if passed else "FAIL", name, text))
+    failed = [name for name, passed, _ in results if not passed]
+    print("FAIL: %s" % ", ".join(failed) if failed else "PASS")
+    return 1 if failed else 0
 
 
 def main():
@@ -1514,10 +2191,23 @@ def main():
     selftest = commands.add_parser("selftest", help="Check, generate twice and compare with the committed models")
     selftest.add_argument("--committed", required=True, help="The committed models' directory")
     selftest.add_argument("--work", required=True, help="A directory to write into")
+    selftest.add_argument("--stations", required=True, help="The scripts' Stations.h, whose c_Stations rows must equal the table")
+    layout_parser = commands.add_parser("layout", help="Write the command script that builds the scene's entities")
+    layout_parser.add_argument("--output", required=True, help="The command script to write (.json)")
+    bake = commands.add_parser("bake", help="Write the command script that bakes the six probes")
+    bake.add_argument("--output", required=True, help="The command script to write (.json)")
+    setup = commands.add_parser("setup", help="Print a station's edit-mode steps")
+    setup.add_argument("--station", required=True, choices=[row[0] for row in STATIONS])
+    setup.add_argument("--format", required=True, choices=("lookdev", "script"), help="LookDev Setup entries or command steps")
+    setup.add_argument("--output", help="Write them to this file instead of printing them")
+    checkshots = commands.add_parser("checkshots", help="Check a LookDev capture of the showcase's shots")
+    checkshots.add_argument("--capture", required=True, help="The LookDev output directory (holding shots/)")
+    checkshots.add_argument("--live", action="store_true", help="Measure the live shots' highlight shimmer instead")
     arguments = parser.parse_args()
     try:
         return {"terrain": command_terrain, "check": command_check, "stations": command_stations,
-                "selftest": command_selftest}[arguments.command](arguments)
+                "selftest": command_selftest, "layout": command_layout, "bake": command_bake, "setup": command_setup,
+                "checkshots": command_checkshots}[arguments.command](arguments)
     except CheckFailed as error:
         print("FAIL: %s" % error)
         return 1
