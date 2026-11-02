@@ -549,12 +549,17 @@ namespace Strata
 	void EditorContext::ApplyProjectLayers()
 	{
 		m_EditScene->ApplyProjectLayers();
+		m_EditScene->ApplyProjectTiming();
 		if (m_RuntimeScene)
+		{
 			m_RuntimeScene->ApplyProjectLayers();
+			m_RuntimeScene->ApplyProjectTiming();
+		}
 	}
 
 	void EditorContext::AdoptProjectLayers(Scene& scene, AssetHandle handle)
 	{
+		scene.ApplyProjectTiming();
 		scene.ApplyProjectLayers();
 		if (!scene.DoStoredLayersDiffer() || !handle.IsValid() || !m_StoredLayersWarned.insert(handle).second)
 			return;

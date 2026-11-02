@@ -549,6 +549,19 @@ TEST_SUITE("Editor.Input")
 		CHECK(harness.Run("input.key", { { "key", "Space" }, { "seconds", 0.1 }, { "wait", false } })["steps"] == 5);
 	}
 
+	TEST_CASE("Durations in seconds count in the project's fixed rate")
+	{
+		InputHarness harness;
+		harness.Run("scene.setSettings", { { "fixedTimestep", 0.02 } });
+		harness.Run("project.setSettings", { { "section", "Scene.Timing" }, { "value", { { "FixedRate", "120" } } } });
+		// Not playing: 900 s are 108,000 steps of a 120th, more than a duration may last (45,000 of the scene's own 0.02 s).
+		CHECK(harness.Fail("input.key", { { "key", "Space" }, { "seconds", 900 } }).ErrorKind == EditorCommandError::InvalidParameters);
+		harness.Run("play.start");
+		harness.Frame();
+		// A tenth of a second is 12 steps at 120 (5 of the scene's own step).
+		CHECK(harness.Run("input.key", { { "key", "Space" }, { "seconds", 0.1 }, { "wait", false } })["steps"] == 12);
+	}
+
 	TEST_CASE("An input sequence gives the same game whatever the frame rate")
 	{
 		const nlohmann::json sequence = {

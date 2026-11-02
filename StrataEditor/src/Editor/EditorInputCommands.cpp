@@ -73,9 +73,9 @@ namespace Strata
 			nlohmann::json& properties = schema["properties"];
 			properties["steps"] = IntegerSchema(fmt::format("Fixed steps of the game {} lasts ({}). Exact when frames run one step each (play.step, "
 				"input.sequence); in a running game the release lands after the frame whose update ran the last step, which may run up to "
-				"maxFixedStepsPerFrame - 1 more", what, hasDefault ? "default 1" : "default: until replaced or released"), 1, c_MaxHoldSteps);
-			properties["seconds"] = NumberSchema(fmt::format("Game time {} lasts, rounded up to whole fixed steps of the scene's fixedTimestep "
-				"(instead of steps)", what));
+				"the scene's maxFixedSteps - 1 more", what, hasDefault ? "default 1" : "default: until replaced or released"), 1, c_MaxHoldSteps);
+			properties["seconds"] = NumberSchema(fmt::format("Game time {} lasts, rounded up to whole fixed steps of the scene's step (scene.info's "
+				"settings.fixedRate.fixedTimestep; instead of steps)", what));
 			properties["frames"] = IntegerSchema("Same as steps (an older name: they used to count frames)", 1, c_MaxHoldSteps);
 			return schema;
 		}

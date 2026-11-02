@@ -1699,4 +1699,60 @@ TEST_SUITE("Editor.Commands")
 		CHECK(settings["contactRecycleDistance"].get<double>() == doctest::Approx(0.05));
 		harness.Run("play.stop");
 	}
+
+	TEST_CASE("project.setSettings sets the project's fixed rate: scenes step at it at once, and undo gives the scene's own back")
+	{
+		CommandHarness harness;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("EditorFixedRate") / "Game";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		// physics.stats reports the world's settings only while a world exists.
+		Scene& edited = *harness.Context.GetEditScene();
+		Tests::CreateGround(edited);
+		Tests::CreateDynamicBox(edited, "Box", glm::vec3(0.0f, 2.0f, 0.0f));
+		CHECK(harness.Run("project.settings")["sections"].dump().find("Scene.Timing") != std::string::npos);
+
+		harness.Run("scene.setSettings", { { "fixedTimestep", 0.02 } });
+		harness.Run("project.setSettings", { { "section", "Scene.Timing" }, { "value", { { "FixedRate", "120" } } } });
+		nlohmann::json settings = harness.Run("scene.info")["settings"];
+		CHECK(settings["fixedRate"]["stepsPerSecond"].get<double>() == doctest::Approx(120.0));
+		CHECK(settings["fixedRate"]["fixedTimestep"].get<double>() == doctest::Approx(1.0 / 120.0));
+		CHECK(settings["fixedRate"]["maxFixedSteps"] == 16);
+		CHECK(settings["fixedRate"]["source"] == "project");
+		CHECK(settings["fixedTimestep"].get<double>() == doctest::Approx(0.02)); // The scene's stored value
+
+		// The scene's own step is still stored, with a warning that the project's rate overrides it.
+		const nlohmann::json changed = harness.Run("scene.setSettings", { { "fixedTimestep", 0.01 } });
+		REQUIRE(changed.contains("warning"));
+		CHECK(changed["warning"].get<std::string>().find("Scene.Timing") != std::string::npos);
+		CHECK(changed["settings"]["fixedTimestep"].get<double>() == doctest::Approx(0.01));
+		CHECK(changed["settings"]["fixedRate"]["source"] == "project");
+		// A change of another setting warns of nothing, also with the step unchanged beside it (the Inspector sends them all).
+		CHECK_FALSE(harness.Run("scene.setSettings", { { "gravity", { 0.0, -9.81, 0.0 } }, { "fixedTimestep", 0.01 }, { "maxFixedStepsPerFrame", 8 } })
+			.contains("warning"));
+
+		harness.Run("play.start");
+		harness.Context.Update(Timestep(1.0f / 60.0f));
+		Scene& running = *harness.Context.GetActiveScene();
+		CHECK(running.GetFixedTimestep() == 1.0f / 120.0f);
+		CHECK(running.GetMaxFixedSteps() == 16);
+
+		// While playing: the running game steps at the new rate from its next update, and physics stiffens contacts to it
+		// (box3d: at most an eighth of the substep rate, 15 Hz at 30 steps/s; the copy's stored 0.01 s would give 30).
+		harness.Run("project.setSettings", { { "section", "Scene.Timing" }, { "value", { { "FixedRate", "30" } } } });
+		harness.Context.Update(Timestep(1.0f / 60.0f));
+		CHECK(harness.Context.GetActiveScene()->GetFixedTimestep() == 1.0f / 30.0f);
+		CHECK(harness.Run("physics.stats")["settings"]["effectiveContactHertz"].get<double>() == doctest::Approx(15.0));
+		harness.Run("play.stop");
+
+		// Undo: the rate 30, the scene's 0.01 s, the rate 120. The scene steps at its own 0.02 s again.
+		harness.Run("edit.undo");
+		harness.Run("edit.undo");
+		harness.Run("edit.undo");
+		settings = harness.Run("scene.info")["settings"];
+		CHECK(settings["fixedRate"]["source"] == "scene");
+		CHECK(settings["fixedRate"]["stepsPerSecond"].get<double>() == doctest::Approx(50.0));
+		CHECK(settings["fixedRate"]["maxFixedSteps"] == 8);
+		CHECK(settings["fixedTimestep"].get<double>() == doctest::Approx(0.02));
+		CHECK(harness.Context.GetProject()->GetSettings().FindSection("Scene.Timing") == nullptr);
+	}
 }

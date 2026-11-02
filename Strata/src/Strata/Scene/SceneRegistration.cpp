@@ -5,6 +5,7 @@
 #include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/ProjectCollisionLayers.h"
+#include "Strata/Scene/ProjectSceneTiming.h"
 #include "Strata/Scene/SceneReadProgress.h"
 
 namespace Strata
@@ -16,6 +17,9 @@ namespace Strata
 		// The project's collision layers are Scene's: the type, the parser and every reader of names are, so a build or game
 		// without physics keeps them.
 		SettingsRegistry::GetProcessRegistry().Register(ProjectCollisionLayers::MakeSection());
+		// The fixed rate is Scene's: the step drives scripts and animation as well as physics, so a build without physics keeps
+		// it.
+		SettingsRegistry::GetProcessRegistry().Register(ProjectSceneTiming::MakeSection());
 
 		// Prefabs and scenes are stored as their JSON source, models in their cooked JSON form: all are read as streams, which
 		// stop once the load is given up.
