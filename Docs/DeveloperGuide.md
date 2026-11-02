@@ -5534,6 +5534,9 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   columns, so inserting one moves the later ones; nothing depends on that, since ids are compared only within a build
   and perf-log readers find columns by name. A new resource of the scene layout takes the next free slot that
   `Include/Scene.slang`'s comment lists (assigned slots included), and a pass that does not run binds a dummy there.
+  Wave 8's assignments are in `Include/Scene.slang` (SRV 30-31, 34-36; `ReflectionParams.y` and `.z`) and its plan
+  (`GPU.Volumetric` after `GPU.Shadows`, `GPU.RadianceCascades` after `GPU.AO`; debug views `gi` and `open` after
+  `albedo`).
 - Register a module's GPU stages when the module registers (`RegisterRendererModule` registers `RendererGPUStages`), so they
   exist before a perf log writes its header (`GPU.UI` by `RegisterGameUIModule`), and so are the CPU stages its passes
   time (`Render.UI`): a stage `ST_PROFILE_STAGE` first registers in a frame after the header gets no column; a stage of a

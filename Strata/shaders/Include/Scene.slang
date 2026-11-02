@@ -7,9 +7,11 @@
 // The scene layout's slots (SceneRenderer::CreateResources): SRV 0-21, 27, 28, 29 (the aerial perspective volume), 32 and 33,
 // samplers 0-5 (materials), 8, 9 and 10, CBV 0.
 // SRV 22-26 belong to the compute layouts of temporal anti-aliasing and screen-space reflections, never to this one.
-// Assigned for wave 7: SRV 28 the sun's screen-space shadow mask, 32 the cascades' depth ranges and 33 the shadows'
-// blue-noise tile (sun-shadows); 29 the aerial perspective volume, 30 and 31 the irradiance volume, 34 volumetric fog
-// (light-and-materials). A new scene resource takes the next free slot (35), and a pass that does not run binds a dummy.
+// Assigned in wave 7: SRV 28 the sun's screen-space shadow mask, 32 the cascades' depth ranges and 33 the shadows'
+// blue-noise tile; 29 the aerial perspective volume. Assigned for wave 8: 30 and 31 the irradiance volume (radiance-cascades,
+// below its cut), 34 volumetric fog (volumetric), 35 the radiance cascades' indirect light (radiance-cascades), 36 fog
+// volumes (volumetric, below its cut). A new scene resource takes the next free slot (37), and a pass that does not run
+// binds a dummy.
 
 #include "Include/Common.slang"
 
@@ -102,7 +104,9 @@ struct FrameConstants
 	// The atmosphere's sun disk: xyz toward the sun, w its angular radius (0: none); rgb its illuminance at the ground (lux)
 	float4 SunDiskDirection;
 	float4 SunDiskColor;
-	float4 ReflectionParams; // x: 1 when the frame traced screen-space reflections (Forward.frag's u_ScreenReflections)
+	// x: 1 when the frame traced screen-space reflections (Forward.frag's u_ScreenReflections, SRV 18); y: 1 when the frame's
+	// indirect light comes from the radiance cascades (SRV 35), z: their intensity (radiance-cascades); w: reflections'.
+	float4 ReflectionParams;
 };
 
 ConstantBuffer<FrameConstants> u_Frame : register(b0);

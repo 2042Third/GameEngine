@@ -98,7 +98,10 @@ namespace Strata
 			// w its angular radius (0: no disk); rgb its illuminance at the ground in lux, through the atmosphere.
 			glm::vec4 SunDiskDirection;
 			glm::vec4 SunDiskColor;
-			glm::vec4 ReflectionParams; // x: 1 when the frame traced screen-space reflections (SRV 18 holds them)
+			// x: 1 when the frame traced screen-space reflections (SRV 18 holds them); y: 1 when the frame's indirect light
+			// comes from the radiance cascades (SRV 35), z: their intensity (radiance-cascades); w: reflections'. y, z and w
+			// are written 0 until those streams use them.
+			glm::vec4 ReflectionParams;
 		};
 		static_assert(sizeof(FrameConstants) == 8 * 64 + 26 * 16);
 
