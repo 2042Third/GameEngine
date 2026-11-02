@@ -80,13 +80,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build ccache gcc-14 g++-14 xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols \
-            libgtk-3-dev libvulkan-dev pkg-config
+            libgtk-3-dev libvulkan-dev pkg-config spirv-tools
           echo "CC=gcc-14" >> "$GITHUB_ENV"
           echo "CXX=g++-14" >> "$GITHUB_ENV"
 
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
-        run: brew install ninja ccache
+        run: brew install ninja ccache molten-vk
 
       - name: Install sccache
         if: runner.os == 'Windows'
@@ -138,6 +138,25 @@ jobs:
           set -o pipefail
           # Ninja keeps building after a failure, so one run reports every compile error.
           cmake --build --preset ${{ matrix.preset }}-${{ matrix.config }} --parallel -- -k 0 2>&1 | tee build.log
+
+      # Slang validates every module it writes, but StrataShaderTool then patches some (the depth prepass's vertex shaders'
+      # Invariant decoration) and Slang's archive has no spirv-val: the modules the engine embeds are validated here, after
+      # the patch, in the Vulkan 1.2 environment (Docs/DeveloperGuide.md, "Shaders").
+      - name: Validate the embedded shaders
+        if: matrix.key == 'linux-release'
+        shell: bash
+        run: |
+          set -o pipefail
+          bash .github/scripts/validate_shaders.sh build/${{ matrix.preset }}/Strata/EmbeddedShaders 2>&1 | tee shaders.log
+
+      # No Mac with a GPU runs CI: every embedded module goes through MoltenVK's SPIR-V to Metal conversion and Apple's Metal
+      # compiler, a lower bound of what MoltenVK does at run time (Docs/DeveloperGuide.md, "Shaders").
+      - name: Convert the embedded shaders to Metal
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -o pipefail
+          bash .github/scripts/convert_shaders_to_metal.sh build/${{ matrix.preset }}/Strata/EmbeddedShaders "${{ runner.temp }}/metal" --report-only 2>&1 | tee metal.log
 
       - name: Compiler cache statistics
         if: ${{ !cancelled() }}
@@ -199,7 +218,7 @@ jobs:
         shell: bash
         run: |
           python=$(command -v python3 || command -v python)
-          "$python" .github/scripts/annotate_failures.py configure.log build.log test.log
+          "$python" .github/scripts/annotate_failures.py configure.log build.log shaders.log metal.log test.log
 
   # Releases ship Dist builds (asserts compiled out, ST_DIST code paths), which only the release workflow built: a change
   # that compiled with asserts on alone broke Dist in wave 3 unnoticed. Every target is built in Dist on Windows here,

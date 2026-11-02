@@ -177,7 +177,10 @@ strata_add_shaders(Strata_Renderer
 		"Effects/GTAO.comp|Effects/GTAOHalf.comp|ST_AO_HALF"
 		"Scene/Skybox.frag|Scene/SkyboxAtmosphere.frag|ST_ATMOSPHERE"
 		"Effects/AODenoise.comp|Effects/AODenoiseHalf.comp|ST_AO_HALF"
-		"Effects/SceneColorCopy.comp|Effects/SceneColorCopyFallback.comp|ST_SCENE_COLOR_FALLBACK")
+		"Effects/SceneColorCopy.comp|Effects/SceneColorCopyFallback.comp|ST_SCENE_COLOR_FALLBACK"
+	# The depth prepass's EQUAL test needs the forward pass's positions bit-identical (Scene/Mesh.vert).
+	INVARIANT_POSITION
+		Scene/Mesh.vert)
 
 # The default font of text rendering (Roboto Medium, Apache License 2.0; see ThirdPartyNotices.md).
 strata_embed_file(Strata_Renderer "${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/misc/fonts/Roboto-Medium.ttf" GetDefaultFont)

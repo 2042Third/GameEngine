@@ -27,6 +27,9 @@ PATTERNS = [
     # MSVC and doctest built with it: path(line[,column]): [fatal] error C1234: message / path(line): ERROR: message
     re.compile(r"^\s*(?P<file>[^\s(][^(]*)\((?P<line>\d+)(?:,(?P<column>\d+))?\):\s*(?:(?:fatal|FATAL) )?(?:error|ERROR)(?:\s+\w+)?:\s*(?P<message>.*)$"),
 ]
+# slangc names the error on one line and its place on the next: error[E30019]: message / --> path:line:column
+SLANG_ERROR = re.compile(r"^\s*error\[E(?P<code>\d+)\]:\s*(?P<message>.*)$")
+SLANG_LOCATION = re.compile(r"^\s*-->\s*(?P<file>.+?):(?P<line>\d+):(?P<column>\d+)\s*$")
 # doctest prints what a failed assertion compared and the messages logged with it on the indented lines after it.
 DETAIL = re.compile(r"^\s+(values|logged|with expansion|exception):")
 # doctest's console reporter names the test case before its errors.
@@ -106,8 +109,15 @@ def main():
                 match = pattern.match(line)
                 if match:
                     break
+            slang = SLANG_ERROR.match(line)
+            if not match and slang and index + 1 < len(lines) and SLANG_LOCATION.match(lines[index + 1]):
+                location = SLANG_LOCATION.match(lines[index + 1])
+                match = {"file": location.group("file"), "line": location.group("line"), "column": location.group("column"),
+                         "message": "E%s: %s" % (slang.group("code"), slang.group("message"))}
             if match:
-                message = match.group("message")
+                if not isinstance(match, dict):
+                    match = match.groupdict()
+                message = match["message"]
                 details = []
                 for later in lines[index + 1:index + 1 + c_MaxDetailLines]:
                     if not DETAIL.match(later):
@@ -115,12 +125,12 @@ def main():
                     details.append(later.strip())
                 if details:
                     message += "\n" + "\n".join(details)
-                key = (match.group("file"), match.group("line"), message)
+                key = (match["file"], match["line"], message)
                 if key not in seen:
                     seen.add(key)
-                    located.append((relative(match.group("file")), match.group("line"), match.group("column"), message))
+                    located.append((relative(match["file"]), match["line"], match["column"], message))
                 if case:
-                    name = "%s / %s: %s:%s" % (suite, case, relative(match.group("file")), match.group("line"))
+                    name = "%s / %s: %s:%s" % (suite, case, relative(match["file"]), match["line"])
                     if name not in failed_cases:
                         failed_cases.append(name)
                 marked.update(range(max(0, index - c_ContextLines), min(len(lines), index + c_ContextLines + 1)))

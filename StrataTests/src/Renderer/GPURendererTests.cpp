@@ -4,9 +4,12 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Process.h"
 #include "Strata/ImGui/ImGuiRenderer.h"
+#include "Strata/Renderer/EmbeddedShaders.h"
+#include "Strata/Renderer/ShaderLibrary.h"
 #include "TestHelpers.h"
 
 #include <imgui.h>
+#include <spdlog/fmt/fmt.h>
 
 #include <chrono>
 #include <filesystem>
@@ -436,6 +439,29 @@ TEST_SUITE("GPU.Renderer")
 			imguiRenderer.Shutdown();
 		}
 		ImGui::DestroyContext();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Every embedded shader becomes a module the validation layer accepts")
+	{
+		// The layer validates every module the device creates and checks its capabilities against the enabled features, so
+		// this validates all of them, the ones StrataShaderTool patched included, not only those a test happens to draw with.
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ShaderLibrary& library = Renderer::GetShaderLibrary();
+		const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+		size_t created = 0;
+		for (const EmbeddedShader& shader : EmbeddedShaders::GetAll())
+		{
+			INFO(shader.Name);
+			const bool valid = library.Get(shader.Name) != nullptr;
+			CHECK(valid);
+			if (valid)
+				created++;
+		}
+		const double milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+		MESSAGE(fmt::format("{} shader modules created in {:.1f} ms (those other tests created before are cached)", created, milliseconds));
+		CHECK(created == EmbeddedShaders::GetAll().size());
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

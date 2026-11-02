@@ -115,6 +115,8 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_TEST_SOURCES}
 # The engine with its tooling (the asset pipeline: importers; the network: the RPC tests; ImGui: the UI tests).
 # StrataScriptCore: the scripting tests call the script C ABI directly.
 target_link_libraries(StrataTests PRIVATE Strata StrataTooling StrataScriptCore doctest stb)
+# Renderer.ShaderTool and Renderer.ShaderModules read SPIR-V with the shader tool's code (CMake/StrataShaderTool).
+target_link_libraries(StrataTests PRIVATE StrataShaderToolCore)
 # The glTF tests compress models with meshoptimizer's encoders (EXT_meshopt_compression), which the engine only decodes.
 target_link_libraries(StrataTests PRIVATE meshoptimizer)
 # The physics tests drive box3d directly too, among them box3d's own cross-platform determinism scenario (its golden hash,
