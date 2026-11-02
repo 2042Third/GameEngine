@@ -202,9 +202,10 @@ the newest of its branch or main, saved even when tests fail; at most 250 MB for
 Each ref keeps one entry per job: after the save, the job deletes its ref's older entries, so that main's set and the
 active branches' stay below GitHub's 10 GB, beyond which GitHub evicts the least recently used (main's first). A
 Dist build of every target on Windows uses the Visual Studio generator people build with, without a cache, and runs the
-`package` tests, so that the Visual Studio generator's script builds stay tested. Every job runs
-`StrataShaders.TargetHLSL` (every shader also compiles to HLSL); the Linux job validates the embedded shaders with
-`spirv-val`, and the macOS job converts them to Metal and compiles them ([Shaders](#shaders), "The checks"). Older compilers and other standard
+`package` tests, so that the Visual Studio generator's script builds stay tested. Every job that runs
+`ctest -LE "gpu|perf"` (all but the Dist build) runs `StrataShaders.TargetHLSL` (every shader also compiles to HLSL) and
+`StrataTools.LookDevOffline`, also without the editor; the Linux job validates the embedded shaders with `spirv-val`, and
+the macOS job converts them to Metal and compiles them ([Shaders](#shaders), "The checks"). Older compilers and other standard
 libraries reject code that the local ones accept (Apple Clang 15's libc++ has no floating-point `std::from_chars`;
 `size_t` and `uint64_t` are different types on macOS; GCC 14 warns where newer GCCs do not), so a branch that lands many
 changes (a wave's integration) is pushed as `ci/<name>` and waits for green CI before it moves `main`
@@ -686,7 +687,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     command script, one shot at 320x180 with FXAA twice, every output checked (sizes, crops, stats with no pending asset,
     no difference between the repeats, the page, `compare` of the set with itself), and the offline checks: the PNG
     reader and writer round trip, the signed difference and the per-mode summary. `selftest` without `--build` runs only
-    the offline checks, which `StrataTools.LookDevOffline` (label `tools`, no GPU) runs on every CI job. Both need Python
+    the offline checks, which `StrataTools.LookDevOffline` (label `tools`, no GPU, no editor) runs on every CI job that
+    runs `ctest -LE "gpu|perf"` (all but the Dist build). Both need Python
     3.10 or later found at configure time; without it the tests fail saying so.
   - Baselines: Strata 0.6.0's set (bc6ee123's Release build, every shot, both sizes, all modes, 5 repeats) lies in
     `.worktrees/wave7-plan/lookdev/0.6.0/` on the reference machine, outside the repository, with wave 7's step 0 beside it.
@@ -3663,7 +3665,8 @@ mechanical, so a lighting bug in code nobody changed may be a conversion slip (i
    types, `Sample` in compute, storage images without a format, `SV_InstanceID`); the four `Scene/Mesh*.vert` entries
    keep their position invariant; no module binds two used variables to one slot. `Renderer.ShaderTool` tests the tool.
    `GPU.Renderer` creates every module under the validation layer. `StrataShaders.TargetHLSL` compiles every entry to
-   HLSL on every CI job, `StrataSlang.Fetch` checks the pin, `StrataTools.LookDevOffline` the look-dev compare. CI's
+   HLSL on every CI job but the Dist build (which runs only the package tests), `StrataSlang.Fetch` checks the pin,
+   `StrataTools.LookDevOffline` the look-dev compare. CI's
    Linux job validates the final modules with `spirv-val` (Vulkan 1.2; slangc validated them before the patch), and the
    macOS job converts every module to Metal with MoltenVK's converter and compiles it (a lower bound of what MoltenVK does
    at run time): `c_KnownFailures` of `.github/scripts/convert_shaders_to_metal.sh` lists the entries the offline

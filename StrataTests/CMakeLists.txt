@@ -340,13 +340,29 @@ add_test(NAME StrataSlang.Fetch
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/SlangFetchTests.cmake")
 
 # The console route stays open: every embedded shader also compiles to HLSL (slangc -target hlsl over the build's shader
-# manifest, no DXC; Shaders/TargetHLSL.cmake). No label, so every CI job runs it.
+# manifest, no DXC; Shaders/TargetHLSL.cmake). No label, so every CI job that runs ctest -LE "gpu|perf" runs it (the Dist
+# job runs only the package tests).
 get_property(strataSlangc GLOBAL PROPERTY STRATA_SLANGC)
 get_property(strataShaderEntries GLOBAL PROPERTY STRATA_SHADER_ENTRIES)
 add_test(NAME StrataShaders.TargetHLSL
 	COMMAND "${CMAKE_COMMAND}" "-DSLANGC=${strataSlangc}" "-DENTRIES=${strataShaderEntries}" "-DREPOSITORY=${PROJECT_SOURCE_DIR}"
 		"-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/ShaderTargets/hlsl/$<CONFIG>" -P "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/TargetHLSL.cmake")
 set_tests_properties(StrataShaders.TargetHLSL PROPERTIES TIMEOUT 300)
+
+# The look-dev harness's checks that need no editor (PNG, signed differences, the per-mode summary): no editor guard, so
+# every build that runs CTest has it, also the one without the editor; StrataTools.LookDev, below, captures with the
+# editor and needs a GPU. The StrataTools.* tests need Python 3; without it at configure time the tests still exist and
+# fail saying so.
+find_package(Python3 3.10 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+	add_test(NAME StrataTools.LookDevOffline
+		COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/Tools/LookDev.py" selftest
+			--output "${CMAKE_CURRENT_BINARY_DIR}/LookDevOffline/$<CONFIG>")
+else()
+	add_test(NAME StrataTools.LookDevOffline
+		COMMAND "${CMAKE_COMMAND}" "-DTEST_NAME=StrataTools.LookDevOffline" -P "${CMAKE_CURRENT_SOURCE_DIR}/Tools/PythonMissing.cmake")
+endif()
+set_tests_properties(StrataTools.LookDevOffline PROPERTIES LABELS "tools" TIMEOUT 120)
 
 # Games contain no tooling: the runtime's linker map names no object or library of Dear ImGui, ImGuizmo, the asset
 # pipeline, the network or zstd's compressor (Architecture/CheckNoTooling.cmake; the configure checks what it links).
@@ -499,26 +515,17 @@ if(TARGET StrataEditor AND TARGET StrataCLI)
 	set_tests_properties(StrataEditor.Automation PROPERTIES ENVIRONMENT "${STRATA_END_TO_END_ENVIRONMENT}" TIMEOUT 600)
 
 	# The look-dev harness (Tools/LookDev.py) keeps working: it builds the look-dev project with this build's editor,
-	# captures one shot small twice and checks every output (Docs/DeveloperGuide.md, "Look-dev harness").
-	# StrataTools.LookDevOffline runs only the checks that need no editor (PNG, signed differences, the per-mode summary),
-	# so every CI job runs them; StrataTools.LookDev needs a GPU. The StrataTools.* tests need Python 3; without it at
-	# configure time the tests still exist and fail saying so.
-	find_package(Python3 3.10 COMPONENTS Interpreter)
+	# captures one shot small twice and checks every output (Docs/DeveloperGuide.md, "Look-dev harness"). Python 3 was
+	# looked for above, beside StrataTools.LookDevOffline.
 	if(Python3_Interpreter_FOUND)
 		add_test(NAME StrataTools.LookDev
 			COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/Tools/LookDev.py" selftest --build "$<TARGET_FILE_DIR:StrataEditor>"
 				--output "${CMAKE_CURRENT_BINARY_DIR}/LookDevSelfTest/$<CONFIG>")
-		add_test(NAME StrataTools.LookDevOffline
-			COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/Tools/LookDev.py" selftest
-				--output "${CMAKE_CURRENT_BINARY_DIR}/LookDevOffline/$<CONFIG>")
 	else()
 		add_test(NAME StrataTools.LookDev
 			COMMAND "${CMAKE_COMMAND}" "-DTEST_NAME=StrataTools.LookDev" -P "${CMAKE_CURRENT_SOURCE_DIR}/Tools/PythonMissing.cmake")
-		add_test(NAME StrataTools.LookDevOffline
-			COMMAND "${CMAKE_COMMAND}" "-DTEST_NAME=StrataTools.LookDevOffline" -P "${CMAKE_CURRENT_SOURCE_DIR}/Tools/PythonMissing.cmake")
 	endif()
 	set_tests_properties(StrataTools.LookDev PROPERTIES LABELS "gpu;tools" TIMEOUT 900)
-	set_tests_properties(StrataTools.LookDevOffline PROPERTIES LABELS "tools" TIMEOUT 120)
 endif()
 
 # The runtime's command line, before any game is looked for: --help prints the usage and exits 0, an argument it does not
