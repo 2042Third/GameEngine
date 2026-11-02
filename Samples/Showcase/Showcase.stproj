@@ -1,6 +1,10 @@
 {
 	"Project": {
 		"AssetDirectory": "Assets",
+		"Export": {
+			"AlwaysInclude": [],
+			"LoadingScene": "E9C051E8C0168F66"
+		},
 		"Name": "Showcase",
 		"Scripts": {
 			"ModuleName": "ShowcaseScripts",
@@ -9,6 +13,235 @@
 		"StartScene": "6F344C100157C0F5"
 	},
 	"Settings": {
+		"Input.Actions": {
+			"Value": {
+				"Maps": [
+					{
+						"Actions": [
+							{
+								"Bindings": [
+									"Key/Enter",
+									"Key/KPEnter",
+									"Key/Space",
+									"Gamepad/A"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Submit"
+							},
+							{
+								"Bindings": [
+									"Key/Escape",
+									"Gamepad/B"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Cancel"
+							},
+							{
+								"Bindings": [
+									"Key/Up",
+									"Gamepad/DPadUp",
+									"Gamepad/LeftY+"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Up"
+							},
+							{
+								"Bindings": [
+									"Key/Down",
+									"Gamepad/DPadDown",
+									"Gamepad/LeftY-"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Down"
+							},
+							{
+								"Bindings": [
+									"Key/Left",
+									"Gamepad/DPadLeft",
+									"Gamepad/LeftX-"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Left"
+							},
+							{
+								"Bindings": [
+									"Key/Right",
+									"Gamepad/DPadRight",
+									"Gamepad/LeftX+"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Right"
+							}
+						],
+						"Enabled": true,
+						"Name": "UI"
+					},
+					{
+						"Actions": [
+							{
+								"Bindings": [
+									"2D:Key/W,Key/S,Key/A,Key/D",
+									"Gamepad/LeftStick"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Vector2",
+								"Name": "Move"
+							},
+							{
+								"Bindings": [
+									"Gamepad/RightStick"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Vector2",
+								"Name": "Look"
+							},
+							{
+								"Bindings": [
+									"Key/Space",
+									"Gamepad/A"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Jump"
+							},
+							{
+								"Bindings": [
+									"Key/LeftShift",
+									"Gamepad/RightBumper"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Run"
+							},
+							{
+								"Bindings": [
+									"Key/E",
+									"Gamepad/RightTrigger+"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Up"
+							},
+							{
+								"Bindings": [
+									"Key/Q",
+									"Gamepad/LeftTrigger+"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Down"
+							}
+						],
+						"Enabled": true,
+						"Name": "Gameplay"
+					},
+					{
+						"Actions": [
+							{
+								"Bindings": [
+									"Key/Tab",
+									"Gamepad/Y"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Fly"
+							},
+							{
+								"Bindings": [
+									"Key/P",
+									"Gamepad/Start"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Photo"
+							},
+							{
+								"Bindings": [
+									"Key/H",
+									"Gamepad/Back"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "HideUI"
+							},
+							{
+								"Bindings": [
+									"Key/T"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Tour"
+							},
+							{
+								"Bindings": [
+									"Key/D1"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Bookmark1"
+							},
+							{
+								"Bindings": [
+									"Key/D2"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Bookmark2"
+							},
+							{
+								"Bindings": [
+									"Key/D3"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Bookmark3"
+							},
+							{
+								"Bindings": [
+									"Key/D4"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Bookmark4"
+							},
+							{
+								"Bindings": [
+									"Key/D5"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Bookmark5"
+							},
+							{
+								"Bindings": [
+									"Key/D6"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Bookmark6"
+							},
+							{
+								"Bindings": [
+									"Key/D7"
+								],
+								"DeadZone": 0.15,
+								"Kind": "Button",
+								"Name": "Bookmark7"
+							}
+						],
+						"Enabled": true,
+						"Name": "Showcase"
+					}
+				]
+			},
+			"Version": 1
+		},
 		"Scene.CollisionLayers": {
 			"Value": {
 				"Names": {

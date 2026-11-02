@@ -23,14 +23,29 @@ The sample is being built in steps. This version holds the project and its scann
 | `Assets/Prefabs/` | Bus (on six scanned tyres), OilTank (with its pipes and a leaning ladder), FuelTank, Hut (with its lean-to), FirePit (stones, embers, the light `Fire`) and Lantern (wick and the light `Light`), each with convex colliders |
 | `Assets/Scenes/Outpost.stscene` | The start scene, laid out by `GenerateShowcaseTerrain.py layout`: the ground with its materials and colliders (layer `Terrain`), every prop on the surface under it (layer `Props`), the cliff band, boulders and dead brush, six reflection probes (`Probe.<Dawn, Golden or Dusk>.<Yard or Hut>`), the tour's markers (`Shot<N>.From`, `.Key`, `.To`, `.Look`), the camera rig (`Player` and its `Eye`), the fog, the overlay and the director `Outpost`. It is saved at golden hour |
 | `Assets/Lighting/Outpost/` | The six probes' captures, baked by `GenerateShowcaseTerrain.py bake`: the yard and the hut at dawn, golden hour and dusk |
-| `Scripts/` | `Outpost` (the director: the three times of day and the camera tour), `Flicker` (the fire's and the lanterns' flames), and the tables they share with the generator (`Stations.h`, `TourPath.h`) |
+| `Assets/Scenes/Loading.stscene` | The exported game's loading scene: the title and a progress bar |
+| `Scripts/` | `Outpost` (the director: the three times of day, the camera tour, the walk and flight, the photo mode), `Flicker` (the fire's and the lanterns' flames), `LoadingScreen`, and the tables they share with the generator (`Stations.h`, `TourPath.h`) |
 
 Play it and the tour runs: six shots of about 80 seconds, dawn over the valley from the rim, the low sun on the bus's
-side, on the oil tank and in the puddles, the hut's interior and dusk with the fire lit; it loops. `T` starts it again.
-Each time of day switches its own baked probes on (the old ones stay on for a second, so a reflection never falls to
-the sky). The walk, the free flight and the photo mode come next. The materials and prefabs were made by the generators'
-command scripts (`GenerateShowcaseProps.py materials` and `prefabs`, `GenerateShowcaseTerrain.py layout` and `bake`),
-run in the editor.
+side, on the oil tank and in the puddles, the hut's interior and dusk with the fire lit; it loops. Each time of day
+switches its own baked probes on (the old ones stay on for a second, so a reflection never falls to the sky).
+
+| Control | Keyboard and mouse | Gamepad |
+| --- | --- | --- |
+| Take over from the tour, walk | `W` `A` `S` `D`, the mouse looks | Left stick, right stick |
+| Run (flying: fast) | `Left Shift` | Right bumper |
+| Fly, and back to walking | `Tab`; up `E`, down `Q`; the right mouse button looks | `Y`; triggers |
+| Photo mode | `P` | Start |
+| Hide the game's UI | `H` | Back |
+| The tour again | `T` | |
+| Bookmarks: the six shots and a rock macro | `1` to `7` | |
+
+The photo mode sets the time of day (6:30 to 19:00: the light follows the hour, the reflections snap to the nearest of
+the three baked times), the exposure, the field of view, the focus (by hand or automatic), the f-number and depth of
+field, and the players' graphics options (the quality preset and anti-aliasing) for the session. The scene, its probes
+and the director's controls were made by the generators' command scripts (`GenerateShowcaseProps.py materials` and
+`prefabs`, `GenerateShowcaseTerrain.py layout`, `controls` and `bake`), run in the editor; the exported game shows a
+loading scene while the outpost streams in.
 
 ## Credits
 

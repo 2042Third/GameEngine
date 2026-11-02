@@ -14,7 +14,8 @@ void Outpost::StartTour()
 	if (!m_MarkersFound)
 		FindMarkers();
 	const int32_t start = std::clamp(StartShot, 1, c_ShotCount);
-	Mode = 0;
+	SetPhotoOpen(false);
+	SetMode(0);
 	Shot = 0;
 	m_TourWaiting = true;
 	m_TourTime = GetShotStart(start);
@@ -42,11 +43,7 @@ void Outpost::UpdateTour(float realDeltaTime)
 		ToursCompleted++;
 		if (!LoopTour)
 		{
-			Mode = 1;
-			Shot = 0;
-			SetFade(0.0f);
-			SetCaption("");
-			Log::Info("Showcase: tour finished");
+			EndTour("finished");
 			return;
 		}
 		m_TourTime = std::fmod(m_TourTime, GetTourSeconds());
@@ -58,6 +55,16 @@ void Outpost::UpdateTour(float realDeltaTime)
 	const ShotMarkers& markers = m_Shots[static_cast<size_t>(moment.Shot - 1)];
 	PlaceCamera(DollyPosition(markers.From, markers.Key, markers.To, moment.Progress), markers.Look, GetShot(moment.Shot).Fov);
 	SetFade(moment.Fade);
+}
+
+void Outpost::EndTour(const char* how)
+{
+	Shot = 0;
+	m_TourWaiting = false;
+	SetFade(0.0f);
+	SetCaption("");
+	Log::Info("Showcase: tour ", how);
+	SetMode(1);
 }
 
 void Outpost::BeginShot(int32_t number)
@@ -79,13 +86,11 @@ void Outpost::PlaceCamera(const glm::vec3& eye, const glm::vec3& look, float fov
 	if (horizontal < 1e-4f && std::abs(direction.y) < 1e-4f)
 		return;
 	// The body turns with the yaw, the eye with the pitch (as the walk does).
-	const float yaw = std::atan2(-direction.x, -direction.z);
-	const float pitch = std::atan2(direction.y, horizontal);
-	const glm::quat body = glm::angleAxis(yaw, glm::vec3(0.0f, 1.0f, 0.0f));
-	const glm::vec3 eyeOffset = Eye.GetTransform().GetTranslation();
-	Player.GetTransform().SetWorldPosition(eye - body * eyeOffset);
-	Player.GetTransform().SetWorldRotation(body);
-	Eye.GetTransform().SetRotation(glm::angleAxis(pitch, glm::vec3(1.0f, 0.0f, 0.0f)));
+	m_Yaw = glm::degrees(std::atan2(-direction.x, -direction.z));
+	m_Pitch = glm::degrees(std::atan2(direction.y, horizontal));
+	ApplyLook();
+	const glm::quat body = glm::angleAxis(glm::radians(m_Yaw), glm::vec3(0.0f, 1.0f, 0.0f));
+	Player.GetTransform().SetWorldPosition(eye - body * Eye.GetTransform().GetTranslation());
 	if (Eye.GetProperty<float>("Camera", "PerspectiveFOV").value_or(0.0f) != fov)
 		Eye.SetProperty("Camera", "PerspectiveFOV", fov);
 }

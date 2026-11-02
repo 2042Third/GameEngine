@@ -9,6 +9,7 @@ The outputs are committed and a CTest (StrataTools.ShowcaseTerrain) keeps them e
     python3 -I Tools/GenerateShowcaseTerrain.py selftest --committed Samples/Showcase/Assets/Generated/Terrain
         --stations Samples/Showcase/Scripts/Stations.h --work <dir>
     python3 -I Tools/GenerateShowcaseTerrain.py layout --output <Layout.json>
+    python3 -I Tools/GenerateShowcaseTerrain.py controls --output <Controls.json>
     python3 -I Tools/GenerateShowcaseTerrain.py bake --output <Bake.json>
     python3 -I Tools/GenerateShowcaseTerrain.py setup --station Dawn|Golden|Dusk --format lookdev|script [--output <file>]
     python3 -I Tools/GenerateShowcaseTerrain.py checkshots --capture <LookDev output directory> [--live]
@@ -55,6 +56,8 @@ layout    writes the editor command script that builds the scene's entities in S
           present): the ground's materials, the fog, the camera rig, the props on the surfaces under them, the seeded rocks
           and brush, the six reflection probes, the tour's markers, the overlay, the director and the Golden station; it
           is run once (StrataEditor --quit-after-commands), later edits are commands of their own.
+controls  writes the command script of the director's controls: the project's input actions (Gameplay: Move, Look, Jump,
+          Run, Up, Down; Showcase: Fly, Photo, HideUI, Tour, Bookmark1-7), the photo mode's canvas and the loading scene.
 bake      writes the command script that bakes the six probes: per station (Dawn, Dusk, Golden last, the saved one) its
           edit-mode steps with only its two probes on, then lighting.bakeProbes of them twice (the second adds a bounce).
 setup     prints a station's edit-mode steps: the GoldenHour preset turned to its sun, the sun's intensity and shadow
@@ -1888,6 +1891,117 @@ def layout_script(world):
     return s.steps
 
 
+# The input actions (the showcase spec's D9): (map, action, kind, bindings).
+INPUT_ACTIONS = (
+    ("Gameplay", "Move", "Vector2", ["2D:Key/W,Key/S,Key/A,Key/D", "Gamepad/LeftStick"]),
+    ("Gameplay", "Look", "Vector2", ["Gamepad/RightStick"]),
+    ("Gameplay", "Jump", "Button", ["Key/Space", "Gamepad/A"]),
+    ("Gameplay", "Run", "Button", ["Key/LeftShift", "Gamepad/RightBumper"]),
+    ("Gameplay", "Up", "Button", ["Key/E", "Gamepad/RightTrigger+"]),
+    ("Gameplay", "Down", "Button", ["Key/Q", "Gamepad/LeftTrigger+"]),
+    ("Showcase", "Fly", "Button", ["Key/Tab", "Gamepad/Y"]),
+    ("Showcase", "Photo", "Button", ["Key/P", "Gamepad/Start"]),
+    ("Showcase", "HideUI", "Button", ["Key/H", "Gamepad/Back"]),
+    ("Showcase", "Tour", "Button", ["Key/T"]),
+) + tuple(("Showcase", "Bookmark%d" % n, "Button", ["Key/D%d" % n]) for n in range(1, 8))
+
+# The photo mode's sliders (the showcase spec's D12): (slider, label, min, max, value, whole numbers).
+PHOTO_SLIDERS = (
+    ("TimeSlider", "TimeLabel", STATIONS[0][1], STATIONS[-1][1], station("Golden")[1], False),
+    ("ExposureSlider", "ExposureLabel", -3.0, 3.0, 0.0, False),
+    ("FovSlider", "FovLabel", 20.0, 90.0, 40.0, False),
+    ("FocusSlider", "FocusLabel", 0.0, 1.0, 0.5, False),
+    ("ApertureSlider", "ApertureLabel", 0.0, 8.0, 2.0, True),
+)
+
+
+def controls_script():
+    """The editor command script of the director's controls (S5): the project's input actions, the photo mode's canvas
+    (its widgets reporting to Outpost, which the script's fields name), the loading scene and the export setting naming
+    it. Run once on the laid-out scene; it saves both scenes."""
+    s = SceneScript()
+    s.add("scene.open", {"scene": SCENE})
+    s.add("script.build", expect={"/success": {"equals": True}})
+    for map_name in ("Gameplay", "Showcase"):
+        s.add("inputActions.setMap", {"map": map_name})
+    for map_name, action, kind, bindings in INPUT_ACTIONS:
+        s.add("inputActions.setAction", {"action": "%s/%s" % (map_name, action), "kind": kind, "bindings": bindings})
+    outpost = s.find("Outpost")
+    target = {"EventTarget": outpost}
+
+    def ui(kind, name, parent, **extra):
+        parameters = {"type": kind, "name": name}
+        if parent is not None:
+            parameters["parent"] = {"$ref": parent}
+        parameters.update(extra)
+        bind = {name: "/entity"}
+        if kind in ("toggle", "button"):
+            bind[name + "Label"] = "/parts/label"
+        s.add("ui.create", parameters, bind)
+        if kind in ("toggle", "button"):
+            # The widget kit's labels are sized for menus: the panel's are small and stay on one line.
+            s.add("component.set", {"entity": {"$ref": name + "Label"}, "component": "UIText", "values": {"FontSize": 14, "Wrap": False}})
+
+    def set_component(name, component, values):
+        s.add("component.set", {"entity": {"$ref": name}, "component": component, "values": values})
+
+    def label(name, text):
+        ui("text", name, "PhotoRows", text=text, size=[0, 20])
+        set_component(name, "UIText", {"FontSize": 15, "Alignment": "Left"})
+
+    ui("canvas", "PhotoMode", None)
+    set_component("PhotoMode", "UICanvas", {"ReferenceResolution": [1280, 720], "MatchWidthOrHeight": 1.0, "SortOrder": 5})
+    ui("image", "PhotoPanel", "PhotoMode", anchor="middleRight", position=[-16, 0], size=[300, 600])
+    set_component("PhotoPanel", "UIImage", {"Color": [0.04, 0.04, 0.05, 0.72], "CornerRadius": 10})
+    ui("verticalLayout", "PhotoRows", "PhotoPanel", anchor="stretch")
+    set_component("PhotoRows", "UILayout", {"Padding": [14, 14, 14, 14], "Spacing": [0, 4], "StretchChildren": True})
+    for slider, text, low, high, value, whole in PHOTO_SLIDERS:
+        label(text, text)
+        ui("slider", slider, "PhotoRows", size=[0, 18])
+        set_component(slider, "UISlider", dict(target, MinValue=low, MaxValue=high, Value=value, WholeNumbers=whole))
+    for toggle, text in (("DofToggle", "Depth of field"), ("AutoFocusToggle", "Autofocus")):
+        ui("toggle", toggle, "PhotoRows", text=text, size=[0, 24])
+        set_component(toggle, "UIToggle", dict(target, IsOn=toggle == "AutoFocusToggle"))
+    label("QualityLabel", "Quality")
+    ui("gridLayout", "QualityRow", "PhotoRows", size=[0, 48])
+    set_component("QualityRow", "UILayout", {"CellSize": [128, 22], "Columns": 2, "Spacing": [6, 4]})
+    for preset in ("Low", "Medium", "High", "Ultra"):
+        ui("toggle", "Preset" + preset, "QualityRow", text=preset)
+        set_component("Preset" + preset, "UIToggle", dict(target, Group={"$ref": "QualityRow"}, IsOn=preset == "High"))
+    label("AntiAliasingLabel", "Anti-aliasing")
+    ui("button", "AntiAliasing", "PhotoRows", text="Change", size=[0, 26])
+    set_component("AntiAliasing", "UIButton", target)
+    label("BookmarksLabel", "Bookmarks")
+    ui("gridLayout", "BookmarkRow", "PhotoRows", size=[0, 28])
+    set_component("BookmarkRow", "UILayout", {"CellSize": [34, 26], "Columns": 7, "Spacing": [3, 0]})
+    for n in range(1, 8):
+        ui("button", "Bookmark%d" % n, "BookmarkRow", text=str(n))
+        set_component("Bookmark%d" % n, "UIButton", target)
+    s.add("entity.setActive", {"entity": {"$ref": "PhotoPanel"}, "active": False})
+    for field in ["PhotoPanel", "QualityLabel", "AntiAliasingLabel", "DofToggle", "AutoFocusToggle"] + [n for row in PHOTO_SLIDERS for n in row[:2]]:
+        s.add("script.setField", {"entity": outpost, "class": "Outpost", "field": field, "value": {"$ref": field}})
+    s.add("scene.save")
+
+    # The loading scene: a black camera, the title and a bar LoadingScreen fills.
+    s.add("scene.new", {"name": "Loading"})
+    s.create("Camera", components={"Camera": {"Primary": True, "ClearColor": [0.0, 0.0, 0.0, 1.0]}})
+    ui("canvas", "LoadingUI", None)
+    ui("text", "Title", "LoadingUI", text="High Desert Outpost", anchor="middleCenter", position=[0, -60], size=[1200, 80])
+    set_component("Title", "UIText", {"FontSize": 56})
+    ui("image", "Track", "LoadingUI", anchor="middleCenter", position=[0, 30], size=[640, 10])
+    set_component("Track", "UIImage", {"Color": [1.0, 1.0, 1.0, 0.15], "CornerRadius": 5})
+    ui("image", "Bar", "Track", anchor="stretch")
+    set_component("Bar", "UIImage", {"Color": [0.95, 0.72, 0.42, 1.0], "CornerRadius": 5, "Type": "Filled", "FillAmount": 0.0})
+    ui("text", "Label", "LoadingUI", text="Loading the outpost...", anchor="middleCenter", position=[0, 70], size=[800, 40])
+    set_component("Label", "UIText", {"FontSize": 22})
+    loading = s.create("Loading")
+    s.add("script.add", {"entity": loading, "class": "LoadingScreen", "fields": {"Bar": {"$ref": "Bar"}, "Label": {"$ref": "Label"}}})
+    s.add("scene.saveAs", {"path": "Scenes/Loading.stscene"})
+    s.add("project.setExportSettings", {"loadingScene": "Scenes/Loading.stscene"})
+    s.add("scene.open", {"scene": SCENE})
+    return s.steps
+
+
 def bake_script():
     """The probes' bake (D10): each station's edit-mode steps with only its own probes on, then lighting.bakeProbes of its
     two twice (the second pass adds the bounce the first gives), Golden last so the saved scene is Golden's."""
@@ -2157,6 +2271,11 @@ def command_layout(arguments):
     return 0
 
 
+def command_controls(arguments):
+    write_steps(controls_script(), arguments.output)
+    return 0
+
+
 def command_bake(arguments):
     write_steps(bake_script(), arguments.output)
     return 0
@@ -2194,6 +2313,8 @@ def main():
     selftest.add_argument("--stations", required=True, help="The scripts' Stations.h, whose c_Stations rows must equal the table")
     layout_parser = commands.add_parser("layout", help="Write the command script that builds the scene's entities")
     layout_parser.add_argument("--output", required=True, help="The command script to write (.json)")
+    controls = commands.add_parser("controls", help="Write the command script of the input actions, the photo mode and the loading scene")
+    controls.add_argument("--output", required=True, help="The command script to write (.json)")
     bake = commands.add_parser("bake", help="Write the command script that bakes the six probes")
     bake.add_argument("--output", required=True, help="The command script to write (.json)")
     setup = commands.add_parser("setup", help="Print a station's edit-mode steps")
@@ -2206,7 +2327,7 @@ def main():
     arguments = parser.parse_args()
     try:
         return {"terrain": command_terrain, "check": command_check, "stations": command_stations,
-                "selftest": command_selftest, "layout": command_layout, "bake": command_bake, "setup": command_setup,
+                "selftest": command_selftest, "layout": command_layout, "controls": command_controls, "bake": command_bake, "setup": command_setup,
                 "checkshots": command_checkshots}[arguments.command](arguments)
     except CheckFailed as error:
         print("FAIL: %s" % error)

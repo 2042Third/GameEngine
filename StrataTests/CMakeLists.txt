@@ -931,8 +931,10 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataEditor.OpenWorldRender PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldExport)
 	# High Desert Outpost: its six probe stations are found, and the tour (four times faster, started with T once every
 	# collider is built) shows shot 1 at dawn with the dawn probes on, switches to the golden ones for shot 2 (the dawn ones
-	# off a second later) and reaches its sixth shot at dusk with the fire lit; the exported games start the tour from the
-	# cooked pack, the pruned one with every capture the inactive stations name.
+	# off a second later) and reaches its sixth shot at dusk with the fire lit; W takes over, the walk covers 2.5 m at eye
+	# height over the ground, Tab flies up, the photo mode's time slider snaps the stations to Golden, its Quality row sets
+	# Medium (then reset) and bookmark 3 flies to the oil tank; the exported games start the tour from the cooked pack, the
+	# pruned one with every capture the inactive stations name.
 	add_test(NAME StrataEditor.Showcase
 		COMMAND "${CMAKE_COMMAND}"
 			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
@@ -944,7 +946,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DCOMMANDS=${CMAKE_CURRENT_SOURCE_DIR}/Editor/ShowcaseCommands.json.in"
 			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/Samples/Showcase/$<CONFIG>"
 			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
-			"-DEDITOR_EXPECT=Showcase: stations ready (found 6|Showcase: tour started|Showcase: shot 1 (dawn vista)|Showcase: shot 6 (dusk)"
+			"-DEDITOR_EXPECT=Showcase: stations ready (found 6|Showcase: tour started|Showcase: shot 1 (dawn vista)|Showcase: shot 6 (dusk)|Showcase: tour taken over|Showcase: walking|Showcase: flying|Showcase: photo mode on|Showcase: graphics preset Medium|Showcase: bookmark 3"
 			"-DGAME_EXPECT=Loaded script module 'ShowcaseScripts'|Showcase: stations ready (found 6|Showcase: tour started|Showcase: shot 1"
 			"-DGAME_FRAMES=600"
 			# A fresh copy has never built its scripts: opening its scene says so, and play.start builds them. Poly Haven's

@@ -5,7 +5,6 @@
 #include <initializer_list>
 #include <optional>
 #include <string>
-#include <utility>
 
 using namespace Strata;
 using namespace Showcase;
@@ -48,6 +47,8 @@ void Outpost::OnCreate()
 	FindMarkers();
 	RequestCaptures();
 	SetStation(StationId::Golden, true);
+	PhotoHour = GetStation(StationId::Golden).Hour;
+	SetPhotoOpen(false);
 	SetFade(1.0f);
 	if (TourOnStart)
 	{
@@ -55,9 +56,10 @@ void Outpost::OnCreate()
 	}
 	else
 	{
-		Mode = 1;
+		// Walking from the Player's place, standing still.
 		Shot = 0;
 		SetFade(0.0f);
+		SetMode(1);
 	}
 }
 
@@ -75,34 +77,78 @@ void Outpost::OnUpdate(float)
 	m_SinceCreate += realDeltaTime;
 	PollCaptures();
 	UpdateProbeHold(realDeltaTime);
-	if (Input::IsKeyPressed(Key::T))
-		StartTour();
+	HandleInput();
 	if (Mode == 0)
 		UpdateTour(realDeltaTime);
+	else if (Mode == 1)
+		UpdateWalk(realDeltaTime);
+	else
+		UpdateFlight(realDeltaTime);
+	if (PhotoOpen && m_Autofocus)
+		UpdateAutofocus();
 	MeasureGround();
+}
+
+void Outpost::HandleInput()
+{
+	if (Input::IsActionPressed("Showcase/Tour"))
+	{
+		StartTour();
+		return;
+	}
+	// A bookmark flies there, also from the tour.
+	for (int32_t number = 1; number <= 7; number++)
+	{
+		if (Input::IsActionPressed("Showcase/Bookmark" + std::to_string(number)))
+		{
+			TakeBookmark(number);
+			return;
+		}
+	}
+	if (Mode == 0)
+	{
+		// Any control hands the tour over to the walk (the press itself does nothing else).
+		const bool taken = Input::IsActionPressed("Gameplay/Move") || Input::IsActionPressed("Gameplay/Look") || Input::IsActionPressed("Gameplay/Jump")
+			|| Input::IsActionPressed("Showcase/Fly") || Input::IsActionPressed("Showcase/Photo") || Input::IsMouseButtonPressed(Mouse::ButtonLeft)
+			|| Input::IsMouseButtonPressed(Mouse::ButtonRight);
+		if (taken)
+			EndTour("taken over");
+		return;
+	}
+	if (Input::IsActionPressed("Showcase/Fly"))
+		SetMode(Mode == 1 ? 2 : 1);
+	if (Input::IsActionPressed("Showcase/Photo"))
+		SetPhotoOpen(!PhotoOpen);
+	if (Input::IsActionPressed("Showcase/HideUI"))
+		ToggleHideUI();
 }
 
 void Outpost::FindMarkers()
 {
 	m_MarkersFound = true;
+	const auto find = [this](const std::string& name, glm::vec3& position)
+	{
+		const Entity marker = Scene::FindEntityByName(name);
+		if (!marker.IsValid())
+		{
+			Log::Warn("Showcase: no entity '", name, "'");
+			m_MarkersFound = false;
+			return;
+		}
+		position = marker.GetTransform().GetWorldPosition();
+	};
 	for (int32_t number = 1; number <= c_ShotCount; number++)
 	{
 		ShotMarkers& markers = m_Shots[static_cast<size_t>(number - 1)];
 		const std::string prefix = "Shot" + std::to_string(number) + ".";
-		const std::pair<const char*, glm::vec3*> parts[] = { { "From", &markers.From }, { "Key", &markers.Key }, { "To", &markers.To }, { "Look", &markers.Look } };
-		for (const auto& [part, position] : parts)
-		{
-			const std::string name = prefix + part;
-			const Entity marker = Scene::FindEntityByName(name);
-			if (!marker.IsValid())
-			{
-				Log::Warn("Showcase: no entity '", name, "'");
-				m_MarkersFound = false;
-				continue;
-			}
-			*position = marker.GetTransform().GetWorldPosition();
-		}
+		find(prefix + "From", markers.From);
+		find(prefix + "Key", markers.Key);
+		find(prefix + "To", markers.To);
+		find(prefix + "Look", markers.Look);
 	}
+	// The rock macro, bookmark 7.
+	find("Macro.Key", m_Macro.Key);
+	find("Macro.Look", m_Macro.Look);
 }
 
 void Outpost::RequestCaptures()
@@ -192,10 +238,17 @@ void Outpost::UpdateProbeHold(float realDeltaTime)
 
 void Outpost::SetStation(StationId station, bool immediately)
 {
+	if (!immediately && static_cast<int32_t>(station) == Station)
+		return;
+	ApplyLight(GetStation(station));
+	SwitchProbes(station, immediately);
+}
+
+void Outpost::SwitchProbes(StationId station, bool immediately)
+{
 	const int32_t index = static_cast<int32_t>(station);
 	if (!immediately && index == Station)
 		return;
-	ApplyLight(GetStation(station));
 	// At most two stations are on: a switch while another one's hold runs ends that hold first.
 	EndProbeHold();
 	if (immediately)
@@ -226,8 +279,8 @@ void Outpost::ApplyLight(const StationValues& values)
 	}
 	if (Fog.IsValid())
 		Fog.SetProperty("HeightFog", "Density", values.FogDensity);
-	if (PostProcess.IsValid())
-		PostProcess.SetProperty("PostProcess", "Exposure", values.Exposure);
+	m_ExposureBase = values.Exposure;
+	ApplyExposure();
 	SetLightIntensity(FireLight, values.LocalLights ? FireCandela : 0.0f);
 	SetLightIntensity(LanternALight, values.LocalLights ? LanternACandela : 0.0f);
 	SetLightIntensity(LanternBLight, values.LocalLights ? LanternBCandela : 0.0f);
@@ -268,13 +321,36 @@ ST_SCRIPT_CLASS(Outpost)
 	ST_SCRIPT_FIELD(Embers);
 	ST_SCRIPT_FIELD(WickA);
 	ST_SCRIPT_FIELD(WickB);
+	ST_SCRIPT_FIELD(PhotoPanel);
+	ST_SCRIPT_FIELD(TimeSlider);
+	ST_SCRIPT_FIELD(TimeLabel);
+	ST_SCRIPT_FIELD(ExposureSlider);
+	ST_SCRIPT_FIELD(ExposureLabel);
+	ST_SCRIPT_FIELD(FovSlider);
+	ST_SCRIPT_FIELD(FovLabel);
+	ST_SCRIPT_FIELD(FocusSlider);
+	ST_SCRIPT_FIELD(FocusLabel);
+	ST_SCRIPT_FIELD(ApertureSlider);
+	ST_SCRIPT_FIELD(ApertureLabel);
+	ST_SCRIPT_FIELD(DofToggle);
+	ST_SCRIPT_FIELD(AutoFocusToggle);
+	ST_SCRIPT_FIELD(QualityLabel);
+	ST_SCRIPT_FIELD(AntiAliasingLabel);
 	ST_SCRIPT_FIELD(TourOnStart);
 	ST_SCRIPT_FIELD(StartShot);
 	ST_SCRIPT_FIELD(TourSpeed);
 	ST_SCRIPT_FIELD(LoopTour);
 	ST_SCRIPT_FIELD(FadeSeconds);
+	ST_SCRIPT_FIELD(WalkSpeed);
+	ST_SCRIPT_FIELD(RunSpeed);
+	ST_SCRIPT_FIELD(FlySpeed);
+	ST_SCRIPT_FIELD(FastFactor);
+	ST_SCRIPT_FIELD(LookSpeed);
+	ST_SCRIPT_FIELD(StickTurnSpeed);
+	ST_SCRIPT_FIELD(WalkRadius);
 	ST_SCRIPT_FIELD(ProbeHoldSeconds);
 	ST_SCRIPT_FIELD(StationWaitSeconds);
+	ST_SCRIPT_FIELD(PhotoHourMax);
 	ST_SCRIPT_FIELD(SunIlluminance);
 	ST_SCRIPT_FIELD(FireCandela);
 	ST_SCRIPT_FIELD(LanternACandela);
@@ -284,8 +360,13 @@ ST_SCRIPT_CLASS(Outpost)
 	ST_SCRIPT_FIELD(Station);
 	ST_SCRIPT_FIELD(CapturesFound);
 	ST_SCRIPT_FIELD(CapturesResident);
+	ST_SCRIPT_FIELD(PhotoOpen);
+	ST_SCRIPT_FIELD(PhotoHour);
 	ST_SCRIPT_FIELD(SunElevation);
 	ST_SCRIPT_FIELD(SunAzimuth);
+	ST_SCRIPT_FIELD(Bookmark);
+	ST_SCRIPT_FIELD(DistanceWalked);
+	ST_SCRIPT_FIELD(Grounded);
 	ST_SCRIPT_FIELD(HeightAboveGround);
 	ST_SCRIPT_FIELD(ToursCompleted);
 }
