@@ -219,7 +219,8 @@ compile time of the editor's and the tests' objects by about 40%.
   Core basics (`Base.h`, `Log.h`, `Assert.h`, `Profiling.h`, `PlatformDetection.h`): never an engine, editor or test
   header that changes often, because every object of the target rebuilds when its precompiled header changes.
   `Architecture.PrecompiledHeaders` fails on any other include.
-- Sources and headers still include what they use. The lint (`Tools/CompatLint.py`) compiles without precompiled headers,
+- Sources and headers still include what they use (a header self-contained: `Strata/Core/Assert.h` for `ST_CORE_ASSERT`,
+  though the precompiled header holds it). The lint (`Tools/CompatLint.py`) compiles without precompiled headers,
   and so does a build configured with `-DSTRATA_PRECOMPILED_HEADERS=OFF`: a missing include that the precompiled header
   hides fails there.
 - Headers stay light, because every file that includes a header parses what it includes (all of it without precompiled
@@ -424,6 +425,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `Platform.DockIcon` needs the window server too, and no device (no `GPUContext`): it has a CTest of its own on the Mac
   only, `StrataTests.DockIcon`, with the same label (CI, which skips `gpu`, never runs it), and reads the Dock icon back
   by drawing it.
+- Exact-pixel tests render with `Tests::ExactSpecification()` (no texture streaming, no dither) and `AddNeutralPostProcess`
+  ([Readback, the game renderer and tests](#readback-the-game-renderer-and-tests)); tests of whole-asset residency call
+  `AssetManagerBase::SetPartialLoads(false)` ([Mip streaming](#mip-streaming)); tests of text with many distinct glyphs render
+  until no glyph is pending ([Text and fonts](#text-and-fonts)).
 
 ### Perf tests
 
@@ -820,7 +825,8 @@ exercised by it.
 ## Code style
 
 AGENTS.md, [Code style](../AGENTS.md#code-style-hazel-conventions), states the code style, the precompiled headers' rule
-in short ([Precompiled headers](#precompiled-headers) has it in full) and three conventions whose details are these:
+in short ([Precompiled headers](#precompiled-headers) has it in full), the profiling rule in short (Frame stages, below)
+and three conventions whose details are these:
 
 - **Logging:** console lines are `[time] [level] logger: message` (the level, as the log file and `StrataCLI` write it, so
   that output captured without colors still tells a warning from information: the sample tests fail on unexpected ones).
@@ -831,7 +837,9 @@ in short ([Precompiled headers](#precompiled-headers) has it in full) and three 
 - **Frame stages:** `ST_PROFILE_STAGE("Stage.Name")` scopes feed the always-on `FrameProfiler`
   ([Frame profiler](Architecture.md#frame-profiler); `editor.perf` and `--perf-log` report it). A stage records its self
   time, so put it around a unit of the frame's work, not around calls that take nanoseconds
-  (`Scene::UpdateWorldTransforms` times only updates that recompute something).
+  (`Scene::UpdateWorldTransforms` times only updates that recompute something). Hot paths are profiled with
+  `ST_PROFILE_FUNCTION()` and `ST_PROFILE_SCOPE("Name")` (Tracy). Scene systems name their stage in
+  `SceneSystemDescriptor::ProfileStage`, in whose scope the scene runs their callbacks.
 
 ## Architecture rules
 
@@ -2582,8 +2590,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (`EditorShell::DrawDiscardQuestion` between its `BeginModal` and `EndModal`), and a recorded `force` is never repeated
   for the person (the Activity panel's Re-run asks, through `RequestReleaseProject` for a command that releases the
   project and `RequestQuit` for `editor.quit`).
-- **Saves are never lost and never hold a frame:** the project file goes through `Editor/SettingsFileWriter`
-  ([Project settings](#project-settings)), and the edited scene and every engine-native document a command or a
+- **Saves are never lost and never hold a frame:** settings files (the project file, the preferences) go through
+  `Editor/SettingsFileWriter` (a snapshot taken in the frame, the writing on a background job;
+  [Project settings](#project-settings)), and the edited scene and every engine-native document a command or a
   panel writes as a whole go through `Editor/DocumentSaver` (`EditorContext::BeginSaveScene`, `BeginSaveSceneAs`; world
   cells too), which serializes, scans and writes on a background job and publishes on the main thread; never serialize a
   document on the main thread for a save (the blocking `SaveScene`/`SaveSceneAs` are for tools, tests and a template's

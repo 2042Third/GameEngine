@@ -103,10 +103,8 @@ Every runner, suite and helper: [Testing](Docs/DeveloperGuide.md#testing).
   prefix gets a shard (`StrataTests/CoreShards.json`) and corruption sweeps go in `*.Sweep` suites ([Unit
   tests](Docs/DeveloperGuide.md#unit-tests), [Shards, sweeps and locks](Docs/DeveloperGuide.md#shards-sweeps-and-locks)).
 - `GPU*` suites (label `gpu`) share one device through `Tests::GPUContext` (never create devices in tests) and end with
-  `CHECK(gpu.GetNewErrorCount() == 0)`: validation errors fail them. Exact-pixel tests render with
-  `Tests::ExactSpecification()` (no texture streaming, no dither) and `AddNeutralPostProcess`, tests of whole-asset
-  residency `SetPartialLoads(false)`; text tests render until no glyph is pending. Count what a frame drew with
-  `Tests::GetDrawnCounts` (the GPU-driven path counts on the GPU, frames later).
+  `CHECK(gpu.GetNewErrorCount() == 0)`; exact-pixel tests render with `Tests::ExactSpecification()` and
+  `AddNeutralPostProcess` ([GPU tests](Docs/DeveloperGuide.md#gpu-tests): residency, text, drawn counts).
 - **Perf tests** (`Perf.*`, `PerfGPU.*`, label `perf`, Release and Dist; CI skips them): limits live only in
   `StrataTests/Perf/Budgets.json`, measured on the reference machine (else `Provisional`); **budgets only go down** (at
   most 1.5 times the measurement; commits that add or lower one state the measured values); there, run `-L perf` before
@@ -114,11 +112,10 @@ Every runner, suite and helper: [Testing](Docs/DeveloperGuide.md#testing).
   ([Perf tests](Docs/DeveloperGuide.md#perf-tests)).
 - `EndToEnd*` suites start the built executables (no GPU) with private session directories, free ports and timeouts,
   and terminate what they started when they fail.
-- Tests follow the transform contract, use `Tests::CreateTemporaryDirectory()` for files (never the source tree), never
-  open samples in place (`Tests::CopySampleProject`) or change their process's environment for a child, and depend on
-  no program outside the build (stand-ins: the test binary's `--strata-test-helper=<mode>`). Check
-  that a new regression test fails without its fix. Tests hold on CI's slowest machines: they wait
-  by the clock or a condition, never by a count of frames, and size their own job pools.
+- Tests follow the transform contract, keep files in `Tests::CreateTemporaryDirectory()`, copy samples
+  (`Tests::CopySampleProject`), never set their environment for a child, depend on no program outside the build and wait
+  by the clock or a condition, never frames ([Test rules](Docs/DeveloperGuide.md#test-rules-and-helper-processes)).
+  Check that a new regression test fails without its fix.
 - Expectations that differ in Dist say so with `#if defined(ST_DIST)` ([Releases](Docs/DeveloperGuide.md#releases)).
 - The **feature test** (golden rule 6, `StrataTests/FeatureTest/`) fails when something registered (a component, a
   property's non-default value, a settings section, a script field type, callback, host function or SDK name, an asset
@@ -175,26 +172,20 @@ Conventions:
 - Files and directories only the current user may change (tokens, code the engine loads) go through
   `Platform::EnsurePrivateDirectory`, `CreatePrivateDirectory`, `GetUserRuntimeDirectory`, `WritePrivateFile` and
   `ReadTrustedFile`, which follow one contract (`Strata/Core/Platform.h`); never create them with default permissions.
-- Headers must be self-contained and sources include what they use, e.g. `Strata/Core/Assert.h` for `ST_CORE_ASSERT`.
-  Precompiled headers hold only the standard library, vendor headers and the Core basics; engine headers that only
-  declare JSON parameters and returns include `<nlohmann/json_fwd.hpp>`
-  ([Precompiled headers](Docs/DeveloperGuide.md#precompiled-headers)).
+- Headers are self-contained and sources include what they use; precompiled headers hold only the standard library,
+  vendor headers and the Core basics ([Precompiled headers](Docs/DeveloperGuide.md#precompiled-headers)).
 - Tag components (empty structs) carry no data: use `HasComponent`/`AddComponent`, never `GetComponent`.
 - Prefer clear, verbose code over clever abstractions; comment *why*, not *what*.
-- Profile hot paths with `ST_PROFILE_FUNCTION()` / `ST_PROFILE_SCOPE("Name")` (Tracy). Work that belongs to a stage of
-  the main thread's frame runs in a `ST_PROFILE_STAGE("Stage.Name")` scope around a unit of the frame's work, not around
-  calls that take nanoseconds ([Code style](Docs/DeveloperGuide.md#code-style)). Scene systems name their stage in
-  `SceneSystemDescriptor::ProfileStage`.
+- Profile hot paths with `ST_PROFILE_FUNCTION()` / `ST_PROFILE_SCOPE("Name")` (Tracy); a unit of the main thread's frame
+  work runs in a `ST_PROFILE_STAGE("Stage.Name")` scope ([Code style](Docs/DeveloperGuide.md#code-style)).
 
 ## Architecture rules
 
 The threading model, frame loop and pipelines these rules protect are described in
 [Docs/Architecture.md](Docs/Architecture.md).
 
-- **Threading:** the main thread owns the scene, input, scripts and rendering submission. Background work goes through
-  `JobSystem` (`Submit` for CPU work, `SubmitIO` for blocking I/O, `JobPriority::Background` for long work no frame
-  waits for). A thread that waits for a job runs that job itself if it has not started, and never other jobs. Results
-  return to the main thread through `Application::SubmitToMainThread` or polled queues — never callbacks that touch
+- **Threading:** the main thread owns the scene, input, scripts and rendering submission; background work goes through
+  `JobSystem`, and results return through `Application::SubmitToMainThread` or polled queues, never callbacks that touch
   engine state from worker threads.
 - **Renderer conventions:** NVRHI flips the Vulkan viewport to D3D conventions: framebuffer origin is
   top-left, NDC +Y is up, depth range is [0, 1] and the engine uses reversed-Z (near = 1, far = 0).
@@ -205,15 +196,11 @@ The threading model, frame loop and pipelines these rules protect are described 
   Bindings use the `ST_SRV/ST_SAMPLER/ST_CBV/ST_UAV(slot)` macros of `Include/Common.glsl`, matching
   NVRHI's register mapping. Push constants share the `b` registers with constant buffers: give them a
   slot no constant buffer of the pipeline's other layouts uses.
-- **NVRHI pitfalls:** never take the address of a handle (`&m_Pipeline`). Consecutive dispatches through the *same*
-  binding set that read each other's UAV writes need an explicit
-  `setBufferState`/`setTextureState(..., UnorderedAccess)` plus `commitBarriers()`. Drop render targets, and what
-  references them, through `Renderer::ReleaseDeferred` (the Vulkan backend does not keep the textures of clears and
-  resolves alive).
-- **Assets:** referenced by `AssetHandle` (UUID), never by path at runtime. Loading is asynchronous; code must handle
-  "not loaded yet" every frame instead of blocking. See [Asset pipeline](#asset-pipeline). New code that works for a
-  scene (scene systems, loading into it, rendering it) reaches the asset manager through `Scene::GetAssetManager()`,
-  never through `AssetManager`'s static functions, which use the process's active manager.
+- **NVRHI pitfalls:** never take the address of a handle (`&m_Pipeline`); dispatches through one binding set that read
+  each other's UAV writes need explicit barriers; drop render targets through `Renderer::ReleaseDeferred`.
+- **Assets:** referenced by `AssetHandle` (UUID), never by path at runtime; code handles "not loaded yet" every frame
+  instead of blocking, and code that works for a scene reaches assets through `Scene::GetAssetManager()`, never
+  `AssetManager`'s static functions.
 - **Layers:** every file under `Strata/src` belongs to a layer of `StrataTests/Architecture/Layers.json` and includes
   across layers only what it allows (`Architecture.Layering`). Never add a `LayeringAllowlist.txt` line or widen
   `MayInclude` to make a sideways or upward include pass: invert the dependency (an interface below, a registry, a scene
@@ -287,14 +274,13 @@ Game logic is C++ script classes in a module built against `StrataScriptCore` on
 - Appending keeps `ST_SCRIPT_ABI_VERSION`; an incompatible change bumps it.
 - Script code never runs while engine state it could invalidate is in use: entity destruction goes through
   `ScriptSystem::DestroyEntity`.
-- Save files go through `IGameSaves` (names pass `SaveFiles::ValidateName` before any path is formed; atomic writes);
-  in-process game loops provide `IGameWindow`, `IGameSaves` and `IProjectSettings` and update input actions after their
-  frame's input. Gameplay and UI read rebindable controls as input actions, and only `InputActions` touches the players'
-  bindings file ([Gameplay API](Docs/DeveloperGuide.md#gameplay-api)).
+- Save files go through `IGameSaves` and the players' bindings only through `InputActions`; gameplay and UI read
+  rebindable controls as input actions; in-process game loops provide the game's services
+  ([Gameplay API](Docs/DeveloperGuide.md#gameplay-api)).
 - SDK helpers named like engine classes (`Random`, `Timer`) are tested only inside a script module.
-- Players' graphics options go through `IGameGraphics` (`Renderer.Quality`'s fields by name; the project's value, then
-  the player's, then `--quality`); in-process game loops provide it too; only `GameGraphicsService` touches
-  `GraphicsOptions.json`, and every quality row has a line in `RendererQuality`'s traits table (`FollowsPreset`).
+- Players' graphics options go through `IGameGraphics` (in-process game loops provide it), only `GameGraphicsService`
+  touches `GraphicsOptions.json`, and every quality row has a traits line
+  ([Quality settings](Docs/DeveloperGuide.md#quality-settings)).
 
 ## Audio
 
@@ -335,10 +321,8 @@ module ([Game UI](Docs/DeveloperGuide.md#game-ui)).
   check) ([The UI contract](Docs/DeveloperGuide.md#the-ui-contract)).
 - The renderer reaches the UI only through `SceneOverlayRegistry`, whose pass requests each UI texture and font once per
   frame, never per element; UI components require `UIRect`.
-- UI input belongs to the "UI" scene system: UI code reads `Input::GetPointerState` and `GetKeyState`, widgets write
-  with `registry.patch` and report through `IUIEvents`, and world-space elements are projected and hit through the
-  camera's ray (`GameUIPointer`), never by dividing pixels by a canvas's scale
-  ([UI input](Docs/DeveloperGuide.md#ui-input)).
+- UI input belongs to the "UI" scene system: widgets write with `registry.patch` and report through `IUIEvents`, and
+  world-space elements are hit through the camera's ray (`GameUIPointer`) ([UI input](Docs/DeveloperGuide.md#ui-input)).
 
 ## Editor
 
@@ -357,9 +341,8 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - A command that replaces the edited scene starts with `CommandUtils::CheckUnsavedChanges` (fails unless `force`, also
   on unwritten settings files it would release); UI code passes `force` only once the person answered
   `EditorShell::RequestDiscardChanges` or its release and quit forms, for the changes asked about.
-- Saves never serialize on the main thread: documents go through `Editor/DocumentSaver`, settings files through
-  `SettingsFileWriter` (a snapshot in the frame, the writing on a background job), commands that replace the scene,
-  close the project or quit wrap their handler in `CommandUtils::AfterSaves`, and UI code saves through the command runner
+- Saves never serialize on the main thread (`Editor/DocumentSaver`, `SettingsFileWriter`); commands that replace the
+  scene, close the project or quit wrap their handler in `CommandUtils::AfterSaves`
   ([No silent data loss](Docs/DeveloperGuide.md#no-silent-data-loss)).
 - Asset deletes go to the trash and refuse while something uses the asset; steps that change files check them first
   and fail with the reason when they no longer fit (never overwriting), and asset steps never mark the scene unsaved.
@@ -376,10 +359,9 @@ reaches the application only through `EditorHost`. Every command family, panel a
   ([Stepping a paused game](Docs/DeveloperGuide.md#stepping-a-paused-game)).
 - A component property another property can turn off gets an `InactiveReason` (`ComponentRegistry::SetInactiveReason`,
   [Inspectors](Docs/DeveloperGuide.md#inspectors)).
-- UI code takes colors only from theme tokens, sizes relative to the font (no fixed pixels above 16), panels through
-  `EditorPanelRegistry` (never `ImGui::Begin`), the editor's fonts and the widget kit (`UI/Widgets.h`)
-  ([Editor UI rules](Docs/DeveloperGuide.md#editor-ui-rules)). Selection
-  shortcuts are `ImGuiInputFlags_RouteFocused` shortcuts of the Hierarchy and the Viewport.
+- UI code takes colors only from theme tokens, sizes relative to the font, panels through `EditorPanelRegistry`, the
+  editor's fonts and the widget kit ([Editor UI rules](Docs/DeveloperGuide.md#editor-ui-rules); selection shortcuts:
+  [Shortcuts](Docs/DeveloperGuide.md#shortcuts-and-editor-status)).
 - Never walk the scene or the asset directory per frame in UI code: draw cached views (`HierarchyView`,
   `AssetBrowserView`) rebuilt when versions change, and long lists through `ImGuiListClipper`.
 - Only `Editor/SceneRecovery` writes recovery files, scenes load through `SceneLoader` (never `LoadAssetSync`) and are
@@ -403,15 +385,11 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - Costly knobs are rows of `RendererQualitySettings` and fields of the `Renderer.Quality` section (a row per line, its four
   presets on it); Medium keeps 0.6.0's costs ([Quality settings](Docs/DeveloperGuide.md#quality-settings)).
 - Shaders writing HDR targets clamp with `SanitizeHDR`; normal maps are read as X and Y with Z reconstructed.
-- Post effects run in `Renderer/SceneRendererPost.cpp` between the TAA resolve and the tone mapping, take parameters by
-  push constants or the post's constant buffer (never new `FrameConstants` fields; reading them is fine), read the
-  frame's post source, are off in `AddNeutralPostProcess`, and exact-pixel tests also turn `DitherOutput` off; Filmic's
-  and white balance's constants come only from their `Tools/` generators
+- Post effects run in `Renderer/SceneRendererPost.cpp` between the TAA resolve and the tone mapping, add no
+  `FrameConstants` fields and are off in `AddNeutralPostProcess`
   ([Post-processing](Docs/DeveloperGuide.md#post-processing)).
-- Light keeps its energy and needs no history: specular is compensated for multiple scattering from the BRDF table
-  (`GetSpecularEnergy`) and diffuse gets what specular leaves; ambient occlusion and other screen-space lighting denoise
-  within the frame; specular anti-aliasing takes derivatives only of the primitive's own interpolants and textures. Check
-  lighting changes with the `lighting`, `ao`, `indirect`, `luminance` and `albedo` debug views and the white-furnace
+- Light keeps its energy and needs no history: specular is compensated for multiple scattering (`GetSpecularEnergy`)
+  and screen-space lighting denoises within the frame; check lighting changes with the debug views and the white-furnace
   test ([Lighting](Docs/DeveloperGuide.md#lighting)).
 - Temporal effects jitter only the frame's camera copy and keep history per renderer; single images settle or turn TAA
   off.
@@ -430,11 +408,10 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - The sun's shadow reaches opaque surfaces through the screen-space mask (SRV 28) and transparent ones through
   `SampleDirectionalShadow`: change both; the sun's filters use fixed noise, never `TemporalParams.z`, and cascade layouts
   come only from `ShadowFitTracker` on the CPU ([Sun shadows](Docs/DeveloperGuide.md#sun-shadows)).
-- Shadow views are kept while nothing reaching them changed (`PrepareShadowCache`, `FindLocalShadowCasters`): a new
-  input of how casters are drawn changes a version they compare. What is drawn and requested is decided twice, by the
-  CPU path (`SceneRendererExtraction.cpp`) and the GPU's culling and visibility feedback (`Cull.comp`): change both, keep
-  shading independent of draw order (screen-space derivatives only of the primitive's own interpolants and textures), and
-  keep `GPU.SceneRenderer.GPUDriven` and `.Feedback` passing ([GPU-driven path](Docs/DeveloperGuide.md#gpu-driven-path)).
+- A new input of how casters are drawn changes a version the shadow caches compare (`PrepareShadowCache`,
+  `FindLocalShadowCasters`). What is drawn and requested is decided by the CPU path and `Cull.comp`: change both, keep
+  shading independent of draw order (derivatives only of the primitive's own interpolants and textures) and
+  `GPU.SceneRenderer.GPUDriven` and `.Feedback` passing ([GPU-driven path](Docs/DeveloperGuide.md#gpu-driven-path)).
 
 ## Automation (editor RPC + MCP)
 
@@ -442,10 +419,9 @@ The editor serves JSON-RPC 2.0 on loopback (`RpcServer`); `StrataCLI` is its cli
 `.claude/skills/strata-editor-automation/SKILL.md`; protocol and sessions:
 [Automation](Docs/DeveloperGuide.md#automation-editor-rpc--mcp).
 
-- Commands are the API: every registered command is a method and an MCP tool of its group's toolset (`core`, the
-  default, stays within 32 tools and 30 KiB: [MCP toolsets](Docs/DeveloperGuide.md#mcp-toolsets)), so a feature reaches
-  agents by registering a command (IDs as 16-digit hex strings, camelCase result keys); no RPC code is needed.
-  `editor.status` answers compactly (`sections` for more).
+- Commands are the API: every registered command is a method and an MCP tool of its group's toolset (`core` stays
+  within 32 tools and 30 KiB: [MCP toolsets](Docs/DeveloperGuide.md#mcp-toolsets)), so a feature reaches agents by
+  registering a command; no RPC code is needed.
 - Loopback only, no server without a token; the token never crosses the wire and is never logged or printed; before
   authentication only the handshake is served, and the project's `.strata/EditorSession.json` is untrusted and never
   holds the port or token ([Security model](Docs/DeveloperGuide.md#security-model)).
