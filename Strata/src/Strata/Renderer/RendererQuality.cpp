@@ -40,7 +40,9 @@ namespace Strata
 		constexpr PresetRow<float> c_LODErrorPixelsRow = { 2.0f, 1.0f, 1.0f, 0.5f };
 		constexpr PresetRow<float> c_MinProjectedPixelsRow = { 1.0f, 0.5f, 0.5f, 0.25f };
 		constexpr PresetRow<uint32_t> c_ShadowFilterQualityRow = { 8, 16, 24, 32 };
-		constexpr PresetRow<uint32_t> c_ContactShadowsRow = { 0, 0, 12, 16 };
+		// Off in every preset: binary hits in a thin shell under screen-locked noise shimmer in motion (DG "Sun shadows");
+		// Custom turns them on.
+		constexpr PresetRow<uint32_t> c_ContactShadowsRow = { 0, 0, 0, 0 };
 		constexpr PresetRow<AmbientOcclusionLevel> c_AmbientOcclusionQualityRow = { AmbientOcclusionLevel::Low, AmbientOcclusionLevel::Medium, AmbientOcclusionLevel::High, AmbientOcclusionLevel::Ultra };
 		constexpr PresetRow<uint32_t> c_EnvironmentResolutionRow = { 256, 256, 512, 512 };
 		constexpr PresetRow<ReflectionsQuality> c_ReflectionsRow = { ReflectionsQuality::Off, ReflectionsQuality::Checkerboard, ReflectionsQuality::Spatial, ReflectionsQuality::SpatialHigh };
@@ -651,7 +653,7 @@ namespace Strata
 			section.Category = "Rendering";
 			section.Description = "The rendering quality of the project's games and of the editor's views and captures: the costly knobs every "
 				"renderer draws with, as a preset or as Custom values. Medium keeps Strata 0.6.0's costs (its sample counts and resolutions); "
-				"High, the default, adds more sun shadow filter taps, contact shadows, finer ambient occlusion, sharper sky reflections and "
+				"High, the default, adds more sun shadow filter taps, finer ambient occlusion, sharper sky reflections and "
 				"full-resolution screen-space reflections at every size and draws 4096-texel sun shadow cascades from 1440 output rows. Scenes keep their look on lights, Post Process and the sky; "
 				"no setting renders below the output's resolution. Set it with project.setSettings; players may change it in games that offer "
 				"graphics options, and StrataRuntime --quality for one run.";
@@ -693,7 +695,8 @@ namespace Strata
 				"than a shadow texel: more taps leave less grain in soft shadows for more GPU time (8, 16, 24 or 32).",
 				SizeOptions(c_ShadowFilterTapOptions), std::to_string(high.ShadowFilterQuality)));
 			section.Fields.push_back(NumberField("ContactShadows", "Contact shadows", "Steps of the sun's contact shadows, which ground small objects "
-				"below the shadow map's detail: more steps find thinner contacts for more GPU time (0: off; 1 to 3 count as 4).",
+				"below the shadow map's detail: more steps find thinner contacts for more GPU time, but they can shimmer in motion, so no "
+				"preset turns them on (0: off; 1 to 3 count as 4).",
 				SettingsFieldType::Int, 0, c_MaxContactShadowSteps, high.ContactShadows));
 			std::vector<std::string> occlusionLevels;
 			for (const AmbientOcclusionName& entry : c_AmbientOcclusionNames)

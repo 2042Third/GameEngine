@@ -3536,7 +3536,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | `MaxShadowedLocalLights` | 4 | 16 | 16 | 16 |
 | `LODErrorPixels` / `MinProjectedPixels` | 2 / 1 | 1 / 0.5 | 1 / 0.5 | 0.5 / 0.25 |
 | `ShadowFilterQuality` (taps of the sun's wide penumbrae) | 8 | 16 | 24 | 32 |
-| `ContactShadows` (steps of the sun's contact shadows; 0 off) | 0 | 0 | 12 | 16 |
+| `ContactShadows` (steps of the sun's contact shadows; 0 off) | 0 | 0 | 0 | 0 |
 | `AmbientOcclusionQuality` (slices x steps per side) | Low 1 x 4 | Medium 2 x 6 | High 3 x 8 | Ultra 4 x 12 |
 | `EnvironmentResolution` (prefiltered sky per face) | 256 | 256 | 512 | 512 |
 | `Reflections` (screen-space reflections a scene asks for) | Off | Checkerboard (TAA only) | Spatial | SpatialHigh |
@@ -3550,7 +3550,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
   High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for rows that cost at every
-  size (`ShadowFilterQuality`, `ContactShadows`, `AmbientOcclusionQuality`, `EnvironmentResolution`, `Reflections`, and
+  size (`ShadowFilterQuality`, `AmbientOcclusionQuality`, `EnvironmentResolution`, `Reflections`, and
   `MotionBlurQuality` for scenes with motion blur; `Renderer.Quality` checks it).
   Custom is the section's fields (High's values by default). `RendererQuality::Clamp` keeps every knob in its range.
 - **Auto by rows:** `RendererQuality::ResolveShadowMapSize` resolves Auto and AutoFine for the renderer's viewport rows
@@ -4090,10 +4090,13 @@ lights, Post Process and the sky), and never a resolution below the output's.
   a shadowed sun and released with the render targets; a frame whose targets cannot be made renders without the sun's
   shadows (`ShadowParams.w` 0, also for transparent surfaces), reported. `SceneRendererStats::ScreenShadows`,
   `SceneRenderer::GetScreenShadowTexture`.
-- **Contact shadows** ground what lies below the cascades' texels (a 5 cm plate on the floor, a foot): a pass of their own
+- **Contact shadows** ground what lies below the cascades' texels (a 5 cm plate on the floor, a foot) when a Custom quality
+  asks: a pass of their own
   between the evaluation (which then writes B) and the blur, `Effects/ContactShadows.frag` (B into A; apart from the
   evaluation so neither carries the other's registers), marches from each pixel the sun still reaches toward the sun over
-  the prepass's depth, `RendererQualitySettings::ContactShadows` steps (0 at Low and Medium: no march; 12 High, 16 Ultra; Custom 0 or 4-32)
+  the prepass's depth, `RendererQualitySettings::ContactShadows` steps (0 in every preset since 0.8.0: whether a step
+  lands in the thin shell is close to chance and the noise is locked to the screen, so they shimmer in motion; Custom 0 or
+  4-32; at 0 no march)
   over the light's `DirectionalLightComponent::ContactShadowLength` (meters, 0-2, default 0.3; 0 turns them off for the
   light), shortened so the march spans at most 5% of the image's height on screen. It starts one pixel's footprint off
   the surface, only where both the prepass's normal and the pixel's **own face** face the sun (`FaceNormal`: the plane
@@ -4174,9 +4177,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   `shadowFit` and `cascades`. Tests:
   `Renderer.ShadowFit` (the tracker alone, synthetic readbacks), `GPU.SceneRenderer.ShadowFit`.
 - **Costs** (look-dev A/B against cc9524a1, three interleaved pairs, medians, the samples' scene cameras with TAA; RTX
-  5090, after the wave's perf pass): at 3840x2160 High `GPU.ScreenShadows` is 0.35-0.52 ms (mask, contact shadows, blur
-  and the fit's reduction) while `GPU.Opaque` loses the filter; at 1920x1080 Medium it is 0.06-0.10 ms. Timed apart
-  (temporary timers) at 4K High in the Third-Person view: the evaluation 0.20 ms (the disk's taps, then the range cells'
+  5090, after the wave's perf pass): at 3840x2160 0.7.0's High, which drew contact shadows, `GPU.ScreenShadows` is
+  0.35-0.52 ms (mask, contact shadows, blur and the fit's reduction) while `GPU.Opaque` loses the filter; at 1920x1080
+  Medium it is 0.06-0.10 ms. Timed apart (temporary timers) at 4K in 0.7.0's High in the Third-Person view: the evaluation 0.20 ms (the disk's taps, then the range cells'
   loop; pixels in a blend band sample two cascades), contact shadows 0.20, the two blur passes 0.10 (the blurred pixels'
   taps: writing only changed pixels saved nothing), the reduction 0.02. Measured and not kept: gathering the range cells
   four at a time (5-16% slower in registers), the reduction beside the mask's passes (graphics and compute work on one

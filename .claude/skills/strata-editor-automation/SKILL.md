@@ -513,7 +513,7 @@ time: presenting, and the wait for the display's image at the back buffer's firs
 **Render statistics and GPU time**: `editor.perf` also has `gpu` (`frames` with GPU times, `latencyFrames`: they arrive
 2-3 frames late, `busy`, `stages` per GPU stage: `GPU.Uploads`, `GPU.Setup`, `GPU.Aerial` (the atmosphere's aerial
 perspective), `GPU.Cull`, `GPU.Shadows`, `GPU.Prepass`, `GPU.ScreenShadows` (the sun's shadow mask, its blur, contact
-shadows and the cascades' fit to the view), `GPU.AO`, `GPU.Reflections` (reflection probes' conversions, screen-space
+shadows when a Custom quality draws them and the cascades' fit to the view), `GPU.AO`, `GPU.Reflections` (reflection probes' conversions, screen-space
 reflections), `GPU.Opaque` (with the sky), `GPU.Transparent`, `GPU.TAA` (motion vectors' history, temporal
 anti-aliasing), `GPU.MotionBlur`, `GPU.DepthOfField`, `GPU.Post`, `GPU.Overlays`, `GPU.UI` (the game UI), `GPU.ImGui`)
 and `boundBy`: `"gpu"`
