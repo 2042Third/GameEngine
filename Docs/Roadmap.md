@@ -1471,6 +1471,9 @@ Further:
 - 64-bit entity handles and origin rebasing.
 - Per-world audio listeners and input contexts.
 - Native game modules and an exported engine package.
+- A console port: script modules linked statically (no `DynamicLibrary` path exists), crash containment without SEH or
+  signals, the console's window and present behind `Window` and `GraphicsDevice`, file, thread and suspend behavior;
+  DeveloperGuide.md's "Platform seams" lists the seams.
 - Audio streaming from packs, and an audio mixer with buses and effects.
 - Localization with string tables and font fallback chains.
 - BC6H.

@@ -7,7 +7,8 @@ namespace Strata
 
 	using KeyCode = uint16_t;
 
-	// Values match GLFW key codes (US keyboard layout).
+	// The engine's key codes, named by where the key is on a US keyboard. They are script ABI (StrataScript/Input.h) and never
+	// renumbered. They were taken from GLFW's, so the GLFW backend passes its codes through; another backend translates its own.
 	namespace Key
 	{
 		enum : KeyCode

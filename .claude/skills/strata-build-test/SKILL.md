@@ -33,8 +33,8 @@ cmake --build --preset windows-debug --target StrataTests   # just the tests
   them (`Architecture.PrecompiledHeaders`).
 - `-DSTRATA_COMPILER_CACHE=ON` builds through ccache or sccache as CI does (precompiled headers off by default). On
   Windows it needs the `windows-ninja` preset, configured and built from a Developer PowerShell.
-- A game without a module: `-DSTRATA_WITH_PHYSICS=OFF` (and `_AUDIO`, `_ANIMATION`) with `-DSTRATA_BUILD_EDITOR=OFF`, in a
-  build directory of its own (`cmake --preset <platform> -B build/<name> ...`). A test case that needs a module is
+- A game without a module: `-DSTRATA_WITH_PHYSICS=OFF` (and `_AUDIO`, `_ANIMATION`, `_GLFW`) with `-DSTRATA_BUILD_EDITOR=OFF`,
+  in a build directory of its own (`cmake --preset <platform> -B build/<name> ...`). A test case that needs a module is
   guarded with `#if ST_WITH_<MODULE>` (or `ST_TESTS_HAVE_EVERY_MODULE`); CI builds and tests the configuration without
   audio and physics, so check a change to such tests there or locally.
 - Upgrading box3d (the physics library; a submodule bump in a commit of its own): `Physics.Box3D`'s first case runs
