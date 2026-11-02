@@ -259,12 +259,13 @@ namespace Strata
 			{
 				// Along the camera's view (its local -Z), as the focus plane lies: an entity off to the side is in focus at the same
 				// depth as one straight ahead.
-				const glm::mat4 cameraTransform = scene.GetWorldTransform(entity);
+				// Both where they are drawn this frame (SceneCamera::FromEntity's rule).
+				const glm::mat4 cameraTransform = scene.GetDrawnTransform(entity);
 				const glm::vec3 position(cameraTransform[3]);
 				const glm::vec3 axis(cameraTransform[2]);
 				const float axisLength = glm::length(axis);
 				const glm::vec3 forward = axisLength > 0.0f ? -axis / axisLength : glm::vec3(0.0f, 0.0f, -1.0f);
-				const float distance = glm::dot(glm::vec3(scene.GetWorldTransform(target)[3]) - position, forward);
+				const float distance = glm::dot(glm::vec3(scene.GetDrawnTransform(target)[3]) - position, forward);
 				lens.FocusDistance = std::max(std::isfinite(distance) ? distance : 0.0f, std::max(component.PerspectiveNear, 0.001f));
 			}
 		}

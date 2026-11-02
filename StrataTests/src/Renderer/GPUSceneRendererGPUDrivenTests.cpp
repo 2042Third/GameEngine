@@ -2,6 +2,7 @@
 
 #include "Animation/SkinnedMeshTestUtils.h"
 #include "Animation/TestSkinningPoses.h"
+#include "Scene/InterpolationTestUtils.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Renderer/LODSelection.h"
 #include "Strata/Renderer/Mesh.h"
@@ -1313,6 +1314,67 @@ TEST_SUITE("GPU.SceneRenderer.LODFade")
 			}
 			gpu.GetDevice().WaitForIdle();
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+}
+
+// Interpolation (Scene::SetInterpolation): what the fixed steps move is placed between its poses on every frame, on both paths.
+TEST_SUITE("GPU.SceneRenderer.GPUDriven")
+{
+	TEST_CASE("Both paths draw an interpolated frame alike")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!DeviceDrawsGPUDriven())
+			return;
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::DefaultMaterial));
+		ScopedFixedMover moverScope;
+		Scene scene;
+		scene.GetSettings().FixedTimestep = 1.0f / 64.0f;
+		AddNeutralPostProcess(scene);
+		AddSun(scene, glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f)), 3.0f);
+		const AssetHandle material = LitMaterial(assets, glm::vec4(0.6f, 0.4f, 0.3f, 1.0f));
+		Entity ground = AddMesh(scene, BuiltinAssets::PlaneMesh, material, glm::vec3(0.0f, -0.5f, 0.0f), "Ground");
+		ground.GetComponent<TransformComponent>().Scale = glm::vec3(40.0f);
+		// Eight cubes moved by the steps (blended), eight riding a carrier the steps move (composed).
+		Entity carrier = scene.CreateEntity("Carrier");
+		AddFixedMover(scene, carrier, glm::vec3(0.0f, 0.0f, 0.25f * 64.0f), 1.5f);
+		for (uint32_t index = 0; index < 16; index++)
+		{
+			Entity cube = AddMesh(scene, BuiltinAssets::CubeMesh, material, glm::vec3(static_cast<float>(index % 8) * 1.5f - 5.25f, 0.0f,
+				-static_cast<float>(index / 8) * 2.5f), "Cube");
+			if (index < 8)
+				AddFixedMover(scene, cube, glm::vec3(0.1f * 64.0f, 0.0f, 0.0f), 2.0f);
+			else
+				REQUIRE(scene.SetParent(cube, carrier, true));
+		}
+		// A shadowed point light on another mover.
+		Entity lamp = scene.CreateEntity("Lamp");
+		lamp.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 3.0f, -1.0f);
+		PointLightComponent& light = lamp.AddComponent<PointLightComponent>();
+		light.CastShadows = true;
+		light.Range = 15.0f;
+		light.Intensity = 40.0f;
+		AddFixedMover(scene, lamp, glm::vec3(0.15f * 64.0f, 0.0f, 0.0f));
+		scene.SetInterpolation(true);
+		scene.OnRuntimeStart();
+		const SceneCamera camera = View(glm::vec3(0.0f, 14.0f, 12.0f), glm::vec3(0.0f, 0.0f, -2.0f));
+		Comparison comparison(IndirectDrawMode::Auto);
+		// Eight frames between steps of 1/64 s, three steps over.
+		uint32_t between = 0;
+		for (int frame = 0; frame < 24; frame++)
+		{
+			const uint64_t steps = scene.GetFixedStepCount();
+			scene.OnUpdateRuntime(Timestep(1.0f / 512.0f));
+			between += scene.GetFixedStepCount() == steps && !scene.GetInterpolatedEntities().empty() ? 1u : 0u;
+			comparison.Check(scene, camera);
+		}
+		CHECK(between >= 14);
+		scene.OnRuntimeStop();
+		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

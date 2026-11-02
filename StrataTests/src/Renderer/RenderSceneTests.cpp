@@ -2,6 +2,7 @@
 
 #include "Asset/AssetTestUtils.h"
 #include "Renderer/MeshTestUtils.h"
+#include "Scene/InterpolationTestUtils.h"
 #include "Scene/SceneTestUtils.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Renderer/Material.h"
@@ -1358,5 +1359,72 @@ TEST_SUITE("Renderer.RenderScene")
 		CHECK(renderScene.Sync(nullptr) == 1);
 		CHECK(renderScene.GetStats().IndexedProxies == 2);
 		CheckProxies(renderScene);
+	}
+
+	TEST_CASE("Interpolated proxies and lights are placed at their drawn transforms on frames without a step, exactly once they leave")
+	{
+		ScopedFixedMover moverScope;
+		Scene scene("Interpolated");
+		scene.GetSettings().FixedTimestep = 1.0f / 64.0f;
+		Entity body = scene.CreateEntity("Body");
+		body.AddComponent<MeshRendererComponent>();
+		Entity rider = scene.CreateChildEntity(body, "Rider");
+		rider.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 1.0f, 0.0f);
+		rider.AddComponent<MeshRendererComponent>();
+		Entity lantern = scene.CreateEntity("Lantern");
+		lantern.AddComponent<PointLightComponent>().Range = 3.0f;
+		Entity torch = scene.CreateEntity("Torch");
+		torch.AddComponent<SpotLightComponent>();
+		AddFixedMover(scene, body, glm::vec3(6.5f, 0.0f, 0.0f), 1.0f);
+		AddFixedMover(scene, lantern, glm::vec3(0.0f, 0.0f, 3.0f));
+		AddFixedMover(scene, torch, glm::vec3(0.0f, 2.0f, 0.0f), 2.0f, glm::vec3(1.0f, 0.0f, 0.0f));
+		scene.SetInterpolation(true);
+		scene.OnRuntimeStart();
+		RenderScene& renderScene = RenderScene::Get(scene);
+		const RenderLights& lights = renderScene.GetLights();
+
+		const auto checkPlaced = [&]()
+		{
+			for (const Entity entity : { body, rider })
+				CHECK(renderScene.GetWorldTransform(renderScene.FindProxy(entity.GetHandle())) == scene.GetDrawnTransform(entity));
+			const glm::vec3 lanternDrawn(scene.GetDrawnTransform(lantern)[3]);
+			CHECK(glm::vec3(lights.GetRecords()[lights.Find(lantern.GetHandle(), RenderData::c_LightPoint)].PositionRange) == lanternDrawn);
+			const glm::mat4 torchDrawn = scene.GetDrawnTransform(torch);
+			const RenderData::LightRecord& torchRecord = lights.GetRecords()[lights.Find(torch.GetHandle(), RenderData::c_LightSpot)];
+			CHECK(glm::vec3(torchRecord.PositionRange) == glm::vec3(torchDrawn[3]));
+			CheckProxies(renderScene);
+		};
+
+		uint32_t between = 0;
+		for (int frame = 0; frame < 64; frame++)
+		{
+			const uint64_t steps = scene.GetFixedStepCount();
+			scene.OnUpdateRuntime(Timestep(1.0f / 1024.0f));
+			renderScene.Sync(nullptr);
+			checkPlaced();
+			if (scene.GetFixedStepCount() == steps && !scene.GetInterpolatedEntities().empty())
+			{
+				between++;
+				CHECK(renderScene.GetWorldTransform(renderScene.FindProxy(body.GetHandle())) != scene.GetWorldTransform(body));
+			}
+			// A second sync of the frame finds nothing to do.
+			renderScene.Sync(nullptr);
+			CHECK(renderScene.GetStats().LastSyncUpdates == 0);
+		}
+		CHECK(between > 40);
+
+		// Once they stop, they leave the set at the next step and are drawn where they are.
+		FixedMoverSystem::Movers.clear();
+		const uint64_t steps = scene.GetFixedStepCount();
+		while (scene.GetFixedStepCount() == steps)
+			scene.OnUpdateRuntime(Timestep(1.0f / 1024.0f));
+		renderScene.Sync(nullptr);
+		CHECK(scene.GetInterpolatedEntities().empty());
+		CHECK(renderScene.GetWorldTransform(renderScene.FindProxy(body.GetHandle())) == scene.GetWorldTransform(body));
+		CHECK(renderScene.GetWorldTransform(renderScene.FindProxy(rider.GetHandle())) == scene.GetWorldTransform(rider));
+		CHECK(glm::vec3(lights.GetRecords()[lights.Find(lantern.GetHandle(), RenderData::c_LightPoint)].PositionRange)
+			== glm::vec3(scene.GetWorldTransform(lantern)[3]));
+		checkPlaced();
+		scene.OnRuntimeStop();
 	}
 }

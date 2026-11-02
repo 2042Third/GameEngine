@@ -161,7 +161,9 @@ namespace Strata
 		glm::vec3 translation(0.0f);
 		glm::quat rotation(1.0f, 0.0f, 0.0f, 0.0f);
 		glm::vec3 scale(1.0f);
-		Math::DecomposeTransform(scene.GetWorldTransform(entity), translation, rotation, scale);
+		// Where the camera is drawn (between fixed steps while it rides what they move): callers build the camera before the
+		// frame's render scene sync, so the on-demand GetDrawnTransform, not the previous frame's cached matrix.
+		Math::DecomposeTransform(scene.GetDrawnTransform(entity), translation, rotation, scale);
 
 		// Scale never distorts the view: the camera uses only the position and orientation of its entity.
 		camera.View = glm::inverse(glm::translate(glm::mat4(1.0f), translation) * glm::mat4_cast(rotation));

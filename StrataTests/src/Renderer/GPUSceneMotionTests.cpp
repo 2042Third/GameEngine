@@ -2,6 +2,7 @@
 
 #include "Animation/SkinnedMeshTestUtils.h"
 #include "Animation/TestSkinningPoses.h"
+#include "Scene/InterpolationTestUtils.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
 #include "Strata/Renderer/RenderScene.h"
@@ -9,9 +10,11 @@
 
 #include <glm/gtc/packing.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <iterator>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -41,7 +44,9 @@ namespace
 		Entity Ground;
 		SceneCamera Camera;
 
-		MotionScene(SceneTestAssets& assets, uint32_t cubes, const glm::vec3& origin = glm::vec3(0.0f))
+		// `registerPoses` false: the test poses are registered later (a running scene's animation system takes the service at
+		// its start: StartInterpolating).
+		MotionScene(SceneTestAssets& assets, uint32_t cubes, const glm::vec3& origin = glm::vec3(0.0f), bool registerPoses = true)
 		{
 			AddNeutralPostProcess(Contents);
 			AddSun(Contents, glm::normalize(glm::vec3(-0.3f, -1.0f, -0.4f)), 3.0f);
@@ -52,7 +57,8 @@ namespace
 			Arm = AddMesh(Contents, tube, UUID::Null(), origin + glm::vec3(0.0f, 0.5f, 2.0f), "Arm");
 			Arm.AddComponent<SkinComponent>().Animator = Arm.GetComponent<IDComponent>().ID;
 			Poses.Poses[Arm.GetHandle()] = BentChain(3, 1);
-			REQUIRE(Contents.RegisterService<ISkinningPoses>(Poses));
+			if (registerPoses)
+				REQUIRE(Contents.RegisterService<ISkinningPoses>(Poses));
 			Mirrored = AddMesh(Contents, BuiltinAssets::ConeMesh, UUID::Null(), origin + glm::vec3(3.0f, 0.5f, 2.0f), "Mirrored");
 			Mirrored.GetComponent<TransformComponent>().Scale = glm::vec3(-1.2f, 1.2f, 1.2f);
 			Ground = AddMesh(Contents, BuiltinAssets::PlaneMesh, UUID::Null(), origin + glm::vec3(0.0f, -0.5f, 0.0f), "Ground");
@@ -824,6 +830,204 @@ TEST_SUITE("GPU.SceneRenderer.CameraRelative")
 			REQUIRE(renderer.Render(scene.Contents, scene.Camera, nullptr, MotionOptions()));
 			CHECK(CheckMotion(ReadMotionFrame(renderer), scene.Camera, previous, { { GetID(scene.Cubes[4]), glm::dvec3(offset) } }, 0.05) > c_Size * c_Size / 2);
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+}
+
+namespace
+{
+
+	// Runs the scene interpolating (Scene::SetInterpolation) at steps of 1/64 s, the test poses taking ISkinningPoses over from
+	// the animation system its start creates. Pair with StopInterpolating.
+	void StartInterpolating(MotionScene& scene)
+	{
+		scene.Contents.GetSettings().FixedTimestep = 1.0f / 64.0f;
+		scene.Contents.SetInterpolation(true);
+		scene.Contents.OnRuntimeStart();
+		if (ISkinningPoses* running = scene.Contents.GetService<ISkinningPoses>())
+			scene.Contents.UnregisterService<ISkinningPoses>(*running);
+		REQUIRE(scene.Contents.RegisterService<ISkinningPoses>(scene.Poses));
+	}
+
+	void StopInterpolating(MotionScene& scene)
+	{
+		scene.Contents.UnregisterService<ISkinningPoses>(scene.Poses);
+		scene.Contents.OnRuntimeStop();
+	}
+
+	// The pixels showing the entity, by index.
+	std::vector<size_t> FindPixels(const MotionFrame& frame, Entity entity)
+	{
+		std::vector<size_t> pixels;
+		for (size_t pixel = 0; pixel < frame.IDs.size(); pixel++)
+		{
+			if (frame.IDs[pixel] == GetID(entity))
+				pixels.push_back(pixel);
+		}
+		return pixels;
+	}
+
+}
+
+// What the fixed steps move is drawn between their poses (Scene::SetInterpolation): renderers place proxies, skins, lights and
+// cameras where the scene draws them, on every frame.
+TEST_SUITE("GPU.SceneRenderer.Interpolation")
+{
+	TEST_CASE("An interpolated cube and skinned arm move on frames without a fixed step, with their motion vectors, on both paths")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		// Steps of 1/64 s, frames of 1/256 s: the cube moves 0.6 m a step, 0.15 m a frame as drawn, away from the camera behind
+		// the other cubes; the arm toward it, where nothing else is.
+		const glm::vec3 cubeVelocity(0.0f, 0.0f, -0.6f * 64.0f);
+		const glm::vec3 armVelocity(0.0f, 0.0f, 0.2f * 64.0f);
+		constexpr float frameLength = 1.0f / 256.0f;
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			for (const bool interpolate : { true, false })
+			{
+				CAPTURE(PathName(mode));
+				CAPTURE(interpolate);
+				ScopedFixedMover moverScope;
+				MotionScene scene(assets, 16, glm::vec3(0.0f), false);
+				AddFixedMover(scene.Contents, scene.Cubes[10], cubeVelocity);
+				AddFixedMover(scene.Contents, scene.Arm, armVelocity);
+				StartInterpolating(scene);
+				scene.Contents.SetInterpolation(interpolate);
+				SceneRenderer renderer = CreateRenderer("Interpolation", mode);
+				renderer.SetViewportSize(c_Size, c_Size);
+				// Until two steps ran: the drawn motion is continuous from then on.
+				while (scene.Contents.GetFixedStepCount() < 2)
+				{
+					scene.Contents.OnUpdateRuntime(Timestep(frameLength));
+					REQUIRE(renderer.Render(scene.Contents, scene.Camera, nullptr, MotionOptions()));
+				}
+				RenderScene& renderScene = RenderScene::Get(scene.Contents);
+				const uint32_t cubeProxy = renderScene.FindProxy(scene.Cubes[10].GetHandle());
+				uint32_t withoutStep = 0;
+				uint32_t moved = 0;
+				for (int frame = 0; frame < 12; frame++)
+				{
+					const uint64_t steps = scene.Contents.GetFixedStepCount();
+					const glm::mat4 before = renderScene.GetWorldTransform(cubeProxy);
+					scene.Contents.OnUpdateRuntime(Timestep(frameLength));
+					REQUIRE(renderer.Render(scene.Contents, scene.Camera, nullptr, MotionOptions()));
+					withoutStep += scene.Contents.GetFixedStepCount() == steps ? 1u : 0u;
+					moved += renderScene.GetWorldTransform(cubeProxy) != before ? 1u : 0u;
+					if (!interpolate)
+						continue;
+					const MotionFrame motion = ReadMotionFrame(renderer);
+					CHECK(CountPixels(motion, scene.Cubes[10]) > 8);
+					CHECK(CountPixels(motion, scene.Arm) > 8);
+					CheckMotion(motion, scene.Camera, scene.Camera,
+						{ { GetID(scene.Cubes[10]), glm::dvec3(cubeVelocity * frameLength) }, { GetID(scene.Arm), glm::dvec3(armVelocity * frameLength) } });
+				}
+				CHECK(withoutStep == 9);
+				// Drawn between the steps it moves every frame; drawn as simulated it stands still on 3 frames of 4.
+				CHECK(moved == (interpolate ? 12u : 3u));
+				StopInterpolating(scene);
+				gpu.GetDevice().WaitForIdle();
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Cached shadows follow interpolated casters")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!Renderer::GetGraphicsDevice().GetInfo().SupportsDrawIndirectFirstInstance)
+			return; // The cascade cache is the GPU-driven path's
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		ScopedFixedMover moverScope;
+		MotionScene scene(assets, 16, glm::vec3(0.0f), false);
+		// A cube moving through the sun's cascades and a shadowed point light riding a mover.
+		Entity lamp = scene.Contents.CreateEntity("Lamp");
+		lamp.GetComponent<TransformComponent>().Translation = glm::vec3(-1.0f, 2.5f, -1.0f);
+		PointLightComponent& light = lamp.AddComponent<PointLightComponent>();
+		light.CastShadows = true;
+		light.Range = 12.0f;
+		light.Intensity = 30.0f;
+		AddFixedMover(scene.Contents, scene.Cubes[13], glm::vec3(0.0f, 0.0f, -0.3f * 64.0f));
+		AddFixedMover(scene.Contents, lamp, glm::vec3(0.0f, 0.0f, 0.2f * 64.0f));
+		StartInterpolating(scene);
+
+		SceneRendererSpecification specification;
+		specification.TextureStreaming = false;
+		specification.FitShadowsToView = false; // Both renderers' cascades keep one layout
+		specification.SpreadLightingUpdates = false; // Both draw every shadow view a frame asks for, without fades
+		SceneRenderer cached(specification);
+		specification.CacheShadowCascades = false;
+		specification.CacheLocalShadows = false;
+		SceneRenderer redrawn(specification);
+		constexpr uint32_t size = 128;
+		cached.SetViewportSize(size, size);
+		redrawn.SetViewportSize(size, size);
+		for (int frame = 0; frame < 24; frame++)
+		{
+			scene.Contents.OnUpdateRuntime(Timestep(1.0f / 256.0f));
+			const ReadbackImage expected = RenderToImage(redrawn, scene.Contents, scene.Camera);
+			const ReadbackImage image = RenderToImage(cached, scene.Contents, scene.Camera);
+			CAPTURE(frame);
+			CHECK(MaxDifference(expected, image) <= 1);
+		}
+		CHECK(cached.GetStats().GPUDriven);
+		StopInterpolating(scene);
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A camera under an interpolated body sees what rides with it still")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		ScopedFixedMover moverScope;
+		MotionScene scene(assets, 8, glm::vec3(0.0f), false);
+		Entity body = scene.Contents.CreateEntity("Body");
+		body.GetComponent<TransformComponent>().Translation = glm::vec3(-4.0f, 0.0f, 4.0f);
+		Entity eye = scene.Contents.CreateChildEntity(body, "Eye");
+		eye.AddComponent<CameraComponent>();
+		eye.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 6.0f, 8.0f);
+		eye.GetComponent<TransformComponent>().Rotation = glm::angleAxis(glm::radians(-35.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+		Entity rider = AddMesh(scene.Contents, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f), "Rider");
+		REQUIRE(scene.Contents.SetParent(rider, body, false));
+		AddFixedMover(scene.Contents, body, glm::vec3(0.4f * 64.0f, 0.0f, 0.0f));
+		StartInterpolating(scene);
+		SceneRenderer renderer = CreateRenderer("Rider");
+		renderer.SetViewportSize(c_Size, c_Size);
+		// The game's view: the camera entity where it is drawn.
+		const auto render = [&]()
+		{
+			REQUIRE(renderer.Render(scene.Contents, SceneCamera::FromEntity(scene.Contents, eye, 1.0f), nullptr, MotionOptions()));
+			return FindPixels(ReadMotionFrame(renderer), rider);
+		};
+		while (scene.Contents.GetFixedStepCount() < 2)
+		{
+			scene.Contents.OnUpdateRuntime(Timestep(1.0f / 256.0f));
+			render();
+		}
+		std::vector<size_t> previous = render();
+		REQUIRE(previous.size() > 16);
+		uint32_t withoutStep = 0;
+		for (int frame = 0; frame < 12; frame++)
+		{
+			const uint64_t steps = scene.Contents.GetFixedStepCount();
+			scene.Contents.OnUpdateRuntime(Timestep(1.0f / 256.0f));
+			const std::vector<size_t> current = render();
+			withoutStep += scene.Contents.GetFixedStepCount() == steps ? 1u : 0u;
+			std::vector<size_t> changed;
+			std::set_symmetric_difference(previous.begin(), previous.end(), current.begin(), current.end(), std::back_inserter(changed));
+			CHECK(changed.size() <= current.size() / 50);
+			previous = current;
+		}
+		CHECK(withoutStep >= 8);
+		StopInterpolating(scene);
+		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }
