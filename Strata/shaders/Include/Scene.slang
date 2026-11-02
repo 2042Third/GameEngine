@@ -119,7 +119,7 @@ struct InstanceData
 // Every instance of the render scene; it persists between frames.
 StructuredBuffer<InstanceData> u_Instances : register(t0);
 
-// The frame's draw list: an entry per drawn instance, in batch order (gl_InstanceIndex indexes it): the instance in the low
+// The frame's draw list: an entry per drawn instance, in batch order (st_InstanceIndex, SV_VulkanInstanceID with the base instance, indexes it): the instance in the low
 // ST_DRAW_ENTRY_INSTANCE_BITS bits, its level-of-detail cross-fade code above them (RenderData::MakeDrawEntry).
 StructuredBuffer<uint> u_DrawList : register(t14);
 

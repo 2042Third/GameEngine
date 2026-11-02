@@ -2020,7 +2020,7 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
     tail and is forgotten at twice that time. Raised levels fade in: the swap points the texture's table entry at the new
     texture with a minimum level of detail of the levels it gained (`TextureTable::SetFadeIn`), which falls linearly to 0
     over `TextureTable::c_FadeInSeconds` (0.25 s); `SampleMaterialTexture` (`Include/MaterialTextures.slang`, fragment
-    shaders) scales both sampling gradients until the anisotropic level of detail reaches it (`textureGrad`), so the new
+    shaders) scales both sampling gradients until the anisotropic level of detail reaches it (`SampleGrad`), so the new
     detail blends in from what the old texture showed, and filtering keeps its footprint's shape. Material data does not
     change, only the table entries of the fading textures, once per frame. Raises for a view that needs the texture whole
     (no streaming: exact pixels) do not fade, and renderers of single images that wait for their levels (the editor's
@@ -2336,8 +2336,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   one array that persists between frames. Changes are logged by version (`GetInstanceChanges`, the latest 65,536), and
   so are the proxies themselves (`GetProxyChanges`: placement, flags, mesh slot, instance range, creation, destruction;
   a proxy changed several times between two reads is logged once, and taking the version, `GetProxyVersion`, counts as
-  a read) and the palettes. Shaders find an instance through the frame's draw list (`u_DrawList[gl_InstanceIndex]`) and
-  derive the normal matrix from the 3x4 rows.
+  a read) and the palettes. Shaders find an instance through the frame's draw list (`u_DrawList[st_InstanceIndex]`, from
+  `SV_VulkanInstanceID`, which includes the base instance) and derive the normal matrix from the 3x4 rows.
 - **The GPU copy** (`Renderer/RenderSceneGPU.h`). The instances, the palettes and a 64-byte culling record per proxy
   (`RenderData::GPUProxy`: local and world bounds, instance range, mesh slot, flags) live in buffers of a mirror per
   render scene, which every renderer of the scene shares (`Renderer::GetRenderSceneGPUs`, keyed by
@@ -2442,7 +2442,7 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   `drawIndirectCount`), one `drawIndexedIndirect` over the bucket's draw slots (`NoCount`: as many slots as the meshes the
   CPU's marks found have LOD records in that arena, those without instances zeroed; storage for every loaded mesh's
   records), or one per slot (`PerDraw`), through the
-  vertex shaders' `u_DrawList[gl_InstanceIndex]` as before. No call issues more draws than the device's
+  vertex shaders' `u_DrawList[st_InstanceIndex]` as before. No call issues more draws than the device's
   `maxDrawIndirectCount`: buckets with more slots draw without a GPU-written count (whose value must stay within it), in
   several `NoCount` calls. MoltenVK has no `drawIndirectCount`: there the `NoCount` path runs. The counts (instances, draws, triangles, levels, shadow casters, visible and size-culled proxies) come back
   2-3 frames late through a readback (`BufferReadback`, `SceneRendererGPUStats`, `AddGPUCounts`). The opaque pixels do not

@@ -3,8 +3,8 @@
 #include "Include/Common.slang"
 #include "GameUI/UIQuad.slang"
 
-// The game UI's quads (GameUIRenderer): instanced, six vertices per quad from gl_VertexIndex, the quad from
-// gl_InstanceIndex. Canvas units become pixels at the canvas's scale; edges (images) and baselines (glyphs) snap to whole
+// The game UI's quads (GameUIRenderer): instanced, six vertices per quad from SV_VulkanVertexID, the quad from
+// SV_VulkanInstanceID. Canvas units become pixels at the canvas's scale; edges (images) and baselines (glyphs) snap to whole
 // pixels when the canvas asks for it. A world-space canvas stays in canvas units, placed in the scene by its transform.
 
 static float2 v_Local;          // Pixels (world space: canvas units) from the quad's center (images: the rounded rect's distance)

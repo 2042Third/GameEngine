@@ -4,8 +4,7 @@
 #include "Include/Common.slang"
 
 // A 64x64 tile of blue noise (Renderer::GetBlueNoiseTexture) at scene slot SRV 33: per-pixel values whose neighbors differ,
-// fixed per pixel (nothing here turns with the frame). Every shader that includes this file enables
-// GL_EXT_samplerless_texture_functions.
+// fixed per pixel (nothing here turns with the frame), read with Load (no sampler).
 Texture2D<float4> u_BlueNoise : register(t33);
 
 // The tile's value at a pixel, shifted by `shift` (decorrelated uses take different shifts): (k + 0.5) / 256 for the byte k

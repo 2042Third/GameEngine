@@ -3943,9 +3943,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   one by one, back to front. Draws are gathered in parallel chunks merged in chunk order (results do not depend on
   the threads) and sorted with `RadixSort` (`Core/RadixSort.h`). `RenderData::InstanceData` (64 bytes: a 3x4 world
   matrix, the material slot, the entity ID, flags) persists in a buffer indexed through the frame's draw list
-  (`u_DrawList[gl_InstanceIndex]`); only changed instances, materials and draw list ranges are uploaded, so a still
-  frame uploads nothing (`SceneRendererStats::InstanceBytesUploaded`, `ProxyUpdates`). Shaders derive the normal
-  matrix from the 3x4 rows (`TransformNormal` in `Include/Scene.slang`).
+  (`u_DrawList[st_InstanceIndex]`, from `SV_VulkanInstanceID`); only changed instances, materials and draw list ranges
+  are uploaded, so a still frame uploads nothing (`SceneRendererStats::InstanceBytesUploaded`, `ProxyUpdates`). Shaders
+  derive the normal matrix from the 3x4 rows (`TransformNormal` in `Include/Scene.slang`).
 - A draw list entry is `RenderData::MakeDrawEntry`: the instance in the low 27 bits (`ST_DRAW_ENTRY_INSTANCE_MASK`; render
   scenes hold at most `c_MaxRenderInstances`, `RenderScene::SetInstanceLimit`), a level-of-detail cross-fade code above.
   While a view instance's level changes, both levels are drawn for `c_LODFadeFrames` frames with complementary 4x4
@@ -4178,7 +4178,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   fails). Only the TAA reads it. The history's alpha holds the signed view distance (above); screen-space reflections
   fetch only the history's color ("Reflections").
 - **Sharpening** lives in the tone mapping (`Tonemap.frag`, `TonemapParameters::Sharpening`, written only on frames the
-  TAA resolved): four `texelFetch` neighbors, in compressed luminance the center moves from their mean by
+  TAA resolved): four `Load` neighbors, in compressed luminance the center moves from their mean by
   `Sharpening * (1 - R)^8` (R the five taps' range), bounded to the range widened by that amount times R and below
   `(1 + ymax) / 2`, luminance only. It never enters the history, exposure, bloom or `GetResolvedHDRTexture`; captures and
   the project picture show it. The exponent comes from the CPU prototype `Tests::TAA::SharpenLuminance`
@@ -4421,7 +4421,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   loop; pixels in a blend band sample two cascades), contact shadows 0.20, the two blur passes 0.10 (the blurred pixels'
   taps: writing only changed pixels saved nothing), the reduction 0.02. Measured and not kept: gathering the range cells
   four at a time (5-16% slower in registers), the reduction beside the mask's passes (graphics and compute work on one
-  queue do not overlap). The comparisons take level 0 by LOD (`textureLod`, GL_EXT_texture_shadow_lod): sampling the
+  queue do not overlap). The comparisons take level 0 by LOD (`SampleCmpLevelZero`): sampling the
   array with zero gradients made the evaluation cost 2.2-2.4 times as much. `PerfGPU.Renderer.ScreenShadows4K*` and
   `ShadowRedraw4K*` (provisional) measure it on 100,000 shadowed cubes.
 - **Transparent surfaces** are not in the prepass: `Forward.frag`'s transparent and glass variants call

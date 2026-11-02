@@ -5,7 +5,7 @@
 
 // The motion blur's passes (PostProcess/MotionBlurTiles.comp, MotionBlurNeighbors.comp, MotionBlur.comp; SceneRendererPost.cpp,
 // RenderMotionBlur): the frame constants at b0 (Include/Scene.slang: the camera's motion, the depth's view distance), the
-// parameters below as push constants. Every fetch is a point fetch (texelFetch), so no sampler is declared. SRV 0-4 alias
+// parameters below as push constants. Every fetch is a point fetch (Load), so no sampler is declared. SRV 0-4 alias
 // Include/Scene.slang's declarations, which these shaders never use, as Overlay/MotionView.frag's do.
 
 // RenderData::MotionBlurParameters (Renderer/PostProcessData.h).

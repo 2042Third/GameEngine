@@ -179,7 +179,7 @@ namespace Strata
 		copyLayout.visibility = nvrhi::ShaderType::Pixel;
 		copyLayout.bindings = { nvrhi::BindingLayoutItem::Texture_SRV(0), nvrhi::BindingLayoutItem::Sampler(0) };
 		m_CopyBindingLayout = m_Device->createBindingLayout(copyLayout);
-		// Morphological anti-aliasing's passes: every read is a point fetch (texelFetch), so they declare no sampler.
+		// Morphological anti-aliasing's passes: every read is a point fetch (Load), so they declare no sampler.
 		nvrhi::BindingLayoutDesc morphologicalEdgesLayout;
 		morphologicalEdgesLayout.visibility = nvrhi::ShaderType::Pixel;
 		morphologicalEdgesLayout.bindings = { nvrhi::BindingLayoutItem::Texture_SRV(0), nvrhi::BindingLayoutItem::Texture_SRV(1),
