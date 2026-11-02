@@ -144,7 +144,7 @@ namespace Strata
 		// million-entity scenes, record 10,000-13,000 frames at the rate of an editor with pending commands.
 		constexpr size_t c_FrameTimeReserve = 32768;
 
-		// A frame profile as editor.perf reports it (EditorStateCommands.cpp): {"frames", "frame", "framesPerSecond", "stageSum",
+		// A frame profile as editor.perf reports it (EditorStateCommands.cpp): {"frames", "frame", "framesPerSecond", "interval", "stageSum",
 		// "untimed", "jobs", "stages": {"<name>": {"avgMs", "p50Ms", "p95Ms", "maxMs", "inFrameTime"}}}, statistics in
 		// milliseconds; `jobs` adds the job system's current running and queued jobs.
 		nlohmann::json DescribeFrameProfile(const FrameProfileSummary& summary, const JobSystemStats& jobs);

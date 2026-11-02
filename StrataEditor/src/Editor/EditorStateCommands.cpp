@@ -161,6 +161,7 @@ namespace Strata
 				{ "frames", summary.Frames },
 				{ "frame", DescribeFrameTimeStats(summary.Work) },
 				{ "framesPerSecond", summary.FramesPerSecond },
+				{ "interval", DescribeFrameTimeStats(summary.Interval) },
 				{ "stageSum", DescribeFrameTimeStats(summary.StageSum) },
 				{ "untimed", DescribeFrameTimeStats(summary.Untimed) },
 				{ "jobs", {
@@ -912,7 +913,8 @@ namespace Strata
 		registry.Register({ "editor.perf",
 			"Where the editor's frames go: statistics of the latest frames the frame profiler recorded (at most 600). Returns frames (how many "
 			"were summarized), frame (the CPU time of a frame without the waits for the GPU and the display, like the status bar's frame time), "
-			"framesPerSecond, stages (per stage of the main thread: Input, Assets.Update, Assets.Finalize, Scene.Load (swapping in a scene that "
+			"framesPerSecond, interval (the time from one frame's start to the next: what a frame-rate cap, vsync or idle throttling sets), "
+			"stages (per stage of the main thread: Input, Assets.Update, Assets.Finalize, Scene.Load (swapping in a scene that "
 			"finished loading, creating sub-scenes' entities), Scene.UI (the game UI's input), Scene.Scripts, Scene.Animation, Scene.Physics, "
 			"Scene.Audio, Scene.Transforms, Render.Extract, Render.Submit, Render.UI (the game UI pass), Editor.UI and Present, plus stages modules registered; each its self "
 			"time, nested stages excluded, with inFrameTime false for Present: presenting after the frame, and the wait for the display's image at "

@@ -4,6 +4,7 @@
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorFrameRate.h"
 #include "Editor/EditorInterface.h"
 #include "Editor/EditorPreferences.h"
 #include "Editor/ExternalEditor.h"
@@ -112,6 +113,24 @@ namespace
 
 TEST_SUITE("Editor.Preferences")
 {
+	TEST_CASE("The frame rate section is a user section with 0.7.0's defaults")
+	{
+		PreferencesRegistry registry;
+		const SettingsSection* section = registry.Registry.Find(EditorFrameRate::c_SettingsSection);
+		REQUIRE(section);
+		CHECK(section->Scope == SettingsScope::User);
+		CHECK(section->Version == 1);
+		CHECK(section->GetDefault() == nlohmann::json { { "IdleAfterSeconds", 0.5 }, { "IdleFrameRate", "30" }, { "UnfocusedIdleFrameRate", "10" },
+			{ "ActiveFrameRate", "Unlimited" } });
+		// Unset, the policy is 0.7.0's: idle after half a second at 30 (10 in the background), uncapped while busy.
+		const EditorPreferences preferences(registry.Registry, {});
+		CHECK(EditorFrameRate::GetPolicy(preferences) == EditorFrameRate::Policy());
+		CHECK(EditorFrameRate::Policy().IdleAfterSeconds == 0.5);
+		CHECK(EditorFrameRate::Policy().IdleFrameRate == 30);
+		CHECK(EditorFrameRate::Policy().UnfocusedIdleFrameRate == 10);
+		CHECK(EditorFrameRate::Policy().ActiveFrameRate == 0);
+	}
+
 	TEST_CASE("A 0.5.0 EditorSettings.json is imported once and left as it was")
 	{
 		const std::filesystem::path directory = CreateTemporaryDirectory("PreferencesImport") / "Strata";
