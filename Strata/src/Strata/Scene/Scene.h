@@ -377,7 +377,8 @@ namespace Strata
 		uint64_t GetTransformsVersion() const { return m_TransformsVersion; }
 		// Appends the entities whose WorldTransformComponent changed after transforms version `sinceVersion`, and those whose
 		// drawn transform jumped back to it (they left the interpolated set, or BreakInterpolation) (an entity may appear more
-		// than once; some may have been destroyed since), so that caches of world transforms update only what changed. Returns false, appending nothing, if the scene no longer remembers that far back (it keeps the latest
+		// than once; some may have been destroyed since), so that caches of world transforms update only what changed.
+		// Returns false, appending nothing, if the scene no longer remembers that far back (it keeps the latest
 		// c_MaxTransformChanges changes): then any entity may have changed.
 		bool GetWorldTransformChanges(uint64_t sinceVersion, std::vector<entt::entity>& outEntities) const;
 		static constexpr size_t c_MaxTransformChanges = 16384;
@@ -664,9 +665,9 @@ namespace Strata
 		bool ApplyProjectLayers();
 		// Makes the project's fixed rate and interpolation (ProjectSceneTiming::Find) the scene's unless they came from that
 		// value already; interpolation turned off empties the interpolated set. Returns whether the rate the scene runs at
-		// changed; without a project (no IProjectSettings) nothing changes. Main
-		// thread: everywhere ApplyProjectLayers is called (the scene asset's hand-over, SceneLoadRequest::TakeScene, the
-		// editor's adoption of a scene and every change of the project's settings). Not saved; Copy keeps it.
+		// changed; without a project (no IProjectSettings) nothing changes. Main thread: everywhere ApplyProjectLayers is
+		// called (the scene asset's hand-over, SceneLoadRequest::TakeScene, the editor's adoption of a scene and every change
+		// of the project's settings). Not saved; Copy keeps it.
 		bool ApplyProjectTiming();
 		// Whether the document stores layers (GetStoredPhysicsLayers) other than the project's table the working copy came from:
 		// a 0.5.0 scene whose layers the project's replaced. The editor warns of it once per scene and session.
