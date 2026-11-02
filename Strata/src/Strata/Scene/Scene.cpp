@@ -6,6 +6,7 @@
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/ProjectCollisionLayers.h"
+#include "Strata/Scene/ProjectSceneTiming.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scene/SceneWorkBudget.h"
 #include "Strata/Scene/SubSceneLoad.h"
@@ -224,6 +225,26 @@ namespace Strata
 		return true;
 	}
 
+	bool Scene::ApplyProjectTiming()
+	{
+		const ProjectSceneTiming::Timing* timing = ProjectSceneTiming::Find();
+		if (!timing || timing->Version == m_ProjectTimingVersion)
+			return false;
+		const uint32_t previousRate = m_ProjectFixedRate;
+		m_ProjectFixedRate = timing->FixedRate;
+		m_ProjectTimingVersion = timing->Version;
+		return previousRate != m_ProjectFixedRate;
+	}
+
+	uint32_t Scene::GetMaxFixedSteps() const
+	{
+		// At the project's rate the scene's own cap, chosen for its own step, does not apply: 8 steps of a 240th would drop
+		// time on every frame longer than 33 ms.
+		if (m_ProjectFixedRate > 0)
+			return ProjectSceneTiming::GetMaxSteps(m_ProjectFixedRate);
+		return std::max(1u, m_Settings.MaxFixedStepsPerFrame);
+	}
+
 	Ref<Scene> Scene::Copy(const Ref<Scene>& source)
 	{
 		return Copy(source, SceneCopyOptions {});
@@ -240,6 +261,8 @@ namespace Strata
 		destination->m_StoredPhysicsLayers = source->m_StoredPhysicsLayers;
 		destination->m_ProjectLayersVersion = source->m_ProjectLayersVersion;
 		destination->m_StoredLayersDiffer = source->m_StoredLayersDiffer;
+		destination->m_ProjectFixedRate = source->m_ProjectFixedRate;
+		destination->m_ProjectTimingVersion = source->m_ProjectTimingVersion;
 		destination->m_SourceAsset = source->m_SourceAsset;
 		destination->m_LocalLineageID = source->m_LocalLineageID;
 
@@ -2171,7 +2194,7 @@ namespace Strata
 		else
 		{
 			m_FixedTimeAccumulator += deltaTime;
-			const uint32_t maxSteps = std::max(1u, m_Settings.MaxFixedStepsPerFrame);
+			const uint32_t maxSteps = GetMaxFixedSteps();
 			// The wall time one step stands for: the fixed timestep, stretched by slow motion.
 			const double realTimePerStep = static_cast<double>(fixedTimestep) / static_cast<double>(m_TimeScale > 0.0f ? m_TimeScale : 1.0f);
 			// The steps are timed only when time dilation could stop one: it is on and a second step is due (the first always

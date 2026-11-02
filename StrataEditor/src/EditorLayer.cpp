@@ -90,6 +90,8 @@ namespace Strata
 
 		// How strongly the viewport's debug views tint the scene: enough to read the color, little enough to see the shapes.
 		constexpr float c_DebugTintAlpha = 0.6f;
+		// The quieter box of a placement that is a guess (nothing under the pointer).
+		constexpr float c_PlacementGuessAlpha = 0.7f;
 
 		EditorContextSpecification MakeContextSpecification(const EditorOptions& options)
 		{
@@ -419,6 +421,10 @@ namespace Strata
 		ViewportSettings& viewportSettings = m_Context.GetViewport().GetSettings();
 		const UI::ThemeColors& themeColors = UI::GetThemeColors();
 		viewportSettings.SelectionColor = ToVec4(themeColors.Accent);
+		// The placement ghost: the accent where an asset lands on a surface, a quieter color where it is a guess.
+		viewportSettings.Placement.Hit = ToVec4(themeColors.Accent);
+		viewportSettings.Placement.Guess = ToVec4(UI::WithAlpha(themeColors.TextSecondary, c_PlacementGuessAlpha));
+		viewportSettings.Placement.Tint = ToVec4(UI::WithAlpha(themeColors.Accent, c_DebugTintAlpha));
 		viewportSettings.DebugColors.Pending = ToVec4(UI::WithAlpha(GetAssetStateColor(AssetState::Loading), c_DebugTintAlpha));
 		viewportSettings.DebugColors.Failed = ToVec4(UI::WithAlpha(GetAssetStateColor(AssetState::Failed), c_DebugTintAlpha));
 		const ImVec4* lodColors[] = { &themeColors.Success, &themeColors.Info, &themeColors.Warning, &themeColors.Error };
@@ -486,7 +492,12 @@ namespace Strata
 					{ "frameMilliseconds", m_FrameStats.WorkMilliseconds },
 					{ "cap", m_Host->GetMaxFrameRate() },
 					{ "idle", m_Idle },
-					{ "throttling", IsThrottlingEnabled() } } } };
+					{ "throttling", IsThrottlingEnabled() },
+					// The preferences, also while throttling is off (throttling says whether they apply).
+					{ "idleAfterSeconds", m_FrameRatePolicy.IdleAfterSeconds },
+					{ "idleFrameRate", m_FrameRatePolicy.IdleFrameRate },
+					{ "unfocusedIdleFrameRate", m_FrameRatePolicy.UnfocusedIdleFrameRate },
+					{ "activeFrameRate", m_FrameRatePolicy.ActiveFrameRate } } } };
 		}, [this]() { return nlohmann::json { { "launcher", IsLauncherShown() } }; });
 		if (m_Options.EnableAutomation)
 			StartAutomation();
@@ -612,11 +623,13 @@ namespace Strata
 			if (m_StartupSeconds)
 				ST_INFO("Started in {:.2f} s", *m_StartupSeconds);
 		}
-		// The interface scale the person chose, given to the host whenever the preferences change (--ui-scale wins there).
+		// The interface scale the person chose, given to the host whenever the preferences change (--ui-scale wins there), and
+		// the frame rate policy, so that no frame reads the preferences.
 		if (const uint64_t version = m_Context.GetPreferences().GetVersion(); version != m_AppliedPreferencesVersion)
 		{
 			m_AppliedPreferencesVersion = version;
 			m_Host->SetUIScaleFactor(EditorInterface::GetScaleFactor(m_Context.GetPreferences()));
+			m_FrameRatePolicy = EditorFrameRate::GetPolicy(m_Context.GetPreferences());
 		}
 		// The game's content scale in play mode is the display's as the editor's UI takes it (UI scaled to a physical size
 		// matches the editor's UI at Automatic), without the person's interface scale: that sizes the editor, not the game.
@@ -714,6 +727,8 @@ namespace Strata
 		TrackInput();
 		// Before any shortcut reads the keyboard: a binding capture the Project Settings window runs keeps it.
 		BindingCapture::BeginFrame();
+		// Before the panels: a drag cancelled now is gone for every drop target this frame.
+		UI::CancelDragDropOnEscape();
 		EditorPanelContext panelContext = MakePanelContext();
 		if (IsLauncherShown())
 		{
@@ -842,8 +857,11 @@ namespace Strata
 
 	bool EditorLayer::IsBusy(double now) const
 	{
-		if (now - m_LastInputTime < c_InputActivitySeconds || now - m_LastAutomationTime < c_AutomationActivitySeconds)
+		if (now - m_LastInputTime < m_FrameRatePolicy.IdleAfterSeconds
+			|| now - m_LastAutomationTime < std::max(c_AutomationActivitySeconds, m_FrameRatePolicy.IdleAfterSeconds))
+		{
 			return true;
+		}
 		if (m_Panels.IsAnyAnimating())
 			return true;
 		if (m_Context.IsPlaying())
@@ -855,6 +873,11 @@ namespace Strata
 			return true;
 		return m_CommandRunner.GetPendingCount() > 0 || m_Automation.GetPendingRequestCount() > 0 || m_Context.GetScriptBuilder().IsRunning()
 			|| m_Context.GetViewport().IsPickPending();
+	}
+
+	bool EditorLayer::RunsUncapped() const
+	{
+		return m_Context.HasPendingSteps() || m_CommandRunner.GetPendingCount() > 0 || m_Automation.GetPendingRequestCount() > 0;
 	}
 
 	void EditorLayer::UpdateSteppingFrameRate()
@@ -879,11 +902,18 @@ namespace Strata
 			m_Idle = false;
 			return;
 		}
-		m_Idle = !IsBusy(m_Host->GetTime());
+		// Idle after 0 never idles. This is a branch of its own, not a reason to turn throttling off: the early return above
+		// keeps whatever cap the last idle frame set, which would leave an idle editor stuck at its idle rate.
+		// Pending steps, commands and automation requests run uncapped, idle or not: UpdateSteppingFrameRate's lift (cap 0
+		// while steps are pending) must not be overwritten by an active or idle cap.
+		const bool uncapped = RunsUncapped();
+		m_Idle = m_FrameRatePolicy.IdleAfterSeconds > 0.0 && !uncapped && !IsBusy(m_Host->GetTime());
+		uint32_t cap = 0;
 		if (m_Idle)
-			m_Host->SetMaxFrameRate(m_Host->IsWindowFocused() ? c_IdleFrameRate : c_UnfocusedIdleFrameRate);
-		else
-			m_Host->SetMaxFrameRate(0);
+			cap = m_Host->IsWindowFocused() ? m_FrameRatePolicy.IdleFrameRate : m_FrameRatePolicy.UnfocusedIdleFrameRate;
+		else if (!uncapped)
+			cap = m_FrameRatePolicy.ActiveFrameRate;
+		m_Host->SetMaxFrameRate(cap);
 	}
 
 	double EditorLayer::GetAverageFrameRate() const

@@ -322,8 +322,7 @@ namespace Strata
 				ScriptSystem* system = ResolveContext(context, "GetFixedDeltaTime");
 				if (!system)
 					return 0.0f;
-				const float fixedTimestep = system->GetScene().GetSettings().FixedTimestep;
-				return fixedTimestep > 0.0f ? fixedTimestep : 1.0f / 60.0f;
+				return system->GetScene().GetFixedTimestep();
 			});
 		}
 

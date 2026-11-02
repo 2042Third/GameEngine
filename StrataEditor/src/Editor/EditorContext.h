@@ -210,9 +210,10 @@ namespace Strata
 		bool HasUnwrittenProjectSettings() const;
 		// The project file's writer, for tests (SettingsFileWriter::SetTestHook); null without a project.
 		SettingsFileWriter* GetProjectFileWriter() const { return m_ProjectFileWriter.get(); }
-		// Applies the project's collision layers (Scene::ApplyProjectLayers) to the edited scene and the running one, as every
-		// change of the project's settings does (ProjectSettingsAction, its undo and redo too): a new table reaches a running
-		// game at once, replacing what its scripts changed, and a change of another section changes nothing.
+		// Applies the project's collision layers and fixed rate (Scene::ApplyProjectLayers, ApplyProjectTiming) to the edited
+		// scene and the running one, as every change of the project's settings does (ProjectSettingsAction, its undo and redo
+		// too): a new table reaches a running game at once, replacing what its scripts changed, a new rate from its next
+		// update, and a change of another section changes nothing.
 		void ApplyProjectLayers();
 		// Whether the open project, saved by 0.5.0 or older (Project::GetFileVersion below 3), is being migrated: its scenes'
 		// collision layers are read on a job, then become the project's (ProjectMigration), before its start scene opens.
@@ -749,8 +750,8 @@ namespace Strata
 		// Finishes the migration once its scan is done (with `wait`, waiting for it), on the main thread: the project's
 		// collision layers, the project file written as version 3, the log.
 		void UpdateProjectMigration(bool wait);
-		// Takes the project's layers for a scene the editor adopts (edited or running) and warns, once per scene asset and
-		// session, when its document stores other layers: the project's apply, and saving the scene drops the scene's.
+		// Takes the project's fixed rate and layers for a scene the editor adopts (edited or running) and warns, once per scene
+		// asset and session, when its document stores other layers: the project's apply, and saving the scene drops the scene's.
 		void AdoptProjectLayers(Scene& scene, AssetHandle handle);
 		// What a save of the edited scene restores when it fails (BeginSaveSceneAs).
 		struct SceneSaveRestore

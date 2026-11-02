@@ -14,8 +14,17 @@ their place in the scene).
 
 ## Place instances
 
-Drag the prefab from the Content Browser into the Scene view: the instance rests on the surface under the cursor. Its
-Asset tab's **Add to Scene** (also in the Content Browser's context menu) places one where the view looks. Several
+Drag the prefab from the Content Browser into the Scene view: while you drag, a box shows where it will land, resting on
+the surface under the pointer, and a label beside the pointer names the surface ("Crate on 'Ground'"). Where nothing is
+under the pointer the box is dimmed: the prefab would land on the grid (the ground plane at height 0, up to 500 m away),
+or in front of the camera when the grid is farther than that. Release to place it (one undo step); press **Escape** to
+cancel the drag. The toolbar's **Snap** puts it on the grid step along the surface and **Ctrl** inverts it, as for the
+gizmo. With **Game camera** on, the drop goes where the scene's camera sees the pointer. Models and meshes (a model's
+mesh, or a built-in one) are dropped the same way; a mesh becomes an entity with a Mesh Renderer. Drag a material onto a
+mesh to give it the material: the mesh it would go to is tinted. Assets that cannot be dropped say so at the pointer
+("Cannot place a Texture here").
+
+The Asset tab's **Add to Scene** (also in the Content Browser's context menu) places one where the view looks. Several
 instances of one prefab among the same siblings get numbered names ("Crate", "Crate (1)", ...).
 
 An instance's root has its own place and name: moving, rotating, scaling or renaming the root never counts as a change of
@@ -57,5 +66,7 @@ menu) ends the link: the entities stay, as ordinary entities.
 
 The same through commands: `prefab.create`, `prefab.instantiate` (also many at once: `{prefab, instances: [...]}`),
 `prefab.status` (the overrides, whether the instance is modified or outdated), `prefab.apply` and `prefab.revert` (the
-whole instance, or one override with `component` and `property`) and `prefab.unpack`. The
+whole instance, or one override with `component` and `property`) and `prefab.unpack`. `scene.raycast` says what a ray
+or a pixel of the Scene view hits, and `asset.place` places a prefab, model or mesh where a ray, a pixel or a point lands,
+as a drop does (both in the MCP `scene` toolset). The
 [editor automation skill](../../.claude/skills/strata-editor-automation/SKILL.md) has the details.

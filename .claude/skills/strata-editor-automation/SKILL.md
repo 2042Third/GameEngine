@@ -419,10 +419,17 @@ but cannot be applied to (unpack them, or make a prefab of the instance).
 
 **Placing**: `entity.create` and `prefab.instantiate` put an entity where its `Transform` says (the origin, or the
 prefab's own place, without one); the editor's own menus put new entities on the surface under the view's pivot (the
-camera's target) and send that translation, and prefabs dragged into the viewport rest on the surface under the cursor.
-To rest entities on what is below them,
-`entity.dropToGround {"entities": [...]}` moves each straight down until its bounds touch a surface (one undo step;
-`unchanged` lists those with nothing below).
+camera's target) and send that translation. To put a prefab, model or mesh where something lands, `asset.place {"asset":
+"Prefabs/Rock.stprefab", "ray": {"origin": [x, 200, z], "direction": [0, -1, 0]}}` rests it on the first surface the ray
+hits (one undo step; the drop into the Scene view runs the same command); `"viewport": {"x", "y"}` takes a pixel of the
+Scene view through its camera, `"point"` with `"normal"` a known spot (e.g. a `scene.raycast` hit). A miss lands on the
+grid plane y = 0 within 500 m, else in front of the camera (`placedOn` says which), or fails with `"requireSurface":
+true`; `snap`, `rotation` (degrees) and `scale` apply over the asset's own. `scene.raycast {origin, direction}` or
+`{viewport}` tells what is hit first (`entity`, `point`, `normal`). Both are in the MCP `scene` toolset (enable it with
+`strata_toolsets`). `asset.place` waits while the asset loads, so `editor.batch` refuses it: place many with one call
+each, or cast with `scene.raycast` and make them with `prefab.instantiate {instances}`. To rest entities on what is
+below them, `entity.dropToGround {"entities": [...]}` moves each straight down until its bounds touch a surface (one undo
+step; `unchanged` lists those with nothing below).
 
 **Edit**: `component.add` (adds if missing, then sets values), `component.set` (component must exist),
 `component.remove`, `entity.setActive`: each takes `"entities": [...]` instead of `"entity"` to change all of them in one
@@ -502,7 +509,8 @@ itself (`Game::LoadScene`), `play.state` (and `scene.info`, `editor.status`) nam
 `maxMs`): the CPU time of the frames that ran entirely during the wait, without the waits for the GPU and vsync (measure
 with a window, not `--no-gpu`, to include rendering). A command script can gate it:
 `{"command": "editor.wait", "parameters": {"frames": 120}, "expect": {"/frameTimes/medianMs": {"max": 5}}}`.
-`editor.perf {"frames": 120}` then says where the time went, per stage of the main thread (self times in ms:
+`editor.perf {"frames": 120}` then says where the time went (it stays live while a person pauses the Performance panel
+to read its frames; `interval` is the time between frames, which shows a frame-rate cap), per stage of the main thread (self times in ms:
 `Input`, `Assets.Update`, `Assets.Finalize` (GPU uploads of arriving assets), `Scene.Load` (swapping in a scene that
 finished loading, creating sub-scenes' entities), `Scene.UI` (the game UI's input), `Scene.Scripts`, `Scene.Animation` (animators: poses, root motion,
 attachments, events), `Scene.Physics`, `Scene.Audio`, `Scene.Transforms`, `Render.Extract`, `Render.Submit`, `Render.UI` (the game UI pass), `Editor.UI`,
@@ -594,7 +602,8 @@ and read the effect (`component.get`, `log.read`, `viewport.capture`). Notes:
 - Durations are the game's fixed steps (its physics and `OnFixedUpdate` time base), not frames: a tap of 30 `steps` lasts
   30 steps whatever the frame rate (`frames` is an older name of `steps`). It is exact while the game is stepped
   (`play.step`, `input.sequence`); in a running game a frame may run several steps, so a release can land up to
-  `maxFixedStepsPerFrame - 1` steps late. While the game is paused (`play.pause`), input waits for the next step `play.step`
+  `maxFixedSteps - 1` steps late (`scene.info`'s `settings.fixedRate`, which also gives the step `seconds` count in: the
+  project's `Scene.Timing` rate when it sets one). While the game is paused (`play.pause`), input waits for the next step `play.step`
   runs (or for `play.pause {"paused": false}`) and arrives with its press: `input.key {"key": "Space"}` then
   `play.step {"steps": 1}` makes the game see Space pressed in that step, and released in the following one. Commands
   answer at once while paused (`"seen": false`), because waiting would block you from stepping; pass `"wait": true` to wait

@@ -56,6 +56,27 @@ namespace
 		}
 	}
 
+	// Profiled frames whose work took `workSeconds`, `seconds` of the harness's clock each.
+	void ProfiledWork(HarnessEditor& editor, int count, double workSeconds, float seconds = ImGuiHarness::c_DeltaTime)
+	{
+		FrameProfiler& profiler = FrameProfiler::Get();
+		for (int frame = 0; frame < count; frame++)
+		{
+			profiler.BeginFrame();
+			editor.Frames(1, seconds);
+			profiler.EndFrame(workSeconds);
+		}
+	}
+
+	PerformancePanel& OpenPerformancePanel(HarnessEditor& editor)
+	{
+		REQUIRE(editor.Click("Status.Frame"));
+		ProfiledFrames(editor, 3);
+		PerformancePanel* panel = editor.Layer->GetPanels().Get<PerformancePanel>(EditorPanels::c_Performance);
+		REQUIRE(panel);
+		return *panel;
+	}
+
 	// Whether the probe's rectangle lies within the window's visible inner area (not scrolled or cut away).
 	bool IsVisibleIn(const UI::ItemProbe::Item& item, const ImGuiWindow& window)
 	{
@@ -695,6 +716,145 @@ TEST_SUITE("Editor.UI")
 
 		profiler.SetGPUTimesExpected(expected);
 		profiler.Reset();
+	}
+
+	TEST_CASE("Pausing the Performance panel holds its timeline, tooltip and table while the profiler records on")
+	{
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIPerformancePause"));
+		FrameProfiler& profiler = FrameProfiler::Get();
+		profiler.Reset();
+		ProfiledWork(editor, 3, 0.001);
+		PerformancePanel& panel = OpenPerformancePanel(editor);
+		ProfiledWork(editor, 40, 0.001);
+
+		REQUIRE(editor.Click("Performance.Pause"));
+		const uint64_t clicked = profiler.GetTotalFrameCount() - 1;
+		ProfiledWork(editor, static_cast<int>(FrameProfiler::c_MaxGPULatencyFrames) + 1, 0.001);
+		CHECK(panel.IsPaused());
+		REQUIRE(panel.GetSnapshot());
+		CHECK(panel.GetSnapshot()->GetLastFrameIndex() <= clicked + 1);
+		const std::optional<UI::ItemProbe::Item> paused = UI::ItemProbe::Find("Performance.Paused");
+		REQUIRE(paused);
+		CHECK(paused->Text.starts_with("Paused"));
+
+		// A still mouse over the timeline stays on one frame while the profiler records on.
+		const std::optional<UI::ItemProbe::Item> timeline = UI::ItemProbe::Find("Performance.Timeline");
+		REQUIRE(timeline);
+		editor.Harness.MoveMouse(ImVec2(timeline->Max.x - (timeline->Max.x - timeline->Min.x) * 0.02f, timeline->GetCenter().y));
+		ProfiledWork(editor, 2, 0.001);
+		const std::optional<UI::ItemProbe::Item> hovered = UI::ItemProbe::Find("Performance.HoveredFrame");
+		REQUIRE(hovered);
+		const std::string frame = hovered->Text;
+		for (int step = 0; step < 30; step++)
+		{
+			ProfiledWork(editor, 1, 0.001);
+			const std::optional<UI::ItemProbe::Item> still = UI::ItemProbe::Find("Performance.HoveredFrame");
+			REQUIRE(still);
+			CHECK(still->Text == frame);
+		}
+
+		// Slower frames for longer than the refresh: the panel's statistics hold, the profiler and editor.perf move on.
+		const uint64_t builds = panel.GetTableBuildCount();
+		REQUIRE(panel.GetSummary());
+		CHECK(panel.GetSummary()->Work.P50 == doctest::Approx(1.0f).epsilon(0.01));
+		const uint64_t total = profiler.GetTotalFrameCount();
+		ProfiledWork(editor, 120, 0.005, 0.05f);
+		CHECK(panel.GetTableBuildCount() == builds);
+		CHECK(panel.GetSummary()->Work.P50 == doctest::Approx(1.0f).epsilon(0.01));
+		CHECK(profiler.GetTotalFrameCount() > total);
+		CHECK(editor.Run("editor.perf", { { "frames", 30 } })["frame"]["p50Ms"].get<double>() == doctest::Approx(5.0).epsilon(0.01));
+
+		// Copy as JSON copies the paused frames.
+		REQUIRE(editor.Click("Performance.CopyJson"));
+		std::string error;
+		const std::optional<nlohmann::json> copied = JsonUtils::Parse(editor.Harness.GetClipboard(), &error);
+		REQUIRE_MESSAGE(copied, error);
+		CHECK((*copied)["frame"]["p50Ms"].get<double>() == doctest::Approx(1.0).epsilon(0.01));
+		CHECK((*copied)["paused"]["lastFrame"].get<uint64_t>() == panel.GetSnapshot()->GetLastFrameIndex());
+
+		// Space with the panel focused resumes, and copies nothing again; the live statistics come at once.
+		const std::string clipboard = editor.Harness.GetClipboard();
+		editor.Harness.SetKey(ImGuiKey_Space, true);
+		ProfiledWork(editor, 1, 0.005);
+		editor.Harness.SetKey(ImGuiKey_Space, false);
+		ProfiledWork(editor, 1, 0.005);
+		CHECK_FALSE(panel.IsPaused());
+		CHECK(editor.Harness.GetClipboard() == clipboard);
+		CHECK(panel.GetSummary()->Work.P50 == doctest::Approx(5.0f).epsilon(0.01));
+
+		// With the navigation cursor shown (Tab), Space presses the item it is on and does not toggle the pause.
+		editor.Harness.SetKey(ImGuiKey_Tab, true);
+		ProfiledWork(editor, 1, 0.005);
+		editor.Harness.SetKey(ImGuiKey_Tab, false);
+		ProfiledWork(editor, 1, 0.005);
+		REQUIRE(ImGui::GetCurrentContext()->NavCursorVisible);
+		editor.Harness.SetKey(ImGuiKey_Space, true);
+		ProfiledWork(editor, 1, 0.005);
+		editor.Harness.SetKey(ImGuiKey_Space, false);
+		ProfiledWork(editor, 1, 0.005);
+		CHECK_FALSE(panel.IsPaused());
+
+		// A profiler reset between the click and the snapshot resumes instead of showing frames of the new count.
+		profiler.SetGPUTimesExpected(true);
+		editor.ClickAt(UI::ItemProbe::Find("Performance.Pause")->GetCenter());
+		ProfiledWork(editor, 1, 0.005);
+		REQUIRE(panel.IsPaused());
+		REQUIRE_FALSE(panel.GetSnapshot());
+		profiler.Reset();
+		ProfiledWork(editor, 2, 0.005);
+		CHECK_FALSE(panel.IsPaused());
+		profiler.SetGPUTimesExpected(false);
+		profiler.Reset();
+	}
+
+	TEST_CASE("Pause waits for the GPU times of the frames it shows")
+	{
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIPerformancePauseGPU"));
+		FrameProfiler& profiler = FrameProfiler::Get();
+		profiler.Reset();
+		const bool expected = profiler.AreGPUTimesExpected();
+		profiler.SetGPUTimesExpected(true);
+		const RendererGPUStages& stages = RendererGPUStages::Get();
+		// GPU times faked three frames late, as a renderer delivers them.
+		const auto profiledFrames = [&](int count)
+		{
+			for (int frame = 0; frame < count; frame++)
+			{
+				profiler.BeginFrame();
+				editor.Frames(1);
+				profiler.EndFrame(0.002);
+				const uint64_t index = profiler.GetTotalFrameCount() - 1;
+				if (index >= 3)
+					REQUIRE(profiler.RecordGPUFrame(index - 3, std::vector<GPUStageTime> { { stages.Opaque, 1.0f } }));
+			}
+		};
+		profiledFrames(6);
+		PerformancePanel& panel = OpenPerformancePanel(editor);
+		profiledFrames(6);
+		REQUIRE(editor.Click("Performance.Pause"));
+		const uint64_t clicked = profiler.GetTotalFrameCount() - 1;
+		profiledFrames(static_cast<int>(FrameProfiler::c_MaxGPULatencyFrames) + 1);
+		REQUIRE(panel.GetSnapshot());
+		CHECK(panel.GetSnapshot()->GetLastFrameIndex() >= clicked);
+		const FrameSample newest = panel.GetSnapshot()->GetFrame(0);
+		CHECK(newest.HasGPU);
+		profiler.SetGPUTimesExpected(expected);
+		profiler.Reset();
+	}
+
+	TEST_CASE("Hiding the Performance panel resumes it and frees its copy")
+	{
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIPerformanceHide"));
+		FrameProfiler::Get().Reset();
+		ProfiledFrames(editor, 3);
+		PerformancePanel& panel = OpenPerformancePanel(editor);
+		REQUIRE(editor.Click("Performance.Pause"));
+		ProfiledFrames(editor, 2);
+		REQUIRE(panel.GetSnapshot());
+		editor.Layer->GetPanels().Focus(EditorPanels::c_Console);
+		ProfiledFrames(editor, 3);
+		CHECK_FALSE(panel.IsPaused());
+		CHECK(panel.GetSnapshot() == nullptr);
 	}
 
 	TEST_CASE("What bounds the frames reads as a line for the panel and the frame pill")

@@ -204,6 +204,7 @@ namespace Strata
 	void RegisterEditorStateCommands(EditorCommandRegistry& registry);
 	void RegisterPlayCommands(EditorCommandRegistry& registry); // play.* (Commands/PlayCommands.cpp)
 	void RegisterBatchCommands(EditorCommandRegistry& registry); // editor.batch (Commands/BatchCommands.cpp)
+	void RegisterPlacementCommands(EditorCommandRegistry& registry); // scene.raycast, asset.place (Commands/PlacementCommands.cpp)
 	void RegisterViewportCommands(EditorCommandRegistry& registry);
 	void RegisterScriptCommands(EditorCommandRegistry& registry);
 	void RegisterInputCommands(EditorCommandRegistry& registry);

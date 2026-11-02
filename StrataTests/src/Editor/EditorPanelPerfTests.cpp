@@ -194,6 +194,19 @@ TEST_SUITE("Perf.EditorPanels")
 				performanceStats.MedianMs, " ms, p95 ", performanceStats.P95Ms, " ms, max ", performanceStats.MaxMs, " ms per frame");
 			return performanceStats.P95Ms;
 		});
+
+		// Paused: the same frames drawn from the panel's snapshot (taken in the warm-up frames: no GPU times are expected).
+		performance.Pause();
+		MeasurePanel(harness, performance, panelContext, c_WarmupFrames);
+		REQUIRE(performance.GetSnapshot());
+		Perf::CheckBudgetConfirmed("Perf.EditorPanels.Performance600FramesPausedP95", [&]
+		{
+			const PanelFrames pausedFrames = MeasurePanel(harness, performance, panelContext, c_MeasuredFrames);
+			const Perf::Measurement pausedStats = Perf::Summarize(pausedFrames.All);
+			MESSAGE("Paused Performance panel: median ", pausedStats.MedianMs, " ms, p95 ", pausedStats.P95Ms, " ms per frame");
+			return pausedStats.P95Ms;
+		});
+		performance.Resume();
 	}
 }
 

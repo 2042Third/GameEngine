@@ -10,9 +10,12 @@
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Renderer/Mesh.h>
+#include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/Scene.h>
+
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -79,17 +82,122 @@ namespace Strata
 			return Surface { camera.GetTarget(), glm::vec3(0.0f, 1.0f, 0.0f), false };
 		}
 
-		std::optional<SceneRayHit> CastAt(Scene& scene, const EditorCamera& camera, const glm::vec2& ndc, float aspectRatio, std::span<const Entity> ignore)
+		const char* PlacementSourceToString(PlacementSource source)
 		{
-			const glm::mat4 viewProjection = camera.GetProjectionMatrix(aspectRatio) * camera.GetViewMatrix();
-			return SceneRaycast::Cast(scene, Ray::FromNDC(ndc, glm::inverse(viewProjection)), camera.GetFar(), ignore);
+			switch (source)
+			{
+				case PlacementSource::Surface: return "surface";
+				case PlacementSource::Grid: return "grid";
+				case PlacementSource::InFront: return "inFront";
+				case PlacementSource::Point: return "point";
+			}
+			return "surface";
 		}
 
-		Surface FindSurfaceAt(Scene& scene, const EditorCamera& camera, const glm::vec2& ndc, float aspectRatio, std::span<const Entity> ignore)
+		Ray MakeViewRay(const SceneCamera& camera, const glm::vec2& ndc)
 		{
-			if (const std::optional<SceneRayHit> hit = CastAt(scene, camera, ndc, aspectRatio, ignore))
-				return ToSurface(*hit);
-			return FindPivotSurface(scene, camera, ignore);
+			// Through the rotation-only view: the ray's origin stays near zero, so the camera's position is added exactly once
+			// instead of being lost in the inverse of a matrix that holds it.
+			const glm::mat4 rotation(glm::mat3(camera.View));
+			const Ray relative = Ray::FromNDC(ndc, glm::inverse(camera.Projection * rotation));
+			return Ray(camera.Position + relative.Origin, relative.Direction);
+		}
+
+		float GetFallbackDistance(const EditorCamera* editorCamera)
+		{
+			const float distance = editorCamera ? editorCamera->GetDistance() : c_DefaultFallbackDistance;
+			if (!std::isfinite(distance))
+				return c_DefaultFallbackDistance;
+			return std::min(std::max(distance, c_MinFallbackDistance), c_GridFallbackDistance);
+		}
+
+		PlacementRequest MakeRayRequest(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, float fallbackDistance,
+			std::optional<float> snap)
+		{
+			PlacementRequest request;
+			request.CastRay = Ray(origin, direction);
+			request.MaxDistance = maxDistance;
+			request.FallbackDistance = std::min(std::max(fallbackDistance, c_MinFallbackDistance), c_GridFallbackDistance);
+			request.Snap = snap;
+			return request;
+		}
+
+		std::optional<Placement> Place(Scene& scene, const PlacementRequest& request, const AABB& bounds)
+		{
+			Placement placement;
+			if (bounds.IsValid())
+				placement.PlacedBounds = bounds.Transformed(glm::mat4_cast(request.Rotation) * glm::scale(glm::mat4(1.0f), glm::vec3(request.Scale)));
+
+			// Where: the given point, else what the ray hits, else the grid plane, else in front of the camera.
+			const Ray& ray = request.CastRay;
+			if (request.At)
+			{
+				placement.Source = PlacementSource::Point;
+				placement.RestingOn = *request.At;
+				const float length = glm::length(placement.RestingOn.Normal);
+				placement.RestingOn.Normal = length > 0.0f && std::isfinite(length) ? placement.RestingOn.Normal / length : glm::vec3(0.0f, 1.0f, 0.0f);
+			}
+			else if (const std::optional<SceneRayHit> hit = SceneRaycast::Cast(scene, ray, request.MaxDistance))
+			{
+				placement.Source = PlacementSource::Surface;
+				placement.RestingOn = ToSurface(*hit);
+				placement.HitEntity = hit->HitEntity;
+			}
+			else
+			{
+				if (request.RequireSurface)
+					return std::nullopt;
+				const float reach = std::min(request.MaxDistance, c_GridFallbackDistance);
+				const float gridDistance = std::abs(ray.Direction.y) > 1.0e-6f ? -ray.Origin.y / ray.Direction.y : -1.0f;
+				if (gridDistance > 0.0f && gridDistance <= reach)
+				{
+					placement.Source = PlacementSource::Grid;
+					placement.RestingOn = Surface { ray.GetPoint(gridDistance), glm::vec3(0.0f, ray.Direction.y < 0.0f ? 1.0f : -1.0f, 0.0f), false };
+				}
+				else
+				{
+					// Never std::clamp with bounds that may cross: a reach under the minimum distance wins.
+					const float distance = std::min(std::max(request.FallbackDistance, c_MinFallbackDistance), reach);
+					placement.Source = PlacementSource::InFront;
+					placement.RestingOn = Surface { ray.GetPoint(distance), glm::vec3(0.0f, 1.0f, 0.0f), false };
+				}
+			}
+
+			// Snapping: along the surface (the normal's dominant axis keeps its value), as the gizmo snaps translations.
+			if (request.Snap && *request.Snap > 0.0f)
+			{
+				const float step = *request.Snap;
+				const glm::vec3 normal = placement.RestingOn.Normal;
+				const glm::vec3 magnitude = glm::abs(normal);
+				int axis = 1;
+				if (placement.Source == PlacementSource::Surface || placement.Source == PlacementSource::Point)
+					axis = magnitude.x > magnitude.y && magnitude.x > magnitude.z ? 0 : (magnitude.y >= magnitude.z ? 1 : 2);
+				glm::vec3 snapped = placement.RestingOn.Point;
+				for (int i = 0; i < 3; i++)
+				{
+					if (i != axis)
+						snapped[i] = std::round(snapped[i] / step) * step;
+				}
+				placement.RestingOn.Point = snapped;
+				// On ground facing up, the height under the snapped point (still at the hit's height when nothing is there).
+				if (placement.Source == PlacementSource::Surface && axis == 1 && normal.y > 0.0f)
+				{
+					const Ray down(snapped + glm::vec3(0.0f, c_SnapLift, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f));
+					if (const std::optional<SceneRayHit> under = SceneRaycast::Cast(scene, down, c_SnapLift + c_SnapDepth))
+					{
+						placement.RestingOn = ToSurface(*under);
+						placement.HitEntity = under->HitEntity;
+					}
+				}
+				placement.Snapped = true;
+			}
+
+			// InFront has nothing to rest on: the box straddles the point, so the ghost surrounds the pointer.
+			if (placement.Source == PlacementSource::InFront)
+				placement.Translation = placement.PlacedBounds.IsValid() ? placement.RestingOn.Point - placement.PlacedBounds.GetCenter() : placement.RestingOn.Point;
+			else
+				placement.Translation = RestOn(placement.RestingOn, placement.PlacedBounds);
+			return placement;
 		}
 
 		glm::vec3 RestOn(const Surface& surface, const AABB& bounds)

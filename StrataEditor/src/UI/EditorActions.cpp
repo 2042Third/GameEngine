@@ -283,8 +283,7 @@ namespace Strata
 			RunEditorCommand(context, commands, "entity.dropToGround", { { "entities", GetTopmostSelection(context) } });
 		}
 
-		std::optional<UUID> InstantiatePrefab(EditorContext& context, const EditorCommandRegistry& commands, UUID prefab, UUID parent,
-			const EditorPlacement::Surface* surface)
+		std::optional<UUID> InstantiatePrefab(EditorContext& context, const EditorCommandRegistry& commands, UUID prefab, UUID parent)
 		{
 			nlohmann::json parameters = { { "prefab", UUIDToJson(prefab) } };
 			if (parent.IsValid())
@@ -293,7 +292,7 @@ namespace Strata
 			}
 			else if (const Ref<Scene>& scene = context.GetActiveScene())
 			{
-				const EditorPlacement::Surface placed = surface ? *surface : EditorPlacement::FindPivotSurface(*scene, context.GetViewport().GetCamera());
+				const EditorPlacement::Surface placed = EditorPlacement::FindPivotSurface(*scene, context.GetViewport().GetCamera());
 				const glm::vec3 translation = EditorPlacement::RestOn(placed, EditorPlacement::GetPlacementBounds(context, prefab));
 				parameters["components"] = { { "Transform", { { "Translation", { translation.x, translation.y, translation.z } } } } };
 			}
@@ -302,6 +301,18 @@ namespace Strata
 			if (root)
 				context.Select(*root);
 			return root;
+		}
+
+		void PlaceAsset(EditorCommandRunner& runner, EditorContext& context, const EditorCommandRegistry& commands, const nlohmann::json& parameters)
+		{
+			// The context outlives the runner, whose destruction cancels what is pending first.
+			runner.Run(context, commands, "asset.place", parameters, [&context](const EditorCommandResult& result)
+			{
+				if (!result.Success || !result.Value.is_object())
+					return;
+				if (const std::optional<UUID> root = UUIDFromJson(result.Value.value("id", nlohmann::json())))
+					context.Select(*root);
+			}, CommandOrigin { CommandSource::UI });
 		}
 
 		void HandleSelectionShortcuts(EditorContext& context, const EditorCommandRegistry& commands, bool selectAll)
