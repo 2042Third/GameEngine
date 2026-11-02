@@ -592,7 +592,8 @@ and read the effect (`component.get`, `log.read`, `viewport.capture`). Notes:
 - Durations are the game's fixed steps (its physics and `OnFixedUpdate` time base), not frames: a tap of 30 `steps` lasts
   30 steps whatever the frame rate (`frames` is an older name of `steps`). It is exact while the game is stepped
   (`play.step`, `input.sequence`); in a running game a frame may run several steps, so a release can land up to
-  `maxFixedStepsPerFrame - 1` steps late. While the game is paused (`play.pause`), input waits for the next step `play.step`
+  `maxFixedSteps - 1` steps late (`scene.info`'s `settings.fixedRate`, which also gives the step `seconds` count in: the
+  project's `Scene.Timing` rate when it sets one). While the game is paused (`play.pause`), input waits for the next step `play.step`
   runs (or for `play.pause {"paused": false}`) and arrives with its press: `input.key {"key": "Space"}` then
   `play.step {"steps": 1}` makes the game see Space pressed in that step, and released in the following one. Commands
   answer at once while paused (`"seen": false`), because waiting would block you from stepping; pass `"wait": true` to wait
