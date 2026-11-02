@@ -953,6 +953,11 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			# covered_car uses KHR_materials_specular, which the importer leaves out (GltfImporter.cpp's supported extensions):
 			# its import says so, and the car's paint keeps the base material's specular.
 			"-DALLOWED_MESSAGES=\\[warning\\] App: The scripts of 'Showcase' are not built yet|\\[warning\\] Strata: Import 'Scans/covered_car_1k/covered_car_1k.gltf': Not imported: extension KHR_materials_specular"
+			# On CI's runners the editor's play copy cooks the 36 terrain tiles', the apron's and the props' mesh colliders while
+			# the paused game's waits step it, so its simulation may start after physics' 10 s (of simulation time) without some
+			# of them. Nothing falls meanwhile (the scene has no dynamic body; the walk stands on rays), and the regression waits
+			# for every body to be built (physics.stats' pendingOther 0) before it plays the tour.
+			"-DEDITOR_ALLOWED_MESSAGES=\\[warning\\] Strata: Physics: scene 'Outpost' starts simulating after waiting 10 s for meshes"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
 	set_tests_properties(StrataEditor.Showcase PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain FIXTURES_SETUP StrataShowcaseExport)
 	# The tour's frames at 1920 x 1080 (Release and Dist, PerfGPU.Samples): the exported game started once per attempt, its
