@@ -4,6 +4,7 @@
 # warnings and is consumed by Strata targets as SYSTEM includes, so it never trips first-party /WX.
 # To upgrade a dependency: check out the new tag inside its submodule, rebuild, run all tests, and
 # update ThirdPartyNotices.md.
+# The shader compiler (Slang) is not here: CMake/StrataSlang.cmake fetches a pinned release archive.
 
 set(CMAKE_FOLDER "Vendor")
 set(BUILD_SHARED_LIBS OFF)
@@ -222,17 +223,6 @@ if(MSVC AND (STRATA_USE_AVX2 OR STRATA_USE_AVX512) AND CMAKE_VS_PLATFORM_NAME MA
 	target_compile_options(zstd_decompress PRIVATE /arch:AVX2)
 	target_compile_options(zstd_compress PRIVATE /arch:AVX2)
 endif()
-
-# --- glslang (glslang-standalone: build-time GLSL -> SPIR-V compiler) ------------------------------
-strata_vendor_option(BUILD_EXTERNAL OFF)
-strata_vendor_option(ENABLE_OPT OFF)
-strata_vendor_option(ENABLE_HLSL OFF)
-strata_vendor_option(ENABLE_GLSLANG_BINARIES ON)
-strata_vendor_option(ENABLE_GLSLANG_JS OFF)
-strata_vendor_option(ENABLE_SPIRV ON)
-strata_vendor_option(GLSLANG_TESTS OFF)
-strata_vendor_option(GLSLANG_ENABLE_INSTALL OFF)
-add_subdirectory(glslang SYSTEM)
 
 # --- doctest (header-only, tests) -----------------------------------------------------------------
 add_library(doctest INTERFACE)

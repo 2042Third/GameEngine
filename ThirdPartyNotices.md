@@ -22,7 +22,6 @@ alongside the executable. Slang, the shader compiler the build runs, is not a su
 | [cgltf](https://github.com/jkuhlmann/cgltf) | 1.15 | MIT | Editor only | glTF import |
 | [meshoptimizer](https://github.com/zeux/meshoptimizer) | 1.3 | MIT | Editor only | Mesh optimization and LOD generation |
 | [MikkTSpace](https://github.com/mmikk/MikkTSpace) | 3e895b4 | zlib | Editor only | Tangent generation |
-| [glslang](https://github.com/KhronosGroup/glslang) | 16.6.0 | BSD-3-Clause and others (see `LICENSE.txt`) | No (build tool) | GLSL to SPIR-V compiler |
 | [Slang](https://github.com/shader-slang/slang) | 2026.20 | Apache-2.0 WITH LLVM-exception (its components' licenses are in the archive's LICENSES/ and third-party-notices/) | No (build tool) | Shader compiler (HLSL-syntax Slang to SPIR-V) |
 | [nativefiledialog-extended](https://github.com/btzy/nativefiledialog-extended) | 1.4.1 | zlib | Editor only | Native file dialogs |
 | [doctest](https://github.com/doctest/doctest) | 2.5.3 | MIT | No (tests) | Unit testing |
