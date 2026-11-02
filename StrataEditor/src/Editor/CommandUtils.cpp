@@ -386,6 +386,10 @@ namespace Strata
 				if (const PhysicsStepInfo step = diagnostics->GetStepInfo(); step.HasWorld)
 					physics = { { "bodies", step.Bodies }, { "awake", step.AwakeBodies }, { "stepMs", step.StepMs } };
 			}
+			// What is drawn between the last two fixed steps (Scene::SetInterpolation): whether it is, how far between their poses
+			// this frame draws, and how many entities.
+			const nlohmann::json interpolation = { { "enabled", scene.IsInterpolating() }, { "stepAlpha", scene.GetStepAlpha() },
+				{ "entities", scene.GetInterpolatedEntities().size() } };
 			nlohmann::json switching = nullptr;
 			if (context.IsRuntimeSceneLoading())
 				switching = { { "scene", UUIDToJson(context.GetRuntimeSceneLoadTarget()) }, { "progress", context.GetRuntimeSceneLoadProgress() } };
@@ -397,6 +401,7 @@ namespace Strata
 				{ "subScenes", std::move(subScenes) },
 				{ "world", std::move(world) },
 				{ "physics", std::move(physics) },
+				{ "interpolation", interpolation },
 				{ "switching", std::move(switching) } };
 		}
 

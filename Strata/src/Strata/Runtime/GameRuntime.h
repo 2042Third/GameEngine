@@ -36,6 +36,10 @@ namespace Strata
 		// (Scene::SetTimeDilation): for games driven by the wall clock. Off by default, so that tools and tests that drive
 		// the runtime with chosen timesteps step deterministically.
 		bool TimeDilation = false;
+		// Draw what fixed steps move between its last two poses (Scene::SetInterpolation, as the project's Scene.Timing
+		// allows): for games that render on the wall clock. Off by default, so that tools and tests that drive the runtime with
+		// chosen timesteps draw what they simulate.
+		bool Interpolation = false;
 		// Each update's timestep is limited to what its scene's fixed steps simulate in one update (its scene's most steps per
 		// update, Scene::GetMaxFixedSteps, at its time scale), so no step is dropped and the scene's clock, its scripts' frame
 		// time and GetPlayedSeconds agree whatever the frame rate: for runs that end after a span of game time or a number of
@@ -185,6 +189,7 @@ namespace Strata
 		Scope<PendingScene> m_SceneLoad;
 		Scope<PendingScene> m_LoadingSceneLoad;
 		bool m_TimeDilation = false; // GameRuntimeOptions::TimeDilation, for every scene the game plays
+		bool m_Interpolation = false; // GameRuntimeOptions::Interpolation, likewise
 		bool m_KeepEveryFixedStep = false; // GameRuntimeOptions::KeepEveryFixedStep
 		SceneLoadOptions m_LoadOptions; // Of every scene the game loads (GameRuntimeOptions::PrepareRenderScenes)
 		std::optional<int32_t> m_QuitRequest;

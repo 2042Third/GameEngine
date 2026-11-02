@@ -233,6 +233,10 @@ namespace Strata
 		const uint32_t previousRate = m_ProjectFixedRate;
 		m_ProjectFixedRate = timing->FixedRate;
 		m_ProjectTimingVersion = timing->Version;
+		m_ProjectInterpolation = timing->Interpolation;
+		// Turned off: every entity is drawn where it is from the next read.
+		if (!m_ProjectInterpolation)
+			ClearInterpolation();
 		return previousRate != m_ProjectFixedRate;
 	}
 

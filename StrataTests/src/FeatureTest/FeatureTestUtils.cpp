@@ -402,6 +402,7 @@ namespace Strata::Tests
 			std::string error;
 			REQUIRE_MESSAGE(scene.ValidateWorldTransforms(&error), error);
 			REQUIRE_MESSAGE(scene.ValidateHierarchy(&error), error);
+			REQUIRE_MESSAGE(scene.ValidateInterpolation(&error), error);
 			if (GameUIScene* ui = GameUIScene::Find(scene))
 				REQUIRE_MESSAGE(ui->Validate(&error), error);
 			if (frame == c_FeatureReloadFrame)

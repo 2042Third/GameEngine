@@ -662,8 +662,9 @@ namespace Strata
 		// hand-over (SceneAsset::TakePreparedScene and CreateScene, so every SceneLoader load before its preparation) and
 		// SceneLoadRequest::TakeScene call it, and the editor for every scene it adopts and after every change of the table.
 		bool ApplyProjectLayers();
-		// Makes the project's fixed rate (ProjectSceneTiming::Find) the scene's unless it came from that value already.
-		// Returns whether the rate the scene runs at changed; without a project (no IProjectSettings) nothing changes. Main
+		// Makes the project's fixed rate and interpolation (ProjectSceneTiming::Find) the scene's unless they came from that
+		// value already; interpolation turned off empties the interpolated set. Returns whether the rate the scene runs at
+		// changed; without a project (no IProjectSettings) nothing changes. Main
 		// thread: everywhere ApplyProjectLayers is called (the scene asset's hand-over, SceneLoadRequest::TakeScene, the
 		// editor's adoption of a scene and every change of the project's settings). Not saved; Copy keeps it.
 		bool ApplyProjectTiming();

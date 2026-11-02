@@ -86,6 +86,9 @@ namespace Strata
 			// they start, so the frame that shows one does not build them all.
 			const bool renders = Application::Get().GetWindow() && Renderer::IsInitialized();
 			runtimeOptions.PrepareRenderScenes = renders;
+			// What the fixed steps move is drawn between their poses where frames show the wall clock: not in runs that end
+			// by themselves (their last frame must not depend on the machine) nor in headless ones, which draw nothing.
+			runtimeOptions.Interpolation = !endsByItself && renders;
 			if (m_Options.TextureBudget)
 			{
 				runtimeOptions.AssetBudgets = AssetManagerBase::GetDefaultResidencyBudgets();

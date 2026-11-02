@@ -1395,6 +1395,7 @@ namespace Strata
 		InputActions::LoadBindings();
 		m_GameGraphics->LoadPlayerOptions();
 		m_RuntimeScene->SetTimeDilation(m_Specification.TimeDilation);
+		m_RuntimeScene->SetInterpolation(m_Specification.Interpolation);
 		m_RuntimeScene->OnRuntimeStart(mode);
 		// Cells with unsaved edits stay for the session: their documents on disk are older than what plays.
 		if (WorldStreamingSystem* streaming = m_RuntimeScene->GetSystem<WorldStreamingSystem>())
@@ -1536,6 +1537,7 @@ namespace Strata
 		m_RuntimeSceneAsset = asset;
 		AdoptProjectLayers(*m_RuntimeScene, asset);
 		m_RuntimeScene->SetTimeDilation(m_Specification.TimeDilation);
+		m_RuntimeScene->SetInterpolation(m_Specification.Interpolation);
 		m_RuntimeScene->OnRuntimeStart(mode);
 		if (paused)
 		{
