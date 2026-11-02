@@ -17,11 +17,11 @@ The sample is being built in steps. This version holds the project and its scann
 | --- | --- |
 | `Assets/Scans/` | Twelve Poly Haven models at 1K: boulders and a cliff, dead brush, drums, a fire pit, a lantern, a tyre, a covered car, a ladder. The rocks keep six levels of detail, the lantern and the ladder five |
 | `Assets/Textures/` | Ten Poly Haven texture sets (base color, OpenGL normal map, and AO, roughness and metalness packed as `arm`) for the ground, the apron, mud, plaster, planks and painted sheet metal |
-| `Assets/Scenes/Outpost.stscene` | The start scene: the golden-hour sky so far |
+| `Assets/Generated/Terrain/` | The ground, written by the engine repository's `Tools/GenerateShowcaseTerrain.py` and imported: a 300 m valley at 1 m resolution inside a 2.7 km ring of hills and mountains, the asphalt apron with its potholes and shallow puddles, their water and mud patches. The generator also checks the design the shots rest on (the low sun clears the hills from the apron, pads are flat) and computes where each shot's camera sees the sun reflected |
+| `Assets/Scenes/Outpost.stscene` | The start scene: the golden-hour sky, the ground with its colliders (layer `Terrain`) and the post-processing |
 
-The terrain and the props come next, written by the generators `Tools/GenerateShowcaseTerrain.py` and
-`Tools/GenerateShowcaseProps.py` of the engine's repository and imported, then the layout, the times of day, the camera
-tour, the walk and the photo mode.
+The props come next, written by `Tools/GenerateShowcaseProps.py` and imported, then the layout, the times of day, the
+camera tour, the walk and the photo mode.
 
 ## Credits
 

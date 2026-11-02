@@ -494,6 +494,19 @@ if(TARGET StrataEditor AND TARGET StrataCLI)
 			COMMAND "${CMAKE_COMMAND}" "-DTEST_NAME=StrataTools.LookDev" -P "${CMAKE_CURRENT_SOURCE_DIR}/Tools/PythonMissing.cmake")
 	endif()
 	set_tests_properties(StrataTools.LookDev PROPERTIES LABELS "gpu;tools" TIMEOUT 900)
+
+	# The showcase sample's ground is what its generator writes: the design's checks pass, two runs write the same bytes,
+	# the committed models equal them and shots 2-4 see the sun where the layout says (Tools/GenerateShowcaseTerrain.py).
+	if(Python3_Interpreter_FOUND)
+		add_test(NAME StrataTools.ShowcaseTerrain
+			COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/Tools/GenerateShowcaseTerrain.py" selftest
+				--committed "${PROJECT_SOURCE_DIR}/Samples/Showcase/Assets/Generated/Terrain"
+				--work "${CMAKE_CURRENT_BINARY_DIR}/ShowcaseTerrain/$<CONFIG>")
+	else()
+		add_test(NAME StrataTools.ShowcaseTerrain
+			COMMAND "${CMAKE_COMMAND}" "-DTEST_NAME=StrataTools.ShowcaseTerrain" -P "${CMAKE_CURRENT_SOURCE_DIR}/Tools/PythonMissing.cmake")
+	endif()
+	set_tests_properties(StrataTools.ShowcaseTerrain PROPERTIES LABELS "tools" TIMEOUT 300)
 endif()
 
 # The runtime's command line, before any game is looked for: --help prints the usage and exits 0, an argument it does not
