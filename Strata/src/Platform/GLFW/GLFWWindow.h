@@ -17,8 +17,12 @@ namespace Strata
 	class GLFWWindow : public Window, private VulkanPresentation
 	{
 	public:
-		explicit GLFWWindow(const WindowSpecification& specification);
+		GLFWWindow() = default;
 		~GLFWWindow() override;
+
+		// Opens the window (Window::Create only); false, with the reason logged, when GLFW cannot be initialized (no display)
+		// or the window cannot be created. A window that was never opened must not be used, only destroyed.
+		bool Open(const WindowSpecification& specification);
 
 		void ProcessEvents() override;
 

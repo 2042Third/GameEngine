@@ -44,10 +44,13 @@ namespace Strata
 
 	Scope<Window> Window::Create(const WindowSpecification& specification)
 	{
-		return CreateScope<GLFWWindow>(specification);
+		Scope<GLFWWindow> window = CreateScope<GLFWWindow>();
+		if (!window->Open(specification))
+			return nullptr; // GLFW's error callback and Open logged why
+		return window;
 	}
 
-	GLFWWindow::GLFWWindow(const WindowSpecification& specification)
+	bool GLFWWindow::Open(const WindowSpecification& specification)
 	{
 		m_Data.Title = specification.Title;
 		m_Data.Width = specification.Width;
@@ -61,8 +64,11 @@ namespace Strata
 			// the engine's instance.
 			if (PFN_vkGetInstanceProcAddr getInstanceProcAddr = VulkanLoader::GetInstanceProcAddr())
 				glfwInitVulkanLoader(getInstanceProcAddr);
-			const int success = glfwInit();
-			ST_CORE_VERIFY(success, "Could not initialize GLFW");
+			if (!glfwInit())
+			{
+				ST_CORE_ERROR("The window system could not be initialized (GLFW): no display, or none GLFW supports");
+				return false;
+			}
 		}
 
 		// Rendering goes through Vulkan; GLFW must not create an OpenGL context.
@@ -96,7 +102,14 @@ namespace Strata
 		}
 
 		m_Window = glfwCreateWindow(width, height, m_Data.Title.c_str(), monitor, nullptr);
-		ST_CORE_VERIFY(m_Window, "Could not create GLFW window");
+		if (!m_Window)
+		{
+			ST_CORE_ERROR("The window '{}' ({} x {}) could not be created", m_Data.Title, width, height);
+			// GLFW was initialized for this window alone.
+			if (s_GLFWWindowCount == 0)
+				glfwTerminate();
+			return false;
+		}
 		s_GLFWWindowCount++;
 
 		int windowWidth = 0;
@@ -289,10 +302,13 @@ namespace Strata
 		});
 
 		ST_CORE_INFO("Created window '{}' ({} x {})", m_Data.Title, m_Data.Width, m_Data.Height);
+		return true;
 	}
 
 	GLFWWindow::~GLFWWindow()
 	{
+		if (!m_Window)
+			return; // Never opened: no window and no share of GLFW's initialization
 		for (GLFWcursor* cursor : m_Cursors)
 		{
 			if (cursor)

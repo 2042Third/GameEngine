@@ -26,6 +26,7 @@
 #include "Strata/Core/Process.h"
 #include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Core/StringUtils.h"
+#include "Strata/Core/Window.h"
 #include "Strata/Engine/BuiltinModules.h"
 #include "Strata/Project/GameManifest.h"
 #include "Strata/Renderer/GraphicsDevice.h"
@@ -329,6 +330,20 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 			std::printf("No graphics device\n");
 		std::fflush(stdout);
 		return device ? 0 : 1;
+	}
+	if (mode == "open-window")
+	{
+		// Opens a hidden window through the platform's window backend and says whether it could: a crash or an abort, not
+		// "No window", is the failure (Core.WindowBackend runs it without a display).
+		Strata::WindowSpecification specification;
+		specification.Title = "StrataTests.Helper";
+		specification.Width = 320;
+		specification.Height = 200;
+		specification.Visible = false;
+		const Strata::Scope<Strata::Window> window = Strata::Window::Create(specification);
+		std::printf("%s\n", window ? "Window opened" : "No window");
+		std::fflush(stdout);
+		return 0;
 	}
 	if (mode == "echo")
 	{

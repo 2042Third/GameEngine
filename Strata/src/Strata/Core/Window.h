@@ -128,7 +128,8 @@ namespace Strata
 		// cannot present through Vulkan (a test's stand-in, another API's window): a device made for it renders offscreen.
 		virtual const VulkanPresentation* GetVulkanPresentation() const { return nullptr; }
 
-		// Opens a window of the platform's window system (GLFW).
+		// Opens a window of the platform's window system (GLFW). Null, with the reason logged, when it cannot be opened (no
+		// display); Application reports that through its fatal-error path.
 		static Scope<Window> Create(const WindowSpecification& specification);
 	};
 
