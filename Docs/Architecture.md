@@ -3868,7 +3868,8 @@ is the `strata-scripting` skill. The layers:
   the command finished). While nothing of this shows the panel does no work for it, and only the fade keeps the editor at
   its full frame rate (`IsAnimating`, from the clock, so a viewport hidden mid-fade does not keep it there).
 - **Viewport** (`EditorViewport.h`, `ViewportRenderer.h`). `EditorViewport` holds the editor camera (and the cameras of
-  the project's other scenes), the settings and three `ViewportRenderer`s, each with render targets of its own size: the
+  the project's other scenes), the settings, the placement preview of an asset dragged over the Scene view
+  (`PlacementPreview`) and three `ViewportRenderer`s, each with render targets of its own size: the
   Scene view's, the Game view's (created on first use; about 72 MB of targets at 1920 x 1080, freed while the Game view is
   hidden or closed) and the captures'. Two panels show them, tabs of one dock node: the Scene view (`ViewportPanel`, id
   `Viewport`) passes `ViewportCameraSource::Editor`, the editor camera on the edited scene or the running one (picking,
@@ -3931,20 +3932,25 @@ drawn at each level chosen by errors (`StreamingViewStats::MaxErrorPixelsPerLOD`
   the mesh renderers of a scene: the scene's `RenderScene` (synced first) answers which boxes lie along the ray (its
   spatial index, asked for a thin prism of planes around the segment), nearest first, and each is hit on its loaded mesh's
   triangles (positions and indices stay on the CPU; submesh bounds skip what the ray misses) or, while the mesh is not
-  loaded, on its bounds; the entities being placed (and their children) are left out. `EditorPlacement` turns that into
-  where content goes: `FindPivotSurface` (what lies under the view's pivot, the camera's target: a ray straight down from
-  just above it, so a roof over the pivot is no surface under it; else the ray through the view's center, else the target),
-  `FindSurfaceAt` and `CastAt` (a cursor's ray, else the pivot's surface), and `RestOn` (the translation that makes a box at
-  the entity's origin touch the surface with its side facing it). The Hierarchy's create menus (the Entity menu too) put
-  new top-level entities under the pivot, resting on the surface by their mesh's bounds (`GetMeshBounds`: the loaded
-  mesh's, else the recorded ones), and send the translation with `entity.create`. Prefabs and models rest by the bounds of
-  what they draw around their root's origin (`GetPlacementBounds`: `EditorContext::GetAssetBounds`'s measurement, made
-  while the asset is dragged over the viewport, else `GetTemplateBounds`: instantiated into a scene of their own, the mesh
-  bounds of the root's subtree with their transforms, skinned meshes in the rest pose once their skeleton is resident,
-  never waiting for it): dropped into the viewport on the cursor's surface, from the Content
-  Browser's, the Asset tab's Add to Scene or a drop on the Hierarchy's empty space under the pivot
-  (`EditorActions::InstantiatePrefab`, `prefab.instantiate` with the translation). A material dropped into the viewport
-  goes to the mesh under the cursor (`component.set`, one undo step). `entity.dropToGround` (End, and Edit > Drop to Ground) moves each
+  loaded, on its bounds; the entities being placed (and their children) are left out; meshes come from the scene's asset
+  manager. `EditorPlacement` turns that into where content goes: `Place` (where an asset with given bounds lands for a
+  request: the surface a ray hits, else the grid plane y = 0 within 500 m, else in front of the camera; or a given point;
+  snapped along the surface, rotated and scaled), `MakeViewRay` (a view camera's ray through a point of its image,
+  camera-relative), `MakeRayRequest` (the one request `asset.place {ray}` and the drag's preview both build),
+  `FindPivotSurface` (what lies under the view's pivot, the camera's target: a ray straight down from just above it, so a
+  roof over the pivot is no surface under it; else the ray through the view's center, else the target) and `RestOn` (the
+  translation that makes a box at the entity's origin touch the surface with its side facing it). The Hierarchy's create
+  menus (the Entity menu too) put new top-level entities under the pivot, resting on the surface by their mesh's bounds
+  (`GetMeshBounds`: the loaded mesh's, else the recorded ones), and send the translation with `entity.create`. Prefabs
+  and models rest by the bounds of what they draw around their root's origin (`EditorContext::GetAssetBounds`'s
+  measurement: instantiated into a scene of their own, the mesh bounds of the root's subtree with their transforms,
+  skinned meshes in the rest pose once their skeleton is resident, never waiting for it; pending results are kept until
+  something they wait for is published): from the Content Browser's and the Asset tab's Add to Scene or a drop on the
+  Hierarchy's empty space under the pivot (`EditorActions::InstantiatePrefab`, `prefab.instantiate` with the
+  translation). An asset dragged over the Scene view feeds `PlacementPreview` (owned by `EditorViewport`), which the Scene
+  view's renderer alone draws as a box ghost (`DebugDraw` lines after TAA) and whose drop runs `asset.place` with the
+  same request, so a person's drop and an agent's call land alike; a material dropped there goes to the mesh under the
+  pointer (`component.set`, one undo step). `entity.dropToGround` (End, and Edit > Drop to Ground) moves each
   entity straight down by the nearest hit of rays from the bottom of its bounds (with its children; the center and four
   inset corners), in one undo step.
 - **Script builds** (`ScriptBuild.h`). `ScriptBuilder` runs CMake configure and build as child processes (one build at a

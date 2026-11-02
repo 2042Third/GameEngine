@@ -2845,7 +2845,11 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (`CommandJournalTests.cpp`'s `c_DeferringCommands` lists them, checked like the kind lists).
   Poll functions own their data (copy parameters, never capture them by reference) and allocate nothing per frame (frame
   times go into a `CommandUtils::FrameTimeRecorder`, reserved when the command starts: an allocation in a frame can wait
-  milliseconds for the heap while a scene is freed in the background). `editor.wait
+  milliseconds for the heap while a scene is freed in the background). `asset.place` is the model of an Edit command that
+  waits for an asset: it resolves its request when called, then each frame requests the asset and checks, in order,
+  that the project is open (else `Cancelled`), the active scene is the one it was called on, the scene is editable and
+  the asset did not fail; it waits by the clock (`steady_clock`, never frames) for the template (30 s, then it fails)
+  and for its size (5 s, then it places by the bounds known so far, `bounds.pending`), never through `LoadAssetSync`. `editor.wait
   {frames}` returns after that many frames, e.g. to let a playing scene run, with `frameTimes` (count, median, mean, 95th
   percentile and maximum in milliseconds) of the frames that ran entirely while it waited: the CPU time of each frame
   (`Application::GetLastFrameWorkTime`, recorded by `EditorLayer` through `EditorContext::RecordFrameTime`), without the
@@ -3184,15 +3188,38 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `RigidBody`; the "Mesh only" submenu (probes `Create.MeshOnly.<Mesh>`) makes them without.
 - **Placing content** (`Editor/SceneRaycast`, `Editor/EditorPlacement`): new top-level entities from the create menus
   appear under the view's pivot, resting on the surface there (`EditorPlacement::FindPivotSurface`, `RestOn` with the
-  mesh's bounds), with the translation sent through `entity.create`; prefabs and models rest by the bounds of what they
-  draw (`GetPlacementBounds`: the editor's `AssetBounds` measurement once complete, which the viewport requests while the
-  asset is dragged over it, else `GetTemplateBounds`, which requests skeletons but never waits for them) on the surface
-  under the cursor when dropped into the viewport, under the pivot from Add to
-  Scene and drops on the Hierarchy's empty space (`EditorActions::InstantiatePrefab`), a dropped material goes to the
-  mesh under the cursor (`component.set`), and
-  `entity.dropToGround {entities}` (End) moves entities down onto what is below them, one undo step. Rays hit the mesh
-  renderers through the render scene's spatial index and the loaded meshes' triangles: code that needs what is under a
-  point uses `SceneRaycast::Cast`, never a loop over the scene's entities.
+  mesh's bounds), with the translation sent through `entity.create`; Add to Scene and drops on the Hierarchy's empty
+  space put a prefab or model under the pivot by the bounds of what it draws (`EditorActions::InstantiatePrefab`,
+  `GetPlacementBounds`), and `entity.dropToGround {entities}` (End) moves entities down onto what is below them, one
+  undo step. Rays hit the mesh renderers through the render scene's spatial index and the loaded meshes' triangles,
+  reaching meshes through `Scene::GetAssetManager()`: code that needs what is under a point uses `SceneRaycast::Cast`,
+  never a loop over the scene's entities.
+- **Placing along a ray** (`EditorPlacement::Place`): one function decides where an asset lands, for `asset.place` and
+  the Scene view's drop alike. A request is a ray (`MakeRayRequest`, which both build from the same floats, so the drop
+  lands exactly where its ghost stood) or a point with a normal (`At`), with `MaxDistance`, `Snap`, `Rotation` and
+  `Scale`. The ray's first surface wins (`Surface`); on a miss, where it meets the grid plane y = 0 within
+  `c_GridFallbackDistance` (500 m, `Grid`), else on the ray at the fallback distance (`InFront`: the editor camera's
+  distance to its target, 10 m through a scene's camera, at least 0.5 m), unless `RequireSurface`. Snapping rounds the
+  two axes across the normal's dominant one to the step and, on ground facing up, finds the height at the snapped point
+  with a ray from `c_SnapLift` above. The asset rests by its `AssetBounds` measurement turned and scaled as placed
+  (`RestOn`); in front of the camera its box straddles the point. `MakeViewRay` casts through a view's camera
+  camera-relative, so it stays exact far from the origin. A rotated template rests by its axis-aligned box, so it may
+  float by the box's slack (`entity.dropToGround` settles it).
+- **The drop and its ghost** (`Editor/PlacementPreview`, owned by `EditorViewport`): while an asset is dragged over the
+  Scene view's image, the panel feeds the preview the pointer's ray through the view's own camera (Game camera
+  included) and the snap (the toolbar's Snap, inverted by Ctrl), and the Scene view's renderer, only there, draws its
+  ghost as `DebugDraw` lines over the finished image (`ViewportRenderer::Render`'s `placement`; captures never get it):
+  for a prefab, model or mesh on a surface its box tested, the box's hidden edges faint on top and a ring where it
+  touches; for a guess (`Grid`, `InFront`) only a box on top in the quieter color (`ViewportSettings::Placement`, from
+  the theme); a marker while its size loads; for a material, the target mesh's box and a tint first in `EntityTints`.
+  A label at the pointer says what a drop would do, or why it cannot ("Cannot place a Texture here", "Drop a material
+  onto a mesh"): unsupported drops log nothing. Hovering writes nothing (no entity, undo step, selection or version) and
+  casts only when its key changed: the pointer's ray, the render scene's updates, the asset manager's content version.
+  The release runs `asset.place` with `MakeDropParameters` through the command runner (`EditorActions::PlaceAsset`,
+  selecting the root once placed; it waits while the asset loads instead of blocking the frame), a material
+  `component.set` on its target. Escape cancels any drag of the editor's payloads (`UI::CancelDragDropOnEscape`, before
+  the panels). `AssetBounds` keeps pending results and measures again only once the asset or something it waits for
+  was published (or after a second), so a drag over a streaming scene does not instantiate its template every frame.
 
 ### Viewport panel
 
@@ -3238,6 +3265,15 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 
 ### View commands
 
+- **Rays and placing** (`Commands/PlacementCommands.cpp`): `scene.raycast {origin, direction | viewport {x, y, width?,
+  height?}, maxDistance?, ignore?}` (Query) answers what the ray, or a pixel of the Scene view's image through its camera
+  (`ResolveSceneView`: the editor camera, the scene's primary camera with Game camera; 1280 x 720 while the view has no
+  size), hits among the mesh renderers: `{hit, entity, name, point, normal, distance, onTriangle, ray}` or `{hit: false,
+  ray}`, the ray what `asset.place {ray}` takes. `asset.place {asset, ray | viewport | point (+ normal), parent?,
+  rotation?, scale?, snap?, maxDistance?, fallbackDistance?, requireSurface?}` places a prefab, model or mesh (an entity
+  with a Mesh Renderer named after it) by `EditorPlacement::Place`, in one undo step named "Place 'Crate'"; a template's
+  roots move rigidly with the first. It answers `{id, entities, placedOn, hitEntity, point, normal, translation, bounds,
+  snapped}`.
 - **World queries:** `entity.get {world: true}` adds the entity's world transform decomposed (`world: {position, rotation:
   {euler, quaternion}, scale}`) and `bounds: {min, max, size, center, pending}` of it with its descendants
   (`SceneBounds::GetEntityBounds`, skinned meshes in their pose; `pending` when a placeholder box stood in for a loading
@@ -5343,7 +5379,9 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
 - **Toolsets:** MCP clients take a limited number of tools (some 128) and pay for every tool definition in tokens, so
   `StrataCLI mcp` lists only the commands of its enabled toolsets (`CLI/McpToolsets`): `core` by default, the commands
   a game is made and tested with (`McpToolsets::GetCoreCommands`), plus one toolset per command group: `scene`
-  (`scene.`, `entity.`, `component.`, `prefab.`, `selection.`, `edit.`, `lighting.`), `assets` (`asset.`, `material.`, `project.`),
+  (`scene.`, `entity.`, `component.`, `prefab.`, `selection.`, `edit.`, `lighting.`, and `asset.place` by its exact name, so
+  an agent placing props gets `scene.raycast`, `asset.place`, `prefab.instantiate` and `entity.dropToGround` together),
+  `assets` (`asset.`, `material.`, `project.`),
   `play` (`play.`, `input.`, `audio.`: game-ui's `input.click` and `input.type` too), `scripts`, `animation`, `viewport`
   (`viewport.`, `camera.`), `streaming` (`asset.stats`, `asset.setBudget`), `perf` (`editor.perf`), `editor` (`editor.`,
   `log.`), `ui` (`ui.create`, `ui.layout`, `ui.hitTest`), `world` (`world.`, `physics.`) and `settings` (the project's
@@ -5362,7 +5400,7 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   ranges and `required` stay (`McpToolsets::MakeCompactToolDefinition`). So the first sentence of a command's
   description says what it does, and a property's first sentence what it is. The default list stays at most 32 tools
   and 30 KiB of `tools/list` JSON (`CLI.McpToolsets`). It is at the tool limit: 27 core commands and 5 generic tools, about 18.6 KB; every command
-  (124 tools) is about 73 KB. A command added to `core` takes the place of another.
+  (126 tools) is about 75 KB. A command added to `core` takes the place of another.
 
 ### Other methods and tests
 

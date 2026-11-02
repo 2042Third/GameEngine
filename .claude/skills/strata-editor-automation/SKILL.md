@@ -419,10 +419,17 @@ but cannot be applied to (unpack them, or make a prefab of the instance).
 
 **Placing**: `entity.create` and `prefab.instantiate` put an entity where its `Transform` says (the origin, or the
 prefab's own place, without one); the editor's own menus put new entities on the surface under the view's pivot (the
-camera's target) and send that translation, and prefabs dragged into the viewport rest on the surface under the cursor.
-To rest entities on what is below them,
-`entity.dropToGround {"entities": [...]}` moves each straight down until its bounds touch a surface (one undo step;
-`unchanged` lists those with nothing below).
+camera's target) and send that translation. To put a prefab, model or mesh where something lands, `asset.place {"asset":
+"Prefabs/Rock.stprefab", "ray": {"origin": [x, 200, z], "direction": [0, -1, 0]}}` rests it on the first surface the ray
+hits (one undo step; the drop into the Scene view runs the same command); `"viewport": {"x", "y"}` takes a pixel of the
+Scene view through its camera, `"point"` with `"normal"` a known spot (e.g. a `scene.raycast` hit). A miss lands on the
+grid plane y = 0 within 500 m, else in front of the camera (`placedOn` says which), or fails with `"requireSurface":
+true`; `snap`, `rotation` (degrees) and `scale` apply over the asset's own. `scene.raycast {origin, direction}` or
+`{viewport}` tells what is hit first (`entity`, `point`, `normal`). Both are in the MCP `scene` toolset (enable it with
+`strata_toolsets`). `asset.place` waits while the asset loads, so `editor.batch` refuses it: place many with one call
+each, or cast with `scene.raycast` and make them with `prefab.instantiate {instances}`. To rest entities on what is
+below them, `entity.dropToGround {"entities": [...]}` moves each straight down until its bounds touch a surface (one undo
+step; `unchanged` lists those with nothing below).
 
 **Edit**: `component.add` (adds if missing, then sets values), `component.set` (component must exist),
 `component.remove`, `entity.setActive`: each takes `"entities": [...]` instead of `"entity"` to change all of them in one

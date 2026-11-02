@@ -8,18 +8,23 @@
 #include "Editor/EditorContext.h"
 #include "Editor/EditorPlacement.h"
 #include "Editor/HarnessEditor.h"
+#include "Editor/PlacementPreview.h"
 #include "Editor/SceneRaycast.h"
+#include "Editor/ViewportRenderer.h"
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/ViewportPanel.h"
 #include "TestHelpers.h"
 #include "UI/ItemProbe.h"
+#include "UI/Theme.h"
 
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/Log.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Math/Math.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/DebugDraw.h>
 #include <Strata/Renderer/Material.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Scene/Components.h>
@@ -31,6 +36,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <chrono>
 #include <cmath>
@@ -693,6 +699,71 @@ TEST_SUITE("Editor.Placement")
 	}
 }
 
+namespace
+{
+
+	// Drags from `from` to `to` over `steps` frames, leaving the button down: the drag still runs.
+	void DragAsset(HarnessEditor& editor, const ImVec2& from, const ImVec2& to, int steps)
+	{
+		editor.Harness.MoveMouse(from);
+		editor.Frames(1);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Left, true);
+		editor.Frames(1);
+		for (int step = 1; step <= steps; step++)
+		{
+			const float t = static_cast<float>(step) / static_cast<float>(steps);
+			editor.Harness.MoveMouse(ImVec2(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t));
+			editor.Frames(1);
+		}
+	}
+
+	// A basic3d project in the editor with a crate prefab (a cube whose origin is its center), the Content Browser showing it.
+	struct CrateEditor
+	{
+		HarnessEditor Editor { { ImVec2(1600.0f, 1000.0f), 1.0f } };
+		AssetHandle Crate;
+		ViewportPanel* Viewport = nullptr;
+
+		explicit CrateEditor(const std::string& name)
+		{
+			Editor.Run("project.create", { { "directory", FileSystem::ToUTF8(CreateTemporaryDirectory(name) / "Game") }, { "name", "Game" },
+				{ "template", "basic3d" } });
+			const std::string source = Editor.Run("entity.create", { { "name", "Crate" }, { "components", {
+				{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } })["id"].get<std::string>();
+			Crate = *UUIDFromJson(Editor.Run("prefab.create", { { "entities", { source } }, { "path", "Prefabs/Crate.stprefab" }, { "link", false } })["asset"]);
+			Editor.Run("entity.delete", { { "entities", { source } } });
+			Editor.Run("camera.set", { { "position", { 0.0, 8.0, 6.0 } }, { "target", { 0.0, 0.0, 0.0 } } });
+			Viewport = Editor.Layer->GetPanels().Get<ViewportPanel>(EditorPanels::c_Viewport);
+			REQUIRE(Viewport);
+		}
+
+		// The middle of an asset's tile in the Content Browser, showing `folder`.
+		ImVec2 ShowTile(AssetHandle asset, const char* folder)
+		{
+			ContentBrowserPanel* browser = Editor.Layer->GetPanels().Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser);
+			REQUIRE(browser);
+			Editor.Layer->GetPanels().Focus(EditorPanels::c_ContentBrowser);
+			browser->SetCurrentDirectory(folder);
+			Editor.Frames(4);
+			const std::optional<ContentBrowserPanel::ItemRect> tile = browser->FindItemRect(asset);
+			REQUIRE(tile);
+			return ImVec2((tile->Min.x + tile->Max.x) * 0.5f, (tile->Min.y + tile->Max.y) * 0.5f);
+		}
+
+		// A point of the Scene view's image, as fractions of its size, on a whole pixel (ImGui rounds the mouse down).
+		ImVec2 ImagePoint(float x, float y) const
+		{
+			const ViewportImageArea& image = Viewport->GetImageArea();
+			REQUIRE(image.Size.x > 0.0f);
+			return ImVec2(std::floor(image.Min.x + image.Size.x * x), std::floor(image.Min.y + image.Size.y * y));
+		}
+
+		PlacementPreview& GetPreview() { return Editor.Context().GetViewport().GetPlacementPreview(); }
+		size_t GetHistorySize() { return Editor.Run("edit.history")["history"].size(); }
+	};
+
+}
+
 TEST_SUITE("Editor.UI.Placement")
 {
 	TEST_CASE("A Cube from the Create menu rests on the ground under the view's pivot, and the menu offers every built-in mesh")
@@ -767,7 +838,8 @@ TEST_SUITE("Editor.UI.Placement")
 		// Hovering the view measured it (requesting what it needs), before the drop.
 		CHECK(editor.Context().GetAssetBounds().GetMeasureCount() > measures);
 		editor.Harness.SetMouseButton(ImGuiMouseButton_Left, false);
-		editor.Frames(2);
+		// asset.place runs through the runner: at once when the prefab is resident, else once it loaded.
+		REQUIRE(editor.FramesUntil([&editor] { return static_cast<bool>(editor.Context().GetPrimarySelection()); }));
 
 		// The instance's root is selected, where the cursor's ray meets the ground, its bottom on it.
 		const Entity root = editor.Context().GetPrimarySelection();
@@ -779,6 +851,18 @@ TEST_SUITE("Editor.UI.Placement")
 		CHECK(position.x == doctest::Approx(hit->Point.x).epsilon(1e-3));
 		CHECK(position.z == doctest::Approx(hit->Point.z).epsilon(1e-3));
 		CHECK(std::abs(position.y - 0.5f) <= 0.01f);
+		// The drop ran asset.place for the person, with the pointer's ray.
+		nlohmann::json placing;
+		const nlohmann::json activity = editor.Run("editor.activity", { { "newest", true }, { "limit", 10 } });
+		for (const nlohmann::json& entry : activity["entries"])
+		{
+			if (entry["command"] != "edit.history" && placing.is_null())
+				placing = entry;
+		}
+		REQUIRE(placing.is_object());
+		CHECK(placing["command"] == "asset.place");
+		CHECK(placing["source"] == "UI");
+		CHECK(placing["parameters"].contains("ray"));
 
 		// The Asset tab's Add to Scene: under the pivot, resting on the ground.
 		editor.Run("camera.set", { { "position", { 4.0, 3.0, 9.0 } }, { "target", { 4.0, 1.0, 1.0 } } });
@@ -839,5 +923,248 @@ TEST_SUITE("Editor.UI.Placement")
 		CHECK(editor.Run("edit.history")["history"].size() == history + 1);
 		editor.Run("edit.undo");
 		CHECK(editor.Run("component.get", { { "entity", ground[0] }, { "component", "MeshRenderer" } })["values"]["Material"] != red);
+	}
+
+	TEST_CASE("Dragging a prefab over the Scene view shows where it will land and changes nothing until the drop")
+	{
+		CrateEditor setup("PlacementUIGhost");
+		HarnessEditor& editor = setup.Editor;
+		EditorContext& context = editor.Context();
+		const ImVec2 from = setup.ShowTile(setup.Crate, "Prefabs");
+		const ImVec2 over = setup.ImagePoint(0.3f, 0.65f);
+		const size_t history = setup.GetHistorySize();
+		DragAsset(editor, from, over, 6);
+		REQUIRE(setup.GetPreview().GetKind() == PlacementPreview::Kind::Place);
+		REQUIRE(setup.GetPreview().GetPlacement());
+		CHECK(setup.GetPreview().GetPlacement()->Source == EditorPlacement::PlacementSource::Surface);
+
+		// Hovering writes nothing.
+		const uint64_t undoVersion = context.GetUndoStack().GetVersion();
+		const bool modified = context.IsSceneModified();
+		const uint64_t hierarchy = context.GetActiveScene()->GetHierarchyVersion();
+		for (int frame = 0; frame < 6; frame++)
+		{
+			editor.Harness.MoveMouse(ImVec2(over.x + static_cast<float>(frame), over.y));
+			editor.Frames(1);
+		}
+		CHECK(context.GetUndoStack().GetVersion() == undoVersion);
+		CHECK(context.IsSceneModified() == modified);
+		CHECK(context.GetActiveScene()->GetHierarchyVersion() == hierarchy);
+		CHECK(setup.GetHistorySize() == history);
+
+		// A still pointer casts nothing once nothing loads; one pixel of movement casts once.
+		REQUIRE(editor.FramesUntil([&context] { return !context.GetAssetManager()->HasPendingLoads(); }));
+		editor.Frames(1);
+		const uint64_t casts = setup.GetPreview().GetCastCount();
+		editor.Frames(10);
+		CHECK(setup.GetPreview().GetCastCount() == casts);
+		editor.Harness.MoveMouse(ImVec2(over.x + 6.0f, over.y + 1.0f));
+		editor.Frames(1);
+		CHECK(setup.GetPreview().GetCastCount() == casts + 1);
+		const std::optional<UI::ItemProbe::Item> label = UI::ItemProbe::Find("Viewport.PlacementLabel");
+		REQUIRE(label);
+		CHECK(label->Text == "Crate on 'Ground'");
+
+		// The drop lands exactly where the ghost stood (both requests are made from the same floats).
+		const glm::vec3 ghost = setup.GetPreview().GetPlacement()->Translation;
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Left, false);
+		REQUIRE(editor.FramesUntil([&context] { return static_cast<bool>(context.GetPrimarySelection()); }));
+		const Entity root = context.GetPrimarySelection();
+		CHECK(root.GetComponent<TransformComponent>().Translation == ghost);
+		CHECK(setup.GetHistorySize() == history + 1);
+		CHECK(setup.GetPreview().GetKind() == PlacementPreview::Kind::None);
+	}
+
+	TEST_CASE("Where nothing is under the pointer the ghost is quieter and the drop lands on the grid")
+	{
+		CrateEditor setup("PlacementUIGrid");
+		HarnessEditor& editor = setup.Editor;
+		// Looking past the ground's edge (x = 10): the top of the view meets y = 0 beyond it.
+		editor.Run("camera.set", { { "position", { 14.0, 4.0, 0.0 } }, { "target", { 30.0, 0.0, 0.0 } } });
+		const ImVec2 from = setup.ShowTile(setup.Crate, "Prefabs");
+		DragAsset(editor, from, setup.ImagePoint(0.5f, 0.55f), 6);
+		REQUIRE(setup.GetPreview().GetKind() == PlacementPreview::Kind::Place);
+		REQUIRE(setup.GetPreview().GetPlacement());
+		CHECK(setup.GetPreview().GetPlacement()->Source == EditorPlacement::PlacementSource::Grid);
+		const std::optional<UI::ItemProbe::Item> label = UI::ItemProbe::Find("Viewport.PlacementLabel");
+		REQUIRE(label);
+		CHECK(label->Color == ImGui::GetColorU32(UI::GetThemeColors().TextSecondary));
+
+		// A guess draws one box on top in the quieter color, and nothing tested.
+		const PlacementColors& colors = editor.Context().GetViewport().GetSettings().Placement;
+		DebugDraw guess;
+		setup.GetPreview().Draw(guess, colors);
+		CHECK(guess.GetLines(DebugDrawDepth::Tested).empty());
+		REQUIRE(guess.GetLines(DebugDrawDepth::OnTop).size() == 24);
+		for (const DebugLineVertex& vertex : guess.GetLines(DebugDrawDepth::OnTop))
+			CHECK(vertex.Color == DebugDraw::PackColor(colors.Guess));
+
+		const glm::vec3 ghost = setup.GetPreview().GetPlacement()->Translation;
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Left, false);
+		REQUIRE(editor.FramesUntil([&editor] { return static_cast<bool>(editor.Context().GetPrimarySelection()); }));
+		const Entity root = editor.Context().GetPrimarySelection();
+		CHECK(root.GetComponent<TransformComponent>().Translation == ghost);
+		CHECK(ghost.y == doctest::Approx(0.5f));
+		CHECK(ghost.x > 10.0f);
+
+		// On a surface: a tested box and the contact ring.
+		editor.Run("camera.set", { { "position", { 0.0, 8.0, 6.0 } }, { "target", { 0.0, 0.0, 0.0 } } });
+		const ImVec2 again = setup.ShowTile(setup.Crate, "Prefabs");
+		DragAsset(editor, again, setup.ImagePoint(0.4f, 0.6f), 6);
+		REQUIRE(setup.GetPreview().GetPlacement());
+		CHECK(setup.GetPreview().GetPlacement()->Source == EditorPlacement::PlacementSource::Surface);
+		DebugDraw hit;
+		setup.GetPreview().Draw(hit, colors);
+		CHECK(hit.GetLines(DebugDrawDepth::Tested).size() > 24);
+		CHECK(hit.GetLines(DebugDrawDepth::OnTop).size() == 24);
+		editor.Harness.SetKey(ImGuiKey_Escape, true);
+		editor.Frames(1);
+		editor.Harness.SetKey(ImGuiKey_Escape, false);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Left, false);
+		editor.Frames(1);
+	}
+
+	TEST_CASE("Assets that cannot be placed say so at the pointer, and dropping them does nothing")
+	{
+		CrateEditor setup("PlacementUIRefused");
+		HarnessEditor& editor = setup.Editor;
+		EditorAssetManager& assets = *editor.Context().GetAssetManager();
+		const std::filesystem::path textures = assets.GetAssetDirectory() / "Textures";
+		REQUIRE(FileSystem::CreateDirectories(textures));
+		REQUIRE(FileSystem::WriteBytes(textures / "Red.png", CreateSolidPNG(4, 4, 200, 20, 20)));
+		assets.Scan();
+		const AssetHandle texture = assets.FindAssetByPath("Textures/Red.png");
+		REQUIRE(texture.IsValid());
+		REQUIRE(editor.FramesUntil([&assets] { return !assets.HasPendingImports(); }));
+		const size_t history = setup.GetHistorySize();
+		const uint64_t logged = Log::GetBuffer().GetLatestSequence();
+
+		const ImVec2 from = setup.ShowTile(texture, "Textures");
+		DragAsset(editor, from, setup.ImagePoint(0.5f, 0.5f), 6);
+		CHECK(setup.GetPreview().GetKind() == PlacementPreview::Kind::Refused);
+		const std::optional<UI::ItemProbe::Item> label = UI::ItemProbe::Find("Viewport.PlacementLabel");
+		REQUIRE(label);
+		CHECK(label->Text == "Cannot place a Texture here");
+		CHECK(label->Color == ImGui::GetColorU32(UI::GetThemeColors().Warning));
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Left, false);
+		editor.Frames(3);
+		CHECK(setup.GetHistorySize() == history);
+		bool warned = false;
+		for (const LogEntry& entry : Log::GetBuffer().GetEntries(logged))
+			warned = warned || entry.Message.find("dropped into the viewport") != std::string::npos;
+		CHECK_FALSE(warned);
+	}
+
+	TEST_CASE("Escape cancels a drag: the ghost goes and the release drops nothing")
+	{
+		CrateEditor setup("PlacementUIEscape");
+		HarnessEditor& editor = setup.Editor;
+		const size_t history = setup.GetHistorySize();
+		const ImVec2 from = setup.ShowTile(setup.Crate, "Prefabs");
+		DragAsset(editor, from, setup.ImagePoint(0.4f, 0.6f), 6);
+		REQUIRE(setup.GetPreview().GetKind() == PlacementPreview::Kind::Place);
+		editor.Harness.SetKey(ImGuiKey_Escape, true);
+		editor.Frames(1);
+		editor.Harness.SetKey(ImGuiKey_Escape, false);
+		editor.Frames(1);
+		CHECK_FALSE(ImGui::IsDragDropActive());
+		CHECK(setup.GetPreview().GetKind() == PlacementPreview::Kind::None);
+		// The button still down: the drag does not start again.
+		for (int frame = 0; frame < 3; frame++)
+		{
+			editor.Harness.MoveMouse(ImVec2(setup.ImagePoint(0.4f, 0.6f).x + static_cast<float>(frame), setup.ImagePoint(0.4f, 0.6f).y));
+			editor.Frames(1);
+			CHECK_FALSE(ImGui::IsDragDropActive());
+		}
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Left, false);
+		editor.Frames(3);
+		CHECK(setup.GetHistorySize() == history);
+	}
+
+	TEST_CASE("A material over a mesh tints it, and elsewhere says where to drop it")
+	{
+		CrateEditor setup("PlacementUIMaterialGhost");
+		HarnessEditor& editor = setup.Editor;
+		const AssetHandle red = *UUIDFromJson(editor.Run("material.create", { { "path", "Materials/Red.stmat" } })["asset"]);
+		const ImVec2 from = setup.ShowTile(red, "Materials");
+		DragAsset(editor, from, setup.ImagePoint(0.5f, 0.5f), 6);
+		REQUIRE(setup.GetPreview().GetKind() == PlacementPreview::Kind::Material);
+		CHECK(setup.GetPreview().GetTarget().GetName() == "Ground");
+		CHECK(setup.GetPreview().GetTargetBounds().IsValid());
+		// Over the sky: nowhere to go.
+		editor.Run("camera.set", { { "position", { 0.0, 2.0, 0.0 } }, { "target", { 0.0, 50.0, -1.0 } } });
+		editor.Harness.MoveMouse(setup.ImagePoint(0.5f, 0.4f));
+		editor.Frames(2);
+		CHECK(setup.GetPreview().GetKind() == PlacementPreview::Kind::NoTarget);
+		const std::optional<UI::ItemProbe::Item> label = UI::ItemProbe::Find("Viewport.PlacementLabel");
+		REQUIRE(label);
+		CHECK(label->Text == "Drop a material onto a mesh");
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Left, false);
+		editor.Frames(2);
+	}
+
+	TEST_CASE("With Game camera a drop lands under the pointer through the scene's camera")
+	{
+		CrateEditor setup("PlacementUIGameCamera");
+		HarnessEditor& editor = setup.Editor;
+		EditorContext& context = editor.Context();
+		// The editor camera looks elsewhere; the template's Main Camera looks at the origin.
+		editor.Run("camera.set", { { "position", { 30.0, 5.0, 30.0 } }, { "target", { 35.0, 0.0, 35.0 } } });
+		editor.Run("viewport.setSettings", { { "pilotGameCamera", true } });
+		const ImVec2 from = setup.ShowTile(setup.Crate, "Prefabs");
+		const ImVec2 point = setup.ImagePoint(0.45f, 0.6f);
+		DragAsset(editor, from, point, 6);
+		REQUIRE(setup.Viewport->IsPiloting());
+		REQUIRE(setup.GetPreview().GetPlacement());
+		CHECK(setup.GetPreview().GetPlacement()->Source == EditorPlacement::PlacementSource::Surface);
+		// Where the scene camera's ray through the pointer meets the ground.
+		const ViewportImageArea& image = setup.Viewport->GetImageArea();
+		const glm::vec2 ndc((point.x - image.Min.x) / image.Size.x * 2.0f - 1.0f, 1.0f - (point.y - image.Min.y) / image.Size.y * 2.0f);
+		const glm::uvec2 size = context.GetViewport().GetSize();
+		const std::optional<ViewportView> view = ResolveSceneView(context, static_cast<float>(size.x) / static_cast<float>(size.y));
+		REQUIRE(view);
+		REQUIRE(view->FromScene);
+		const std::optional<SceneRayHit> hit = SceneRaycast::Cast(*context.GetActiveScene(), EditorPlacement::MakeViewRay(view->Camera, ndc), view->Camera.Far);
+		REQUIRE(hit);
+		CHECK(hit->HitEntity.GetName() == "Ground");
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Left, false);
+		REQUIRE(editor.FramesUntil([&context] { return static_cast<bool>(context.GetPrimarySelection()); }));
+		const glm::vec3 position(context.GetActiveScene()->GetWorldTransform(context.GetPrimarySelection())[3]);
+		CHECK(position.x == doctest::Approx(hit->Point.x).epsilon(1e-3));
+		CHECK(position.z == doctest::Approx(hit->Point.z).epsilon(1e-3));
+		CHECK(position.y == doctest::Approx(0.5f).epsilon(1e-3));
+	}
+
+	TEST_CASE("Snapping follows the toolbar's Snap, inverted by Ctrl")
+	{
+		CrateEditor setup("PlacementUISnap");
+		HarnessEditor& editor = setup.Editor;
+		EditorContext& context = editor.Context();
+		ViewportSettings& settings = context.GetViewport().GetSettings();
+		settings.Snap = true;
+		settings.TranslateSnap = 1.0f;
+		const ImVec2 from = setup.ShowTile(setup.Crate, "Prefabs");
+		DragAsset(editor, from, setup.ImagePoint(0.37f, 0.63f), 6);
+		REQUIRE(setup.GetPreview().GetPlacement());
+		CHECK(setup.GetPreview().GetPlacement()->Snapped);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Left, false);
+		REQUIRE(editor.FramesUntil([&context] { return static_cast<bool>(context.GetPrimarySelection()); }));
+		const glm::vec3 snapped = context.GetPrimarySelection().GetComponent<TransformComponent>().Translation;
+		CHECK(std::abs(snapped.x - std::round(snapped.x)) < 1e-4f);
+		CHECK(std::abs(snapped.z - std::round(snapped.z)) < 1e-4f);
+
+		// Ctrl held: not snapped.
+		context.ClearSelection();
+		const ImVec2 again = setup.ShowTile(setup.Crate, "Prefabs");
+		DragAsset(editor, again, setup.ImagePoint(0.37f, 0.63f), 6);
+		editor.Harness.SetKey(ImGuiMod_Ctrl, true);
+		editor.Frames(1);
+		REQUIRE(setup.GetPreview().GetPlacement());
+		CHECK_FALSE(setup.GetPreview().GetPlacement()->Snapped);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Left, false);
+		REQUIRE(editor.FramesUntil([&context] { return static_cast<bool>(context.GetPrimarySelection()); }));
+		editor.Harness.SetKey(ImGuiMod_Ctrl, false);
+		const glm::vec3 free = context.GetPrimarySelection().GetComponent<TransformComponent>().Translation;
+		CHECK(std::abs(free.x - std::round(free.x)) > 1e-3f);
 	}
 }

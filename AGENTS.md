@@ -356,6 +356,8 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - Commands never block a frame: one that waits returns `EditorCommandResult::Defer(poll)`, whose poll owns its data and
   allocates nothing per frame, and is registered with `MayDefer`. A command that answers from the whole asset registry sets
   `WaitsForAssets` (it waits for a background scan, as Edit commands do).
+- Content is placed through `asset.place` (`EditorPlacement::Place`): the Scene view's drop and its ghost
+  (`Editor/PlacementPreview`) use one request, and hovering writes nothing.
 - Tools count game time in fixed steps (`Scene::GetFixedStepCount`), never frames
   ([Stepping a paused game](Docs/DeveloperGuide.md#stepping-a-paused-game)).
 - A component property another property can turn off gets an `InactiveReason` (`ComponentRegistry::SetInactiveReason`,

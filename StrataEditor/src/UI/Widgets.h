@@ -232,4 +232,8 @@ namespace Strata::UI
 	// back to the defaults.
 	void TextureImage(ImDrawList* drawList, ImTextureID texture, const TextureSpecification& specification, const ImVec2& min, const ImVec2& max);
 
+	// Escape cancels a drag and drop of any of the editor's payloads, wherever it is over: nothing is delivered on the
+	// release. Call once per frame before the panels draw.
+	void CancelDragDropOnEscape();
+
 }

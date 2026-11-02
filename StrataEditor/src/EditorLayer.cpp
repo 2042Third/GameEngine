@@ -90,6 +90,8 @@ namespace Strata
 
 		// How strongly the viewport's debug views tint the scene: enough to read the color, little enough to see the shapes.
 		constexpr float c_DebugTintAlpha = 0.6f;
+		// The quieter box of a placement that is a guess (nothing under the pointer).
+		constexpr float c_PlacementGuessAlpha = 0.7f;
 
 		EditorContextSpecification MakeContextSpecification(const EditorOptions& options)
 		{
@@ -419,6 +421,10 @@ namespace Strata
 		ViewportSettings& viewportSettings = m_Context.GetViewport().GetSettings();
 		const UI::ThemeColors& themeColors = UI::GetThemeColors();
 		viewportSettings.SelectionColor = ToVec4(themeColors.Accent);
+		// The placement ghost: the accent where an asset lands on a surface, a quieter color where it is a guess.
+		viewportSettings.Placement.Hit = ToVec4(themeColors.Accent);
+		viewportSettings.Placement.Guess = ToVec4(UI::WithAlpha(themeColors.TextSecondary, c_PlacementGuessAlpha));
+		viewportSettings.Placement.Tint = ToVec4(UI::WithAlpha(themeColors.Accent, c_DebugTintAlpha));
 		viewportSettings.DebugColors.Pending = ToVec4(UI::WithAlpha(GetAssetStateColor(AssetState::Loading), c_DebugTintAlpha));
 		viewportSettings.DebugColors.Failed = ToVec4(UI::WithAlpha(GetAssetStateColor(AssetState::Failed), c_DebugTintAlpha));
 		const ImVec4* lodColors[] = { &themeColors.Success, &themeColors.Info, &themeColors.Warning, &themeColors.Error };
@@ -714,6 +720,8 @@ namespace Strata
 		TrackInput();
 		// Before any shortcut reads the keyboard: a binding capture the Project Settings window runs keeps it.
 		BindingCapture::BeginFrame();
+		// Before the panels: a drag cancelled now is gone for every drop target this frame.
+		UI::CancelDragDropOnEscape();
 		EditorPanelContext panelContext = MakePanelContext();
 		if (IsLauncherShown())
 		{

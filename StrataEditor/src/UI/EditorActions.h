@@ -74,10 +74,12 @@ namespace Strata
 		// entity.dropToGround of the selected entities (those below another selected one move with it).
 		void DropSelectionToGround(EditorContext& context, const EditorCommandRegistry& commands);
 		// prefab.instantiate of a prefab or model, its first root selected: under a parent where the prefab puts it, or at the
-		// top level resting on a surface of the scene (EditorPlacement::RestOn with its bounds, GetTemplateBounds): the one
-		// given, else the one under the view's pivot. Returns the root's id, nothing when it failed.
-		std::optional<UUID> InstantiatePrefab(EditorContext& context, const EditorCommandRegistry& commands, UUID prefab, UUID parent = UUID::Null(),
-			const EditorPlacement::Surface* surface = nullptr);
+		// top level resting on the surface under the view's pivot (EditorPlacement::FindPivotSurface and RestOn with its
+		// bounds, GetPlacementBounds). Returns the root's id, nothing when it failed.
+		std::optional<UUID> InstantiatePrefab(EditorContext& context, const EditorCommandRegistry& commands, UUID prefab, UUID parent = UUID::Null());
+		// asset.place for the person (the Scene view's drop) through the runner, since it waits while its asset loads: its
+		// root is selected once it is placed; a failure or a warning shows as a notification.
+		void PlaceAsset(EditorCommandRunner& runner, EditorContext& context, const EditorCommandRegistry& commands, const nlohmann::json& parameters);
 
 		// Puts a component's values (component.get's form) into the clipboard: those component.set can set (read-only and
 		// transient ones are left out).
