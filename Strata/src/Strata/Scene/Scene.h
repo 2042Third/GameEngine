@@ -10,6 +10,7 @@
 #include "Strata/Scene/SceneHierarchy.h"
 #include "Strata/Scene/SceneSystem.h"
 #include "Strata/Scene/SubScene.h"
+#include "Strata/Scene/TransformInterpolation.h"
 
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
@@ -98,7 +99,9 @@ namespace Strata
 	// API do), or through MarkTransformChanged where an on_update signal is unwanted (physics write-back). The same holds
 	// for NameComponent and TagComponent, whose values the name and tag lookups index. Entities created since the last
 	// UpdateWorldTransforms are recomputed anyway. Debug builds validate the caches after runtime and editor updates: after
-	// every one for scenes of up to c_CacheCheckEntitiesPerUpdate entities, every few for larger ones.
+	// every one for scenes of up to c_CacheCheckEntitiesPerUpdate entities, every few for larger ones. While a running scene
+	// interpolates, what the fixed steps moved also has a drawn transform beside its cached world transform (see
+	// GetDrawnTransform): renderers draw that one, the simulation never reads it.
 	class Scene
 	{
 	public:
@@ -372,9 +375,9 @@ namespace Strata
 
 		// Changes whenever a cached WorldTransformComponent changes (matrices in UpdateWorldTransforms, activity at once).
 		uint64_t GetTransformsVersion() const { return m_TransformsVersion; }
-		// Appends the entities whose WorldTransformComponent changed after transforms version `sinceVersion` (an entity may
-		// appear more than once; some may have been destroyed since), so that caches of world transforms update only what
-		// changed. Returns false, appending nothing, if the scene no longer remembers that far back (it keeps the latest
+		// Appends the entities whose WorldTransformComponent changed after transforms version `sinceVersion`, and those whose
+		// drawn transform jumped back to it (they left the interpolated set, or BreakInterpolation) (an entity may appear more
+		// than once; some may have been destroyed since), so that caches of world transforms update only what changed. Returns false, appending nothing, if the scene no longer remembers that far back (it keeps the latest
 		// c_MaxTransformChanges changes): then any entity may have changed.
 		bool GetWorldTransformChanges(uint64_t sinceVersion, std::vector<entt::entity>& outEntities) const;
 		static constexpr size_t c_MaxTransformChanges = 16384;
@@ -469,6 +472,59 @@ namespace Strata
 		// Fixed steps whose time was dropped since the scene started running: skipped by time dilation, or beyond
 		// GetMaxFixedSteps().
 		uint64_t GetDroppedFixedStepCount() const { return m_DroppedFixedSteps; }
+
+		// Interpolation of what is drawn (Scene/SceneInterpolation.cpp; Docs/DeveloperGuide.md, "Interpolation"). While the
+		// scene interpolates, every entity the fixed steps moved (bodies, characters, what scripts move in OnFixedUpdate, and
+		// what hangs below them) is drawn between its pose before the latest stepping frame's steps and its pose after them,
+		// a constant one fixed step behind the scene's clock (without interpolation the latest pose is drawn, between none and
+		// one step behind it), so motion is smooth at any frame rate. The simulation itself is untouched: world transforms,
+		// the accumulator and the step count are those of a scene that does not interpolate.
+		//
+		// The program's switch, off by default so that tests and tools draw exactly what they simulate
+		// (GameRuntimeOptions::Interpolation, EditorContextSpecification::Interpolation turn it on where time dilation is
+		// on). Turning it off draws every entity where it is from the next read.
+		void SetInterpolation(bool enabled);
+		bool IsInterpolationEnabled() const { return m_InterpolationEnabled; }
+		// In effect: the switch, the project's Scene.Timing Interpolation (ApplyProjectTiming; on without a project) and a
+		// running scene.
+		bool IsInterpolating() const { return m_InterpolationEnabled && m_ProjectInterpolation && m_IsRunning; }
+		// The fraction of the way from the poses before the latest stepping frame's steps to those after them that this
+		// frame draws, in [0, 1]: 1 - (1 - accumulator / step) / steps. 1 while not interpolating, paused or stepping. Final
+		// after the frame's fixed steps (OnLateUpdate); during OnUpdate it is the previous frame's.
+		float GetStepAlpha() const { return IsInterpolating() ? m_StepAlpha : 1.0f; }
+		// Where the entity is drawn this frame: its interpolated transform while it is in the set, else GetWorldTransform.
+		// Exact at any time: the cache of UpdateDrawnTransforms when it is current, otherwise computed from the set (costs
+		// the entity's depth). Entities of another scene ask theirs.
+		glm::mat4 GetDrawnTransform(Entity entity) const;
+		// The drawn matrix of an entity of the set as of the last UpdateDrawnTransforms, else null (draw its world matrix).
+		// Only reads, so worker threads may call it while nothing changes the scene. Readers call UpdateDrawnTransforms first
+		// in the frame.
+		const glm::mat4* FindDrawnTransform(entt::entity handle) const;
+		// Brings the world transforms (UpdateWorldTransforms) and then the drawn matrices up to date; returns at once while
+		// nothing changed (no set, the same step alpha, no write since). RenderScene::Sync calls it, so a run that draws
+		// nothing never blends. Large sets on the job system. Main thread.
+		void UpdateDrawnTransforms();
+		// Changes whenever drawn matrices may have changed (UpdateDrawnTransforms recomputed them, the set was rebuilt,
+		// cleared or broken): readers of GetDrawnMatrices compare it.
+		uint64_t GetDrawnTransformsVersion() const { return m_DrawnVersion; }
+		// The set in walk order (parents first) and its drawn matrices as of the last UpdateDrawnTransforms, index for
+		// index. Empty while the scene does not interpolate. Entities may have been destroyed since: check them.
+		std::span<const entt::entity> GetInterpolatedEntities() const { return m_InterpolatedEntities; }
+		std::span<const glm::mat4> GetDrawnMatrices() const { return m_DrawnMatrices; }
+		// The set's entries (roles, parent slots, poses), index for index with GetInterpolatedEntities: for tests and tools.
+		std::span<const InterpolatedEntry> GetInterpolatedEntries() const { return m_InterpolatedEntries; }
+		// Draws the entity and its descendants where they are until the next fixed step moves them again: a teleport.
+		// PhysicsWorld::Teleport and TeleportCharacter call it, and scripts through ResetInterpolation. During the fixed
+		// steps it applies to the poses those steps leave; outside them at once. Nothing for entities outside the set or
+		// while the scene does not interpolate.
+		void BreakInterpolation(Entity entity);
+		InterpolationStats GetInterpolationStats() const;
+		// Checks the set (its slot map, walk order, Compose entries' parents, finite poses): false with the first problem.
+		// Debug builds run it with the caches' check (CheckCachesAfterUpdate).
+		bool ValidateInterpolation(std::string* outError = nullptr) const;
+		// A step longer than this speed times the time it simulated is a teleport, never blended: box3d's maximum linear
+		// speed (b3WorldDef::maximumLinearSpeed, 400 m/s; PhysicsWorld keeps box3d's default, which Physics.Settings checks).
+		static constexpr float c_MaxInterpolatedSpeed = 400.0f;
 
 		// The running system of class T (registered with MakeSceneSystemDescriptor<T>), or null: not running, not created
 		// in this mode, or not registered. Looks the exact class up, not its base classes.
@@ -725,6 +781,50 @@ namespace Strata
 		// Debug builds, after an update: AssertCachesValid when m_CacheCheck says it is due, in the Scene.Transforms stage.
 		void CheckCachesAfterUpdate();
 
+		// Interpolation (Scene/SceneInterpolation.cpp). An update of the world transforms either applies the per-frame rules
+		// to the set's entities it recomputes (Update) or records every matrix it overwrites (Capture, after the fixed steps).
+		enum class TransformPass : uint8_t
+		{
+			Update,
+			Capture
+		};
+		// What a walk of UpdateWorldTransforms does beside computing each matrix, chosen once per call so that a scene that
+		// does not interpolate runs the walk without a branch per entity.
+		enum class TransformHook : uint8_t
+		{
+			None,
+			PerFrame,
+			Capture
+		};
+		// A matrix the capture pass overwrote.
+		struct TransformCapture
+		{
+			entt::entity Entity = entt::null;
+			glm::mat4 Previous = glm::mat4(1.0f); // The cached world matrix before this pass
+			bool OwnChange = false;               // HierarchyComponent::TransformDirty was set: its own transform or parent changed
+			bool HadWorld = false;                // HierarchyComponent::HasWorldTransform was set: Previous is a computed matrix
+		};
+		void UpdateWorldTransforms(TransformPass pass);
+		template<TransformHook Hook>
+		void WalkWorldTransforms(std::vector<entt::entity>& frontier);
+		// The per-frame rules for an entity of the set that an Update pass recomputed (`previous`: its cached matrix before;
+		// `ancestorMoved`: an ancestor was recomputed too). Writes only the entity's own entry.
+		void ApplyPerFrameRule(uint32_t slot, entt::entity handle, const glm::mat4& previous, bool ownChange, bool ancestorMoved);
+		// Records the matrices the fixed steps changed (an UpdateWorldTransforms Capture pass) and builds the new set from them.
+		void CaptureInterpolation(uint32_t steps, float timestep);
+		// Empties the set: every entity of it is drawn where it is (logged as a transform change).
+		void ClearInterpolation();
+		// The entity's slot in the set (the whole handle: an entity that reuses a destroyed one's index is never taken for it).
+		uint32_t FindInterpolationSlot(entt::entity handle) const;
+		// A world matrix in parts: of a root entity's current world matrix its TransformComponent (the matrix is exactly their
+		// composition), else (any other matrix: pass entt::null) its decomposition. `outExact`: it cannot be blended (sheared, a
+		// failed decomposition, zero scale, not finite).
+		InterpolationPose GetWorldPose(entt::entity handle, const glm::mat4& world, bool& outExact) const;
+		// The drawn matrix of a slot computed from the set as the next UpdateDrawnTransforms will (GetDrawnTransform).
+		glm::mat4 ComputeDrawnTransform(uint32_t slot) const;
+		// Makes the entry at `slot` Exact, with every Blend entry below it; logs them as transform changes.
+		void BreakSlot(uint32_t slot);
+
 		// Lookup indices (caches, hence const)
 		void BuildLookupIndex(LookupIndex& index, bool names) const;
 		void IndexLookupValue(LookupIndex& index, entt::entity handle, std::string_view value) const;
@@ -822,6 +922,27 @@ namespace Strata
 		float m_TimeScale = 1.0f;
 		bool m_TimeDilation = false;
 		uint64_t m_DroppedFixedSteps = 0;
+		// Interpolation (SetInterpolation; Scene/SceneInterpolation.cpp)
+		bool m_InterpolationEnabled = false;
+		bool m_ProjectInterpolation = true;                   // Scene.Timing Interpolation (ApplyProjectTiming)
+		std::vector<entt::entity> m_InterpolatedEntities;     // By slot, parents first
+		std::vector<InterpolatedEntry> m_InterpolatedEntries; // By slot
+		std::vector<glm::mat4> m_DrawnMatrices;               // By slot, as of the last UpdateDrawnTransforms
+		std::vector<uint32_t> m_InterpolationSlots;           // By entt::to_entity: the slot, or c_NoInterpolationSlot
+		std::vector<TransformCapture> m_Captures;             // Scratch of a capture pass
+		std::vector<entt::entity> m_NextEntities;             // Scratch of the set a capture builds (swapped in)
+		std::vector<InterpolatedEntry> m_NextEntries;
+		std::vector<uint8_t> m_KeptSlots;                     // Scratch: old slots the new set keeps
+		std::vector<uint8_t> m_SlotScratch;                   // Scratch: per slot, new without a world pose, or broken
+		std::vector<entt::entity> m_PendingBreaks;            // BreakInterpolation during the fixed steps
+		float m_StepAlpha = 1.0f;
+		uint32_t m_InterpolationSteps = 1;                    // Steps of the stepping frame that built the set
+		float m_InterpolationTimestep = 0.0f;                 // Their fixed timestep
+		float m_DrawnAlpha = -1.0f;                           // The alpha m_DrawnMatrices hold
+		bool m_DrawnStale = true;                             // A write to the set's entities since UpdateDrawnTransforms
+		bool m_DrawnFilled = false;                           // m_DrawnMatrices were computed for the current set
+		bool m_InFixedSteps = false;
+		uint64_t m_DrawnVersion = 0;
 		double m_Time = 0.0;
 		double m_UnscaledTime = 0.0;
 		float m_UnscaledDeltaTime = 0.0f;
