@@ -5,7 +5,9 @@
 namespace Strata
 {
 
-	// Values match the GLFW gamepad mapping (Xbox-style layout).
+	// The engine's gamepad buttons and axes, named by an Xbox-style layout. They are script ABI (StrataScript/Input.h) and never
+	// renumbered. They were taken from GLFW's gamepad mapping, so the GLFW backend passes its indices through; another backend
+	// translates its own.
 	enum class GamepadButton : uint8_t
 	{
 		A = 0,

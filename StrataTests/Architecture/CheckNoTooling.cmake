@@ -4,9 +4,10 @@
 # game contains them. Map formats differ (MSVC /MAP, GNU ld -Map, Apple ld -map), so names are matched as object and
 # library basenames wherever they appear. The map must first name the objects every runtime contains (its own
 # RuntimeApplication and the engine's Application): a map that does not, empty, truncated or in a format these patterns
-# do not read, proves nothing by naming no tooling.
+# do not read, proves nothing by naming no tooling. EXTRA_*: '|'-separated object and library basenames a build that leaves
+# more out must not contain, and objects it must (a build without GLFW: no GLFW objects or library, and Platform/NoWindow's).
 #
-#   cmake -DMAP=<file.map> -P CheckNoTooling.cmake
+#   cmake -DMAP=<file.map> [-DEXTRA_OBJECTS=a|b] [-DEXTRA_LIBRARIES=a|b] [-DEXTRA_REQUIRED=a|b] -P CheckNoTooling.cmake
 
 if(NOT MAP)
 	message(FATAL_ERROR "CheckNoTooling: MAP is required")
@@ -34,6 +35,14 @@ set(forbiddenLibraries imgui ImGuizmo nfd cgltf zstd_compress Strata_ImGui Strat
 
 # Objects every runtime contains: the program's own and the engine's Application (Strata_App).
 set(requiredObjects RuntimeApplication Application)
+
+# What this build leaves out besides tooling, and what it holds in its place.
+foreach(extra IN ITEMS OBJECTS LIBRARIES REQUIRED)
+	string(REPLACE "|" ";" EXTRA_${extra} "${EXTRA_${extra}}")
+endforeach()
+list(APPEND forbiddenObjects ${EXTRA_OBJECTS})
+list(APPEND forbiddenLibraries ${EXTRA_LIBRARIES})
+list(APPEND requiredObjects ${EXTRA_REQUIRED})
 
 # One pass per kind over the map's lines (maps reach hundreds of megabytes: the lines are filtered as they are read).
 string(REPLACE ";" "|" requiredNames "${requiredObjects}")
@@ -66,6 +75,6 @@ list(LENGTH found count)
 if(count GREATER 0)
 	list(SUBLIST found 0 20 shown)
 	string(REPLACE ";" "\n  " shown "${shown}")
-	message(FATAL_ERROR "The game executable contains tooling (${MAP}), ${count} lines name it, among them:\n  ${shown}")
+	message(FATAL_ERROR "The game executable contains tooling or what this build leaves out (${MAP}), ${count} lines name it, among them:\n  ${shown}")
 endif()
-message(STATUS "No tooling in ${MAP}")
+message(STATUS "No tooling or what this build leaves out in ${MAP}")

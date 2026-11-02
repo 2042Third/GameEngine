@@ -28,6 +28,9 @@ namespace Strata
 		std::filesystem::path WorkingDirectory; // Empty keeps the current directory
 		CommandLine CommandLineArgs;
 		WindowSpecification Window;
+		// Makes the window instead of Window::Create (empty: Window::Create): tests run the frame loop on a stand-in
+		// (Tests::StubWindow), an embedder its own window. Null is a window that could not be opened.
+		std::function<Scope<Strata::Window>(const WindowSpecification&)> WindowFactory;
 
 		bool Headless = false; // No window; modules that need one (a swapchain, ImGui) do without or refuse to start
 		// The engine modules the program runs (graphics, audio, ImGui, the project...), in the order they start where their

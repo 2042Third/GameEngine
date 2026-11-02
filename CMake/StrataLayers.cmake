@@ -3,7 +3,7 @@
 #
 # strata_add_layer_libraries(TABLE <Layers.json> SOURCE_ROOT <dir> LIBRARIES_FILE <file>)
 #   Globs every engine source under SOURCE_ROOT once (.h .hpp .inl .c .cpp .m .mm, the files LayeringAnalyzer reads; other
-#   operating systems' Platform/<OS>/ folders left out) and gives each file to the one layer whose Paths match it and whose
+#   operating systems' Platform/<OS>/ folders and the window backend not built left out) and gives each file to the one layer whose Paths match it and whose
 #   Exclude does not (globs relative to SOURCE_ROOT: '**/' is any directories or none, '**' anything, '*' and '?' stay
 #   within one path component). A file in no layer or in two fails the configure, naming it.
 #   For every layer whose option is on (a layer's "Option" names the CMake option that builds it), it makes
@@ -108,6 +108,12 @@ function(strata_add_layer_libraries)
 		list(FILTER sources EXCLUDE REGEX "^Platform/(Windows|Linux)/")
 	else()
 		list(FILTER sources EXCLUDE REGEX "^Platform/(Windows|MacOS)/")
+	endif()
+	# The window backend: GLFW's, or none (Platform/NoWindow, STRATA_WITH_GLFW OFF). LibrariesTests' IsLeftOutOfBuild agrees.
+	if(STRATA_WITH_GLFW)
+		list(FILTER sources EXCLUDE REGEX "^Platform/NoWindow/")
+	else()
+		list(FILTER sources EXCLUDE REGEX "^Platform/GLFW/")
 	endif()
 	list(SORT sources)
 

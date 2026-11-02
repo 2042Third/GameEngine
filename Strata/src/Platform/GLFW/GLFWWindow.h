@@ -1,9 +1,11 @@
 #pragma once
 
 #include "Strata/Core/Window.h"
+#include "Platform/Vulkan/VulkanPresentation.h"
 
 #include <array>
 #include <string>
+#include <vector>
 
 struct GLFWcursor;
 struct GLFWwindow;
@@ -11,11 +13,16 @@ struct GLFWwindow;
 namespace Strata
 {
 
-	class GLFWWindow : public Window
+	// The window of the GLFW backend; it gives the Vulkan device its surfaces through GLFW (VulkanPresentation).
+	class GLFWWindow : public Window, private VulkanPresentation
 	{
 	public:
-		explicit GLFWWindow(const WindowSpecification& specification);
+		GLFWWindow() = default;
 		~GLFWWindow() override;
+
+		// Opens the window (Window::Create only); false, with the reason logged, when GLFW cannot be initialized (no display)
+		// or the window cannot be created. A window that was never opened must not be used, only destroyed.
+		bool Open(const WindowSpecification& specification);
 
 		void ProcessEvents() override;
 
@@ -43,8 +50,14 @@ namespace Strata
 		void Maximize() override;
 		void SetIcon(std::span<const WindowIconImage> images) override;
 
-		void* GetNativeWindow() const override { return m_Window; }
+		const VulkanPresentation* GetVulkanPresentation() const override { return this; }
 	private:
+		// VulkanPresentation, through GLFW's Vulkan functions (GLFW loads Vulkan through VulkanLoader).
+		bool GetRequiredInstanceExtensions(std::vector<std::string>& outExtensions) const override;
+		bool SupportsPresentation(VkInstance instance, VkPhysicalDevice physicalDevice, uint32_t queueFamily) const override;
+		VkResult CreateSurface(VkInstance instance, VkSurfaceKHR& outSurface) const override;
+
+
 		// Decodes a PNG file (WindowSpecification::IconPath) into the icon.
 		void SetIconFromFile(const std::filesystem::path& iconPath);
 		void PollGamepads();

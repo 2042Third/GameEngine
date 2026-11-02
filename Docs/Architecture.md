@@ -74,9 +74,9 @@ linker. Vendor and system libraries attach to the layers that use them (`strata_
 | Layer | Links |
 | --- | --- |
 | Core | `PUBLIC` glm, EnTT, spdlog, nlohmann_json, Tracy when enabled; `PRIVATE` shell32, ole32, bcrypt, dbghelp (Windows), CoreFoundation (Apple), Threads and dl (Linux); the generated `Version.h` and `VersionCommit.h` (`StrataVersionCommit`) |
-| App | `PRIVATE` glfw, Vulkan headers (`VulkanLoader`), stb (window icon), AppKit and the Objective-C runtime (Apple: the Dock icon) |
+| App | `PRIVATE` Vulkan headers (`VulkanLoader`, `VulkanPresentation`), stb (window icon); with `STRATA_WITH_GLFW` (the default) glfw, and AppKit and the Objective-C runtime (Apple: the Dock icon) |
 | Asset | `PRIVATE` zstd_decompress |
-| Renderer | `PUBLIC` nvrhi; `PRIVATE` nvrhi_vk, Vulkan headers, glfw, stb, MikkTSpace, meshoptimizer; the shaders (`strata_add_shaders(Strata_Renderer ...)`) and the default font |
+| Renderer | `PUBLIC` nvrhi; `PRIVATE` nvrhi_vk, Vulkan headers, stb, MikkTSpace, meshoptimizer (no glfw: the device presents through the window's `VulkanPresentation`); the shaders (`strata_add_shaders(Strata_Renderer ...)`) and the default font |
 | Physics | `PRIVATE` box3d |
 | Audio | `PRIVATE` miniaudio |
 | Scripting | `PRIVATE` StrataScriptCore (`ScriptABI.h` only) |
@@ -145,10 +145,13 @@ What may depend on what:
   and draw the UI without a window or GPU (`StrataTests/src/Editor/ImGuiHarness.h`).
 - StrataCLI's logic lives in `StrataCLILib` so that `StrataTests` can link it (`STRATA_TESTS_HAVE_CLI`). Editor and
   CLI tests compile only when those targets exist (`StrataTests/CMakeLists.txt`).
-- Platform code is in `Strata/src/Platform/` (`Windows`, `Posix`, `GLFW`, `Vulkan`), filtered per OS by
-  `strata_add_layer_libraries`; engine modules reach it through interfaces such as `Core/Platform.h`, `Core/Window.h`,
-  `Core/CrashGuard.h`, `Core/Process.h`, `Core/DynamicLibrary.h`, `Core/FileChangeNotifier.h` and
-  `Renderer/GraphicsDevice.h`. Engine code outside `src/Platform/` includes no OS headers.
+- Platform code is in `Strata/src/Platform/` (`Windows`, `Posix`, `GLFW` or, without `STRATA_WITH_GLFW`, `NoWindow`,
+  `Vulkan`), filtered per OS and window backend by `strata_add_layer_libraries`; engine modules reach it through interfaces
+  such as `Core/Platform.h`, `Core/Window.h` (with `Platform/Vulkan/VulkanPresentation.h`, which a window gives the
+  device), `Core/CrashGuard.h`, `Core/Process.h`, `Core/DynamicLibrary.h`, `Core/FileChangeNotifier.h` and
+  `Renderer/GraphicsDevice.h`. Engine code outside `src/Platform/` includes no OS headers but `TargetConditionals.h`,
+  which `Core/PlatformDetection.h` needs to tell Apple's platforms apart; the layer table's `ExternalOwners` enforces it
+  for the window system's, the graphics API's and the OS headers it lists (Docs/DeveloperGuide.md, "Platform seams").
 
 Applications built on `Application` (editor, runtime) get `main` from `Engine/EntryPoint.h`, which calls the program's
 `CreateApplication` (`Engine/ApplicationLaunch.h`), runs the composition root with the options it returned
@@ -574,11 +577,11 @@ A file may include files of its own layer and of the layers it lists, which are 
 | --- | --- | --- |
 | Core | `Core/**` except the application shell, `Math/**`, `stpch.h`, `Platform/Windows`, `Platform/Posix` (not the sockets) | nothing |
 | Input | `Events/**`, `Input/**` | Core |
-| App | `Core/Application.*`, `EngineModule.*`, `Layer.*`, `LayerStack.*`, `Window.h`, `Platform/GLFW/**`, `Platform/Vulkan/VulkanLoader.*` | Core, Input |
+| App | `Core/Application.*`, `EngineModule.*`, `Layer.*`, `LayerStack.*`, `Window.h`, `Platform/GLFW/**`, `Platform/NoWindow/**`, `Platform/Vulkan/VulkanLoader.*`, `Platform/Vulkan/VulkanPresentation.h` | Core, Input |
 | Asset | `Asset/**` except the pipeline files | Core (and no NVRHI or Vulkan header) |
 | Reflection | `Reflection/**` | Core, Asset |
 | Scene | `Scene/**` | Core, Asset, Reflection |
-| Renderer | `Renderer/**`, `Platform/Vulkan/**` | Core, Input, App, Asset, Reflection, Scene |
+| Renderer | `Renderer/**`, `Platform/Vulkan/**` except `VulkanLoader` and `VulkanPresentation` | Core, Input, App, Asset, Reflection, Scene |
 | Physics | `Physics/**` | Core, Asset, Reflection, Scene |
 | Audio | `Audio/**` | Core, App (its engine module), Asset, Reflection, Scene |
 | Animation | `Animation/**` | Core, Asset, Reflection, Scene |
@@ -597,7 +600,9 @@ Objective-C(++) source and header under `Strata/src` (`STRATA_SOURCE_DIR`; `.h`,
 so the macOS platform code too), parses its `#include`s, quoted and angle-bracketed (`Strata/src` is a public include
 directory, so `<Strata/...>` reaches engine headers too; `LayeringAnalyzer`: comments, literals and `#if 0` blocks
 skipped; resolved like the preprocessor, quoted includes next to the file first, both forms from `Strata/src`; standard
-and third-party headers match no layer and are checked only against the prefixes a layer may not include, its
+and third-party headers match no layer and are checked against the table's `ExternalOwners` first (`GLFW/` only from
+`Platform/GLFW`, `vulkan/` and `nvrhi/vulkan` only from `Platform/Vulkan`, the OS headers only from `Platform/Windows` and
+`Platform/Posix`, prefixes ignoring case), then against the prefixes the including layer may not include, its
 `MayNotIncludeExternal`: the asset layer's `nvrhi/`, `vulkan/` and `vk_`), maps both ends to their
 layers and fails on every file that is in no layer or in several, on every forbidden include that is not in
 `StrataTests/Architecture/LayeringAllowlist.txt`, and on every allowlist line that matches nothing. Each allowlist line
@@ -806,8 +811,12 @@ the swapchain image), so it measures what a frame costs whatever the display's r
 `PerfGPU.Editor` perf test measure editor frames.
 
 The timestep is the wall time since the previous frame, clamped to `ApplicationSpecification::MaxTimestep` (0.25 s).
-Windowed applications are paced by vsync when it is on (`WindowSpecification::VSync`) and by their frame rate cap;
-headless ones by the cap alone, which the editor and the runtime set to 60 (`MaxFrameRate`,
+Windowed applications ask for vsync when it is on (`WindowSpecification::VSync`: the device chooses FIFO) and are paced by
+their frame rate cap; whether FIFO paces them is the presentation engine's. On the reference machine it does not pace a
+window in windowed mode, even a focused one: frames run at 1,200-1,500 a second with FIFO chosen and the image acquire
+never waiting (wave 8's S0.6, Docs/Roadmap.md's open items), so only a cap paces them there. Borderless and fullscreen
+windows were not measured. The swapchain's log line names the mode chosen and the modes the surface offers. Headless
+applications are paced by the cap alone, which the editor and the runtime set to 60 (`MaxFrameRate`,
 `StrataEditor/src/EditorApplication.cpp`, `RuntimeApplication.cpp`). The cap is the application's `FramePacer`
 (`Core/Timer.h`) and can change while it runs (`Application::SetMaxFrameRate`; setting the current rate keeps the frame
 schedule). It waits with `Platform::SleepUntil`: on Windows a high-resolution waitable timer of the thread's own, since the

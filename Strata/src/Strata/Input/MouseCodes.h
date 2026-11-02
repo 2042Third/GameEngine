@@ -7,7 +7,8 @@ namespace Strata
 
 	using MouseCode = uint16_t;
 
-	// Values match GLFW mouse button codes.
+	// The engine's mouse button codes. They are script ABI (StrataScript/Input.h) and never renumbered. They were taken from
+	// GLFW's, so the GLFW backend passes its codes through; another backend translates its own.
 	namespace Mouse
 	{
 		enum : MouseCode
