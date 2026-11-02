@@ -126,6 +126,13 @@ them back on the same page. **Close** or Escape closes the window.
 - **Interface**: the size of the editor's interface, as a percentage of the size Strata picks for your display
   (**Automatic**). It changes at once and holds when you move the window to another display. Starting the editor with
   `--ui-scale` overrides it for that session. It sizes the editor only, not the game you play in it.
+- **Frame Rate**: how fast the editor redraws. **Idle after** is how long after your last input the editor counts as idle
+  and redraws slowly (0: never idle; it then redraws at full speed all the time, also behind other windows, which uses
+  more power). **Idle frame rate** and **Idle frame rate in the background** are how fast it redraws while idle, with its
+  window in front or behind another. **Active frame rate** caps it while anything happens (Unlimited: as fast as the
+  display's vertical sync allows); a cap above your display's refresh rate shows nothing more. Stepping a paused game
+  and commands that wait for frames always run at full speed. The defaults are 0.7.0's: idle after half a second, 30
+  frames per second idle, 10 in the background, no cap while active.
 
 Strata 0.5.0 kept the external editor in `EditorSettings.json` in the same folder. The first time a later editor starts,
 it copies that setting into its preferences; from then on each version keeps its own, so an older editor installed beside

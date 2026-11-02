@@ -509,7 +509,8 @@ itself (`Game::LoadScene`), `play.state` (and `scene.info`, `editor.status`) nam
 `maxMs`): the CPU time of the frames that ran entirely during the wait, without the waits for the GPU and vsync (measure
 with a window, not `--no-gpu`, to include rendering). A command script can gate it:
 `{"command": "editor.wait", "parameters": {"frames": 120}, "expect": {"/frameTimes/medianMs": {"max": 5}}}`.
-`editor.perf {"frames": 120}` then says where the time went, per stage of the main thread (self times in ms:
+`editor.perf {"frames": 120}` then says where the time went (it stays live while a person pauses the Performance panel
+to read its frames; `interval` is the time between frames, which shows a frame-rate cap), per stage of the main thread (self times in ms:
 `Input`, `Assets.Update`, `Assets.Finalize` (GPU uploads of arriving assets), `Scene.Load` (swapping in a scene that
 finished loading, creating sub-scenes' entities), `Scene.UI` (the game UI's input), `Scene.Scripts`, `Scene.Animation` (animators: poses, root motion,
 attachments, events), `Scene.Physics`, `Scene.Audio`, `Scene.Transforms`, `Render.Extract`, `Render.Submit`, `Render.UI` (the game UI pass), `Editor.UI`,

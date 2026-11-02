@@ -810,7 +810,10 @@ Windowed applications are paced by vsync when it is on (`WindowSpecification::VS
 headless ones by the cap alone, which the editor and the runtime set to 60 (`MaxFrameRate`,
 `StrataEditor/src/EditorApplication.cpp`, `RuntimeApplication.cpp`). The cap is the application's `FramePacer`
 (`Core/Timer.h`) and can change while it runs (`Application::SetMaxFrameRate`; setting the current rate keeps the frame
-schedule): the editor lowers it while it is idle (see [Editor](#editor)), and a windowed runtime caps itself at 60 while
+schedule). It waits with `Platform::SleepUntil`: on Windows a high-resolution waitable timer of the thread's own, since the
+ordinary sleep waits for the system's 15.6 ms timer tick (a 120 Hz cap then ran 20% slow and a 60 Hz one alternated long
+and short frames: `Perf.FramePacer`), never `timeBeginPeriod`, which changes the whole system's timer. The editor
+lowers it while it is idle and caps it while active as the person's `Editor.FrameRate` preferences say (see [Editor](#editor)), and a windowed runtime caps itself at 60 while
 no scene plays (`GameRuntime::GetFrameRateCap`: the cleared frames of a game loading its start scene left the loading
 threads no CPU at 900 a second) and goes back to the game's pacing once one does. The pacer's wait comes after step 8, so
 `Application::GetLastFrameWorkTime` leaves it out as well: a capped frame rate changes the rate, not the cost of a
@@ -878,7 +881,10 @@ also records how busy the job system's worker, I/O and background threads were s
 read without stopping it).
 `Summarize` gives mean, nearest-rank 50th and 95th percentiles and maximum per stage (every series in one allocation, each
 reordered in place by `ComputeStatsInPlace`; a series of equal samples, such as a stage that did not run, needs no
-search); frame listeners
+search). `TakeSnapshot(newestFrame)` copies the frames still in the ring up to that one, with the stage tables, the GPU
+expectation and the job threads, into a `FrameProfileSnapshot`: a value that recording on, a reset or new stages leave
+alone, with the profiler's accessors (`GetFrame`, `GetStageName`...) and the same `Summarize` (one template over a record
+source serves both). Frame listeners
 (`AddFrameListener`) receive every recorded frame. The editor reports it through `editor.perf`, the Performance panel and
 the status bar's frame pill (see [Editor](#editor));
 `StrataRuntime --perf-log` writes it as CSV (`Runtime/FramePerfLog`, see
@@ -3243,8 +3249,9 @@ is the `strata-scripting` skill. The layers:
   fonts' Private Use Area, and behind them the system's fonts for Chinese, Japanese and Korean, read on an I/O thread)
   and the widget kit (`UI/Widgets`), whose widgets record their rectangles in `UI/ItemProbe`. Rules for UI code:
   DeveloperGuide.md, "Editor UI rules". **Idle throttling**: after drawing, `EditorLayer::UpdateFrameRate` sets the cap
-  to 0 (full rate) while anything happens and to 30 (10 unfocused) frames per second otherwise; headless, `--frames` and
-  command-script runs are never throttled. The frame time shown (status bar, viewport stats, `editor.status`) is
+  from the person's `Editor.FrameRate` preferences: the active rate (unlimited by default) while anything happens, the
+  idle rate (30, 10 unfocused by default) otherwise, never idle with `IdleAfterSeconds` 0, and uncapped while steps,
+  commands or automation requests are pending; headless, `--frames` and command-script runs are never throttled. The frame time shown (status bar, viewport stats, `editor.status`) is
   `Application::GetLastFrameWorkTime` averaged over 60 frames: a frame's CPU time without the waits for the GPU, the
   display and the pacer, which panels get in `EditorPanelContext::Frame`. **Instruments**: the Streaming panel
   (`Panels/StreamingPanel`) and the Performance panel (`Panels/PerformancePanel`) are closed until the status bar's
@@ -3283,8 +3290,12 @@ is the `strata-scripting` skill. The layers:
   stage self times of the last 600 frames (newest at the right, untimed work on top, reference lines at 16.7 and 33.3
   ms), scaled to the 95th percentile frame (taller frames are cut at the top), marks spikes (frames over twice the
   median and a 60 FPS frame), explains the frame under the mouse, lists per-stage statistics under the frame's totals
-  (frozen under the header) and copies `editor.perf`'s JSON (Copy as JSON); its statistics, and the table's text with
-  them, are made four times a second, and each strip sorts out the stages it stacks once per frame drawn, not per column
+  (frozen under the header) and copies `editor.perf`'s JSON (Copy as JSON); **Pause** (or Space while the panel has the
+  keyboard focus and ImGui's navigation cursor is hidden, so a key press never also presses a button) holds the timeline,
+  its tooltip (a still mouse stays on one frame), the summary, the table and Copy as JSON on a `FrameProfileSnapshot`
+  taken once the GPU times of the frames on screen at the click arrived (at most `c_MaxGPULatencyFrames` later; a reset
+  meanwhile resumes instead), while the profiler, `editor.perf`, `--perf-log` and the status bar stay live; hiding the
+  panel resumes it and frees the copy. Its statistics, and the table's text with them, are made four times a second, and each strip sorts out the stages it stacks once per frame drawn, not per column
   (the other strip's stages cost its 600 columns nothing). While GPU times arrive (or are expected) a GPU strip under the timeline stacks the GPU stages of the same frames
   at the same scale (frames without GPU times stay blank), and the table ends with a GPU section: what bounds the frames
   (`PerformancePanel::DescribeBound`: GPU-bound, CPU-bound, capped or unknown, by `FrameBound`), the GPU's busy time and

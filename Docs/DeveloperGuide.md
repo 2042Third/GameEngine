@@ -1360,7 +1360,7 @@ section; the composition root runs it first, and Input is a module every engine 
 ### Preferences
 
 The person's preferences are the registry's *user* sections (`SettingsScope::User`): the editor's own (the external
-editor, `Editor.ExternalEditor`, and the interface, `Editor.Interface`), registered by `EditorPreferences::RegisterSections` in the editor's `Extra`
+editor, `Editor.ExternalEditor`, the interface, `Editor.Interface`, and the frame rate, `Editor.FrameRate`), registered by `EditorPreferences::RegisterSections` in the editor's `Extra`
 registration (and the tests'), and any a module registers. They hold for every project and never reach a game.
 
 - **The store.** `Editor/EditorPreferences` keeps them in `<user data>/Strata/Preferences.json`
@@ -1397,6 +1397,12 @@ registration (and the tests'), and any a module registers. They hold for every p
   `{ "Command": ... }`); `STRATA_EXTERNAL_EDITOR` still wins. The section checks the template's form only; whether its
   program is there depends on the machine and the PATH the editor started with, so `script.setExternalEditor` (and the
   External Editor page) check that when the person sets one.
+- **The frame rate.** `Editor.FrameRate` (`Editor/EditorFrameRate`, a simple section on the generic page, version 1)
+  holds `IdleAfterSeconds` (0-3600, default 0.5; 0 never idles), `IdleFrameRate` (60, 30, 20, 15, 10 or 5; default 30),
+  `UnfocusedIdleFrameRate` (60, 30, 15, 10 or 5; default 10) and `ActiveFrameRate` (Unlimited or 240, 165, 144, 120, 90 or 60;
+  default Unlimited): 0.7.0's behavior by default. `EditorFrameRate::GetPolicy` reads it into a `Policy` whenever the
+  preferences' version changes, never per frame. No rate under 5 is offered: `FramePacer` sleeps without waking on input.
+  Not called an idle timeout anywhere: `--idle-timeout` closes a headless editor without clients.
 - **The interface scale.** `Editor.Interface` (`Editor/EditorInterface`, a simple section on the generic page) holds
   `Scale`, a percentage of the automatic UI scale: `Automatic` (100%), `75%`, `90%`, `110%`, `125%`, `150%`, `175%` or
   `200%`. Whenever the preferences' version changes (and on the first frame) `EditorLayer` gives the factor to the host
@@ -2442,10 +2448,17 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     own, `ClickItem` by probe key) and `HarnessEditor.h` (an editor on that harness, `ReplaceText` for kit text fields,
     and a temporary directory as `EditorOptions::DefaultProjectLocation`, so the project dialogs never read the user's
     projects folder).
-  - Idle throttling: a windowed editor runs at the full rate while anything happens (input in the last 0.5 s, a running
-    unpaused scene or pending steps, loading assets, pending commands, an automation request in the last second, a
-    script build, a panel's `IsAnimating`) and otherwise at 30 frames per second (10 without the focus), through
-    `EditorHost::SetMaxFrameRate`. Headless editors, `--frames` runs and command scripts are never throttled; a panel that
+  - Idle throttling follows the person's `Editor.FrameRate` policy (`EditorLayer::UpdateFrameRate`): a windowed editor
+    runs at most at `ActiveFrameRate` (0: unlimited) while anything happens (input in the last `IdleAfterSeconds`, a
+    running unpaused scene or pending steps, loading assets, pending commands, an automation request in the last second or
+    `IdleAfterSeconds` if longer, a script build, a panel's `IsAnimating`) and otherwise at `IdleFrameRate`
+    (`UnfocusedIdleFrameRate` without the focus), through `EditorHost::SetMaxFrameRate`; `IdleAfterSeconds` 0 never idles
+    (a branch of its own, not throttling turned off, which would keep the last idle cap). Frames that run work someone
+    waits for by frames (pending steps, commands, automation requests: `EditorLayer::RunsUncapped`) are never capped, so
+    the active cap never overwrites `UpdateSteppingFrameRate`'s lift. `editor.status`'s `editor.frameRate` reports the
+    policy (`idleAfterSeconds`, `idleFrameRate`, `unfocusedIdleFrameRate`, `activeFrameRate`) beside `cap`, `idle` and
+    `throttling`, and `editor.perf`'s `interval` the time from one frame's start to the next, which is how a cap is
+    verified. Headless editors, `--frames` runs and command scripts are never throttled; a panel that
     animates without input reports it through `EditorPanel::IsAnimating`. The frame time the status bar, the viewport's
     stats and `editor.status` (`editor.frameRate.frameMilliseconds`, with the measured rate) show is what frames cost
     (`Application::GetLastFrameWorkTime`: CPU time without the waits for the GPU, the display and the frame rate cap;
@@ -2856,7 +2869,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   waits for the GPU and the display, so command scripts can `expect` frame budgets. `editor.perf {frames?}` says where
   those frames went: the frame profiler's statistics (mean, nearest-rank p50 and p95, maximum) of the latest frames (120 by
   default, at most 600) for the frame, every stage (`stages/<name>`, self times, `inFrameTime` false for Present), the
-  stages added up (`stageSum`, at most the frame), the rest of each frame (`untimed`) and the job threads (busy percent,
+  stages added up (`stageSum`, at most the frame), the rest of each frame (`untimed`), the time from each frame's start to
+  the next (`interval`: what a frame-rate cap, vsync or idle throttling sets; the Performance panel's pause freezes only
+  the panel) and the job threads (busy percent,
   running and queued jobs); `stages` lists the main thread's stages only. `gpu` is the GPU's side of the same frames
   (frames with GPU times, the latency, busy time, per GPU stage, and `boundBy`: `FrameBound` by the 90% rules), and
   `renderStats` the viewport panel's latest frame (`CommandUtils::DescribeRenderStats` of its `SceneRendererStats` and
@@ -3387,7 +3402,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (`EditorContext::GetFixedStepCountAtResume`; it notices the resume by `GetResumeCount`, also when the game was paused
   again in the same frame), as it does when play mode stops (a quit or a crash too). A scene switch the
   game asks for carries pending steps over. While steps are pending the editor lifts its frame-rate cap (headless editors'
-  60 frames per second and the idle throttling: `EditorLayer::UpdateSteppingFrameRate`), so 600 steps take the frames'
+  60 frames per second, the idle rates and the active cap: `EditorLayer::UpdateSteppingFrameRate`), so 600 steps take the frames'
   work rather than ten seconds; each frame still runs exactly one step. `wait: false` answers at once with
   `pendingSteps`; `frames` is an accepted older name of `steps`. `play.start {paused: true}` pauses the game before its
   first step (`fixedSteps` 0, also after the scripts' build), so tools drive it from step 0.
@@ -5400,7 +5415,8 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   ranges and `required` stay (`McpToolsets::MakeCompactToolDefinition`). So the first sentence of a command's
   description says what it does, and a property's first sentence what it is. The default list stays at most 32 tools
   and 30 KiB of `tools/list` JSON (`CLI.McpToolsets`). It is at the tool limit: 27 core commands and 5 generic tools, about 18.6 KB; every command
-  (126 tools) is about 75 KB. A command added to `core` takes the place of another.
+  is about 99 KB of definitions (151 commands; `CLI.McpToolsets` prints the figure). A command added to `core` takes the place
+  of another.
 
 ### Other methods and tests
 
