@@ -5390,8 +5390,10 @@ derived code, what was derived) and the license's full text below its table, sin
 carries the text, and the commit message names the project, its commit and its files. Copyleft code (GPL, LGPL, AGPL, MPL
 and the like) is read for ideas, never copied or ported: Strata's license is the owner's choice, and copied copyleft code
 would make it. Large pieces still come in as pinned submodules under `Strata/vendor/` by the rules of AGENTS.md's
-[Working with third-party code](../AGENTS.md#working-with-third-party-code); engine code adapted from a submodule follows
-the notice rule above.
+[Working with third-party code](../AGENTS.md#working-with-third-party-code). Engine code adapted from a submodule gets
+no row, since the submodules' table at the top of `ThirdPartyNotices.md` already names its license; its commit message
+names the submodule, its commit and its files. When a submodule is removed while engine code derived from it stays, that
+code follows the notice rule above from then on (its project is no longer a submodule).
 
 The editor's fonts are not submodules: the release files of Inter, JetBrains Mono and Lucide (with Lucide's codepoint
 map) and their licenses are committed in `StrataEditor/Resources/Fonts/` and compiled in (`strata_embed_file`). To

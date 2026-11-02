@@ -492,8 +492,10 @@ derived code, what was derived) and the license's full text below its table, sin
 carries the text, and the commit message names the project, its commit and its files. Copyleft code (GPL, LGPL, AGPL, MPL
 and the like) is read for ideas, never copied or ported: Strata's license is the owner's choice, and copied copyleft code
 would make it. Large pieces still come in as pinned submodules under `Strata/vendor/` by the rules of AGENTS.md's
-[Working with third-party code](../AGENTS.md#working-with-third-party-code); engine code adapted from a submodule follows
-the notice rule above.
+[Working with third-party code](../AGENTS.md#working-with-third-party-code). Engine code adapted from a submodule gets
+no row, since the submodules' table at the top of `ThirdPartyNotices.md` already names its license; its commit message
+names the submodule, its commit and its files. When a submodule is removed while engine code derived from it stays, that
+code follows the notice rule above from then on (its project is no longer a submodule).
 ```
 
 `ThirdPartyNotices.md`, a new section after the Roboto paragraph (42) and before "## Sample assets" (44), so that
@@ -1477,3 +1479,9 @@ expressions match `Forward.frag:250-300` operand for operand. Changed:
     (after `quarters`, 413); `RenderShadowView` steps time too; the TAA block of "A still camera keeps..." changes meaning;
     the contact-shadow GPU case may need a fresh renderer per frame; 2.1 gained `ThirdPartyNotices.md`,
     `ViewportRenderer.cpp` and `EditorViewportCommands.cpp`.
+11. **Code adapted from a submodule** (minor; the unit review of `wave8-first`, 2026-11-02). 5.5's DG paragraph said such
+    code "follows the notice rule above", a row in `ThirdPartyNotices.md`'s "Code derived from other projects", while that
+    section holds only projects that are not submodules, as D10 and the plan (S0.1) rule. D10 governs: the DG paragraph now
+    says adapted submodule code gets no row (the submodules' table names its license) and its commit message names the
+    submodule, its commit and its files, and that once the submodule is removed while derived code stays, that code follows
+    the notice rule. The notices section is unchanged.
