@@ -1756,7 +1756,7 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Context.GetProject()->GetSettings().FindSection("Scene.Timing") == nullptr);
 	}
 
-	TEST_CASE("A project opened without a start scene runs its fixed rate and layers in the scene the editor keeps")
+	TEST_CASE("Scenes the editor makes run the project's fixed rate and layers: scene.new, and a project opened without a start scene")
 	{
 		CommandHarness harness;
 		const std::filesystem::path root = Tests::CreateTemporaryDirectory("EditorFixedRateScenes");
@@ -1774,6 +1774,10 @@ TEST_SUITE("Editor.Commands")
 			CHECK(settings["physicsLayers"]["names"]["1"] == "Player");
 			CHECK(harness.Context.GetEditScene()->GetFixedTimestep() == 1.0f / 120.0f);
 		};
+		checkProjectRate();
+
+		// A new scene is made by the editor, not loaded: it takes the rate only when the editor adopts it as the edited scene.
+		harness.Run("scene.new", { { "force", true } });
 		checkProjectRate();
 
 		// Another project without a rate: the scene steps at its own.

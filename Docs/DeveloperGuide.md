@@ -1248,8 +1248,8 @@ project's deliberate choice is not an incident.
 - **Hand-over, on the main thread**, exactly where the collision layers are taken ([Collision layers](#collision-layers)):
   `Scene::ApplyProjectTiming()` (`ProjectSceneTiming::Find`: parsed again only when the provider's version changes, with
   a value version that changes only when the rate does) runs in `SceneAsset::TakePreparedScene` and `CreateScene`,
-  `SceneLoadRequest::TakeScene`, when the editor adopts a scene (`EditorContext::AdoptProjectLayers`), when a project
-  opens or closes, and after every change of the project's settings, its undo and redo
+  `SceneLoadRequest::TakeScene`, when the editor adopts a scene (`EditorContext::AdoptProjectLayers`: `scene.new` and
+  the recovery's new scene take the rate only there), when a project opens or closes, and after every change of the project's settings, its undo and redo
   (`EditorContext::ApplyProjectLayers`: the edited scene and the running one, which steps at a new rate from its next
   update; the accumulator holds seconds, so the remainder carries over). `Scene::Copy` keeps the rate; it is never saved.
 - **Readers.** Code reads the step through `Scene::GetFixedTimestep()` and the cap through `Scene::GetMaxFixedSteps()`,
