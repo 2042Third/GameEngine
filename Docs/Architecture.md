@@ -812,10 +812,11 @@ the swapchain image), so it measures what a frame costs whatever the display's r
 
 The timestep is the wall time since the previous frame, clamped to `ApplicationSpecification::MaxTimestep` (0.25 s).
 Windowed applications ask for vsync when it is on (`WindowSpecification::VSync`: the device chooses FIFO) and are paced by
-their frame rate cap; whether FIFO paces them is the presentation engine's. On the reference machine it does not, even
-for a focused window: frames run at 1,200-1,500 a second with FIFO chosen and the image acquire never waiting (wave 8's
-S0.6, Docs/Roadmap.md's open items), so only a cap paces them there. The swapchain's log line names the mode chosen and
-the modes the surface offers. Headless applications are paced by the cap alone, which the editor and the runtime set to 60 (`MaxFrameRate`,
+their frame rate cap; whether FIFO paces them is the presentation engine's. On the reference machine it does not pace a
+window in windowed mode, even a focused one: frames run at 1,200-1,500 a second with FIFO chosen and the image acquire
+never waiting (wave 8's S0.6, Docs/Roadmap.md's open items), so only a cap paces them there. Borderless and fullscreen
+windows were not measured. The swapchain's log line names the mode chosen and the modes the surface offers. Headless
+applications are paced by the cap alone, which the editor and the runtime set to 60 (`MaxFrameRate`,
 `StrataEditor/src/EditorApplication.cpp`, `RuntimeApplication.cpp`). The cap is the application's `FramePacer`
 (`Core/Timer.h`) and can change while it runs (`Application::SetMaxFrameRate`; setting the current rate keeps the frame
 schedule): the editor lowers it while it is idle (see [Editor](#editor)), and a windowed runtime caps itself at 60 while

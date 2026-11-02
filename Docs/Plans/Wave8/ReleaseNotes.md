@@ -35,9 +35,11 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 
 - The swapchain's log line names the present mode chosen and the modes the surface offers (`Swapchain: 2400 x 1350,
   3 images, vsync (FIFO; the surface offers FIFO, MAILBOX, ...)`).
-- Measured: on the reference machine vsync paces no window, focused or not: FIFO is chosen and the presentation engine
-  hands every image back at once (1,200-1,500 frames a second). Not the engine's code, nor focus, nor the RTSS or NVIDIA
-  present layers: a driver or system setting, unconfirmed (Roadmap, open items). A frame-rate cap paces the editor there.
+- Measured: on the reference machine vsync paces no window in windowed mode, focused or not: FIFO is chosen and the
+  presentation engine hands every image back at once (1,200-1,500 frames a second). Not the engine's code, nor focus,
+  nor the RTSS or NVIDIA present layers: a driver or system setting, unconfirmed (Roadmap, open items). Borderless and
+  fullscreen windows were not measured. There only a frame-rate cap paces the editor: File > Preferences > Frame Rate >
+  Active frame rate (Unlimited by default).
 
 ## Defaults that change
 
@@ -62,6 +64,6 @@ projects, the template and scenes or projects without the value get.
 
 **Platform (S0.6).**
 
-- On the reference machine (NVIDIA RTX 5090, driver 621.1), vsync does not pace windows: FIFO presents without waiting,
-  so a windowed editor or game runs as fast as it can unless a frame-rate cap is set. The cause is a driver or system
-  setting, not confirmed yet.
+- On the reference machine (NVIDIA RTX 5090, driver 621.1), vsync does not pace windows in windowed mode: FIFO presents
+  without waiting, so a windowed editor or game runs as fast as it can unless a frame-rate cap is set. The cause is a
+  driver or system setting, not confirmed yet. Borderless and fullscreen windows were not measured.
