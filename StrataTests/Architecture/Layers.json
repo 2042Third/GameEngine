@@ -19,7 +19,7 @@
 		{
 			"Name": "App",
 			"Notes": "The application shell: Application, layers, the EngineModule interface the modules implement (Application runs their hooks and names none of them), the window and its GLFW implementation. VulkanLoader and VulkanPresentation belong here, not to Renderer: the window system implements them (GLFW initializes its Vulkan loader from VulkanLoader, as surfaces must come from the graphics device's loader, and creates surfaces for the device through VulkanPresentation), and they depend only on Core.",
-			"Paths": [ "Strata/Core/Application.*", "Strata/Core/EngineModule.*", "Strata/Core/Layer.*", "Strata/Core/LayerStack.*", "Strata/Core/Window.h", "Platform/GLFW/**", "Platform/Vulkan/VulkanLoader.*", "Platform/Vulkan/VulkanPresentation.h" ],
+			"Paths": [ "Strata/Core/Application.*", "Strata/Core/EngineModule.*", "Strata/Core/Layer.*", "Strata/Core/LayerStack.*", "Strata/Core/Window.h", "Platform/GLFW/**", "Platform/Vulkan/VulkanLoader.*", "Platform/Vulkan/VulkanPresentation.h", "Platform/NoWindow/**" ],
 			"MayInclude": [ "Core", "Input" ]
 		},
 		{

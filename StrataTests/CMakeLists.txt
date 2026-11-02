@@ -78,6 +78,8 @@ set(STRATA_TESTS_OF_PHYSICS "src/Physics/" "src/Perf/PhysicsPerfTests.cpp" "src/
 set(STRATA_TESTS_OF_AUDIO "src/Audio/" "src/Core/ApplicationAudioTests.cpp" "src/Scripting/ScriptAudioTests.cpp")
 set(STRATA_TESTS_OF_ANIMATION "src/Animation/" "src/Asset/GltfSkinImportTests.cpp" "src/Perf/AnimationPerfTests.cpp"
 	"src/Renderer/GPUAnimationTests.cpp" "src/Renderer/RenderSceneSkinTests.cpp" "src/Scripting/ScriptAnimationTests.cpp")
+# The window backend's (STRATA_WITH_GLFW): tests of real windows. A backend, not a module: the feature test needs no window.
+set(STRATA_TESTS_OF_GLFW "src/Core/GPUWindowTests.cpp" "src/Core/ApplicationIconTests.cpp" "src/Platform/DockIconTests.cpp")
 set(STRATA_TESTS_HAVE_EVERY_MODULE ON)
 foreach(module IN ITEMS PHYSICS AUDIO ANIMATION)
 	if(NOT STRATA_WITH_${module})
@@ -85,6 +87,9 @@ foreach(module IN ITEMS PHYSICS AUDIO ANIMATION)
 		list(APPEND STRATA_TESTS_LEFT_OUT ${STRATA_TESTS_OF_${module}})
 	endif()
 endforeach()
+if(NOT STRATA_WITH_GLFW)
+	list(APPEND STRATA_TESTS_LEFT_OUT ${STRATA_TESTS_OF_GLFW})
+endif()
 if(NOT STRATA_TESTS_HAVE_EVERY_MODULE)
 	list(APPEND STRATA_TESTS_LEFT_OUT "src/FeatureTest/")
 endif()
@@ -320,7 +325,7 @@ set_tests_properties(StrataTests.GPU PROPERTIES LABELS "gpu")
 
 # The Dock icon (Platform.DockIcon) needs the window server but no GPU: a test of its own on the Mac, labelled gpu like the
 # other tests that need a display.
-if(APPLE)
+if(APPLE AND STRATA_WITH_GLFW)
 	add_test(NAME StrataTests.DockIcon
 		COMMAND StrataTests --test-suite=Platform.DockIcon --no-intro=true
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
@@ -334,8 +339,13 @@ add_test(NAME StrataPackaging.Version COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CUR
 # Games contain no tooling: the runtime's linker map names no object or library of Dear ImGui, ImGuizmo, the asset
 # pipeline, the network or zstd's compressor (Architecture/CheckNoTooling.cmake; the configure checks what it links).
 if(TARGET StrataRuntime)
+	set(STRATA_RUNTIME_MAP_CHECKS "")
+	# A build without a window backend: no GLFW in the game, and Platform/NoWindow's Window::Create in its place.
+	if(NOT STRATA_WITH_GLFW)
+		list(APPEND STRATA_RUNTIME_MAP_CHECKS "-DEXTRA_OBJECTS=GLFWWindow|GLFWApplicationIcon" "-DEXTRA_LIBRARIES=glfw3|glfw" "-DEXTRA_REQUIRED=NoWindow")
+	endif()
 	add_test(NAME StrataRuntime.NoTooling
-		COMMAND "${CMAKE_COMMAND}" "-DMAP=$<TARGET_FILE_DIR:StrataRuntime>/StrataRuntime.map"
+		COMMAND "${CMAKE_COMMAND}" "-DMAP=$<TARGET_FILE_DIR:StrataRuntime>/StrataRuntime.map" ${STRATA_RUNTIME_MAP_CHECKS}
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Architecture/CheckNoTooling.cmake")
 endif()
 

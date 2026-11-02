@@ -263,7 +263,7 @@ TEST_SUITE("Core.WindowBackend")
 		CHECK(reports == 1);
 	}
 
-#if defined(ST_PLATFORM_LINUX)
+#if defined(ST_PLATFORM_LINUX) && ST_WITH_GLFW
 	TEST_CASE("Window::Create returns null without a display instead of aborting")
 	{
 		// The child's environment only (a helper sets it): no X11 display, no Wayland socket.
@@ -282,6 +282,35 @@ TEST_SUITE("Core.WindowBackend")
 		const std::string log = result.Output + result.ErrorOutput;
 		CHECK(log.find("GLFW error") != std::string::npos);
 		CHECK(log.find("could not be initialized") != std::string::npos);
+	}
+#endif
+
+#if !ST_WITH_GLFW
+	TEST_CASE("A build without a window backend opens no window and says how to run")
+	{
+		{
+			const Tests::LogCapture log;
+			WindowSpecification windowSpecification;
+			windowSpecification.Title = "No backend";
+			const Scope<Window> window = Window::Create(windowSpecification);
+			CHECK_FALSE(window);
+			const std::vector<LogEntry> entries = log.GetEntries();
+			CHECK(std::any_of(entries.begin(), entries.end(), [](const LogEntry& entry)
+			{
+				return entry.Level == LogLevel::Error && entry.Message.find("STRATA_WITH_GLFW") != std::string::npos;
+			}));
+		}
+
+		// A windowed start without a factory ends through the fatal-error path.
+		const Tests::LogCapture log;
+		Application application(MakeWindowedSpecification());
+		CHECK_FALSE(application.IsRunning());
+		CHECK(application.GetExitCode() == 1);
+		const std::vector<LogEntry> entries = log.GetEntries();
+		CHECK(std::any_of(entries.begin(), entries.end(), [](const LogEntry& entry)
+		{
+			return entry.Level == LogLevel::Critical && entry.Message.find("its window could not be opened") != std::string::npos;
+		}));
 	}
 #endif
 }

@@ -263,8 +263,8 @@ miniaudio) are not built, and nothing links them. The editor is a tool with ever
   never a header's, for the same reason); code outside `src/Editor` that calls the editor tests' helpers (TestMain's helper
   modes) with `ST_TESTS_HAVE_EDITOR`, since builds without the editor leave that folder out. In a full build, `ModuleRegistrationOptions::Exclude` registers the engine
   without some of its modules (the `--strata-test-helper=register-without` mode).
-- **CI** builds and tests a game configuration without audio and physics ("Linux (no Audio, no Physics)":
-  `ctest -LE "gpu|perf|package"`).
+- **CI** builds and tests a game configuration without audio, physics and the window backend ("Linux (no Audio, no Physics, no
+  GLFW)": `ctest -LE "gpu|perf|package"`).
 
 ### macOS and MoltenVK
 

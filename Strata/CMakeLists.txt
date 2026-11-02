@@ -20,12 +20,13 @@ strata_add_layer_libraries(
 target_include_directories(Strata_Core PUBLIC
 	"${CMAKE_CURRENT_SOURCE_DIR}/src"
 	"${CMAKE_CURRENT_BINARY_DIR}/Generated")
-# Which optional modules the engine has (STRATA_WITH_*), 1 or 0, for every target that links the engine: definitions rather
+# Which optional modules and backends the engine has (STRATA_WITH_*), 1 or 0, for every target that links the engine: definitions rather
 # than a generated header, so that no file can read one as 0 for want of an include.
 target_compile_definitions(Strata_Core PUBLIC
 	"ST_WITH_PHYSICS=$<BOOL:${STRATA_WITH_PHYSICS}>"
 	"ST_WITH_AUDIO=$<BOOL:${STRATA_WITH_AUDIO}>"
-	"ST_WITH_ANIMATION=$<BOOL:${STRATA_WITH_ANIMATION}>")
+	"ST_WITH_ANIMATION=$<BOOL:${STRATA_WITH_ANIMATION}>"
+	"ST_WITH_GLFW=$<BOOL:${STRATA_WITH_GLFW}>")
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/Strata/Core/Version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/Generated/Strata/Core/Version.h" @ONLY)
 # The commit the engine is built from (c_EngineCommit: editor.status, About), read from git at every build: the header is
@@ -52,13 +53,18 @@ if(WIN32)
 elseif(APPLE)
 	strata_layer_link(Core PRIVATE "-framework CoreFoundation")
 	# The Dock icon (Platform/GLFW/GLFWApplicationIcon.cpp), through the Objective-C runtime: App, not Core, so that programs
-	# without a window (StrataCLI) do not load AppKit.
-	strata_layer_link(App PRIVATE "-framework AppKit" objc)
+	# without a window (StrataCLI) do not load AppKit; a build without the window backend has no Dock icon.
+	if(STRATA_WITH_GLFW)
+		strata_layer_link(App PRIVATE "-framework AppKit" objc)
+	endif()
 else()
 	find_package(Threads REQUIRED)
 	strata_layer_link(Core PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
 endif()
-strata_layer_link(App PRIVATE glfw Vulkan::Headers stb)
+strata_layer_link(App PRIVATE Vulkan::Headers stb)
+if(STRATA_WITH_GLFW)
+	strata_layer_link(App PRIVATE glfw)
+endif()
 strata_layer_link(Asset PRIVATE zstd_decompress)
 strata_layer_link(Renderer PUBLIC nvrhi)
 strata_layer_link(Renderer PRIVATE nvrhi_vk Vulkan::Headers stb MikkTSpace meshoptimizer)

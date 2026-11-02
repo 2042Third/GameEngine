@@ -28,15 +28,22 @@ option(STRATA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors in first-par
 option(STRATA_WITH_PHYSICS "Build the physics module (box3d)" ON)
 option(STRATA_WITH_AUDIO "Build the audio module (miniaudio)" ON)
 option(STRATA_WITH_ANIMATION "Build the animation module" ON)
+# The window backend (Strata/src/Platform/GLFW). Off: the engine has no window system (Platform/NoWindow: Window::Create
+# opens nothing), so its programs run headless only: the configuration a console port starts from, which CI builds
+# (Docs/DeveloperGuide.md, "Platform seams"). Code tests ST_WITH_GLFW, a definition like ST_WITH_PHYSICS.
+option(STRATA_WITH_GLFW "Build the GLFW window backend" ON)
 set(strataAbsentModules "")
 foreach(module IN ITEMS PHYSICS AUDIO ANIMATION)
 	if(NOT STRATA_WITH_${module})
 		list(APPEND strataAbsentModules "STRATA_WITH_${module}")
 	endif()
 endforeach()
+if(NOT STRATA_WITH_GLFW)
+	list(APPEND strataAbsentModules "STRATA_WITH_GLFW")
+endif()
 if(strataAbsentModules AND STRATA_BUILD_EDITOR)
 	list(JOIN strataAbsentModules ", " strataAbsentModules)
-	message(FATAL_ERROR "The editor is a tool with every engine module: configure with -DSTRATA_BUILD_EDITOR=OFF to build without "
+	message(FATAL_ERROR "The editor is a tool with every engine module and a window: configure with -DSTRATA_BUILD_EDITOR=OFF to build without "
 		"${strataAbsentModules}.")
 endif()
 

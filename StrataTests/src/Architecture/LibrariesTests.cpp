@@ -30,8 +30,9 @@ namespace
 		return text;
 	}
 
-	// Platform folders of the other operating systems, which this build leaves out.
-	bool IsOtherPlatform(const std::string& path)
+	// Platform folders this build leaves out, as CMake/StrataLayers.cmake does: the other operating systems', and the window
+	// backend it does not build (Platform/NoWindow with GLFW, Platform/GLFW without).
+	bool IsLeftOutOfBuild(const std::string& path)
 	{
 #if defined(ST_PLATFORM_WINDOWS)
 		const char* others[] = { "Platform/Posix/", "Platform/Linux/", "Platform/MacOS/" };
@@ -45,7 +46,11 @@ namespace
 			if (path.starts_with(other))
 				return true;
 		}
-		return false;
+#if ST_WITH_GLFW
+		return path.starts_with("Platform/NoWindow/");
+#else
+		return path.starts_with("Platform/GLFW/");
+#endif
 	}
 
 	// The layers whose paths match `path` and whose exclusions do not: one for every engine file.
@@ -151,7 +156,7 @@ TEST_SUITE("Architecture.Libraries")
 		for (std::filesystem::recursive_directory_iterator it(root, error), end; !error && it != end; it.increment(error))
 		{
 			const std::string path = FileSystem::ToUTF8(it->path().lexically_relative(root));
-			if (!it->is_regular_file() || !IsSourceFile(path) || IsOtherPlatform(path))
+			if (!it->is_regular_file() || !IsSourceFile(path) || IsLeftOutOfBuild(path))
 				continue;
 			fileCount++;
 			const std::vector<std::string> layers = FindLayers(table, path);
