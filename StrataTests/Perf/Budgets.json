@@ -99,6 +99,7 @@
 	"Perf.Editor.DragPrefabInstanceRoot5kMedian": { "Measured": 0.017, "Budget": 0.0255, "Unit": "ms" },
 	"Perf.Editor.Drag100PrefabInstancesMedian": { "Measured": 1.195, "Budget": 1.792, "Unit": "ms" },
 	"Perf.EditorPanels.Performance600FramesP95": { "Measured": 0.0616, "Budget": 0.0924, "Unit": "ms" },
+	"Perf.EditorPanels.Performance600FramesPausedP95": { "Unit": "ms", "Provisional": true, "Target": 0.0924 },
 	"Perf.EditorPanels.ContentBrowser10kAssetsP95": { "Measured": 0.0376, "Budget": 0.0564, "Unit": "ms" },
 	"Perf.EditorPanels.Streaming10kAssetsP95": { "Measured": 0.1926, "Budget": 0.2172, "Unit": "ms" },
 	"Perf.EditorPanels.Streaming10kAssetsRefreshFrame": { "Measured": 0.147, "Budget": 0.2205, "Unit": "ms" },
