@@ -48,12 +48,14 @@ add_subdirectory(NVRHI SYSTEM)
 # resolve static libraries in command-line order (GNU ld) need nvrhi after nvrhi_vk.
 target_link_libraries(nvrhi_vk PUBLIC nvrhi)
 
-# --- GLFW (glfw) ----------------------------------------------------------------------------------
-strata_vendor_option(GLFW_BUILD_DOCS OFF)
-strata_vendor_option(GLFW_BUILD_TESTS OFF)
-strata_vendor_option(GLFW_BUILD_EXAMPLES OFF)
-strata_vendor_option(GLFW_INSTALL OFF)
-add_subdirectory(glfw SYSTEM)
+# --- GLFW (glfw; the window backend's: STRATA_WITH_GLFW) ------------------------------------------
+if(STRATA_WITH_GLFW)
+	strata_vendor_option(GLFW_BUILD_DOCS OFF)
+	strata_vendor_option(GLFW_BUILD_TESTS OFF)
+	strata_vendor_option(GLFW_BUILD_EXAMPLES OFF)
+	strata_vendor_option(GLFW_INSTALL OFF)
+	add_subdirectory(glfw SYSTEM)
+endif()
 
 # --- glm (header-only) ----------------------------------------------------------------------------
 # No layout-changing GLM_FORCE_* defines: glm types cross the script C ABI and must stay plain.

@@ -207,7 +207,8 @@ The threading model, frame loop and pipelines these rules protect are described 
 - **Layers:** every file under `Strata/src` belongs to a layer of `StrataTests/Architecture/Layers.json` and includes
   across layers only what it allows (`Architecture.Layering`). Never add a `LayeringAllowlist.txt` line or widen
   `MayInclude` to make a sideways or upward include pass: invert the dependency (an interface below, a registry, a scene
-  or engine service); games link no `Tooling` layer.
+  or engine service); games link no `Tooling` layer. `ExternalOwners` keeps GLFW, Vulkan and OS headers in their
+  `Platform/` folders.
 - **Module registration:** modules extend the engine through registries (components, asset loaders and importers, scene
   systems, settings sections), never through lower layers calling higher ones. A component lives in its module
   (`<Module>/<Module>Components.h`); each module has one `Register<Module>Module`, called only by the composition root,

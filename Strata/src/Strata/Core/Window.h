@@ -17,6 +17,8 @@
 namespace Strata
 {
 
+	class VulkanPresentation; // Platform/Vulkan/VulkanPresentation.h
+
 	// One size of a window icon: RGBA8 pixels, rows top to bottom, Width * Height * 4 bytes.
 	struct WindowIconImage
 	{
@@ -69,8 +71,8 @@ namespace Strata
 		std::string AppId;
 	};
 
-	// Platform window. The swapchain is owned by the graphics device, which queries the native handle. The size
-	// (GetWidth, GetHeight, in screen coordinates) and SetCursorMode come from InputWindow, the part Input uses.
+	// Platform window. The graphics device owns the swapchain and presents through the window's VulkanPresentation. The
+	// size (GetWidth, GetHeight, in screen coordinates) and SetCursorMode come from InputWindow, the part Input uses.
 	class Window : public InputWindow
 	{
 	public:
@@ -122,8 +124,12 @@ namespace Strata
 		// give it one); Wayland, whose windows take the desktop entry's icon, ignores it.
 		virtual void SetIcon(std::span<const WindowIconImage> images) = 0;
 
-		virtual void* GetNativeWindow() const = 0;
+		// What the Vulkan graphics device presents into this window through (VulkanPresentation); null for a window that
+		// cannot present through Vulkan (a test's stand-in, another API's window): a device made for it renders offscreen.
+		virtual const VulkanPresentation* GetVulkanPresentation() const { return nullptr; }
 
+		// Opens a window of the platform's window system (GLFW). Null, with the reason logged, when it cannot be opened (no
+		// display); Application reports that through its fatal-error path.
 		static Scope<Window> Create(const WindowSpecification& specification);
 	};
 

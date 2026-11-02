@@ -81,18 +81,30 @@ namespace Strata
 
 		JobSystem::Init(m_Specification.Jobs);
 
+		bool windowOpened = true;
 		if (!m_Specification.Headless)
 		{
 			WindowSpecification windowSpecification = m_Specification.Window;
 			if (windowSpecification.Title.empty())
 				windowSpecification.Title = m_Specification.Name;
-			m_Window = Window::Create(windowSpecification);
-			m_Window->SetEventCallback(ST_BIND_EVENT_FN(OnEvent));
-			Input::SetWindow(m_Window.get());
+			m_Window = m_Specification.WindowFactory ? m_Specification.WindowFactory(windowSpecification) : Window::Create(windowSpecification);
+			if (m_Window)
+			{
+				m_Window->SetEventCallback(ST_BIND_EVENT_FN(OnEvent));
+				Input::SetWindow(m_Window.get());
+			}
+			else
+			{
+				// The window backend logged why (GLFW's error, or a build without a window backend).
+				ReportFatalError(m_Specification.Name, fmt::format("{} cannot start: its window could not be opened.", m_Specification.Name),
+					"It needs a desktop session with a display; to run without a window, start it with --headless.");
+				windowOpened = false;
+			}
 		}
+		// Also after a failed start: tests run several applications in one process.
 		Input::Reset();
 
-		if (!StartModules())
+		if (!windowOpened || !StartModules())
 		{
 			m_Running = false;
 			m_ExitCode = 1;

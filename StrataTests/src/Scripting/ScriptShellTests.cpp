@@ -9,6 +9,7 @@
 #include "Strata/Input/InputWindow.h"
 #include "Strata/Runtime/GameWindowService.h"
 #include "Strata/Scripting/ScriptingComponents.h"
+#include "StubWindow.h"
 #include "TestHelpers.h"
 
 #include <algorithm>
@@ -59,56 +60,6 @@ namespace
 	{
 		return static_cast<size_t>(std::count_if(entries.begin(), entries.end(), [&](const LogEntry& entry) { return entry.Message.find(text) != std::string::npos; }));
 	}
-
-	// A game's window that counts the changes asked of it; its framebuffer takes the resolution it is given.
-	class CountingWindow final : public Window
-	{
-	public:
-		void ProcessEvents() override {}
-		uint32_t GetWidth() const override { return Framebuffer.x; }
-		uint32_t GetHeight() const override { return Framebuffer.y; }
-		void SetCursorMode(CursorMode mode) override { Cursor = mode; }
-		glm::uvec2 GetFramebufferSize() const override { return Framebuffer; }
-		float GetContentScale() const override { return 1.0f; }
-		void SetEventCallback(const EventCallbackFn&) override {}
-		void SetVSync(bool enabled) override
-		{
-			VSync = enabled;
-			VSyncChanges++;
-		}
-		bool IsVSync() const override { return VSync; }
-		void SetTitle(const std::string&) override {}
-		void SetMode(WindowMode mode) override
-		{
-			Mode = mode;
-			ModeChanges++;
-		}
-		WindowMode GetMode() const override { return Mode; }
-		void SetResolution(uint32_t width, uint32_t height) override
-		{
-			Framebuffer = glm::uvec2(width, height);
-			ResolutionChanges++;
-		}
-		bool IsMinimized() const override { return false; }
-		bool IsFocused() const override { return true; }
-		void Maximize() override {}
-		CursorMode GetCursorMode() const override { return Cursor; }
-		void SetCursorShape(CursorShape) override {}
-		std::string GetClipboardText() const override { return {}; }
-		void SetClipboardText(const std::string&) override {}
-		KeyCode GetLayoutKey(KeyCode key) const override { return key; }
-		void* GetPlatformHandle() const override { return nullptr; }
-		void SetIcon(std::span<const WindowIconImage>) override {}
-		void* GetNativeWindow() const override { return nullptr; }
-
-		glm::uvec2 Framebuffer = glm::uvec2(640, 360);
-		WindowMode Mode = WindowMode::Windowed;
-		bool VSync = true;
-		CursorMode Cursor = CursorMode::Normal;
-		int ResolutionChanges = 0;
-		int ModeChanges = 0;
-		int VSyncChanges = 0;
-	};
 
 	// A window as Input sees it (only the cursor mode matters here), Input's window while it lives.
 	struct CursorWindow final : public InputWindow
@@ -309,7 +260,11 @@ TEST_SUITE("Scripting.Game")
 
 	TEST_CASE("Display options a game applies every frame change its window once and are logged once")
 	{
-		CountingWindow window;
+		// It starts at 640 x 360, so that the game's request for 1280 x 720 is a change; every setter counts every call.
+		StubWindow window;
+		window.Width = 640;
+		window.Height = 360;
+		window.Framebuffer = glm::uvec2(640, 360);
 		GameWindowService service(&window);
 		EngineServices::ScopedProvider<IGameWindow> provider(service);
 		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
@@ -338,6 +293,8 @@ TEST_SUITE("Scripting.Game")
 		CHECK(CountLogged(log.GetEntries(), "Game window:") == 1);
 
 		// The player resized the window: the game's resolution, still asked for, applies again, once.
+		window.Width = 800;
+		window.Height = 600;
 		window.Framebuffer = glm::uvec2(800, 600);
 		frames(30);
 		CHECK(window.ResolutionChanges == 2);

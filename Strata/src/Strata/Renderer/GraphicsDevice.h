@@ -22,6 +22,9 @@ namespace Strata
 		bool EnableValidation = false;
 		// No presentation support: offscreen rendering only (tests, servers, headless automation).
 		bool Headless = false;
+		// The window the device presents into (CreateSwapchain): its VulkanPresentation decides the instance extensions and
+		// the queue family. A device that is not headless without a window that can present renders offscreen instead.
+		Window* PresentationWindow = nullptr;
 		uint32_t MaxFramesInFlight = 2;
 		int32_t AdapterIndex = -1; // -1 selects the best adapter (discrete GPUs preferred)
 	};
@@ -145,6 +148,8 @@ namespace Strata
 		virtual bool CreateSwapchain(Window& window, bool vsync) = 0;
 		virtual void DestroySwapchain() = 0;
 		virtual bool HasSwapchain() const = 0; // True while presenting to a window
+		// Whether CreateSwapchain may be called: the device was made for a window it can present into (not headless).
+		virtual bool CanPresent() const = 0;
 
 		virtual void SetVSync(bool vsync) = 0;
 		virtual bool IsVSync() const = 0;

@@ -32,6 +32,7 @@ stays under 40,000 characters (the test `Docs.AgentGuide` fails beyond). How the
   - [Script modules and package tests](#script-modules-and-package-tests)
 - [Code style](#code-style)
 - [Architecture rules](#architecture-rules)
+  - [Platform seams](#platform-seams)
 - [Project settings](#project-settings)
 - [Asset pipeline](#asset-pipeline)
   - [Asset files](#asset-files)
@@ -270,8 +271,13 @@ miniaudio) are not built, and nothing links them. The editor is a tool with ever
   never a header's, for the same reason); code outside `src/Editor` that calls the editor tests' helpers (TestMain's helper
   modes) with `ST_TESTS_HAVE_EDITOR`, since builds without the editor leave that folder out. In a full build, `ModuleRegistrationOptions::Exclude` registers the engine
   without some of its modules (the `--strata-test-helper=register-without` mode).
-- **CI** builds and tests a game configuration without audio and physics ("Linux (no Audio, no Physics)":
-  `ctest -LE "gpu|perf|package"`).
+- **The window backend** is optional too: `-DSTRATA_WITH_GLFW=OFF` builds the engine without GLFW, with
+  `Platform/NoWindow` in place of `Platform/GLFW` (`Window::Create` returns null, so its programs run headless only). It is
+  a backend, not a module: no layer has an `Option` for it, code reads `ST_WITH_GLFW`, the tests of real windows are
+  `STRATA_TESTS_OF_GLFW` (GLFW does not count toward `ST_TESTS_HAVE_EVERY_MODULE`: the feature test needs no window), and
+  the editor needs it ([Platform seams](#platform-seams)).
+- **CI** builds and tests a game configuration without audio, physics and the window backend ("Linux (no Audio, no Physics, no
+  GLFW)": `ctest -LE "gpu|perf|package"`).
 
 ### macOS and MoltenVK
 
@@ -315,7 +321,7 @@ so its Ctrl+C or closing it does not end the program and the log does not run in
 `Platform::InstallInterruptHandler` turns Ctrl+C, Ctrl+Break and the console closing (Windows) or SIGINT and SIGTERM
 (POSIX) into an orderly quit through the main loop (`Platform::IsInterruptRequested`; exit code
 `Application::c_InterruptedExitCode`, 130, unless the run had failed); a second request ends the process at once. Fatal
-startup failures go through `Application::ReportFatalError` (no graphics device, no game to run, a game that cannot
+startup failures go through `Application::ReportFatalError` (no window, no graphics device, no game to run, a game that cannot
 start): logged, and for an Interactive run whose stderr nobody reads (`Platform::ShouldShowErrorDialogs`: started from
 the desktop, from a terminal it left alone, or with its output sent to the null device) also shown in a native dialog
 (`Platform::ShowErrorDialog`: MessageBoxW, osascript, zenity or kdialog) with the advice and the log file's path; tests
@@ -919,7 +925,14 @@ short. Their full wording:
   `Scene/SceneServices.h`, through which the systems of a playing scene use each other, or an engine service,
   `Core/EngineServices.h`, for what outlives scenes) instead. A
   proven downward dependency may widen `MayInclude`, with the reason in the layer's `Notes`. Removing an exception
-  lowers `MaxAllowlistEntries`. The table is also the build (`CMake/StrataLayers.cmake`): every layer is a static
+  lowers `MaxAllowlistEntries`. Third-party and system headers that belong to one platform folder have owners, whatever
+  the including file's layer (the table's `ExternalOwners`): an include whose path, resolved from `Strata/src` as a
+  layer's `MayNotIncludeExternal` prefixes are matched, starts with one of an entry's `Prefixes` (ignoring ASCII case:
+  Windows finds `<windows.h>` as `<Windows.h>`) from a file that none of the entry's `Paths` matches is a violation.
+  Owners are checked before the including layer's prefixes (an owned header in its folder still meets those), allowlist
+  lines cover their violations like any other, and no prefix may equal or start another. They keep `GLFW/` in
+  `Platform/GLFW`, `vulkan/` and `nvrhi/vulkan` in `Platform/Vulkan` and the OS headers in `Platform/Windows` and
+  `Platform/Posix` ([Platform seams](#platform-seams)). The table is also the build (`CMake/StrataLayers.cmake`): every layer is a static
   library, `Strata_<Layer>`, that links `PUBLIC` exactly the built layers of its `MayInclude`, so a library cannot link
   what its layer may not include, and `Architecture.Libraries` checks that every source compiles into its layer's
   library and that each library links exactly those layers (as its target says at the end of the configure: a link
@@ -996,6 +1009,66 @@ short. Their full wording:
   positions with `Scene::GetSiblingIndex` (cached), never by searching the child list, and remove many entities with one
   `DestroyEntities` call. A registry holds at most `Scene::c_MaxEntities` (1,048,575) live entities; creating more
   fails with an error.
+
+### Platform seams
+
+The engine names its window system, graphics API and operating system only in `Strata/src/Platform/<backend or OS>/`,
+behind interfaces the rest of the engine uses, so a port (to a console) replaces those folders rather than the engine.
+
+- **The window** (`Core/Window.h`). The backend is chosen at link time, as `GraphicsDevice::Create` and the
+  `Platform::*` functions are: `Platform/GLFW`, or `Platform/NoWindow` in a build without GLFW. `Window::Create` returns
+  null, with the reason logged, when no window can be opened (no display, no backend), and `Application` then ends the
+  start through `ReportFatalError` with exit code 1, starting no module. `ApplicationSpecification::WindowFactory` makes
+  the window instead of `Window::Create` (an embedder's window, the tests' stand-in). A backend's `ProcessEvents`
+  delivers events into `Input::Process*` and then through the event callback, and reports every gamepad. The key, mouse
+  and gamepad codes (`KeyCodes.h`, `MouseCodes.h`, `GamepadCodes.h`) are the script ABI's (`StrataScript/Input.h`) and are
+  never renumbered: they were taken from GLFW's, so the GLFW backend passes its codes through and another backend
+  translates its own.
+- **Presentation** (`Platform/Vulkan/VulkanPresentation.h`, in the App layer beside `VulkanLoader`): what a window system
+  gives the Vulkan device, the instance extensions its surfaces need, whether a queue family can present and a surface
+  for the window. A window returns it from `Window::GetVulkanPresentation` (null by default), and
+  `GraphicsDeviceSpecification::PresentationWindow` names the window whose presentation decides the instance and the
+  queue family; the device never includes a window system's header. A device made for a window that cannot present
+  renders offscreen (it logs so at info level) and says so through `GraphicsDevice::CanPresent`: `GraphicsModule` then
+  creates no swapchain, and the ImGui module refuses to start.
+- **The rule** is the layer table's `ExternalOwners` ([Architecture rules](#architecture-rules), Layers): `GLFW/` only in
+  `Platform/GLFW`, `vulkan/` and `nvrhi/vulkan` only in `Platform/Vulkan`, `Windows.h`, `winsock2.h` and the other Windows
+  headers the engine uses only in `Platform/Windows`, `unistd.h`, `sys/`, `pthread.h`, `mach/` and the other POSIX and
+  Mach headers only in `Platform/Posix`, `fcntl.h` in both. `objc/` (the Dock icon's runtime, in `Platform/GLFW`) and
+  `TargetConditionals.h` (`Core/PlatformDetection.h` tells Apple's platforms apart with it) have no owner: owning them
+  would describe where they happen to be, not a seam. The renderer's library does not link GLFW, so the compiler refuses a
+  GLFW include there too.
+- **A build without a window backend** (`-DSTRATA_WITH_GLFW=OFF`, [Optional modules](#optional-modules)): no GLFW is built
+  or linked, `Platform/NoWindow` defines `Window::Create` (null, and an error naming the option), and the editor refuses
+  to configure. CI's "Linux (no Audio, no Physics, no GLFW)" row builds the engine, the runtime and the tests so, and
+  `StrataRuntime.NoTooling` checks that the runtime's linker map names no GLFW object or library and names `NoWindow`
+  (`CheckNoTooling.cmake`'s `EXTRA_*` arguments). It proves that no engine layer, runtime or test needs GLFW; it does not
+  prove that anything compiles for a console, presents through anything but Vulkan, or behaves like a console's files,
+  threads or suspend.
+- **Tests** run windows without a display through `Tests::StubWindow` (`StrataTests/src/StubWindow.h`): it delivers
+  queued events as a backend does, reports gamepads, records what is asked of it (every setter counts every call) and
+  cannot present. `Core.WindowBackend` runs the frame loop on it; `GPU.Window` runs the Graphics module on it in a child
+  (`--strata-test-helper=stub-window-graphics`, as an application's Graphics module initializes the process-wide
+  renderer). The `open-window` helper mode opens a real window or says "No window".
+
+What else a console port needs behind the same seams, as an inventory: no abstraction for threads, paths or processes
+until an SDK says what they need (without one they would be guesses).
+
+| Seam | Interface | Implementation | In a game | Note |
+| --- | --- | --- | --- | --- |
+| Window, input, gamepads | `Core/Window.h`, `Input::Process*` | `Platform/GLFW` | Yes | Complete |
+| Graphics, present | `Renderer/GraphicsDevice.h`, `VulkanPresentation` | `Platform/Vulkan` | Yes | No Vulkan header in `Strata/Renderer`; other APIs and shader targets are the Slang work |
+| OS services | `Core/Platform.h` | `Platform/Windows`, `Platform/Posix` | Partly | Many are desktop only: private directories, `ConnectStandardStreams`, `ShowErrorDialog`, `FindProgram`, `OpenWithDefaultApplication` |
+| File reads | `Core/FileReader.h` | `Platform/Windows`, `Platform/Posix` | Yes (asset packs) | Clean |
+| Script modules | `DynamicLibrary`, `CrashGuard`, `FileLock`, `Symbolizer` | `Platform/Windows`, `Platform/Posix` | Yes | The biggest gap: `ScriptModule` holds a `DynamicLibrary` and no static-link path exists; crash containment relies on SEH and signals |
+| Hot reload | `FileChangeNotifier`, `FileWatcher` | `Platform/Windows`, `Platform/Posix` | `ScriptEngine` holds one | Whether exported games need it is unchecked |
+| Processes | `Core/Process.h` | `Platform/Windows`, `Platform/Posix` | No game layer includes it | Tooling only, though it lives in Core |
+| Sockets | `Network/Socket.h` | `Platform/*/*Socket.cpp` | No (tooling) | |
+| Threads | `std::thread` (`JobSystem`, `BackgroundLogSink`, `FileWatcher`, `ScriptWatchdog`), `Platform::SetCurrentThreadName`/`Priority` | Standard library | Yes | Pinning would belong in `JobSystem` |
+| File paths | `std::filesystem` through `FileSystem` | Standard library | Yes | Data goes through `AssetPack`, saves through `IGameSaves`, the writable root through `Platform::GetUserDataDirectory` |
+| Process start | `Engine/EntryPoint.h`'s `main` | One file | Yes | |
+| Audio | `miniaudio.h` (only in `Audio/`) | miniaudio's backends | Yes | |
+| The OS list | `PlatformDetection.h`'s `#error`, `CMake/StrataLayers.cmake`'s filter (its `else` is Linux), `LibrariesTests.cpp`'s `IsLeftOutOfBuild`, Core's paths in `Layers.json` | | | Four places name the operating systems |
 
 ## Project settings
 

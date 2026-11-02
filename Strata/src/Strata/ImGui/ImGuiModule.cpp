@@ -31,6 +31,13 @@ namespace Strata
 			m_Graphics = nullptr;
 			return false;
 		}
+		// ImGui draws into the window's back buffer: a window the device cannot present into (a test's stand-in) has none.
+		if (!m_Graphics->GetDevice()->CanPresent())
+		{
+			ST_CORE_ERROR("The ImGui module needs a window the Graphics module presents into");
+			m_Graphics = nullptr;
+			return false;
+		}
 		// The layer stack owns it from here on; a layer that could not initialize stays there inert (its Begin and End do
 		// nothing) until the program, which cannot run, ends.
 		ImGuiLayer* layer = new ImGuiLayer(m_Specification.LayoutFile);

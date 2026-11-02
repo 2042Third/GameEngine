@@ -3,6 +3,7 @@
 #include "Architecture/LayeringAnalyzer.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Core/StringUtils.h"
 
 #include <spdlog/fmt/fmt.h>
 
@@ -12,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 using namespace Strata;
@@ -516,6 +518,155 @@ TEST_SUITE("Architecture.Layering")
 		{
 			CAPTURE(entry.File);
 			CHECK_FALSE(entry.File.starts_with("Strata/Asset/AssetManager"));
+		}
+	}
+
+	TEST_CASE("Headers with owners are reported outside them, in either include form and any case")
+	{
+		LayerTable table = MakeTwoLayerTable();
+		table.ExternalOwners.push_back({ { "GLFW/" }, { "base/glfw/**" } });
+		table.ExternalOwners.push_back({ { "fcntl.h" }, { "base/os/**", "top/os/**" } });
+		// An owned header in its owner's folder still meets the layer's own prefixes.
+		table.Layers[0].MayNotIncludeExternal = { "GLFW/glfw3native" };
+		const std::map<std::string, std::string> files = {
+			{ "base/glfw/w.cpp", "#include <GLFW/glfw3.h>\n#include <GLFW/glfw3native.h>\n" },
+			{ "base/glfw2/x.cpp", "#include <GLFW/glfw3.h>\n" },
+			{ "base/r.cpp", "#include \"GLFW/glfw3.h\"\n#include <GLFWx.h>\n#include <glm/glm.hpp>\n" },
+			{ "top/t.cpp", "#include <glfw/glfw3native.h>\n#include <FCNTL.H>\n" },
+			{ "top/os/f.cpp", "#include <fcntl.h>\n" }
+		};
+		const LayeringReport report = CheckLayering(table, files, {});
+		CHECK(report.Errors.empty());
+		REQUIRE(report.Violations.size() == 5);
+		CHECK(Describe(report.Violations[0]) == "base/glfw/w.cpp(2): includes GLFW/glfw3native.h, but layer Base may not include third-party headers GLFW/glfw3native*");
+		CHECK(report.Violations[0].Owners.empty());
+		CHECK(Describe(report.Violations[1]) == "base/glfw2/x.cpp(1): includes GLFW/glfw3.h, but only base/glfw/** may include GLFW/*");
+		CHECK(Describe(report.Violations[2]) == "base/r.cpp(1): includes GLFW/glfw3.h, but only base/glfw/** may include GLFW/*");
+		CHECK(Describe(report.Violations[3]) == "top/t.cpp(1): includes glfw/glfw3native.h, but only base/glfw/** may include GLFW/*");
+		CHECK(Describe(report.Violations[4]) == "top/t.cpp(2): includes FCNTL.H, but only base/os/** and top/os/** may include fcntl.h*");
+		CHECK(report.Violations[4].External);
+		// Every owned include is checked; <GLFWx.h> and glm merely start like a prefix or have no owner.
+		CHECK(report.CheckedIncludes == 7);
+
+		// An allowlist entry covers an owner's violation as any other.
+		const LayeringReport allowlisted = CheckLayering(table, files, { { "base/r.cpp", "GLFW/glfw3.h", "wave-x", "until the window moves", 1 } });
+		CHECK(allowlisted.Violations.size() == 4);
+		REQUIRE(allowlisted.Allowlisted.size() == 1);
+		CHECK(allowlisted.Allowlisted[0].File == "base/r.cpp");
+		CHECK(allowlisted.StaleEntries.empty());
+	}
+
+	TEST_CASE("External owners name each prefix once, with paths")
+	{
+		const nlohmann::json layers = { { { "Name", "Base" }, { "Paths", { "base/**" } } } };
+		LayerTable table;
+		std::vector<std::string> errors;
+		const nlohmann::json valid = { { "MaxAllowlistEntries", 0 }, { "Layers", layers }, { "ExternalOwners", {
+			{ { "Prefixes", { "GLFW/" } }, { "Paths", { "base/glfw/**" } }, { "Notes", "The window backend" } },
+			{ { "Prefixes", { "unistd.h", "sys/" } }, { "Paths", { "base/posix/**", "base/mac/**" } } } } } };
+		REQUIRE(ParseLayerTable(valid, table, errors));
+		REQUIRE(table.ExternalOwners.size() == 2);
+		CHECK(table.ExternalOwners[0].Prefixes == std::vector<std::string> { "GLFW/" });
+		CHECK(table.ExternalOwners[0].Paths == std::vector<std::string> { "base/glfw/**" });
+		CHECK(table.ExternalOwners[1].Prefixes == std::vector<std::string> { "unistd.h", "sys/" });
+		CHECK(table.ExternalOwners[1].Paths == std::vector<std::string> { "base/posix/**", "base/mac/**" });
+
+		// A table without owners has none.
+		const nlohmann::json none = { { "MaxAllowlistEntries", 0 }, { "Layers", layers } };
+		REQUIRE(ParseLayerTable(none, table, errors));
+		CHECK(table.ExternalOwners.empty());
+
+		const nlohmann::json withoutPaths = { { "MaxAllowlistEntries", 0 }, { "Layers", layers }, { "ExternalOwners", {
+			{ { "Prefixes", { "GLFW/" } } } } } };
+		errors.clear();
+		CHECK_FALSE(ParseLayerTable(withoutPaths, table, errors));
+		CHECK(JoinLines(errors).find("ExternalOwners entry 0 needs 'Prefixes' and 'Paths'") != std::string::npos);
+
+		const nlohmann::json twice = { { "MaxAllowlistEntries", 0 }, { "Layers", layers }, { "ExternalOwners", {
+			{ { "Prefixes", { "GLFW/" } }, { "Paths", { "a/**" } } },
+			{ { "Prefixes", { "glfw/" } }, { "Paths", { "b/**" } } } } } };
+		errors.clear();
+		CHECK_FALSE(ParseLayerTable(twice, table, errors));
+		CHECK(JoinLines(errors).find("ExternalOwners: the prefix 'glfw/' is listed twice") != std::string::npos);
+
+		const nlohmann::json nested = { { "MaxAllowlistEntries", 0 }, { "Layers", layers }, { "ExternalOwners", {
+			{ { "Prefixes", { "sys/types.h" } }, { "Paths", { "a/**" } } },
+			{ { "Prefixes", { "SYS/" } }, { "Paths", { "b/**" } } } } } };
+		errors.clear();
+		CHECK_FALSE(ParseLayerTable(nested, table, errors));
+		CHECK(JoinLines(errors).find("ExternalOwners: the prefix 'sys/types.h' starts with 'SYS/'") != std::string::npos);
+	}
+
+	TEST_CASE("0.7.0's GLFW include in the Vulkan device is reported")
+	{
+		const EngineSources sources = ReadEngineSources();
+		const std::string file = "Platform/Vulkan/VulkanGraphicsDevice.cpp";
+		REQUIRE(sources.Files.contains(file));
+
+		std::map<std::string, std::string> files = sources.Files;
+		std::string& contents = files[file];
+		if (!contents.empty() && contents.back() != '\n')
+			contents += '\n';
+		const uint32_t line = static_cast<uint32_t>(std::count(contents.begin(), contents.end(), '\n')) + 1;
+		contents += "#include <GLFW/glfw3.h>\n";
+
+		const LayeringReport report = CheckLayering(sources.Table, files, sources.Allowlist);
+		REQUIRE(report.Violations.size() == 1);
+		const Violation& violation = report.Violations.front();
+		CHECK(violation.File == file);
+		CHECK(violation.Line == line);
+		CHECK(Describe(violation) == fmt::format("Platform/Vulkan/VulkanGraphicsDevice.cpp({}): includes GLFW/glfw3.h, but only Platform/GLFW/** may include GLFW/*", line));
+	}
+
+	TEST_CASE("The window system, the graphics API and the OS stay in their platform folders")
+	{
+		const EngineSources sources = ReadEngineSources();
+		const auto findOwner = [&sources](const std::string& prefix) -> const ExternalOwner*
+		{
+			for (const ExternalOwner& owner : sources.Table.ExternalOwners)
+			{
+				if (std::find(owner.Prefixes.begin(), owner.Prefixes.end(), prefix) != owner.Prefixes.end())
+					return &owner;
+			}
+			return nullptr;
+		};
+		const std::vector<std::pair<std::string, std::string>> owned = {
+			{ "GLFW/", "Platform/GLFW/**" }, { "vulkan/", "Platform/Vulkan/**" }, { "nvrhi/vulkan", "Platform/Vulkan/**" },
+			{ "Windows.h", "Platform/Windows/**" }, { "unistd.h", "Platform/Posix/**" }, { "pthread.h", "Platform/Posix/**" }
+		};
+		for (const std::pair<std::string, std::string>& entry : owned)
+		{
+			CAPTURE(entry.first);
+			const ExternalOwner* owner = findOwner(entry.first);
+			REQUIRE(owner);
+			CHECK(owner->Paths == std::vector<std::string> { entry.second });
+		}
+
+		// Whatever the table says: GLFW only in its backend, Vulkan only in the device, and no allowlist line excuses either.
+		size_t glfwIncludes = 0;
+		for (const auto& [path, contents] : sources.Files)
+		{
+			for (const IncludeDirective& include : ParseIncludes(contents))
+			{
+				const std::string header = StringUtils::ToLower(include.Path);
+				CAPTURE(path);
+				CAPTURE(include.Path);
+				if (header.starts_with("glfw/"))
+				{
+					glfwIncludes++;
+					CHECK(path.starts_with("Platform/GLFW/"));
+				}
+				if (header.starts_with("vulkan/"))
+					CHECK(path.starts_with("Platform/Vulkan/"));
+			}
+		}
+		CHECK(glfwIncludes > 0);
+		for (const AllowlistEntry& entry : sources.Allowlist)
+		{
+			CAPTURE(entry.Header);
+			const std::string header = StringUtils::ToLower(entry.Header);
+			CHECK_FALSE(header.starts_with("glfw/"));
+			CHECK_FALSE(header.starts_with("vulkan/"));
 		}
 	}
 }
