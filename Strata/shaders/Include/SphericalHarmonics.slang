@@ -2,7 +2,7 @@
 #define STRATA_SPHERICAL_HARMONICS_SLANG
 
 // The real spherical harmonics of bands 0 to 2 of a unit direction, in the order reflection probes store their irradiance
-// coefficients in (IBL/ProbeIrradiance.comp writes them, Include/ReflectionProbes.glsl reads them).
+// coefficients in (IBL/ProbeIrradiance.comp writes them, Include/ReflectionProbes.slang reads them).
 void ProbeSHBasis(float3 n, out float basis[9])
 {
 	basis[0] = 0.282095;

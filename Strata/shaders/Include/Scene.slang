@@ -89,7 +89,7 @@ struct FrameConstants
 	// Temporal anti-aliasing's offset of the frame's samples in clip units (in Projection, ViewProjection and their inverses; 0
 	// without it): xy this frame's, zw the renderer's previous frame's
 	float4 JitterParams;
-	// Height fog (HeightFogComponent, Include/Fog.glsl; FogParams.x is 0 without one):
+	// Height fog (HeightFogComponent, Include/Fog.slang; FogParams.x is 0 without one):
 	float4 FogDensity; // x: density at the base height (per meter), y: height falloff, z: the camera's height above the base, w: start distance
 	float4 FogColor;   // rgb: the scattering's albedo, w: maximum opacity
 	// rgb: light the fog scatters besides the sun's (the procedural sky's horizon, the ambient color, or 1 when ColorFromSky
@@ -97,7 +97,7 @@ struct FrameConstants
 	// horizon does (toward the ray's azimuth)
 	float4 FogLight;
 	// x: 1 when the scene has fog, y: the asymmetry of its scattering of the directional light; z: aerial perspective's far
-	// distance in meters (0: none; Include/AerialPerspective.glsl), w: its distance scale (light-and-materials claims z and w)
+	// distance in meters (0: none; Include/AerialPerspective.slang), w: its distance scale (light-and-materials claims z and w)
 	float4 FogParams;
 	// The atmosphere's sun disk: xyz toward the sun, w its angular radius (0: none); rgb its illuminance at the ground (lux)
 	float4 SunDiskDirection;
@@ -282,7 +282,7 @@ struct LightData
 	float4 PositionRange;  // xyz: camera-relative world position, w: range
 	float4 Color;          // rgb: color * intensity, w: 1 / range^2
 	float4 DirectionType;  // xyz: direction the light travels, w: type (ST_LIGHT_*)
-	float4 SpotAngles;     // x: cos(inner cone), y: cos(outer cone), z: its shadow slot plus one (0: no shadow; Include/LocalShadows.glsl)
+	float4 SpotAngles;     // x: cos(inner cone), y: cos(outer cone), z: its shadow slot plus one (0: no shadow; Include/LocalShadows.slang)
 };
 
 StructuredBuffer<LightData> u_Lights : register(t2);
@@ -296,7 +296,7 @@ TextureCube<float4> u_PrefilteredMap : register(t4);
 Texture2D<float4> u_BRDFLut : register(t5);
 TextureCube<float4> u_EnvironmentMap : register(t6);
 SamplerState u_LinearClampSampler : register(s8);
-// The atmosphere's sky seen from the viewer, per lux of sun (SkyLightSource::Atmosphere; Include/Atmosphere.glsl maps it;
+// The atmosphere's sky seen from the viewer, per lux of sun (SkyLightSource::Atmosphere; Include/Atmosphere.slang maps it;
 // valid while the sky uses the atmosphere, black otherwise). Sampled with u_Samplers[0] (linear, repeating around).
 Texture2D<float4> u_SkyViewTable : register(t27);
 
@@ -326,7 +326,7 @@ Texture2D<float4> u_Textures[] : register(t0, space1);
 // The texture table (Strata/Renderer/TextureTable.h, GPUEntry): per texture index of material data, x its bindless slot
 // (bits 0-23), sampler index (bits 24-30) and ST_TEXTURE_SLOT_GRAYSCALE, y the float bits of the finest level of detail it
 // is sampled with (levels fading in; 0 otherwise). Textures keep their index while their levels stream. Fragment shaders
-// sample it through SampleMaterialTexture (Include/MaterialTextures.glsl).
+// sample it through SampleMaterialTexture (Include/MaterialTextures.slang).
 StructuredBuffer<uint2> u_TextureTable : register(t16);
 
 // The directional shadow cascades (RenderData::CascadeData), fitted on the GPU (Scene/CascadeFit.comp).

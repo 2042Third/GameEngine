@@ -30,7 +30,7 @@ TEST_SUITE("Editor.ProbeBake")
 	TEST_CASE("The six face views put together give every direction of the equirectangular capture its own view")
 	{
 		// Each face's texels hold the direction its camera sees through them (unprojected with the face's own matrices, as the
-		// renderer draws them); the assembled image's texels must then hold their own directions (Include/IBL.glsl's mapping).
+		// renderer draws them); the assembled image's texels must then hold their own directions (Include/IBL.slang's mapping).
 		const glm::vec3 position(3.0f, -2.0f, 7.0f);
 		std::array<std::vector<float>, 6> faces;
 		for (uint32_t face = 0; face < 6; face++)

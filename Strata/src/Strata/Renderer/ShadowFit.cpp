@@ -13,7 +13,7 @@ namespace Strata
 
 		constexpr double c_Sqrt2 = 1.4142135623730951;
 
-		// Include/OrderedFloat.glsl's DecodeOrderedFloat.
+		// Include/OrderedFloat.slang's DecodeOrderedFloat.
 		double DecodeOrderedFloat(uint32_t encoded)
 		{
 			const uint32_t bits = (encoded & 0x80000000u) != 0u ? (encoded & 0x7FFFFFFFu) : ~encoded;
@@ -48,7 +48,7 @@ namespace Strata
 
 		// The cascades' slices: the first `slicedCount` divide [firstNear, rangeFar], any further one reaches from there to the
 		// shadow distance. Each cascade blends into the next over the last CascadeBlend of its slice before its split (the first
-		// one's measured from the camera, at 0: Include/Shadows.glsl, CascadeBlendWeight), so the next slice starts at that band.
+		// one's measured from the camera, at 0: Include/Shadows.slang, CascadeBlendWeight), so the next slice starts at that band.
 		void LayOutSlices(const ShadowFitView& view, ShadowFitLayout& layout, float firstNear, float rangeFar, float distribution, uint32_t slicedCount)
 		{
 			const uint32_t count = std::min(view.CascadeCount, RenderData::c_MaxCascades);

@@ -25,7 +25,7 @@ struct Parameters
 groupshared float3 s_Sums[ST_GROUP_SIZE][9];
 groupshared float s_Weights[ST_GROUP_SIZE];
 
-// The direction through a texel's center of cube face `face` (+X, -X, +Y, -Y, +Z, -Z), unnormalized, as IBL.glsl lays faces out.
+// The direction through a texel's center of cube face `face` (+X, -X, +Y, -Y, +Z, -Z), unnormalized, as IBL.slang lays faces out.
 float3 FaceDirection(float2 st, uint face)
 {
 	switch (face)

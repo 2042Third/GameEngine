@@ -15,7 +15,7 @@ namespace Strata::Tests::TAA
 
 	constexpr uint32_t c_Size = 64;
 
-	constexpr glm::vec3 c_LuminanceWeights(0.2126f, 0.7152f, 0.0722f); // Include/Exposure.glsl
+	constexpr glm::vec3 c_LuminanceWeights(0.2126f, 0.7152f, 0.0722f); // Include/Exposure.slang
 
 	inline const char* PathName(GPUDrivenMode mode)
 	{

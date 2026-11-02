@@ -17,7 +17,7 @@ namespace Strata
 	class Scene;
 
 	// What lighting.bakeProbes renders a reflection probe's capture with (EditorLightingCommands.cpp): six square views from the
-	// probe's position, read back as HDR and put together into an equirectangular image (Include/IBL.glsl's mapping, which the
+	// probe's position, read back as HDR and put together into an equirectangular image (Include/IBL.slang's mapping, which the
 	// renderer's probes read), written as a Radiance .hdr file.
 	namespace ProbeBake
 	{

@@ -15,7 +15,7 @@ namespace Strata
 	class Material;
 	struct MaterialProperties;
 
-	// What a material is on the GPU, the same for every renderer and path: its MaterialData (Include/Scene.glsl) and the
+	// What a material is on the GPU, the same for every renderer and path: its MaterialData (Include/Scene.slang) and the
 	// flags culling and batching read.
 	namespace MaterialGPU
 	{

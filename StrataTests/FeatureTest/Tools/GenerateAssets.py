@@ -142,7 +142,7 @@ def make_probe_hdr():
     pixels = bytearray()
     for y in range(height):
         for x in range(width):
-            # Columns 8-23 face +X (Include/IBL.glsl: u = atan2(z, x) / 2 pi + 0.5); a window in the middle rows there.
+            # Columns 8-23 face +X (Include/IBL.slang: u = atan2(z, x) / 2 pi + 0.5); a window in the middle rows there.
             if y >= 12:
                 color = (0.05, 0.04, 0.03)  # The floor
             elif 13 <= x <= 18 and 4 <= y <= 8:

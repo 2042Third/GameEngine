@@ -11,7 +11,7 @@
 set -u
 
 # The entries the offline conversion refuses whatever compiled them, each with the first error line as its reason. Filled
-# from glslang's modules (the first run of this step): they read the bindless table (set 1, Texture2D u_Textures[]), a
+# from the first run of this step, on the modules of the compiler before Slang: they read the bindless table (set 1, Texture2D u_Textures[]), a
 # runtime array MoltenVK places in an argument buffer it configures from the pipeline layout at run time, which the
 # offline converter cannot know. Reason of each: "[mvk-error] SPIR-V to MSL conversion error: Runtime sized variables must
 # be in device storage argument buffers."

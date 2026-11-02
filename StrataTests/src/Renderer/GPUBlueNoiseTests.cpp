@@ -12,7 +12,7 @@
 using namespace Strata;
 using namespace Strata::Tests;
 
-// What the sun shadows' shaders read from the blue-noise tile (Include/BlueNoise.glsl's BlueNoise, through
+// What the sun shadows' shaders read from the blue-noise tile (Include/BlueNoise.slang's BlueNoise, through
 // Debug/BlueNoise.comp): the tile's byte k at the shifted pixel as (k + 0.5) / 256, so its values lie evenly in (0, 1).
 
 TEST_SUITE("GPU.Renderer.BlueNoise")

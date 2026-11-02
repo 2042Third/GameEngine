@@ -22,7 +22,7 @@ namespace Strata::LODSelection
 	// The level of detail drawn for a screen fraction (SceneRendererSpecification::LODThreshold): 0 at or above the
 	// threshold, else 1 plus the number of times the fraction can be doubled while staying below the threshold, at most
 	// lodCount - 1 (0 for a mesh without levels, or a fraction that is not positive). Only comparisons and exact doublings: the
-	// GPU's culling (Include/LODSelection.glsl) chooses the same level for the same fraction. Submeshes whose levels have no
+	// GPU's culling (Include/LODSelection.slang) chooses the same level for the same fraction. Submeshes whose levels have no
 	// errors (MeshUtils::HasLODErrors) choose this way.
 	uint32_t SelectLOD(float screenFraction, float lodThreshold, uint32_t lodCount);
 
@@ -37,7 +37,7 @@ namespace Strata::LODSelection
 	// The coarsest level whose projected error stays within the threshold: the last level, scanning down to 1, whose
 	// relative error (relativeErrors[level]; entry 0, full detail, is not read) times the screen fraction is at most
 	// errorThreshold, else 0. 0 for a fraction that is not positive or not finite. One multiplication and a comparison per
-	// level: the GPU's culling (Include/LODSelection.glsl) chooses the same level for the same fraction and errors.
+	// level: the GPU's culling (Include/LODSelection.slang) chooses the same level for the same fraction and errors.
 	uint32_t SelectLODByError(float screenFraction, std::span<const float> relativeErrors, float errorThreshold);
 
 	// The level a renderer draws of a submesh of a mesh with these bounds (Mesh::GetBounds): by its levels' errors where
@@ -48,7 +48,7 @@ namespace Strata::LODSelection
 	// level it shows, the level fading out, the fade's step and the frame and entity it was drawn for. When its level changes,
 	// both levels are drawn for RenderData::c_LODFadeFrames frames with complementary 4x4 ordered dither masks
 	// (GetLODFadeThreshold), the new level on step / c_LODFadeFrames of the pixels, the old one on the others, the same mask
-	// in the depth prepass and the forward pass so that the EQUAL depth test holds. Include/LODSelection.glsl repeats this
+	// in the depth prepass and the forward pass so that the EQUAL depth test holds. Include/LODSelection.slang repeats this
 	// bit for bit.
 	using RenderData::LODFadeState;
 

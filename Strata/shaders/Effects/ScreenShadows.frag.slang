@@ -3,7 +3,7 @@
 #include "Include/Shadows.slang"
 
 // The sun's screen-space shadow mask (SceneRenderer::RenderScreenShadows): every opaque pixel of the depth prepass gets the
-// cascades' filter (Include/Shadows.glsl) at the surface the forward pass shades there, from the prepass's depth and
+// cascades' filter (Include/Shadows.slang) at the surface the forward pass shades there, from the prepass's depth and
 // geometric normal, and the radius Effects/ScreenShadowsBlur.frag smooths it over: none where the filter left early (lit,
 // umbra) or the fixed tent alone filtered, 0.35 of the penumbra's half-width in pixels where the blue-noise-turned disk did,
 // enough to take its grain without widening the penumbra by more than about 6%, and a stretched texel's footprint where the

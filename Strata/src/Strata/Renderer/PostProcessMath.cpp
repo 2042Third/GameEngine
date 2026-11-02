@@ -97,7 +97,7 @@ namespace Strata::PostProcessMath
 		for (uint32_t channel = 0; channel < 3; channel++)
 		{
 			float v = std::clamp(encoded[channel] * levels, 0.0f, levels);
-			// Values within c_DitherEndSnap codes of black or white are black or white (Include/Dither.glsl).
+			// Values within c_DitherEndSnap codes of black or white are black or white (Include/Dither.slang).
 			constexpr float c_DitherEndSnap = 1.0f / 256.0f;
 			v = v < c_DitherEndSnap ? 0.0f : (v > levels - c_DitherEndSnap ? levels : v);
 			const float u0 = PixelRandom(pixel, 2 * channel);
@@ -273,7 +273,7 @@ namespace Strata::PostProcessMath
 		if (!(largest > 0.0f))
 			return glm::vec3(0.0f);
 		// Below middle gray the color scales as a whole (its largest channel on the curve), above it each channel takes the
-		// curve; GLSL's smoothstep between them over the largest channel's stops.
+		// curve; the shader's smoothstep between them over the largest channel's stops.
 		const glm::vec3 perChannel(EvaluateFilmicCurve(inset.r, curve), EvaluateFilmicCurve(inset.g, curve), EvaluateFilmicCurve(inset.b, curve));
 		const glm::vec3 whole = inset * (EvaluateFilmicCurve(largest, curve) / largest);
 		const float t = std::clamp((std::log2(largest / FilmicConstants::c_MiddleGray) - FilmicConstants::c_ChannelStart)

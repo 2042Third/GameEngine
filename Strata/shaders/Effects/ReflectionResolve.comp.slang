@@ -21,7 +21,7 @@ static const int c_Group = 8;
 static const int c_Tile = c_Group + 2;
 static const float c_DepthSharpness = 50.0; // exp(-50 x relative depth difference), as AODenoise.comp's
 static const float c_NormalPower = 8.0;
-static const float c_MinRoughness = 0.045;  // PBR.glsl's lower bound of the perceptual roughness
+static const float c_MinRoughness = 0.045;  // PBR.slang's lower bound of the perceptual roughness
 
 groupshared float4 s_Traced[c_Tile * c_Tile];
 groupshared float4 s_NormalAlpha[c_Tile * c_Tile]; // xyz: the view-space normal, w: alpha^2 (0 for the background)

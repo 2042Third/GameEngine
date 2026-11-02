@@ -2,7 +2,7 @@
 
 #include "Include/AtmospherePass.slang"
 
-// The atmosphere's transmittance table (Include/Atmosphere.glsl): from each height along each direction to the top of the
+// The atmosphere's transmittance table (Include/Atmosphere.slang): from each height along each direction to the top of the
 // atmosphere, ignoring the ground. Computed when the sky light's atmosphere settings change.
 
 [vk::image_format("rgba16f")] RWTexture2D<float4> o_Table : register(u0);

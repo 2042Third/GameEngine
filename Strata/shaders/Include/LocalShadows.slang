@@ -31,7 +31,7 @@ static const float2 c_LocalShadowPoissonDisk[16] = { float2(-0.94201624, -0.3990
 
 // Per-pixel rotation of the filter's taps (interleaved gradient noise) trades banding for fine noise. With temporal
 // anti-aliasing every frame turns it further (TemporalParams.z), so the history averages the noise away. (The sun's filter
-// uses a fixed blue-noise tile instead: Include/Shadows.glsl.)
+// uses a fixed blue-noise tile instead: Include/Shadows.slang.)
 float2x2 LocalShadowSampleRotation(float2 pixel)
 {
 	float angle = TWO_PI * frac(frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715)))) + u_Frame.TemporalParams.z);

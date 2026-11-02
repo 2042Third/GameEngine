@@ -38,7 +38,7 @@ void st_Main()
 #endif
 	if (u_Frame.FogParams.x > 0.0)
 	{
-		// The fog's rays start where the surfaces' do (Include/Fog.glsl): at the camera, or on its plane when orthographic.
+		// The fog's rays start where the surfaces' do (Include/Fog.slang): at the camera, or on its plane when orthographic.
 		float3 start = float3(0.0);
 		if (u_Frame.CameraForward.w > 0.5)
 		{

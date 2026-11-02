@@ -9,7 +9,7 @@
 #include <cstring>
 #include <vector>
 
-// Specular that holds at 4K (Include/PBR.glsl's WidenRoughness and GetHorizonFade, RendererQualitySettings::EnvironmentResolution):
+// Specular that holds at 4K (Include/PBR.slang's WidenRoughness and GetHorizonFade, RendererQualitySettings::EnvironmentResolution):
 // specular anti-aliasing calms a bumpy highlight and keeps its light, the prepass's surface target holds the roughness the
 // forward pass shades, reflections a normal map turns into the surface fade out, and the prefiltered sky's size follows the
 // quality.

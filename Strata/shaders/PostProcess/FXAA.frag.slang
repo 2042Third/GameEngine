@@ -14,7 +14,7 @@ SamplerState u_LinearClamp : register(s0);
 struct FXAAParameters
 {
 	float DitherLevels; // 2^bits - 1 of the target FXAA writes; 0: no dither
-	float FilmGrain;    // The grain's strength (Include/Grain.glsl), added after the anti-aliasing; 0 = off
+	float FilmGrain;    // The grain's strength (Include/Grain.slang), added after the anti-aliasing; 0 = off
 	uint GrainFrame;    // The frame's number: the grain changes every frame
 	float Padding0;
 };

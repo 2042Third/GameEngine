@@ -4,7 +4,7 @@
 #include "Include/Scene.slang"
 
 // Depth of field's passes (PostProcess/DepthOfField*.comp; SceneRendererPost.cpp, RenderDepthOfField): the frame constants at b0
-// (Include/Scene.glsl: the depth's view distance), the parameters below as push constants. SRV 0-3 alias Include/Scene.glsl's
+// (Include/Scene.slang: the depth's view distance), the parameters below as push constants. SRV 0-3 alias Include/Scene.slang's
 // declarations, which these shaders never use, as the motion blur's do; the composite's bilinear reads use its linear clamping
 // sampler (s8).
 

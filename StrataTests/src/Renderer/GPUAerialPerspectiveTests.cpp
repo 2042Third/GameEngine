@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-// Aerial perspective (SkyLightComponent::AerialPerspective, IBL/AtmosphereAerial.comp, Include/AerialPerspective.glsl): the air
+// Aerial perspective (SkyLightComponent::AerialPerspective, IBL/AtmosphereAerial.comp, Include/AerialPerspective.slang): the air
 // between the camera and a surface dims it by the atmosphere's transmittance and adds the light it scatters, as the sky does
 // over its whole depth. Measured through unlit quads (Renderer::ReadTexture reads no 3D texture): a white one's light minus a
 // black one's is the transmittance, the black one's the in-scattered light.

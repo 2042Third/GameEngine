@@ -5,7 +5,7 @@
 #include "Include/OrderedFloat.slang"
 
 // Clustered light assignment: one thread per cluster tests the bounding sphere of every visible light against the
-// cluster's view-space bounding box and lists the lights that reach it (see Include/Clusters.glsl for the layout), in
+// cluster's view-space bounding box and lists the lights that reach it (see Include/Clusters.slang for the layout), in
 // buffer order. When more reach a cluster than it holds, it keeps the most relevant ones (GetLightRelevance): the CPU path
 // sorts its light buffer by relevance, so its first lights are those; the GPU-driven path's buffer is in record order
 // (Scene/LightCompact.comp), so a full cluster finds the relevance its last kept light has by bisection and keeps those

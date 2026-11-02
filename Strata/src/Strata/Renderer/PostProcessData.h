@@ -14,7 +14,7 @@ namespace Strata
 	namespace RenderData
 	{
 
-		// PostProcess/Tonemap.frag's constant buffer (binding ST_CBV(0)), written once per frame. std140: it grows only by
+		// PostProcess/Tonemap.frag's constant buffer (binding b0), written once per frame. std140: it grows only by
 		// appending vec4-aligned blocks, whose offsets the static_asserts below check.
 		struct TonemapConstants
 		{
@@ -52,7 +52,7 @@ namespace Strata
 		// ChromaticAberration 1 shifts red and blue half a pixel at a 3840x2160 image's corners (a fixed share of the image at
 		// every resolution): k = ChromaticAberration * c_ChromaticAberrationScale.
 		constexpr float c_ChromaticAberrationScale = 0.5f / (0.5f * 3840.0f);
-		// The grain's strength in display codes' fraction at FilmGrain 1, in the mid-tones (Include/Grain.glsl).
+		// The grain's strength in display codes' fraction at FilmGrain 1, in the mid-tones (Include/Grain.slang).
 		constexpr float c_FilmGrainAmplitude = 0.04f;
 		// PostProcess/LensFlare.comp (push constants): the ghosts and the halo at a quarter of the resolution, and in alpha the
 		// share of the disk's surroundings that sees the sky (the starburst's, which the tone mapping draws).
@@ -124,7 +124,7 @@ namespace Strata
 			float Threshold;
 			float DepthThreshold;
 			float DitherLevels; // 2^bits - 1 of the target the blend writes; 0: no dither
-			float FilmGrain;    // The blend's grain (Include/Grain.glsl); 0 = off
+			float FilmGrain;    // The blend's grain (Include/Grain.slang); 0 = off
 			uint32_t GrainFrame;
 			float Padding0;
 			float Padding1;
@@ -141,13 +141,13 @@ namespace Strata
 		struct FXAAParameters
 		{
 			float DitherLevels; // 2^bits - 1 of the target FXAA writes; 0: no dither
-			float FilmGrain;    // The grain FXAA adds after its blend (Include/Grain.glsl); 0 = off
+			float FilmGrain;    // The grain FXAA adds after its blend (Include/Grain.slang); 0 = off
 			uint32_t GrainFrame;
 			float Padding0;
 		};
 		static_assert(sizeof(FXAAParameters) == 16);
 
-		// Include/Exposure.glsl: the exposure buffer's floats (the adapted log2 luminance, the multiplier of luminance the tone
+		// Include/Exposure.slang: the exposure buffer's floats (the adapted log2 luminance, the multiplier of luminance the tone
 		// mapping applies, the exposure key's stops) and the luminance histogram.
 		constexpr uint32_t c_ExposureLogLuminance = 0;
 		constexpr uint32_t c_ExposureMultiplier = 1;

@@ -6,7 +6,7 @@
 // GPU culling, one thread per render proxy: the view's frustum and screen-size tests, or with ST_CULL_SHADOW
 // (registered as Scene/CullShadow.comp) the shadow cascades' boxes and sub-texel test and the local shadow views' (point and
 // spot lights: range, frustum and sub-texel tests, a batch of views per pass), then per instance its material
-// (transparent ones are the CPU's), its level of detail (ChooseLOD, Include/LODSelection.glsl) and its bucket. The decisions are the
+// (transparent ones are the CPU's), its level of detail (ChooseLOD, Include/LODSelection.slang) and its bucket. The decisions are the
 // CPU path's (SceneRendererExtraction.cpp: CullView, FindShadowCasters, GatherDraws, GatherShadowDraws) on the same data.
 //
 // Mode 0 counts the instances of each (bucket, LOD record) and the frame's statistics; CullBuild.comp then places each

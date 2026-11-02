@@ -567,7 +567,7 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		};
 
 		const Steps blended = measure(DirectionalLightComponent().CascadeBlend);
-		// The filter has no per-pixel noise to hide a step in (Include/Shadows.glsl: the same tent at every pixel): inside a
+		// The filter has no per-pixel noise to hide a step in (Include/Shadows.slang: the same tent at every pixel): inside a
 		// cascade the edge moves by its texels' rounding alone, so a step of under a quarter of a pixel at the split shows no
 		// seam either, against the switch's several pixels.
 		CHECK(blended.AtSplit <= std::max(blended.InCascade, 0.25f));

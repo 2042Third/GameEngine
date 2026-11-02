@@ -11,7 +11,7 @@
 using namespace Strata;
 using namespace Strata::Tests;
 
-// The sun's shadow filter (Include/Shadows.glsl; Docs/DeveloperGuide.md, "Sun shadows"): penumbrae at the physical width,
+// The sun's shadow filter (Include/Shadows.slang; Docs/DeveloperGuide.md, "Sun shadows"): penumbrae at the physical width,
 // identical in every frame, thin casters kept, narrow edges smooth, the cascades' depth ranges conservative, contacts close.
 
 namespace

@@ -16,7 +16,7 @@
 // The settings (TemporalAntiAliasingSettings) choose further terms, each in a branch on a push constant. The history's alpha
 // holds the pixel's signed view distance (whatever the settings), which the next frame's resolve may compare with.
 
-// Slots above the scene set's (Include/Scene.glsl, whose frame constants and linear clamp sampler this pass binds too).
+// Slots above the scene set's (Include/Scene.slang, whose frame constants and linear clamp sampler this pass binds too).
 Texture2D<float4> u_Current : register(t22);
 Texture2D<float4> u_Depth : register(t23);
 Texture2D<float4> u_Velocity : register(t24);

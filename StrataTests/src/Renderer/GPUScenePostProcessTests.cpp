@@ -33,7 +33,7 @@ namespace
 		return image;
 	}
 
-	// The exposure buffer's floats (Include/Exposure.glsl): the adapted log2 luminance and the multiplier.
+	// The exposure buffer's floats (Include/Exposure.slang): the adapted log2 luminance and the multiplier.
 	glm::vec2 ReadExposure(GPUContext& gpu, SceneRenderer& renderer)
 	{
 		const std::vector<uint8_t> bytes = ReadBufferRange(gpu, renderer.GetExposureBuffer(), 0, 2 * sizeof(float));
@@ -43,7 +43,7 @@ namespace
 		return values;
 	}
 
-	// The exposure key's stops of the latest frame (Include/Exposure.glsl's third float).
+	// The exposure key's stops of the latest frame (Include/Exposure.slang's third float).
 	float ReadExposureKey(GPUContext& gpu, SceneRenderer& renderer)
 	{
 		const std::vector<uint8_t> bytes = ReadBufferRange(gpu, renderer.GetExposureBuffer(), RenderData::c_ExposureKeyStops * sizeof(float), sizeof(float));

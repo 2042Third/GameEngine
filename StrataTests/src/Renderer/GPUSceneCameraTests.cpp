@@ -526,7 +526,7 @@ TEST_SUITE("GPU.SceneRenderer.Camera")
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
-		// A histogram bin's center (Include/Exposure.glsl's HistogramBinToLog2): the metering returns bin centers, and half a
+		// A histogram bin's center (Include/Exposure.slang's HistogramBinToLog2): the metering returns bin centers, and half a
 		// bin (0.055 stops) times Filmic's slope would move the result by up to 2.7 codes.
 		constexpr uint32_t c_Bin = 120;
 		const float log2Luminance = RenderData::c_HistogramMinLog2

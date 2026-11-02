@@ -349,7 +349,7 @@ namespace Strata
 			nvrhi::BindingLayoutItem::Texture_SRV(6),
 			nvrhi::BindingLayoutItem::Texture_SRV(7),
 			nvrhi::BindingLayoutItem::Texture_SRV(8),            // The local shadows' atlas
-			nvrhi::BindingLayoutItem::Texture_SRV(9),            // The reflection probes' cube array (Include/ReflectionProbes.glsl)
+			nvrhi::BindingLayoutItem::Texture_SRV(9),            // The reflection probes' cube array (Include/ReflectionProbes.slang)
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(10),  // The reflection probes (RenderData::ReflectionProbeBuffer)
 			nvrhi::BindingLayoutItem::Texture_SRV(11),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12),
@@ -363,11 +363,11 @@ namespace Strata
 			// The motion history's instances and joint matrices (SceneRenderOptions::MotionVectors): the previous frame's.
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(20),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(21),
-			nvrhi::BindingLayoutItem::Texture_SRV(27),          // The atmosphere's sky-view table (Include/Atmosphere.glsl)
+			nvrhi::BindingLayoutItem::Texture_SRV(27),          // The atmosphere's sky-view table (Include/Atmosphere.slang)
 			nvrhi::BindingLayoutItem::Texture_SRV(28),          // The sun's screen-space shadow mask (Scene/Forward.frag)
-			nvrhi::BindingLayoutItem::Texture_SRV(29),          // Aerial perspective's volume (Include/AerialPerspective.glsl)
-			nvrhi::BindingLayoutItem::Texture_SRV(32),          // The sun shadow cascades' depth ranges (Include/Shadows.glsl)
-			nvrhi::BindingLayoutItem::Texture_SRV(33),          // The blue-noise tile (Include/Shadows.glsl)
+			nvrhi::BindingLayoutItem::Texture_SRV(29),          // Aerial perspective's volume (Include/AerialPerspective.slang)
+			nvrhi::BindingLayoutItem::Texture_SRV(32),          // The sun shadow cascades' depth ranges (Include/Shadows.slang)
+			nvrhi::BindingLayoutItem::Texture_SRV(33),          // The blue-noise tile (Include/Shadows.slang)
 			nvrhi::BindingLayoutItem::Sampler(0).setSize(RenderData::c_SamplerCount),
 			nvrhi::BindingLayoutItem::Sampler(8),
 			nvrhi::BindingLayoutItem::Sampler(9),
@@ -3001,7 +3001,7 @@ namespace Strata
 		m_Stats.ScreenSpaceReflections = m_ReflectionFrame;
 		m_Stats.ScreenSpaceReflectionsPending = m_ReflectionCopyFrame && !m_ReflectionFrame;
 
-		// Scene shaders work camera-relative (Include/Scene.glsl): the view's translation is left out of its matrices. The jitter
+		// Scene shaders work camera-relative (Include/Scene.slang): the view's translation is left out of its matrices. The jitter
 		// is only in the frame's copy of the projection: what the CPU culls, chooses levels of detail and fits the cascades with
 		// is the camera's own, and so are the motion vectors' matrices.
 		RenderData::FrameConstants frame = {};

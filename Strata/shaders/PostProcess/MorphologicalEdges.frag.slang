@@ -18,7 +18,7 @@ struct MorphologicalParameters
 	float Threshold;      // Luma difference (display-encoded) that makes an edge
 	float DepthThreshold; // Relative depth difference (beyond the neighbors' steps) that makes an edge
 	float DitherLevels;   // The blend pass's: 2^bits - 1 of the target it writes; 0: no dither
-	float FilmGrain;      // The blend's grain (Include/Grain.glsl), added after the blend; 0 = off
+	float FilmGrain;      // The blend's grain (Include/Grain.slang), added after the blend; 0 = off
 	uint GrainFrame;      // The frame's number: the grain changes every frame
 	float Padding0;
 	float Padding1;

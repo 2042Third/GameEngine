@@ -18,7 +18,7 @@ struct MorphologicalParameters
 	float Threshold;
 	float DepthThreshold;
 	float DitherLevels; // 2^bits - 1 of the target this pass writes; 0: no dither
-	float FilmGrain;      // The blend's grain (Include/Grain.glsl), added after the blend; 0 = off
+	float FilmGrain;      // The blend's grain (Include/Grain.slang), added after the blend; 0 = off
 	uint GrainFrame;      // The frame's number: the grain changes every frame
 	float Padding0;
 	float Padding1;

@@ -3,7 +3,7 @@
 #include "Include/ShadowView.slang"
 
 // The shadows debug view over the finished image (SceneRenderOptions::ShowShadowView): every receiver pixel colored by the
-// screen pixels one shadow texel of its cascade spans there (Include/ShadowView.glsl), from Colors[0] at one pixel per texel
+// screen pixels one shadow texel of its cascade spans there (Include/ShadowView.slang), from Colors[0] at one pixel per texel
 // or finer through Colors[1] at two to Colors[2] at four or coarser, linear in stops. Where a texel spans more than about 1.4
 // pixels a checker of the shadow map's texels shows them; the colors darken with the sun's shadow (0.4 + 0.6 times the
 // visibility of the frame's screen-space mask), so the view shows where the shadows fall on the texels; cascade edges are

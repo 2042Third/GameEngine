@@ -60,7 +60,7 @@ namespace
 		return texels;
 	}
 
-	// The sky-view table's texel looking along `direction` (Include/Atmosphere.glsl's mapping, nearest texel).
+	// The sky-view table's texel looking along `direction` (Include/Atmosphere.slang's mapping, nearest texel).
 	glm::vec3 SkyViewTexel(const std::vector<glm::vec4>& table, uint32_t width, uint32_t height, const glm::vec3& direction)
 	{
 		const float azimuth = std::atan2(direction.z, direction.x);

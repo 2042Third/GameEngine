@@ -9,7 +9,7 @@ namespace Strata
 
 	// The physical atmosphere of SkyLightSource::Atmosphere: Earth's, with its air and aerosols scaled by the sky light's
 	// settings. A planet whose ground is the world's y = 0 plane, lengths in kilometers, scattering and absorption
-	// coefficients per kilometer for the red, green and blue primaries. Include/Atmosphere.glsl mirrors these constants
+	// coefficients per kilometer for the red, green and blue primaries. Include/Atmosphere.slang mirrors these constants
 	// and the transmittance's quadrature and lookup-table mapping: the GPU fills its table with them, and the CPU evaluates
 	// the same quadrature in double (ComputeTransmittance) for the sun's light at the ground.
 	namespace Atmosphere
@@ -34,7 +34,7 @@ namespace Strata
 		// The transmittance's quadrature: midpoint steps from a point to the top of the atmosphere.
 		constexpr uint32_t c_TransmittanceSteps = 40;
 		// Lookup tables (RGBA16F): transmittance by height and direction, the light of all higher scattering orders by height
-		// and the sun's height, and the sky seen from the viewer by direction (Include/Atmosphere.glsl maps them).
+		// and the sun's height, and the sky seen from the viewer by direction (Include/Atmosphere.slang maps them).
 		constexpr uint32_t c_TransmittanceWidth = 256;
 		constexpr uint32_t c_TransmittanceHeight = 64;
 		constexpr uint32_t c_MultipleScatteringSize = 32;

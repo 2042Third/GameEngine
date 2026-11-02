@@ -10,7 +10,7 @@
 #include <vector>
 
 // The sun's screen-space shadow mask (Docs/DeveloperGuide.md, "Sun shadows"): after the depth prepass, a fullscreen pass
-// evaluates the cascades' filter (Include/Shadows.glsl) at every opaque pixel from the prepass's depth and geometric normal
+// evaluates the cascades' filter (Include/Shadows.slang) at every opaque pixel from the prepass's depth and geometric normal
 // (Effects/ScreenShadows.frag) into target A, with each pixel's blur radius, and an edge-aware separable blur runs A -> B
 // -> A (Effects/ScreenShadowsBlur.frag) where the disk filtered, taking its grain without crossing silhouettes. The forward
 // pass's opaque variants read A's red (SRV 28); transparent surfaces filter per pixel. With contact shadows

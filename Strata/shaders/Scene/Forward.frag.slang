@@ -122,7 +122,7 @@ float3 SampleSpecularLight(float3 relativePosition, float3 normal, float3 reflec
 }
 
 // The lit surface's color: the sun with its shadow, the punctual lights of the pixel's cluster (those with shadows through
-// their views, Include/LocalShadows.glsl), the reflection probes' and the sky's image-based light (or the constant ambient)
+// their views, Include/LocalShadows.slang), the reflection probes' and the sky's image-based light (or the constant ambient)
 // and the emission, under the clear coat where the material has one. `roughness` is the perceptual roughness widened by
 // specular anti-aliasing (main); `diffuseWeight` is the share of the diffuse light the surface scatters (1 - its transmission
 // in the glass variant; 1 elsewhere). The lighting debug views Indirect and AmbientOcclusion return only the indirect light and
@@ -217,12 +217,12 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 	if (lightingView == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION)
 		return float3(diffuseOcclusion);
 	// Multi-bounce (AOParams.y): occluded corners keep the light their walls, of the surface's diffuse albedo, reflect into
-	// them (Include/AmbientOcclusionFit.glsl). Diffuse light only; specular occlusion keeps the visibility.
+	// them (Include/AmbientOcclusionFit.slang). Diffuse light only; specular occlusion keeps the visibility.
 	float3 diffuseOcclusionColor = u_Frame.AOParams.y > 0.0 ? AOMultiBounce(diffuseOcclusion, surface.Albedo * (1.0 - surface.Metallic))
 		: float3(diffuseOcclusion);
 	float3 reflected = reflect(-surface.View, surface.Normal);
 	float3 surfaceGeometricNormal = normalize(v_Normal) * (st_FrontFacing ? 1.0 : -1.0);
-	// Reflection probes whose boxes hold the surface light it first (Include/ReflectionProbes.glsl); the sky, or the constant
+	// Reflection probes whose boxes hold the surface light it first (Include/ReflectionProbes.slang); the sky, or the constant
 	// ambient without an environment, fills in what they leave.
 	ProbeLight probes;
 	probes.Irradiance = float3(0.0);

@@ -77,7 +77,7 @@ namespace Strata::RenderData
 	};
 	static_assert(sizeof(LODFadeState) == 8);
 
-	// GPU culling (Scene/Cull.comp, CullShadow, CullBuild.comp; Include/Culling.glsl mirrors these layouts).
+	// GPU culling (Scene/Cull.comp, CullShadow, CullBuild.comp; Include/Culling.slang mirrors these layouts).
 	//
 	// The mesh table (RenderSceneGPU) holds per mesh slot the GeometryHandle of the loaded mesh (0: none), with this bit for
 	// meshes of the Skinned arena; the material flags per material slot these bits (0: not drawn).
@@ -150,7 +150,7 @@ namespace Strata::RenderData
 			+ (alphaMask ? c_CullShadowAlphaMask : 0u);
 	}
 
-	// A local shadow view as the GPU's culling tests it (u_LocalShadowViews, Include/Culling.glsl): the CPU's decisions for a
+	// A local shadow view as the GPU's culling tests it (u_LocalShadowViews, Include/Culling.slang): the CPU's decisions for a
 	// view (SceneRendererLocalShadows.cpp) on the same values.
 	struct CullLocalShadowView
 	{
@@ -247,11 +247,11 @@ namespace Strata::RenderData
 		uint32_t Reserved[5] = {};
 	};
 	static_assert(sizeof(CullCounters) == 128);
-	// Include/Lights.glsl's ST_COUNTER_VISIBLE_LIGHTS and ST_COUNTER_DRAWN_LIGHTS.
+	// Include/Lights.slang's ST_COUNTER_VISIBLE_LIGHTS and ST_COUNTER_DRAWN_LIGHTS.
 	static_assert(offsetof(CullCounters, VisibleLights) == 21 * sizeof(uint32_t) && offsetof(CullCounters, DrawnLights) == 22 * sizeof(uint32_t));
-	// Include/Culling.glsl's ST_COUNTER_OCCLUDED_CASTERS.
+	// Include/Culling.slang's ST_COUNTER_OCCLUDED_CASTERS.
 	static_assert(offsetof(CullCounters, OccludedCasters) == 23 * sizeof(uint32_t));
-	// Include/Culling.glsl's ST_COUNTER_SECOND_PHASE_SHADOW_DRAWS, ST_COUNTER_LOCAL_SHADOW_INSTANCES and ST_COUNTER_LOCAL_SHADOW_DRAWS.
+	// Include/Culling.slang's ST_COUNTER_SECOND_PHASE_SHADOW_DRAWS, ST_COUNTER_LOCAL_SHADOW_INSTANCES and ST_COUNTER_LOCAL_SHADOW_DRAWS.
 	static_assert(offsetof(CullCounters, SecondPhaseShadowDraws) == 24 * sizeof(uint32_t));
 	static_assert(offsetof(CullCounters, LocalShadowInstances) == 25 * sizeof(uint32_t) && offsetof(CullCounters, LocalShadowDraws) == 26 * sizeof(uint32_t));
 

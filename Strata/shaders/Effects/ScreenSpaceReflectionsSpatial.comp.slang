@@ -20,7 +20,7 @@
 // a camera cut, a reset) is not traced. Output: rgb the reflected luminance (pre-exposed) times the confidence, a the
 // confidence (as the Checkerboard trace's).
 
-// Slots of this pass's own layout (its frame constants and linear clamp sampler at Include/Scene.glsl's slots).
+// Slots of this pass's own layout (its frame constants and linear clamp sampler at Include/Scene.slang's slots).
 Texture2D<float4> u_Depth : register(t22);
 Texture2D<float4> u_Surface : register(t23); // xy: octahedral view-space normal (normal-mapped), z: roughness
 Texture2D<float4> u_Velocity : register(t24);

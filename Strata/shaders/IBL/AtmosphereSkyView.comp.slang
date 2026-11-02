@@ -2,7 +2,7 @@
 
 #include "Include/AtmospherePass.slang"
 
-// The sky seen from the viewer (Include/Atmosphere.glsl's sky-view table), per lux of sun of the sun's color: along each
+// The sky seen from the viewer (Include/Atmosphere.slang's sky-view table), per lux of sun of the sun's color: along each
 // direction, the sun's light scattered toward the viewer once (Rayleigh and Mie phase functions, the sun's transmittance
 // from the transmittance table, zero in the planet's shadow) and that of all higher orders (the multiple-scattering table),
 // dimmed by what lies between, and where the ray meets the ground the ground's diffuse reflection of the sun. Steps grow

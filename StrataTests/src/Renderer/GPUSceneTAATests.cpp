@@ -22,8 +22,8 @@ namespace
 
 	// The local lights' shadow filter turns its noise every frame with TAA, and the history smooths it: the converged penumbra's
 	// roughness stays below `bound` times one frame's under `preset`; `custom` (when set) is the look, under Custom. The penumbra is
-	// a shadowed spot light's (Include/LocalShadows.glsl turns its taps by TemporalParams.z): the sun's shadow has no noise left to
-	// turn (Include/Shadows.glsl, GPU.SceneRenderer.ShadowFilter and .ScreenShadows: the same in every frame, its disk's grain
+	// a shadowed spot light's (Include/LocalShadows.slang turns its taps by TemporalParams.z): the sun's shadow has no noise left to
+	// turn (Include/Shadows.slang, GPU.SceneRenderer.ShadowFilter and .ScreenShadows: the same in every frame, its disk's grain
 	// blurred in the frame), so it would measure nothing. The ambient occlusion never turns: it resolves its pattern within the
 	// frame, the same in every frame of a still view.
 	void CheckNoiseSmoothed(TemporalAntiAliasingPreset preset, const TemporalAntiAliasingSettings* custom, double bound)

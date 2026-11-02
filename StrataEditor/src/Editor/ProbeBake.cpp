@@ -91,7 +91,7 @@ namespace Strata::ProbeBake
 		const float size = static_cast<float>(c_FaceSize);
 		for (uint32_t y = 0; y < c_CaptureHeight; y++)
 		{
-			// Include/IBL.glsl's mapping: u = atan(z, x) / 2 pi + 0.5 around +Y from -X, v from +Y (row 0) down to -Y.
+			// Include/IBL.slang's mapping: u = atan(z, x) / 2 pi + 0.5 around +Y from -X, v from +Y (row 0) down to -Y.
 			const float theta = (static_cast<float>(y) + 0.5f) / static_cast<float>(c_CaptureHeight) * glm::pi<float>();
 			for (uint32_t x = 0; x < c_CaptureWidth; x++)
 			{

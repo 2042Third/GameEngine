@@ -293,7 +293,7 @@ module). See
 
 **Renderer** (`Renderer/`). `GraphicsDevice` is the device interface (NVRHI on Vulkan, implemented in
 `Platform/Vulkan/VulkanGraphicsDevice.cpp`; it owns the swapchain and frames in flight, 2 by default). `Renderer`
-holds the process-wide services: the device, `ShaderLibrary` (SPIR-V compiled from `Strata/shaders` by glslang at
+holds the process-wide services: the device, `ShaderLibrary` (SPIR-V compiled from the Slang sources in `Strata/shaders` by the pinned slangc at
 build time and embedded, `CMake/StrataShaders.cmake`), samplers, fallback textures, `BindlessTextureTable`,
 `StagingPool` (staging memory for texture and mesh uploads, reused), `DeferredReleaseQueue` (`ReleaseDeferred`:
 resources dropped while the GPU may still use them, held until an event query set at the release completes, never
@@ -2011,7 +2011,7 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
     looks back (before, they dropped after 120 frames, 2 s, with gigabytes of headroom). A texture nobody needs falls to its
     tail and is forgotten at twice that time. Raised levels fade in: the swap points the texture's table entry at the new
     texture with a minimum level of detail of the levels it gained (`TextureTable::SetFadeIn`), which falls linearly to 0
-    over `TextureTable::c_FadeInSeconds` (0.25 s); `SampleMaterialTexture` (`Include/MaterialTextures.glsl`, fragment
+    over `TextureTable::c_FadeInSeconds` (0.25 s); `SampleMaterialTexture` (`Include/MaterialTextures.slang`, fragment
     shaders) scales both sampling gradients until the anisotropic level of detail reaches it (`textureGrad`), so the new
     detail blends in from what the old texture showed, and filtering keeps its footprint's shape. Material data does not
     change, only the table entries of the fading textures, once per frame. Raises for a view that needs the texture whole
@@ -2301,7 +2301,7 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   it, and a frozen pose cannot hide it from the view that would pose it. Palettes are computed only when the pose's
   version, the skin binding (another mesh of the same skin, a reimport) or the transform from the animator to the proxy
   changed, in batches of 16 proxies on the job system (each writes its own range and bounds), and logged by version like
-  the instances (`GetPaletteChanges`), so renderers upload only changed joints into their joint buffer (`ST_SRV(15)`); a
+  the instances (`GetPaletteChanges`), so renderers upload only changed joints into their joint buffer (`t15`); a
   still frame skips the pass entirely (poses, transforms, hierarchy and layouts unchanged). Instances of posed proxies
   carry `c_InstanceSkinned` and the palette's first joint (`InstanceData::SkinPalette`, where the padding was: still 64
   bytes), and their draws a sort key bit of their own: they batch per mesh, submesh, level of detail and pipeline state
@@ -2416,14 +2416,14 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   3,000 streamed textures went from 1.01-1.06 ms to 0.61 ms, of 10,000 materials from 1.33 to 0.61 ms, and the editor's
   frames of 10,000 materials from 1.82 to 0.99 ms.
 - **The GPU-driven path** (`SceneRendererSpecification::GPUDriven`, Auto where the device has
-  `drawIndirectFirstInstance`; `SceneRendererGPUDriven.cpp`, `Scene/Cull.comp`, `CullBuild.comp`, `Include/Culling.glsl`).
+  `drawIndirectFirstInstance`; `SceneRendererGPUDriven.cpp`, `Scene/Cull.comp`, `CullBuild.comp`, `Include/Culling.slang`).
   The GPU culls the render scene's GPU copy and builds the opaque and shadow draws; the CPU path (Off) stays as the
   reference and the fallback. The CPU requests the frame's assets, places the cascades' squares and gathers transparent
   draws, sorted; the GPU culls with the mirror's mesh table and material flags (above: whatever is loaded, whether this
   frame requested it or not), and the CPU uploads the bucket table and the constants (`RenderData::CullConstants`). `Cull.comp` runs one thread per proxy, for the view and (variant `ST_CULL_SHADOW`) for
   the cascades: the decisions are the CPU path's on the same data (active and indexed, the frustum, the screen size of
   `MinProjectedPixels` for the view, the light-space box and the sub-texel rule for cascades, per instance the material
-  and the level of detail, `ChooseLOD` and `Include/LODSelection.glsl`: the pool's `GeometryLOD` records carry each
+  and the level of detail, `ChooseLOD` and `Include/LODSelection.slang`: the pool's `GeometryLOD` records carry each
   level's relative error and `GeometrySubmesh::Flags` whether the submesh chooses by them), and each instance counts on
   its (bucket, LOD record). Buckets are
   pipeline states and vertex arenas: mirrored, double-sided and geometry (Static arena, Skinned arena in its bind pose,
@@ -2439,7 +2439,7 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   several `NoCount` calls. MoltenVK has no `drawIndirectCount`: there the `NoCount` path runs. The counts (instances, draws, triangles, levels, shadow casters, visible and size-culled proxies) come back
   2-3 frames late through a readback (`BufferReadback`, `SceneRendererGPUStats`, `AddGPUCounts`). The opaque pixels do not
   depend on the order of a record's instances; shadows' receiver plane bias follows the receiver's normal, not
-  screen-space derivatives, which on some GPUs depend on how draws group pixels into quads (`Include/Shadows.glsl`), so
+  screen-space derivatives, which on some GPUs depend on how draws group pixels into quads (`Include/Shadows.slang`), so
   both paths agree to the pixel (`GPU.SceneRenderer.GPUDriven`, `IndirectFallback`). A render scene that never had a
   proxy records none of this (`SceneRendererStats::GPUCulled`): no culling pass, depth pyramid, second phase or feedback,
   only the clears of the counters (which the point and spot lights' culling still fills, and the readback still copies)
@@ -2453,7 +2453,7 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   are placed by their recorded bounds), the counting pass marks its mesh slot and its materials' slots (its instances',
   or its override material, which the proxy record carries above its flags, while its mesh's layout is unknown) with the
   use (view, high above `HighPriorityScreenFraction`, prefetch, shadow: the CPU's request marks) and the largest projected
-  size, and for textured materials the UV pixels texture streaming follows (`Include/TextureStreaming.glsl`, the port of
+  size, and for textured materials the UV pixels texture streaming follows (`Include/TextureStreaming.slang`, the port of
   `TextureStreamingPolicy::GetWorldPixels` and `GetUVPixels`). The first touch of a slot appends it to a list, so the
   pack pass and the CPU's read are proportional to the distinct assets in use, not to the proxies; slots are read
   before their atomics, so a million proxies of one mesh cost one atomic each slot. The records come back with the
@@ -2521,7 +2521,7 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   compute thread per cascade builds it (`Math::OrthographicReverseZ` times the light view) into `u_Cascades`, which the
   shadow pass and the receivers read, on both paths: the CPU path hands it the nearest casters it found
   (`GatherShadowDraws`), the GPU-driven path's shadow culling records them (`u_CasterDepths`, an atomic maximum of
-  order-preserving encoded floats, `Include/OrderedFloat.glsl`) before the fit runs. So no frame waits for the GPU and
+  order-preserving encoded floats, `Include/OrderedFloat.slang`) before the fit runs. So no frame waits for the GPU and
   both paths build the same matrices from the same inputs.
 - **Cascades kept from frame to frame** (`SceneRendererSpecification::CacheShadowCascades`, on by default; the GPU-driven
   path's `PrepareShadowCache`, `CommitShadowCache`). A cascade's layer of the shadow map is redrawn only when something

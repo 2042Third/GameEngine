@@ -13,7 +13,7 @@
 // become a directional light (lighting.extractSun) and leave the map (TextureImportSettings::RemoveSun). Pure functions
 // over the decoded floats, before the importer resizes or clamps them.
 //
-// The map's texel (x, y) of a width x height image looks along the direction Include/IBL.glsl's DirectionToEquirect maps
+// The map's texel (x, y) of a width x height image looks along the direction Include/IBL.slang's DirectionToEquirect maps
 // to it: columns go around +Y starting at -X (u = atan(z, x) / 2 pi + 0.5), rows from +Y (the top row) to -Y.
 namespace Strata::HDRSun
 {

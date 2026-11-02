@@ -1,10 +1,10 @@
-#ifndef ST_SCREEN_REFLECTIONS_GLSL
-#define ST_SCREEN_REFLECTIONS_GLSL
+#ifndef ST_SCREEN_REFLECTIONS_SLANG
+#define ST_SCREEN_REFLECTIONS_SLANG
 
 // What both screen-space reflection traces share (Effects/ScreenSpaceReflections.comp and ScreenSpaceReflectionsSpatial.comp):
 // a reflected ray as a straight line in screen space, the depth's view distance, how thick a surface is taken to be, and the
 // confidence of a hit. The includer declares u_Depth (the prepass's depth), u_Normals (its geometric view-space normals,
-// octahedral) and Include/Scene.glsl's frame constants first.
+// octahedral) and Include/Scene.slang's frame constants first.
 
 static const float c_FarDistance = 10000.0; // How far rays away from the camera reach before the screen's edges cut them
 // How far behind a surface a ray may be at the first point behind it and still hit it: what the ray's depth changed by

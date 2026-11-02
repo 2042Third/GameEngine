@@ -2,7 +2,7 @@
 
 #include "Include/Common.slang"
 
-// One level of the sun shadow cascades' depth ranges (u_ShadowRanges, Include/Shadows.glsl): each texel the nearest and
+// One level of the sun shadow cascades' depth ranges (u_ShadowRanges, Include/Shadows.slang): each texel the nearest and
 // farthest depth (reversed-Z: the nearest to the light is the largest) of 4x4 shadow map texels for level 0, or of the 2x2
 // texels of the level below (ST_SHADOW_RANGES_DOWNSAMPLE, registered as Scene/ShadowRangesDownsample.comp), packed as
 // (ceil(nearest * 65535) << 16) | floor(farthest * 65535): rounded outward, so a cell's range holds every depth in it. Texels
@@ -56,7 +56,7 @@ void st_Main()
 			farthestDepth = min(farthestDepth, depth);
 		}
 	}
-	// Rounded outward as UnpackShadowRange (Include/Shadows.glsl) reads them back: a product that rounded across a step is
+	// Rounded outward as UnpackShadowRange (Include/Shadows.slang) reads them back: a product that rounded across a step is
 	// moved one step further out.
 	nearestDepth = clamp(nearestDepth, 0.0, 1.0);
 	farthestDepth = clamp(farthestDepth, 0.0, 1.0);

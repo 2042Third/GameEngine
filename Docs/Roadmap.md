@@ -979,6 +979,27 @@ Open items and deferrals later waves own:
     `PerfGPU.Renderer.Render100kCubesShadowed4K` and `...High4K` with their GPU times.
   - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since wave
     4, but shows nothing).
+- Shaders in Slang (wave 8's lane Slang, S0.10; [Shaders](DeveloperGuide.md#shaders)):
+  - Slang's SPIR-V has not run on a Mac's GPU: CI converts every module to Metal with MoltenVK's converter and compiles
+    it, a lower bound of what MoltenVK does at run time. The 15 entries that read the bindless table are refused by the
+    offline conversion whatever compiled them (`c_KnownFailures` of `.github/scripts/convert_shaders_to_metal.sh`:
+    "Runtime sized variables must be in device storage argument buffers"); the first `ctest -L gpu` through MoltenVK is
+    the release's Mac gate.
+  - Only NVIDIA's driver has run Slang's modules; AMD's, Intel's and Mesa's have not (the lavapipe try of the lane is in
+    the release notes).
+  - The converted files keep GLSL's stage variables as `st_*` globals that each entry point fills (`Include/Common.slang`'s
+    last section): moving them into entry-point parameters, file by file, is later work (new shaders take parameters).
+  - What a D3D-style target would still need: `SV_VulkanInstanceID`/`SV_VulkanVertexID` replaced, registers for the push
+    constant blocks, set 1's register space, HLSL's constant buffer packing, the Forward variants' 3,600-byte
+    `ReflectionProbeBuffer` element within DXC's 2,048.
+  - A shader debug-information option (`-g`, for RenderDoc) would make shader outputs depend on the configuration.
+  - Three findings about Slang 2026.20, recorded, not reported (filing them is the owner's call): it has no way to say
+    `invariant` (the build patches the decoration); a `spirv_asm` `OpDecorate` is ignored without a word; `f32tof16`
+    lowers to 16-bit types on SPIR-V (`Float16`, `Int16`), so `Include/Common.slang` wraps `PackHalf2x16`.
+  - `IBL/BRDFLut.comp` writes its RG16F table with `shaderStorageImageExtendedFormats`, which device selection does not
+    require (older than Slang; every desktop GPU and MoltenVK have it).
+  - The main checkout's untracked `Strata/vendor/glslang` and `.git/modules/Strata/vendor/glslang` stay until 0.8.0
+    ships (`.worktrees/wave8-base` and commits before glslang's removal build with them), then go with that worktree.
 
 ## Waves
 

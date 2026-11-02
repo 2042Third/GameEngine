@@ -14,7 +14,7 @@ using namespace Strata;
 namespace
 {
 
-	// Include/OrderedFloat.glsl's EncodeOrderedFloat.
+	// Include/OrderedFloat.slang's EncodeOrderedFloat.
 	uint32_t EncodeOrdered(float value)
 	{
 		const uint32_t bits = std::bit_cast<uint32_t>(value);

@@ -3,7 +3,7 @@
 #include "Include/ShadowView.slang"
 
 // The shadows debug view's statistics (SceneRenderer::GetShadowViewStats): every pixel of the frame counted as sky, as a
-// surface no cascade covers, or in its cascade's bin of screen pixels per shadow texel (Include/ShadowView.glsl, the same
+// surface no cascade covers, or in its cascade's bin of screen pixels per shadow texel (Include/ShadowView.slang, the same
 // pixels Overlay/ShadowView.frag colors). Each group counts in shared memory and adds its non-zero counts to the buffer
 // (RenderData::ShadowViewCounts, cleared before the dispatch) with one atomic add each.
 

@@ -10,7 +10,7 @@
 
 // The shadows debug view (SceneRenderOptions::ShowShadowView): Debug/ShadowViewStats.comp counts the frame's pixels by cascade
 // and screen pixels per shadow texel into a buffer read back frames later (GetShadowViewStats), and Overlay/ShadowView.frag
-// colors them over the finished image, both from Include/ShadowView.glsl so they see the same pixels. Both run in the
+// colors them over the finished image, both from Include/ShadowView.slang so they see the same pixels. Both run in the
 // GPU.Overlays stage, with the overlays' frame constants (the camera's own matrices in TAA frames, over the jittered depth:
 // an error of under half a pixel in the reconstructed position, immaterial to a ratio binned in eighths of a stop). Nothing
 // exists until a frame shows the view.
@@ -26,7 +26,7 @@ namespace Strata
 			layout.visibility = nvrhi::ShaderType::Pixel;
 			layout.bindings = {
 				nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-				nvrhi::BindingLayoutItem::StructuredBuffer_SRV(17), // The cascades (Include/Scene.glsl)
+				nvrhi::BindingLayoutItem::StructuredBuffer_SRV(17), // The cascades (Include/Scene.slang)
 				nvrhi::BindingLayoutItem::Texture_SRV(22),          // The depth
 				nvrhi::BindingLayoutItem::Texture_SRV(23),          // The sun's shadow mask, or white
 				// Slot 1: register b0 belongs to the frame constants.

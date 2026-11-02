@@ -15,7 +15,7 @@
 // frame, have none: Forward.frag keeps the probes' and the sky's specular light there and mixes the reflection over it
 // elsewhere. The TAA averages the noise of the frames.
 
-// Slots above the scene set's (Include/Scene.glsl, whose frame constants and linear clamp sampler this pass binds too).
+// Slots above the scene set's (Include/Scene.slang, whose frame constants and linear clamp sampler this pass binds too).
 Texture2D<float4> u_Depth : register(t22);
 Texture2D<float4> u_Surface : register(t23); // xy: octahedral view-space normal (normal-mapped), z: roughness
 Texture2D<float4> u_Velocity : register(t24);

@@ -9,7 +9,7 @@
 // the camera up to each slice, per lux of sun of the sun's color, into slices 0 to 31, and the transmittance to it into slices
 // 32 to 63. Slice k ends at D ((k + 0.5) / 32)^2 meters (D: the volume's far distance), crowding near the camera where the
 // change is fastest; distances are multiplied by the distance scale before they enter the air, so small worlds can show the
-// haze of large ones. Include/AerialPerspective.glsl applies it.
+// haze of large ones. Include/AerialPerspective.slang applies it.
 
 [vk::image_format("rgba16f")] RWTexture3D<float4> o_Volume : register(u0);
 

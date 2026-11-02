@@ -80,7 +80,7 @@ namespace Strata
 	// over [N, F] (the receivers' range with margins, in quarter stops) and fits every cascade's square but the last one's to
 	// the receivers re-projected through the readback's camera into this frame's camera and light; the last cascade keeps its
 	// slice's sphere and reaches the shadow distance, so a receiver the readback did not see still has a cascade (shaders select
-	// cascades by containment: Include/Shadows.glsl, SelectShadowCascade). Bounds and sides grow at once and shrink only after
+	// cascades by containment: Include/Shadows.slang, SelectShadowCascade). Bounds and sides grow at once and shrink only after
 	// c_ShrinkReadbacks readbacks in a row asked for less. Until the first readback of an epoch (Reset: a camera cut, another
 	// scene, other cascades) and without receivers, the layout is Strata 0.6.0's. Pure C++: SceneRenderer feeds it.
 	class ShadowFitTracker
