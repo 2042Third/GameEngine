@@ -1,12 +1,15 @@
 # Checks the Slang pin's fetch, cache and host detection (CMake/StrataSlang.cmake) with a fake archive and file:// URLs,
 # never the real cache or the network. Run as a script: cmake -DWORK=<empty folder> -P SlangFetchTests.cmake
 
+# IN_LIST and the other policies of the repository's minimum: a script run by cmake -P starts with old policies.
+cmake_minimum_required(VERSION 3.25)
+
 include("${CMAKE_CURRENT_LIST_DIR}/../../CMake/StrataSlang.cmake")
 
 if(NOT WORK)
 	message(FATAL_ERROR "SlangFetchTests.cmake needs -DWORK=<folder>")
 endif()
-file(TO_CMAKE_PATH "${WORK}" WORK)
+string(REPLACE "\\" "/" WORK "${WORK}")
 file(REMOVE_RECURSE "${WORK}")
 file(MAKE_DIRECTORY "${WORK}/source/bin" "${WORK}/source/docs" "${WORK}/docs-only/docs" "${WORK}/empty")
 strata_slang_compiler_name(compiler)
