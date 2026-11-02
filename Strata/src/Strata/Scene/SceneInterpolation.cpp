@@ -75,6 +75,38 @@ namespace Strata
 			return Math::ComposeTransform(translation, rotation, scale);
 		}
 
+		// A root's world pose: UpdateWorldTransforms composes its world matrix from exactly these values.
+		InterpolationPose GetLocalPose(const TransformComponent& transform, bool& outExact)
+		{
+			InterpolationPose pose;
+			pose.Translation = transform.Translation;
+			pose.Rotation = transform.Rotation;
+			pose.Scale = transform.Scale;
+			outExact = !IsBlendablePose(pose);
+			return pose;
+		}
+
+		// Any world matrix's pose; exact (not blendable) when it is sheared or does not decompose.
+		InterpolationPose DecomposePose(const glm::mat4& world, bool& outExact)
+		{
+			InterpolationPose pose;
+			outExact = true;
+			const glm::vec3 columns[3] = { glm::vec3(world[0]), glm::vec3(world[1]), glm::vec3(world[2]) };
+			const float lengths[3] = { glm::length(columns[0]), glm::length(columns[1]), glm::length(columns[2]) };
+			for (int first = 0; first < 3; first++)
+			{
+				for (int second = first + 1; second < 3; second++)
+				{
+					if (std::abs(glm::dot(columns[first], columns[second])) > c_ShearTolerance * lengths[first] * lengths[second])
+						return pose;
+				}
+			}
+			if (!Math::DecomposeTransform(world, pose.Translation, pose.Rotation, pose.Scale))
+				return pose;
+			outExact = !IsBlendablePose(pose);
+			return pose;
+		}
+
 		void ForSlots(uint32_t count, const std::function<void(uint32_t begin, uint32_t end)>& function)
 		{
 			if (count > c_ParallelInterpolationWidth && JobSystem::IsInitialized())
@@ -115,34 +147,10 @@ namespace Strata
 	InterpolationPose Scene::GetWorldPose(entt::entity handle, const glm::mat4& world, bool& outExact) const
 	{
 		const entt::registry& registry = m_Registry;
-		InterpolationPose pose;
 		const HierarchyComponent* node = handle != entt::null ? registry.try_get<HierarchyComponent>(handle) : nullptr;
 		if (node && node->Parent == entt::null)
-		{
-			// UpdateWorldTransforms composes a root's world matrix from exactly these values.
-			const TransformComponent& transform = registry.get<TransformComponent>(handle);
-			pose.Translation = transform.Translation;
-			pose.Rotation = transform.Rotation;
-			pose.Scale = transform.Scale;
-			outExact = !IsBlendablePose(pose);
-			return pose;
-		}
-
-		outExact = true;
-		const glm::vec3 columns[3] = { glm::vec3(world[0]), glm::vec3(world[1]), glm::vec3(world[2]) };
-		const float lengths[3] = { glm::length(columns[0]), glm::length(columns[1]), glm::length(columns[2]) };
-		for (int first = 0; first < 3; first++)
-		{
-			for (int second = first + 1; second < 3; second++)
-			{
-				if (std::abs(glm::dot(columns[first], columns[second])) > c_ShearTolerance * lengths[first] * lengths[second])
-					return pose;
-			}
-		}
-		if (!Math::DecomposeTransform(world, pose.Translation, pose.Rotation, pose.Scale))
-			return pose;
-		outExact = !IsBlendablePose(pose);
-		return pose;
+			return GetLocalPose(registry.get<TransformComponent>(handle), outExact);
+		return DecomposePose(world, outExact);
 	}
 
 	void Scene::ApplyPerFrameRule(uint32_t slot, entt::entity handle, const glm::mat4& previous, bool ownChange, bool ancestorMoved)
@@ -197,6 +205,11 @@ namespace Strata
 		const entt::registry& registry = m_Registry;
 		const uint32_t count = static_cast<uint32_t>(m_Captures.size());
 		const uint32_t oldCount = static_cast<uint32_t>(m_InterpolatedEntities.size());
+		// Every captured entity has these (UpdateWorldTransforms computed it). Fetched once: a lookup through the registry costs
+		// more than the rest of an entry's work.
+		const auto& hierarchy = *registry.storage<HierarchyComponent>();
+		const auto& transforms = *registry.storage<TransformComponent>();
+		const auto& worlds = *registry.storage<WorldTransformComponent>();
 		m_NextEntities.resize(count);
 		m_NextEntries.resize(count);
 		m_KeptSlots.assign(oldCount, 0);
@@ -227,17 +240,18 @@ namespace Strata
 					entry.Role = InterpolationRole::Compose;
 					continue;
 				}
-				const glm::mat4& world = registry.get<WorldTransformComponent>(capture.Entity).Matrix;
+				const glm::mat4& world = worlds.get(capture.Entity).Matrix;
 				if (SameMatrix(world, capture.Previous))
 					continue;
 				bool exactTo = false;
-				entry.To = GetWorldPose(capture.Entity, world, exactTo);
+				entry.To = hierarchy.get(capture.Entity).Parent == entt::null ? GetLocalPose(transforms.get(capture.Entity), exactTo)
+					: DecomposePose(world, exactTo);
 				bool exactFrom = false;
 				// The per-frame rules keep a Blend entry's To equal to its world pose before the steps.
 				if (old != c_NoInterpolationSlot && m_InterpolatedEntries[old].Role == InterpolationRole::Blend)
 					entry.From = m_InterpolatedEntries[old].To;
 				else
-					entry.From = GetWorldPose(entt::null, capture.Previous, exactFrom);
+					entry.From = DecomposePose(capture.Previous, exactFrom);
 				if (!exactTo && !exactFrom && glm::length(entry.To.Translation - entry.From.Translation) <= maxDistance)
 					entry.Role = InterpolationRole::Blend;
 			}
@@ -275,7 +289,7 @@ namespace Strata
 			for (uint32_t slot = begin; slot < end; slot++)
 			{
 				InterpolatedEntry& entry = m_InterpolatedEntries[slot];
-				entry.ParentSlot = FindInterpolationSlot(registry.get<HierarchyComponent>(m_InterpolatedEntities[slot]).Parent);
+				entry.ParentSlot = FindInterpolationSlot(hierarchy.get(m_InterpolatedEntities[slot]).Parent);
 				if (m_SlotScratch[slot])
 					entry.Role = entry.ParentSlot != c_NoInterpolationSlot ? InterpolationRole::Compose : InterpolationRole::Exact;
 				else if (entry.Role == InterpolationRole::Compose && entry.ParentSlot == c_NoInterpolationSlot)

@@ -5,6 +5,7 @@
 #include "Perf/RendererPerfUtils.h"
 #include "Perf/SceneGenerators.h"
 #include "Renderer/TextureStreamingTestUtils.h"
+#include "Scene/InterpolationTestUtils.h"
 
 #include <Strata/Asset/RuntimeAssetManager.h>
 #include <Strata/Core/FileSystem.h>
@@ -24,6 +25,7 @@
 #include <chrono>
 #include <cmath>
 #include <optional>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -303,6 +305,53 @@ TEST_SUITE("PerfGPU.Renderer")
 			return Perf::MetricValues { { "PerfGPU.Renderer.Render10kMaterials", measurement.CPU.MedianMs },
 				{ "PerfGPU.Renderer.Render10kMaterials.OpaqueDrawCalls", static_cast<double>(GetDrawnCounts(renderer).Draws) } };
 		});
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("32,768 moving cubes cost a step frame's proxy work in every interpolated frame")
+	{
+		// The cube grid, each cube moved every fixed step (1/64 s) as physics writes its poses back, under the sun's shadows. A
+		// frame of the harness (the scene's update, the render scene's sync, the render) that runs a step without
+		// interpolation (0.7.0's busiest frame), against frames of 1/1024 s with it, whose median is a frame without a step
+		// (15 of 16): every such frame now places every moving proxy, as a step frame did.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		ScopedFixedMover moverScope;
+		constexpr size_t c_Count = 32'768;
+		Scene scene("Moving cubes");
+		scene.GetSettings().FixedTimestep = 1.0f / 64.0f;
+		Perf::AddCameraAndLight(scene);
+		std::mt19937 random(32);
+		std::uniform_real_distribution<float> unit(-1.0f, 1.0f);
+		for (const Entity cube : Perf::CreateCubeGrid(scene, c_Count))
+			AddFixedMover(scene, cube, glm::vec3(unit(random), 0.0f, unit(random)) * 0.5f, unit(random));
+		scene.OnRuntimeStart();
+		SceneRenderer renderer(Perf::MeasuredRendererSpecification());
+		renderer.SetViewportSize(c_Width, c_Height);
+		const SceneCamera camera = GridView(c_Count);
+		Perf::CheckBudgetsConfirmed({ "PerfGPU.Renderer.StepFrame32k", "PerfGPU.Renderer.InterpolatedFrame32k", "PerfGPU.Renderer.InterpolatedFrame32k.StepRatio" }, [&]
+		{
+			scene.SetInterpolation(false);
+			const Perf::FrameMeasurement stepping = Perf::MeasureFrames(gpu, c_WarmupFrames, c_MeasuredFrames, [&]
+			{
+				scene.OnUpdateRuntime(Timestep(1.0f / 64.0f));
+				REQUIRE(renderer.Render(scene, camera));
+			});
+			scene.SetInterpolation(true);
+			const Perf::FrameMeasurement interpolated = Perf::MeasureFrames(gpu, c_WarmupFrames, c_MeasuredFrames, [&]
+			{
+				scene.OnUpdateRuntime(Timestep(1.0f / 1024.0f));
+				REQUIRE(renderer.Render(scene, camera));
+			});
+			CHECK(scene.GetInterpolationStats().Blended == c_Count);
+			if (stepping.GPU && interpolated.GPU)
+				MESSAGE("GPU busy: ", stepping.GPU->MedianMs, " ms a step frame, ", interpolated.GPU->MedianMs, " ms an interpolated frame");
+			return Perf::MetricValues { { "PerfGPU.Renderer.StepFrame32k", stepping.CPU.MedianMs },
+				{ "PerfGPU.Renderer.InterpolatedFrame32k", interpolated.CPU.MedianMs },
+				{ "PerfGPU.Renderer.InterpolatedFrame32k.StepRatio", interpolated.CPU.MedianMs / stepping.CPU.MedianMs } };
+		});
+		scene.OnRuntimeStop();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

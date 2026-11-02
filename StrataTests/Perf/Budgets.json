@@ -250,5 +250,12 @@
 	"Perf.World.CellUnload.LibraryOnly": { "Unit": "ms", "Provisional": true },
 	"Perf.Physics.Sleeping70k.StepRatio": { "Unit": "ratio", "Provisional": true, "Target": 1.2 },
 	"Perf.Physics.BallPit2k.SettleCpuMs": { "Unit": "ms", "Provisional": true },
-	"Perf.Physics.Boxes10k.SettleCpuMs": { "Unit": "ms", "Provisional": true }
+	"Perf.Physics.Boxes10k.SettleCpuMs": { "Unit": "ms", "Provisional": true },
+	"Perf.Scene.StepFrame100k": { "Unit": "ms", "Provisional": true },
+	"Perf.Scene.InterpolatedStepFrame100k": { "Unit": "ms", "Provisional": true },
+	"Perf.Scene.InterpolatedStepFrame100k.Ratio": { "Unit": "ratio", "Provisional": true, "Target": 1.5 },
+	"Perf.Scene.InterpolatedFrame100k": { "Unit": "ms", "Provisional": true, "Target": 0.5 },
+	"PerfGPU.Renderer.StepFrame32k": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.Renderer.InterpolatedFrame32k": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.Renderer.InterpolatedFrame32k.StepRatio": { "Unit": "ratio", "Provisional": true, "Target": 1.15 }
 }
