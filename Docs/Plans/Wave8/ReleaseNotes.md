@@ -49,6 +49,18 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   eighth while the camera moves), and shrink only after half a second. Something that stays close still moves them once.
   `editor.perf` and `viewport.capture` report the fit's layout `changes` and whether a growth is `holding`.
 
+**physics-timing: smooth at any frame rate**
+
+- Games and the editor's Play and Simulate draw bodies, characters and what scripts move in fixed updates between their
+  last two physics steps, so motion is smooth at any frame rate: the Third-Person robot running across the view moved by
+  up to 29.4 px (peak to peak, on a 4K screen) at 700 fps; now by 0.25 px at 731 fps and at most 0.37 px at 30, 60, 120,
+  144, 240 and 400-730 frames per second and at 30, 60, 120 and 240 steps per second. The simulation is unchanged. What you see is a constant step behind the game's clock, about half a step (8 ms at 60 steps per second)
+  more on average than before and no more at worst; Project Settings > Physics > Timing > Interpolation turns it off.
+- New script API: `Time::GetStepAlpha`, `TransformComponent::GetDrawnPosition`, `GetDrawnRotation`, `ResetInterpolation`.
+- The Third-Person camera follows the robot as it is drawn and lets its arm out smoothly after something passed between
+  them.
+- `play.state` and `physics.stats` report interpolation.
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and
@@ -57,6 +69,7 @@ projects, the template and scenes or projects without the value get.
 | What | 0.7.0 | 0.8.0 | Where |
 | --- | --- | --- | --- |
 | Contact shadow steps of the Graphics Quality presets | Low 0, Medium 0, High 12, Ultra 16 | 0 in every preset | lane Render |
+| What games, Play and Simulate draw | each body's last fixed pose | between its last two fixed poses, a step behind the clock | physics-timing |
 
 ## Upgrading from 0.7.0
 
@@ -76,6 +89,10 @@ projects, the template and scenes or projects without the value get.
 | Contact shadows | drawn at High (12 steps) and Ultra (16) | off in every preset | Graphics Quality Custom, Contact Shadows 12 (or 16) |
 | A Custom quality saved before contact shadows existed (a development build of wave 7) | read High's 12 steps | reads 0 steps | Graphics Quality Custom, Contact Shadows 12 |
 | The cascades' near end | follows any near object above 1% of the view at once | waits 0.5 s (0.12 s moving) below 10% of the view; transparent surfaces and narrow views at once | nothing to keep: settled views are unchanged |
+| **physics-timing** | | | |
+| Scripts that place something from a moving body's position every frame (a follow camera, an effect) | the body's last fixed pose, which is what was drawn | the body is drawn up to a step behind its last fixed pose, so it seems to jitter against them | read `GetDrawnPosition()`/`GetDrawnRotation()` in `OnLateUpdate` instead of the world position |
+| Scripts that move an entity far by setting its transform in `OnFixedUpdate` | drawn there at the step | drawn sliding there over a step if within 400 m/s | call `GetTransform().ResetInterpolation()` after the move |
+| What games, Play and Simulate draw | each body's last fixed pose | between its last two fixed poses | Project Settings > Physics > Timing > Interpolation off |
 
 ## Known issues
 
@@ -86,3 +103,12 @@ projects, the template and scenes or projects without the value get.
 - With contact shadows off, a thin object's shadow near the camera (a 5 cm plate on the floor) stays solid at High, but
   its edge shows the shadow map's texel steps, as Medium's did in 0.7.0. Graphics Quality Custom with Contact Shadows 12
   smooths it again, at the cost of shimmer in motion.
+
+**physics-timing**
+
+- While a game runs on the clock, world-space game UI, editor gizmos, picking, reflection probes, fog and post-process
+  volumes, the sky and the sun, and attachments placed outside their animator's hierarchy use the simulated poses, up to
+  one step off what is drawn (exact while paused or stepped).
+- A character or body that rides something a script moves every frame in `OnUpdate` is drawn a step behind it (a
+  constant 5 cm at 3 m/s and 60 steps per second; it flickered between 0 and 5 cm before): move carriers in
+  `OnFixedUpdate` or as kinematic bodies.

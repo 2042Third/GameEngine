@@ -58,7 +58,11 @@ to find a page or a field), the selected page on the right:
   times the steps of 60. At 30 contacts are soft: stiffness can reach only 15 instead of 30, so stacks sag and settle more
   slowly. A higher rate halves the small step-to-step stutter a fast character shows on a high refresh rate display, but
   does not remove it. While a rate is set, the Inspector shows the scene's Fixed Timestep and Max Steps per Frame greyed
-  out, and "Fixed rate: the project's" with a link to this page.
+  out, and "Fixed rate: the project's" with a link to this page. **Interpolation** (on by default) draws moving bodies,
+  characters and what scripts move in fixed updates between their last two physics steps, so they move smoothly at any
+  frame rate. What you see is then always one step (about 17 ms at 60 steps per second) behind the game's clock instead
+  of between none and one step: about 8 ms more on average, no more at worst. Turn it off only for a game that wants each
+  physics step shown as it is.
 - **Input Actions** (under Input): the game's named controls, which scripts read by name and players can rebind. Actions
   sit in maps (a set the game turns on and off together, such as Gameplay or Vehicle): **Add Map** adds one, and the
   selected map's name, whether it works when the game starts, and the bin to remove it are below the list. **Add Action**

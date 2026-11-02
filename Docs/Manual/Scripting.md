@@ -154,6 +154,26 @@ during play). `Save` writes them to the engine's file beside the save files; the
 `<Game> --quality` overrides it for one run (an option's `Source` then says `CommandLine`). Options a later engine adds
 appear in `Options()` without new code: read and set them by name.
 
+## Following moving things
+
+Games, Play and Simulate draw what moves in fixed steps (bodies, characters, what your scripts move in `OnFixedUpdate`)
+between its last two physics steps, so it moves smoothly on any display (Project Settings > Physics > Timing >
+Interpolation). A camera or an effect that follows such a body reads where it is drawn, in `OnLateUpdate`:
+
+```cpp
+void OnLateUpdate(float deltaTime) override
+{
+	const glm::vec3 target = Target.GetTransform().GetDrawnPosition() + glm::vec3(0.0f, 1.5f, 0.0f);
+	// ... place the camera from target
+}
+```
+
+Following `GetWorldPosition()` instead makes the body judder against the camera at frame rates above the step rate.
+`Time::GetStepAlpha()` says how far between the two steps' poses the frame draws. Teleports (`GetRigidBody().Teleport`,
+a character controller's `Teleport`) are drawn where they land; after moving an entity far by setting its transform in
+`OnFixedUpdate`, call `GetTransform().ResetInterpolation()` so that it is not drawn sliding there. Move what others ride
+(a platform) in `OnFixedUpdate`, so that it and its riders are drawn together.
+
 ## Hot reload
 
 Build while the game plays and the new code takes over: every script instance is recreated with its fields kept, and

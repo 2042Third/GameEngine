@@ -1465,6 +1465,10 @@ upscaling, and nothing may need temporal accumulation to look right (TAA stays o
 - **`animation-authoring`:** previews and scrubbing of animators, clips and transitions in the Inspector and the Asset
   tab.
 - **Exported-game automation:** command scripts, simulated input and expectations in StrataRuntime.
+- **Interpolation, the rest (below `physics-timing`'s cut in wave 8):** world-space game UI and editor gizmos and picking
+  on drawn poses; reflection probes, fog and post-process volumes, the sky and the sun on drawn poses; attachments placed
+  outside their animator's hierarchy following its drawn pose; a cap on interpolated bodies and parallel proxy placement,
+  if a real scene's per-frame proxy work caps its frame rate.
 
 Further:
 - JobSystem v2 with work stealing and a frame task graph, once `Perf.Jobs` shows a need.
