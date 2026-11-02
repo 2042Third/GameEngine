@@ -4583,12 +4583,13 @@ lights, Post Process and the sky), and never a resolution below the output's.
   lobe then reflects everything) and less for colored metals, whose further bounces absorb `1 - F0` each. The factor
   (`SurfaceData::SpecularEnergy`, `ClearcoatData::SpecularEnergy` for the coat's lobe of F0 0.04) is computed once per pixel
   from the table fetch the surface setup of `ShadeLitSurface` makes, and multiplies direct light's specular term
-  (`EvaluateLightWeighted`, `EvaluateClearcoat`), image light's split sum (`specularColor`), the coat's reflectance, and what
-  glass reflects in `TransmitLight` (what passes through is what it does not reflect). Image light's diffuse keeps
-  `1 - specularColor` (diffuse gets what specular leaves); direct light's keeps `1 - F`, as the compensation adds under 0.5%
-  to a dielectric's reflection. A white metal in a white furnace reflects the whole sky at every roughness (0.31 of it at
-  roughness 1 before; `GPU.SceneRenderer.Lighting`'s furnace cases): check every shading change with them, and with the
-  look-dev furnace (`lookdev.furnace`, Tonemapper None, so the PNG's decoded values at the sphere centers are linear).
+  (`EvaluateLightWeighted`, `EvaluateClearcoat`), image light's split sum (`IndirectInputs::SpecularColor`), the coat's
+  reflectance, and what glass reflects in `TransmitLight` (what passes through is what it does not reflect). Image light's
+  diffuse keeps `1 - SpecularColor` (diffuse gets what specular leaves); direct light's keeps `1 - F`, as the compensation
+  adds under 0.5% to a dielectric's reflection. A white metal in a white furnace reflects the whole sky at every roughness
+  (0.31 of it at roughness 1 before; `GPU.SceneRenderer.Lighting`'s furnace cases): check every shading change with them,
+  and with the look-dev furnace (`lookdev.furnace`, Tonemapper None, so the PNG's decoded values at the sphere centers are
+  linear).
 - **Specular anti-aliasing** (`PBR.slang`'s `WidenRoughness`, `SceneRendererSpecification::SpecularAntiAliasing`, on by
   default, `MaterialParams.z`): a highlight narrower than a pixel lands on some pixels and misses their neighbors, so
   normal-mapped and curved surfaces sparkle at 4K and as they move. The shading normal's change across the pixel is a spread
@@ -4608,6 +4609,13 @@ lights, Post Process and the sky), and never a resolution below the output's.
   occlusion) is multiplied by `clamp(1 + R . Ng / 0.25, 0, 1)^2` with Ng the geometric normal (facing the viewer), reaching
   0 about 15 degrees below the surface; the coat takes its own. Direct light has its own `NoL`. Smooth surfaces without a
   normal map reflect above their surface and are unchanged.
+- **The indirect light's seam** (`Include/IndirectLight.slang`): the forward pass fills `IndirectInputs` once per pixel
+  (`GetIndirectInputs` in `Scene/Forward.frag.slang`: the split sum's reflectance, the reflected direction, the geometric
+  normal, the occlusions, the probes, the screen-space reflection, the sky's share and its two cube reads), and the base's
+  indirect light is `ComposeIndirect(GatherIndirectDiffuse, GatherIndirectSpecular)`, keeping 0.7.0's four forms
+  (`ST_INDIRECT_PROBES`, `SCREEN`, `SKY`, `AMBIENT`) bit for bit; the clear coat follows. Streams add fields at the end of
+  the struct and change their own gather (wave 8's plan: the specular gather is `reflections`', the diffuse gather
+  `radiance-cascades`').
 - **Lighting debug views** (`SceneRenderOptions::LightingView`, `SceneLightingView`; `R/SceneRendererLightingView.cpp`) show
   and measure the scene's light, so a lighting change is checked against numbers rather than by eye. The forward pass reads
   the view from `MaterialParams.y` (a uniform branch, nothing when 0): **Lighting** shades every lit surface with albedo 1 and

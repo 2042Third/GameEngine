@@ -12,6 +12,7 @@
 #include "Include/AmbientOcclusionFit.slang"
 #define ST_REFLECTION_PROBE_SAMPLING
 #include "Include/ReflectionProbes.slang"
+#include "Include/IndirectLight.slang"
 
 // Forward shading into the HDR target, compiled in these variants (see Strata/CMakeLists.txt):
 // - Scene/Forward.frag shades opaque and alpha-masked surfaces after the depth prepass with an EQUAL depth test. The
@@ -79,17 +80,6 @@ bool IsLightingValueView(uint view)
 	return view == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION || view == ST_LIGHTING_VIEW_ALBEDO;
 }
 
-// The share of its diffuse light a surface scatters: transmissive surfaces pass the rest through (the glass variant). The other
-// variants scatter all of it, with the arithmetic they had before transmission existed.
-float3 ScatterDiffuse(float3 diffuse, float diffuseWeight)
-{
-#ifdef ST_FORWARD_GLASS
-	return diffuse * diffuseWeight;
-#else
-	return diffuse;
-#endif
-}
-
 // The light a lit surface reflects from one light: the base's, under its clear coat when it has one (the coat reflects some of
 // the light before it reaches the base).
 float3 LightSurface(SurfaceData surface, ClearcoatData coat, float diffuseWeight, float3 lightDirection, float3 radiance)
@@ -119,6 +109,56 @@ float3 SampleSpecularLight(float3 relativePosition, float3 normal, float3 reflec
 		probes = EvaluateReflectionProbes(relativePosition, normal, reflected, roughness);
 	float3 sky = environment ? u_PrefilteredMap.SampleLevel(u_LinearClampSampler, RotateEnvironmentDirection(reflected), roughness * u_Frame.EnvironmentParams.z).rgb * u_Frame.EnvironmentParams.x : u_Frame.AmbientColor.rgb;
 	return probes.Radiance + sky * (1.0 - probes.Weight);
+}
+
+// The indirect light's inputs at the pixel (Include/IndirectLight.slang), filled once.
+IndirectInputs GetIndirectInputs(SurfaceData surface, float3 f0, float2 dfg, float NoV, float3 geometricNormal, float2 fragCoord,
+	float diffuseOcclusion, float3 diffuseOcclusionColor, float diffuseWeight)
+{
+	IndirectInputs inputs;
+	inputs.DiffuseOcclusion = diffuseOcclusion;
+	inputs.DiffuseOcclusionColor = diffuseOcclusionColor;
+	inputs.DiffuseWeight = diffuseWeight;
+	inputs.GeometricNormal = geometricNormal;
+	inputs.Reflected = reflect(-surface.View, surface.Normal);
+	// Image-based lighting: diffuse irradiance plus split-sum specular (prefiltered radiance x environment BRDF, compensated
+	// for multiple scattering); diffuse gets what specular leaves.
+	inputs.SpecularColor = (f0 * dfg.x + dfg.y) * surface.SpecularEnergy;
+	// Reflection probes whose boxes hold the surface light it first (Include/ReflectionProbes.slang); the sky, or the constant
+	// ambient without an environment, fills in what they leave.
+	inputs.Probes.Irradiance = float3(0.0);
+	inputs.Probes.Radiance = float3(0.0);
+	inputs.Probes.Weight = 0.0;
+	if (u_ProbeCounts.x > 0u)
+		inputs.Probes = EvaluateReflectionProbes(surface.Position, surface.Normal, inputs.Reflected, surface.Roughness);
+	inputs.Sky = 1.0 - inputs.Probes.Weight;
+	// Screen-space reflections replace the probes' and the sky's specular light by their confidence.
+	inputs.ScreenReflection = float4(0.0);
+#ifndef ST_FORWARD_TRANSPARENT
+	if (u_Frame.ReflectionParams.x > 0.0)
+	{
+		inputs.ScreenReflection = u_ScreenReflections.SampleLevel(u_LinearClampSampler, fragCoord * u_Frame.ViewportSize.zw, 0.0);
+		inputs.ScreenReflection.rgb /= u_Frame.TemporalParams.y;
+	}
+#endif
+	inputs.Environment = u_Frame.EnvironmentParams.w > 0.0;
+	inputs.SkyIrradiance = float3(0.0);
+	inputs.SkyRadiance = float3(0.0);
+	if (inputs.Environment)
+	{
+		inputs.SkyIrradiance = u_IrradianceMap.SampleLevel(u_LinearClampSampler, RotateEnvironmentDirection(surface.Normal), 0.0).rgb;
+		inputs.SkyRadiance = u_PrefilteredMap.SampleLevel(u_LinearClampSampler, RotateEnvironmentDirection(inputs.Reflected),
+			surface.Roughness * u_Frame.EnvironmentParams.z).rgb;
+	}
+	// Strata 0.7.0's branch order: probes first, then screen-space reflections, then the sky, else the constant ambient.
+	inputs.Form = inputs.Probes.Weight > 0.0 ? ST_INDIRECT_PROBES : inputs.ScreenReflection.a > 0.0 ? ST_INDIRECT_SCREEN
+		: inputs.Environment ? ST_INDIRECT_SKY : ST_INDIRECT_AMBIENT;
+	// Specular occlusion from ambient occlusion (Lagarde): tighter for smooth surfaces and grazing views; reflections a normal
+	// map turns into the surface fade out (GetHorizonFade).
+	inputs.SpecularOcclusion = inputs.Form == ST_INDIRECT_AMBIENT ? 1.0
+		: clamp(pow(NoV + diffuseOcclusion, exp2(-16.0 * surface.Roughness - 1.0)) - 1.0 + diffuseOcclusion, 0.0, 1.0)
+		* GetHorizonFade(inputs.Reflected, geometricNormal);
+	return inputs;
 }
 
 // The lit surface's color: the sun with its shadow, the punctual lights of the pixel's cluster (those with shadows through
@@ -220,79 +260,11 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 	// them (Include/AmbientOcclusionFit.slang). Diffuse light only; specular occlusion keeps the visibility.
 	float3 diffuseOcclusionColor = u_Frame.AOParams.y > 0.0 ? AOMultiBounce(diffuseOcclusion, surface.Albedo * (1.0 - surface.Metallic))
 		: float3(diffuseOcclusion);
-	float3 reflected = reflect(-surface.View, surface.Normal);
 	float3 surfaceGeometricNormal = normalize(v_Normal) * (st_FrontFacing ? 1.0 : -1.0);
-	// Reflection probes whose boxes hold the surface light it first (Include/ReflectionProbes.slang); the sky, or the constant
-	// ambient without an environment, fills in what they leave.
-	ProbeLight probes;
-	probes.Irradiance = float3(0.0);
-	probes.Radiance = float3(0.0);
-	probes.Weight = 0.0;
-	if (u_ProbeCounts.x > 0u)
-		probes = EvaluateReflectionProbes(surface.Position, surface.Normal, reflected, surface.Roughness);
-	// Screen-space reflections replace the probes' and the sky's specular light by their confidence (the scene's luminance as
-	// the previous frame showed it, which no intensity of the sky scales).
-	float4 screenReflection = float4(0.0);
-#ifndef ST_FORWARD_TRANSPARENT
-	if (u_Frame.ReflectionParams.x > 0.0)
-	{
-		screenReflection = u_ScreenReflections.SampleLevel(u_LinearClampSampler, st_FragCoord.xy * u_Frame.ViewportSize.zw, 0.0);
-		screenReflection.rgb /= u_Frame.TemporalParams.y;
-	}
-#endif
-	bool environment = u_Frame.EnvironmentParams.w > 0.0;
+	IndirectInputs indirectInputs = GetIndirectInputs(surface, f0, dfg, NoV, surfaceGeometricNormal, st_FragCoord.xy, diffuseOcclusion,
+		diffuseOcclusionColor, diffuseWeight);
 	// The base's image-based light (or constant ambient), which the clear coat covers below.
-	float3 indirect;
-	if (environment || probes.Weight > 0.0 || screenReflection.a > 0.0)
-	{
-		// Image-based lighting: diffuse irradiance plus split-sum specular (prefiltered radiance x environment BRDF, compensated
-		// for multiple scattering); diffuse gets what specular leaves.
-		float3 specularColor = (f0 * dfg.x + dfg.y) * surface.SpecularEnergy;
-		float3 irradiance = float3(0.0);
-		float3 radiance = float3(0.0);
-		if (environment)
-		{
-			irradiance = u_IrradianceMap.SampleLevel(u_LinearClampSampler, RotateEnvironmentDirection(surface.Normal), 0.0).rgb;
-			radiance = u_PrefilteredMap.SampleLevel(u_LinearClampSampler, RotateEnvironmentDirection(reflected), surface.Roughness * u_Frame.EnvironmentParams.z).rgb;
-		}
-		// Specular occlusion from ambient occlusion (Lagarde): tighter for smooth surfaces and grazing views; reflections a normal
-		// map turns into the surface fade out (GetHorizonFade).
-		float specularOcclusion = clamp(pow(NoV + diffuseOcclusion, exp2(-16.0 * surface.Roughness - 1.0)) - 1.0 + diffuseOcclusion, 0.0, 1.0)
-			* GetHorizonFade(reflected, surfaceGeometricNormal);
-		if (probes.Weight > 0.0)
-		{
-			// The probes' captures hold the scene's luminance (their intensities applied); the sky's share is scaled here.
-			float sky = 1.0 - probes.Weight;
-			irradiance = probes.Irradiance + (environment ? irradiance * u_Frame.EnvironmentParams.x * sky : float3(0.0));
-			radiance = probes.Radiance + radiance * (environment ? u_Frame.EnvironmentParams.x * sky : 0.0);
-			if (screenReflection.a > 0.0)
-				radiance = radiance * (1.0 - screenReflection.a) + screenReflection.rgb;
-			float3 diffuse = irradiance * surface.Albedo * (1.0 - surface.Metallic) * (1.0 - specularColor);
-			// The constant ambient's share as the constant ambient lights alone (below: diffuse only, no specular share), so
-			// that a probe fading out meets it without a step at its box's faces.
-			if (!environment)
-				diffuse += u_Frame.AmbientColor.rgb * sky * surface.Albedo * (1.0 - surface.Metallic);
-			indirect = ScatterDiffuse(diffuse, diffuseWeight) * diffuseOcclusionColor + radiance * specularColor * specularOcclusion;
-		}
-		else if (screenReflection.a > 0.0)
-		{
-			// Without the sky the constant ambient lights the diffuse part, as it does without reflections (below).
-			float3 diffuse = environment ? irradiance * surface.Albedo * (1.0 - surface.Metallic) * (1.0 - specularColor) * u_Frame.EnvironmentParams.x
-				: u_Frame.AmbientColor.rgb * surface.Albedo * (1.0 - surface.Metallic);
-			float3 specular = radiance * (environment ? u_Frame.EnvironmentParams.x : 0.0) * (1.0 - screenReflection.a) + screenReflection.rgb;
-			indirect = ScatterDiffuse(diffuse, diffuseWeight) * diffuseOcclusionColor + specular * specularColor * specularOcclusion;
-		}
-		else
-		{
-			float3 diffuse = irradiance * surface.Albedo * (1.0 - surface.Metallic) * (1.0 - specularColor);
-			indirect = (ScatterDiffuse(diffuse, diffuseWeight) * diffuseOcclusionColor + radiance * specularColor * specularOcclusion) * u_Frame.EnvironmentParams.x;
-		}
-	}
-	else
-	{
-		// Constant ambient without an environment map: diffuse only, modulated by material occlusion.
-		indirect = ScatterDiffuse(u_Frame.AmbientColor.rgb * surface.Albedo * (1.0 - surface.Metallic), diffuseWeight) * diffuseOcclusionColor;
-	}
+	float3 indirect = ComposeIndirect(indirectInputs, GatherIndirectDiffuse(indirectInputs, surface), GatherIndirectSpecular(indirectInputs));
 
 	float3 emitted = lightingView == ST_LIGHTING_VIEW_INDIRECT ? float3(0.0) : surface.Emissive;
 	if (coat.Strength > 0.0)
@@ -301,9 +273,9 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 		// the light under it, the base's and the emission, loses what it reflects.
 		float coatReflectance = coat.Strength * (c_ClearcoatF0 * coatDFG.x + coatDFG.y) * coat.SpecularEnergy;
 		float3 coatReflected = reflect(-surface.View, coat.Normal);
-		float3 coatRadiance = SampleSpecularLight(surface.Position, coat.Normal, coatReflected, coat.Roughness, environment);
+		float3 coatRadiance = SampleSpecularLight(surface.Position, coat.Normal, coatReflected, coat.Roughness, indirectInputs.Environment);
 		float coatOcclusion = clamp(pow(coatNoV + diffuseOcclusion, exp2(-16.0 * coat.Roughness - 1.0)) - 1.0 + diffuseOcclusion, 0.0, 1.0)
-			* GetHorizonFade(coatReflected, surfaceGeometricNormal);
+			* GetHorizonFade(coatReflected, indirectInputs.GeometricNormal);
 		indirect = indirect * (1.0 - coatReflectance) + coatRadiance * coatReflectance * coatOcclusion;
 		emitted *= 1.0 - ClearcoatFresnel(coat, coatNoV);
 	}
