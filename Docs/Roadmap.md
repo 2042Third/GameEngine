@@ -1538,9 +1538,10 @@ integration starts without it.
   converts it to Metal, and Mesa's lavapipe passes 529 of 553 GPU cases with the new modules as with the old. Its
   GPU-time gate got no reading within its noise rule (open items).
 - Last: the forward shader's indirect light split into a diffuse and a specular gather over shared inputs
-  (`Include/IndirectLight.slang`), so that `reflections` and `radiance-cascades` each change their own: the 4K look-dev
-  84-set is identical but for the two Open World TAA shots whose pictures differ between runs of one build; wave 8's
-  scene slots, GPU stages and debug views assigned; this entry.
+  (`Include/IndirectLight.slang`), so that `reflections` and `radiance-cascades` each change their own: every picture of
+  the 4K look-dev 84-set is identical to its base's (the two Open World TAA shots that differed between the first base
+  and tip captures are identical in interleaved base, tip, base, tip captures); wave 8's scene slots, GPU stages and
+  debug views assigned; this entry.
 
 What every rendering stream keeps from wave 7: native resolution only, nothing that needs TAA to look right (Medium's
 Checkerboard reflections are the named exception), nothing that costs anything when off, the two draw paths and the
