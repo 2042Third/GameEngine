@@ -671,7 +671,7 @@ namespace Strata
 			m_ProjectFileWriter.reset();
 			m_Project.reset();
 			m_ProjectGeneration++;
-			// The scene that stays takes the layers of no project.
+			// The scene that stays takes the layers and fixed rate of no project.
 			ApplyProjectLayers();
 		}
 		if (activateBuiltinAssets)
