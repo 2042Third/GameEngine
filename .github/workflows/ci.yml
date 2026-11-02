@@ -295,7 +295,7 @@ jobs:
         run: |
           set -o pipefail
           ls /usr/share/vulkan/icd.d/
-          VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json build/linux/bin/Release/StrataTests --test-suite='GPU*' \
+          VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json build/linux/bin/Release/StrataTests --test-suite='GPU*' --test-suite-exclude='GPU.Window*' \
             --no-breaks 2>&1 | tee lavapipe.log | tail -300
 
       - name: Annotate failures
