@@ -5,6 +5,7 @@
 #include "Strata/Events/KeyEvent.h"
 #include "Strata/Events/MouseEvent.h"
 #include "Strata/ImGui/ImGuiPlatform.h"
+#include "StubWindow.h"
 
 #include <imgui.h>
 
@@ -19,64 +20,17 @@ using namespace Strata;
 namespace
 {
 
-	// A window that records what the platform layer asks of it.
-	class TestWindow final : public Window
-	{
-	public:
-		void ProcessEvents() override {}
-		uint32_t GetWidth() const override { return Width; }
-		uint32_t GetHeight() const override { return Height; }
-		void SetCursorMode(CursorMode mode) override { Mode = mode; }
-		glm::uvec2 GetFramebufferSize() const override { return Framebuffer; }
-		float GetContentScale() const override { return 1.0f; }
-		void SetEventCallback(const EventCallbackFn&) override {}
-		void SetVSync(bool) override {}
-		bool IsVSync() const override { return true; }
-		void SetTitle(const std::string&) override {}
-		void SetMode(WindowMode) override {}
-		WindowMode GetMode() const override { return WindowMode::Windowed; }
-		void SetResolution(uint32_t, uint32_t) override {}
-		bool IsMinimized() const override { return false; }
-		bool IsFocused() const override { return true; }
-		void Maximize() override {}
-		CursorMode GetCursorMode() const override { return Mode; }
-		void SetCursorShape(CursorShape shape) override
-		{
-			Shape = shape;
-			ShapeChanges++;
-		}
-		std::string GetClipboardText() const override { return Clipboard; }
-		void SetClipboardText(const std::string& text) override { Clipboard = text; }
-		KeyCode GetLayoutKey(KeyCode key) const override
-		{
-			const auto it = Layout.find(key);
-			return it != Layout.end() ? it->second : key;
-		}
-		void* GetPlatformHandle() const override { return Handle; }
-		void SetIcon(std::span<const WindowIconImage>) override {}
-
-		uint32_t Width = 1280;
-		uint32_t Height = 720;
-		glm::uvec2 Framebuffer = glm::uvec2(1280, 720);
-		CursorMode Mode = CursorMode::Normal;
-		CursorShape Shape = CursorShape::Arrow;
-		int ShapeChanges = 0;
-		std::string Clipboard;
-		// Keys the layout names otherwise (KeyCode by position -> KeyCode by what it types).
-		std::map<KeyCode, KeyCode> Layout;
-		int HandleTarget = 0;
-		void* Handle = &HandleTarget;
-	};
-
 	// An ImGui context with the platform layer as its backend, and no renderer (fonts are requested, never drawn).
 	struct PlatformContext
 	{
-		TestWindow Window;
+		Tests::StubWindow Window;
 		ImGuiPlatform Platform;
 		ImGuiContext* Context = nullptr;
+		int HandleTarget = 0; // What the window's handle points at: any address the platform layer must pass on
 
 		PlatformContext()
 		{
+			Window.Handle = &HandleTarget;
 			Context = ImGui::CreateContext();
 			ImGuiIO& io = ImGui::GetIO();
 			io.IniFilename = nullptr;
@@ -324,12 +278,12 @@ TEST_SUITE("ImGui.Platform")
 		CHECK(imgui.Window.Shape == CursorShape::Hand);
 
 		// A game that locked the cursor keeps it; ImGui's shape returns with the cursor.
-		imgui.Window.Mode = CursorMode::Locked;
+		imgui.Window.Cursor = CursorMode::Locked;
 		const int beforeLock = imgui.Window.ShapeChanges;
 		imgui.Frame(ask(ImGuiMouseCursor_ResizeNS));
 		imgui.Frame(ask(ImGuiMouseCursor_ResizeNS));
 		CHECK(imgui.Window.ShapeChanges == beforeLock);
-		imgui.Window.Mode = CursorMode::Normal;
+		imgui.Window.Cursor = CursorMode::Normal;
 		imgui.Frame(ask(ImGuiMouseCursor_ResizeNS));
 		CHECK(imgui.Window.Shape == CursorShape::ResizeNS);
 		CHECK(imgui.Window.ShapeChanges == beforeLock + 1);
