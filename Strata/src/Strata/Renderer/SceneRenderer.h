@@ -680,10 +680,12 @@ namespace Strata
 		// from a readback of the receivers (else Strata 0.6.0's layout), and some cascade's square was fitted to them; whether
 		// the layout settled (no readback is due that may change it: true without a fit); the range [ShadowFitNear,
 		// ShadowFitFar] the slices divide (the last cascade always reaches the shadow distance); layout changes since the
-		// renderer was made. Cascades[c].Fitted says which squares were fitted.
+		// renderer was made. Cascades[c].Fitted says which squares were fitted. ShadowFitHolding: a growth of the near bound or
+		// of a square waits (ShadowFitTracker::IsHolding), and the layout is not settled meanwhile.
 		bool ShadowFit = false;
 		bool ShadowFitSquares = false;
 		bool ShadowFitSettled = true;
+		bool ShadowFitHolding = false;
 		float ShadowFitNear = 0.0f;
 		float ShadowFitFar = 0.0f;
 		uint64_t ShadowFitChanges = 0;

@@ -1946,6 +1946,8 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(first["waitedFrames"].get<int>() >= 1); // The first frame cannot know the receivers yet
 		CHECK(first["renderStats"]["shadowFit"]["fitted"] == true);
 		CHECK(first["renderStats"]["shadowFit"]["settled"] == true);
+		CHECK(first["renderStats"]["shadowFit"]["holding"] == false);
+		CHECK(first["renderStats"]["shadowFit"]["changes"].is_number_unsigned());
 		CHECK(first["renderStats"]["cascades"].size() == harness.Context.GetViewport().GetCaptureRenderer()->GetStats().CascadeCount);
 		CHECK(harness.Context.GetViewport().GetCaptureRenderer()->GetStats().ShadowFit);
 		// Single pictures keep Strata 0.7.0's fit rules: no holds counted in seconds, which would tie the picture to frame times.

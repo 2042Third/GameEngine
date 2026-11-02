@@ -525,7 +525,9 @@ captured frame) says what a frame drew: `quality` (the Graphics Quality it drew 
 it), `shadowMapSize` (the sun's cascades' texels), `cascades` (each sun cascade's slice `near`/`far` in meters of view
 distance, `texelSize` in meters and `fitted`: its square follows the receivers rather than its slice's sphere),
 `shadowFit` (`fitted`: the cascades are laid out over the receivers the frame's depth showed; `squaresFitted`, `settled`:
-no readback is due that may change them; `near`, `far`: the range the slices divide), `localShadowTileSizes` (each
+no readback is due that may change them; `near`, `far`: the range the slices divide; `changes`: the view renderer's layout
+changes since it was made, so the difference over a run counts re-cuts; `holding`: a near object or a wider square waits
+before it re-cuts the cascades), `localShadowTileSizes` (each
 shadowed point and spot light's tile),
 `exposure` (automatic exposure's metered `ev100`, its key's `keyStops` and the sun's gray card `cardEv100`; null with
 manual exposure), `motionBlur` (`samples`, `tileSize` on frames that blurred; editor views and captures never blur, only

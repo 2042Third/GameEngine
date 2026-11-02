@@ -4145,9 +4145,23 @@ lights, Post Process and the sky), and never a resolution below the output's.
     last cascade, whose sphere then holds every point of the view nearer than `D`; where it would not (the near bound they
     give beyond `D k`, `k = tan^2(fovY/2) + tan^2(fovX/2)`, which only fields of view below about 45 degrees at 16:9 and
     orthographic views, `k = 0`, allow) they are kept like any receiver; `F` their farthest times 2^0.5, quarter stops
-    above, at least `N` 2^0.5, and the shadow distance `D` from 0.7 `D` on (one cascade: always). A bound or side grows in
-    the frame it must and shrinks only after `ShadowFitTracker::c_ShrinkReadbacks` (8) readbacks in a row asked for less,
-    to the least shrunk of them.
+    above, at least `N` 2^0.5, and the shadow distance `D` from 0.7 `D` on (one cascade: always).
+  - **Persistence, in seconds** (`ShadowFitView::Seconds`: `SceneRenderer::StepSeconds`, the wall clock between the
+    renderer's frames, at most 0.25 s, or `SceneRenderOptions::AdaptationSeconds`): the far bound grows in the frame it
+    must; the near bound does so for receivers nearer than it that hold at least `c_NearNowShare` (10%) of the receiver
+    pixels (a wall, a dive), for the previous frame's nearest transparent surface, and where the last cascade's sphere
+    could not hold what it leaves out (the bound beyond `D k`); otherwise it grows only once it has asked for
+    `c_GrowSeconds` (0.5 s; `c_GrowSecondsMoving`, 0.12 s, while the camera or the sun moves), to the least it asked for,
+    and the receivers nearer than it stay out of the squares meanwhile (containment shades them from the last cascade). So
+    a ball passing the camera re-cuts nothing at any frame rate (the Physics Playground's ball holds 6.85% at spawn and is
+    gone in 116-354 ms), while an object that stays near re-cuts once, after the wait. A square grows at once on a moving
+    camera; on a still one it waits `c_GrowSeconds` and the previous square stays whole meanwhile. Every bound and side
+    shrinks after `ShadowFitTracker::c_ShrinkReadbacks` (8) readbacks in a row and `c_ShrinkSeconds` (0.5 s), to the least
+    shrunk of them. Tests that compare two renderers with the fit on and content or a camera that moves pass
+    `AdaptationSeconds`, since wall-clock holds would make them timing dependent. Renderers of single images
+    (`SceneRendererSpecification::ShadowFitHolds` off: the capture renderer behind `viewport.capture` and project
+    thumbnails) keep Strata 0.7.0's rules (growths at once, shrinks after 8 readbacks), so a capture is the same on any
+    machine.
   - **Slices:** with `F = D` the `n` slices over `[N, D]`, else `n - 1` over `[N, F]` and the last one from the band before
     `F` to `D`, splitting by the light's `CascadeDistribution` (0-1, 0.9: the logarithmic share). The **last cascade always
     reaches `D` on its slice's sphere** (that of `[N, D]` where the field of view is so narrow that the sphere of `[a, D]`
@@ -4166,15 +4180,15 @@ lights, Post Process and the sky), and never a resolution below the output's.
     the position 33 texels inside its square (the last one to its edge, as 0.6.0) and in its depth range; a band blends
     into the next cascade only where that one holds the pixel. The debug view selects alike.
   - **Settled** (`SceneRendererStats::ShadowFitSettled`): since the latest change or epoch, a readback of a frame drawn with
-    the current layout arrived and kept it (true without a fit). `viewport.capture` and the project thumbnail render
+    the current layout arrived and kept it, and no growth waits (`ShadowFitHolding`; true without a fit). `viewport.capture` and the project thumbnail render
     again while it is not, for at most 12 frames (`c_MaxCaptureShadowFitFrames`, `ProjectThumbnail::c_MaxShadowFitFrames`);
     tests render frames waited for (`ReadTexture`), so readbacks arrive the frame after on every machine.
   Layout changes keep the visibility feedback (squares move texel by texel with the camera, as 0.6.0's spheres did): on
   feedback frames every cascade gets the slots of every caster the feedback saw, and the last cascade holds every caster
   of every receiver. `ForThumbnails()` and `ForBake()` turn the fit off (single frames), and so do tests of the layout's
-  texel sizes or 0.6.0's splits. Stats: `ShadowFit`, `ShadowFitSquares`, `ShadowFitSettled`, `ShadowFitNear`, `ShadowFitFar`,
-  `ShadowFitChanges`, `Cascades[c].Fitted`; `editor.perf`'s `renderStats` (and every `viewport.capture` result's) report
-  `shadowFit` and `cascades`. Tests:
+  texel sizes or 0.6.0's splits. Stats: `ShadowFit`, `ShadowFitSquares`, `ShadowFitSettled`, `ShadowFitHolding`,
+  `ShadowFitNear`, `ShadowFitFar`, `ShadowFitChanges`, `Cascades[c].Fitted`; `editor.perf`'s `renderStats` (and every
+  `viewport.capture` result's) report `shadowFit` (with `changes` and `holding`) and `cascades`. Tests:
   `Renderer.ShadowFit` (the tracker alone, synthetic readbacks), `GPU.SceneRenderer.ShadowFit`.
 - **Costs** (look-dev A/B against cc9524a1, three interleaved pairs, medians, the samples' scene cameras with TAA; RTX
   5090, after the wave's perf pass): at 3840x2160 0.7.0's High, which drew contact shadows, `GPU.ScreenShadows` is

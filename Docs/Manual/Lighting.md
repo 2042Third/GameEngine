@@ -115,7 +115,8 @@ nearest to the farthest surface in view, and each one but the farthest shrinks t
 detail goes where the surfaces are (a high camera looking down over a level gets several times finer shadows than
 cascades starting at the camera). The farthest cascade always reaches the Shadow Distance, so a surface that just came
 into view (the camera turned, a door opened) is shadowed at once, a little coarser for the few frames until the cascades
-follow. **Cascade Distribution** (0 to 1, 0.9 by default) decides how the cascades share those distances: 0 evenly, 1 each
+follow. Something passing close to the camera, such as a thrown ball, leaves them alone; something that stays close moves
+them once, after half a second. **Cascade Distribution** (0 to 1, 0.9 by default) decides how the cascades share those distances: 0 evenly, 1 each
 cascade the same ratio farther than the previous one; higher puts more of the detail near the camera.
 
 **Shadow Softness** is the light's apparent size in degrees: 0.53 is the sun's (the default; scenes saved with another

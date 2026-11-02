@@ -11,6 +11,10 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 
 - Contact shadows are off in every Graphics Quality preset: they shimmered while the camera moved. The fitted sun cascades
   ground small objects near the camera.
+- The sun's shadows no longer jump while something passes close to the camera (a ball thrown from it, a bird): the
+  cascades follow a near object that holds less than a tenth of the view only once it has stayed for half a second (an
+  eighth while the camera moves), and shrink only after half a second. Something that stays close still moves them once.
+  `editor.perf` and `viewport.capture` report the fit's layout `changes` and whether a growth is `holding`.
 
 ## Defaults that change
 
@@ -28,5 +32,11 @@ projects, the template and scenes or projects without the value get.
 | **Lane Render** | | | |
 | Contact shadows | drawn at High (12 steps) and Ultra (16) | off in every preset | Graphics Quality Custom, Contact Shadows 12 (or 16) |
 | A Custom quality saved before contact shadows existed (a development build of wave 7) | read High's 12 steps | reads 0 steps | Graphics Quality Custom, Contact Shadows 12 |
+| The cascades' near end | follows any near object above 1% of the view at once | waits 0.5 s (0.12 s moving) below 10% of the view; transparent surfaces and narrow views at once | nothing to keep: settled views are unchanged |
 
 ## Known issues
+
+**Lane Render**
+
+- An object that stays close to the camera still re-fits the cascades once, coarsening far shadows; one that covers under
+  a tenth of the view waits up to half a second in a coarser cascade.

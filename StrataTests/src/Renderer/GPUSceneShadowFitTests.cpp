@@ -85,9 +85,18 @@ namespace
 		return LookAt(glm::vec3(0.0f, 22.0f, 30.0f), glm::vec3(0.0f), static_cast<float>(width) / static_cast<float>(height));
 	}
 
+	// Frames 1/60 s apart, whatever the machine's clock says: the fit's holds count these seconds (ShadowFitView::Seconds), so
+	// no comparison depends on how long frames take.
+	SceneRenderOptions StepOptions(float seconds = 1.0f / 60.0f)
+	{
+		SceneRenderOptions options;
+		options.AdaptationSeconds = seconds;
+		return options;
+	}
+
 	ReadbackImage RenderHDR(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera)
 	{
-		REQUIRE(renderer.Render(scene, camera));
+		REQUIRE(renderer.Render(scene, camera, nullptr, StepOptions()));
 		ReadbackImage image;
 		REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image)); // Waits for the GPU: the frame's readbacks are complete
 		REQUIRE(image.Format == nvrhi::Format::RGBA16_FLOAT);
@@ -99,7 +108,7 @@ namespace
 	{
 		for (uint32_t frame = 1; frame <= frames; frame++)
 		{
-			RenderToImage(renderer, scene, camera);
+			RenderToImage(renderer, scene, camera, StepOptions());
 			if (renderer.GetStats().ShadowFitSettled)
 				return frame;
 		}
@@ -162,7 +171,7 @@ namespace
 
 	ShadowViewStats RenderShadowView(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera)
 	{
-		SceneRenderOptions options;
+		SceneRenderOptions options = StepOptions();
 		options.ShowShadowView = true;
 		REQUIRE(renderer.Render(scene, camera, nullptr, options));
 		ReadbackImage image;
@@ -371,7 +380,7 @@ TEST_SUITE("GPU.SceneRenderer.ShadowFit")
 				CHECK(stats.Cascades[cascade].Far == doctest::Approx(ShadowFitTracker::GetSplit(camera.Near, 80.0f, 0.8f, cascade, 4)));
 			CHECK(stats.Cascades[0].Near == doctest::Approx(camera.Near));
 		};
-		RenderToImage(renderer, scene, camera);
+		RenderToImage(renderer, scene, camera, StepOptions());
 		checkUnfitted(renderer.GetStats());
 		CHECK(RenderUntilFitSettled(renderer, scene, camera, 8) <= 8);
 		CHECK(renderer.GetStats().ShadowFit);
@@ -380,13 +389,13 @@ TEST_SUITE("GPU.SceneRenderer.ShadowFit")
 		SceneCamera cut = camera;
 		cut.Position = glm::vec3(0.0f, 22.0f, 130.0f);
 		cut.View = glm::lookAt(cut.Position, glm::vec3(0.0f, 0.0f, 100.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-		RenderToImage(renderer, scene, cut);
+		RenderToImage(renderer, scene, cut, StepOptions());
 		checkUnfitted(renderer.GetStats());
 
 		// ResetShadowFit likewise (scene loads, a capture's first frame).
 		CHECK(RenderUntilFitSettled(renderer, scene, cut, 8) <= 8);
 		renderer.ResetShadowFit();
-		RenderToImage(renderer, scene, cut);
+		RenderToImage(renderer, scene, cut, StepOptions());
 		CHECK_FALSE(renderer.GetStats().ShadowFit);
 
 		// With the fit off: 0.6.0's layout, always settled.
@@ -396,7 +405,7 @@ TEST_SUITE("GPU.SceneRenderer.ShadowFit")
 		plain.SetViewportSize(size, size);
 		for (int frame = 0; frame < 4; frame++)
 		{
-			RenderToImage(plain, scene, camera);
+			RenderToImage(plain, scene, camera, StepOptions());
 			CHECK_FALSE(plain.GetStats().ShadowFit);
 			CHECK(plain.GetStats().ShadowFitSettled);
 		}
@@ -418,13 +427,13 @@ TEST_SUITE("GPU.SceneRenderer.ShadowFit")
 		REQUIRE(renderer.IsGPUDriven());
 		const SceneCamera camera = PlaygroundCamera(size, size);
 		CHECK(RenderUntilFitSettled(renderer, scene, camera, 8) <= 8);
-		RenderToImage(renderer, scene, camera);
+		RenderToImage(renderer, scene, camera, StepOptions());
 		REQUIRE(renderer.GetStats().ShadowFit);
 		const uint64_t changes = renderer.GetStats().ShadowFitChanges;
 		const auto cascades = renderer.GetStats().Cascades;
 		for (int frame = 0; frame < 10; frame++)
 		{
-			RenderToImage(renderer, scene, camera);
+			RenderToImage(renderer, scene, camera, StepOptions());
 			CHECK(renderer.GetStats().CachedCascadeMask == 0xFu);
 			CHECK(renderer.GetStats().ShadowFitChanges == changes);
 			CHECK(renderer.GetStats().ShadowFitSettled);
@@ -433,26 +442,30 @@ TEST_SUITE("GPU.SceneRenderer.ShadowFit")
 		playground.Mover.GetComponent<TransformComponent>().Translation.x += 0.1f;
 		playground.Mover.MarkModified<TransformComponent>();
 		for (int frame = 0; frame < 4; frame++)
-			RenderToImage(renderer, scene, camera);
+			RenderToImage(renderer, scene, camera, StepOptions());
 		CHECK(renderer.GetStats().ShadowFitChanges == changes);
 		CHECK(renderer.GetStats().Cascades == cascades);
 
-		// With temporal anti-aliasing each frame's receivers are seen through another sub-pixel jitter: once a cycle of its phases
-		// grew what any of them asked for, the squares stay where they hold the receivers, and the cascades stay cached.
+		// With temporal anti-aliasing each frame's receivers are seen through another sub-pixel jitter: on a still camera a wider
+		// square some phases ask for waits (c_GrowSeconds) and is dropped at the next readback that does not ask, so the squares
+		// stay where they hold the receivers, and the cascades stay cached.
 		PostProcessComponent& postProcess = GetPostProcess(scene);
 		postProcess.AntiAliasing = true;
 		postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
 		for (uint32_t frame = 0; frame < 2 * SceneRenderer::c_TemporalJitterPhases; frame++)
-			RenderToImage(renderer, scene, camera);
+			RenderToImage(renderer, scene, camera, StepOptions());
 		REQUIRE(renderer.GetStats().TemporalAntiAliasing);
 		const uint64_t temporalChanges = renderer.GetStats().ShadowFitChanges;
+		uint32_t holdingFrames = 0;
 		for (uint32_t frame = 0; frame < 2 * SceneRenderer::c_TemporalJitterPhases; frame++)
 		{
-			RenderToImage(renderer, scene, camera);
+			RenderToImage(renderer, scene, camera, StepOptions());
 			CHECK(renderer.GetStats().ShadowFit);
 			CHECK(renderer.GetStats().CachedCascadeMask == 0xFu);
 			CHECK(renderer.GetStats().ShadowFitChanges == temporalChanges);
+			holdingFrames += renderer.GetStats().ShadowFitHolding ? 1 : 0;
 		}
+		CHECK_MESSAGE(!renderer.GetStats().ShadowFitHolding, "frames holding a growth: ", holdingFrames, " of ", 2 * SceneRenderer::c_TemporalJitterPhases);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -476,8 +489,8 @@ TEST_SUITE("GPU.SceneRenderer.ShadowFit")
 
 		const auto compare = [&]()
 		{
-			const ReadbackImage cpuImage = RenderToImage(cpu, scene, camera);
-			const ReadbackImage gpuImage = RenderToImage(gpuDriven, scene, camera);
+			const ReadbackImage cpuImage = RenderToImage(cpu, scene, camera, StepOptions());
+			const ReadbackImage gpuImage = RenderToImage(gpuDriven, scene, camera, StepOptions());
 			gpuDriven.ResolveGPUStats(true);
 			CHECK(cpu.GetStats().ShadowFit == gpuDriven.GetStats().ShadowFit);
 			CHECK(cpu.GetStats().Cascades == gpuDriven.GetStats().Cascades);
@@ -497,6 +510,102 @@ TEST_SUITE("GPU.SceneRenderer.ShadowFit")
 			compare();
 			CHECK(gpuDriven.GetStats().FeedbackRequests);
 			CHECK(gpuDriven.GetStats().ShadowFit);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A ball shot from the camera leaves the cascades alone")
+	{
+		// The Physics Playground's shot: a 0.25 m ball leaves the camera at 1.5 m and 24 m/s (0.4 m a 1/60 s frame). It holds
+		// under a tenth of the receivers and is gone before the near bound's half second: no slice or square is re-cut.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		PlaygroundScene playground(assets);
+		Scene& scene = playground.SceneData;
+		MaterialProperties matte;
+		const AssetHandle material = assets.AddMaterial(matte);
+		constexpr uint32_t size = 256;
+		SceneRenderer renderer(FittedSpecification());
+		renderer.SetViewportSize(size, size);
+		const SceneCamera camera = PlaygroundCamera(size, size);
+		// Out of view until it is shot.
+		Entity ball = AddMesh(scene, BuiltinAssets::SphereMesh, material, glm::vec3(0.0f, 60.0f, 80.0f), "Ball");
+		ball.GetComponent<TransformComponent>().Scale = glm::vec3(0.5f);
+		ball.MarkModified<TransformComponent>();
+		CHECK(RenderUntilFitSettled(renderer, scene, camera, 8) <= 8);
+		RenderToImage(renderer, scene, camera, StepOptions());
+		REQUIRE(renderer.GetStats().ShadowFit);
+		const uint64_t changes = renderer.GetStats().ShadowFitChanges;
+		const auto cascades = renderer.GetStats().Cascades;
+		const glm::vec3 forward = glm::normalize(-camera.Position);
+		for (int step = 0; step < 40; step++)
+		{
+			CAPTURE(step);
+			ball.GetComponent<TransformComponent>().Translation = camera.Position + forward * (1.5f + 0.4f * static_cast<float>(step));
+			ball.MarkModified<TransformComponent>();
+			RenderToImage(renderer, scene, camera, StepOptions());
+			CHECK(renderer.GetStats().ShadowFitChanges == changes);
+			CHECK(renderer.GetStats().Cascades == cascades);
+		}
+		CHECK_FALSE(renderer.GetStats().ShadowFitHolding);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The fit's holds count the frame's AdaptationSeconds")
+	{
+		// A box parked 2 m in front of the camera, on a few percent of the receivers: its growth of the near bound waits half a
+		// second of the frames' SceneRenderOptions::AdaptationSeconds, never of the machine's clock.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		PlaygroundScene playground(assets);
+		Scene& scene = playground.SceneData;
+		constexpr uint32_t size = 256;
+		const SceneCamera camera = PlaygroundCamera(size, size);
+		const glm::vec3 forward = glm::normalize(-camera.Position);
+		for (const float seconds : { 0.1f, 0.0f })
+		{
+			CAPTURE(seconds);
+			SceneRenderer renderer(FittedSpecification());
+			renderer.SetViewportSize(size, size);
+			Entity box = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f, 60.0f, 80.0f), "Box");
+			box.GetComponent<TransformComponent>().Scale = glm::vec3(0.4f);
+			box.MarkModified<TransformComponent>();
+			CHECK(RenderUntilFitSettled(renderer, scene, camera, 8) <= 8);
+			const float nearBound = renderer.GetStats().ShadowFitNear;
+			REQUIRE(nearBound > 4.0f);
+			box.GetComponent<TransformComponent>().Translation = camera.Position + forward * 2.0f;
+			box.MarkModified<TransformComponent>();
+			if (seconds > 0.0f)
+			{
+				// The readback that sees the box arrives a frame later: from then on the growth waits, and the fit is not settled.
+				uint32_t frame = 0;
+				while (frame < 3 && !renderer.GetStats().ShadowFitHolding)
+				{
+					RenderToImage(renderer, scene, camera, StepOptions(seconds));
+					frame++;
+				}
+				CHECK(renderer.GetStats().ShadowFitHolding);
+				CHECK_FALSE(renderer.GetStats().ShadowFitSettled);
+				CHECK(renderer.GetStats().ShadowFitNear == nearBound);
+				while (frame < 12 && renderer.GetStats().ShadowFitNear == nearBound)
+				{
+					RenderToImage(renderer, scene, camera, StepOptions(seconds));
+					frame++;
+				}
+				CAPTURE(frame);
+				CHECK(renderer.GetStats().ShadowFitNear < 1.75f);
+				CHECK(frame >= 5); // Half a second of 0.1 s frames
+			}
+			else
+			{
+				for (int frame = 0; frame < 30; frame++)
+					RenderToImage(renderer, scene, camera, StepOptions(seconds));
+				CHECK(renderer.GetStats().ShadowFitHolding);
+				CHECK(renderer.GetStats().ShadowFitNear == nearBound);
+			}
+			scene.DestroyEntity(box);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

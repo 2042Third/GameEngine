@@ -117,6 +117,7 @@ namespace Strata
 		m_Stats.ShadowFit = m_ShadowFitLayout.Fitted;
 		m_Stats.ShadowFitSquares = m_ShadowFitLayout.SquaresFitted;
 		m_Stats.ShadowFitSettled = m_ShadowFit.IsSettled();
+		m_Stats.ShadowFitHolding = m_ShadowFit.IsHolding();
 		m_Stats.ShadowFitNear = m_ShadowFitLayout.Near;
 		m_Stats.ShadowFitFar = m_ShadowFitLayout.Far;
 		m_Stats.ShadowFitChanges = m_ShadowFit.GetChanges();
