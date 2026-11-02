@@ -331,6 +331,12 @@ endif()
 # optional pre-release suffix (CMake/StrataPackageVersion.cmake).
 add_test(NAME StrataPackaging.Version COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/Packaging/PackageVersionTests.cmake")
 
+# The Slang pin's fetch (CMake/StrataSlang.cmake): a fake archive through file:// URLs into a private cache, the digest
+# check, cache hits without the archive, the error texts, the per-user folders and the host key in script mode.
+add_test(NAME StrataSlang.Fetch
+	COMMAND "${CMAKE_COMMAND}" "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/SlangFetchTest/$<CONFIG>"
+		-P "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/SlangFetchTests.cmake")
+
 # Games contain no tooling: the runtime's linker map names no object or library of Dear ImGui, ImGuizmo, the asset
 # pipeline, the network or zstd's compressor (Architecture/CheckNoTooling.cmake; the configure checks what it links).
 if(TARGET StrataRuntime)

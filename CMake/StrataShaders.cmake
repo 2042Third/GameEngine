@@ -15,6 +15,11 @@
 # Shared code lives in *.glsl include files under SOURCE_DIR. Every shader depends on all of them,
 # so editing an include recompiles all shaders (cheap, and immune to depfile parsing quirks).
 # Only one target per build may embed shaders, since the registry defines the lookup functions.
+#
+# Slang (CMake/StrataSlang.cmake), the pinned compiler that replaces glslang, is found and checked by every configure;
+# its slangc is the global property STRATA_SLANGC.
+
+include("${CMAKE_CURRENT_LIST_DIR}/StrataSlang.cmake")
 
 function(strata_add_shaders target)
 	cmake_parse_arguments(ARG "" "SOURCE_DIR" "SHADERS;VARIANTS;INCLUDE_DIRS" ${ARGN})
@@ -24,6 +29,8 @@ function(strata_add_shaders target)
 	if(NOT TARGET glslang-standalone)
 		message(FATAL_ERROR "strata_add_shaders: the glslang-standalone target is not available")
 	endif()
+	strata_find_slang(slangc)
+	set_property(GLOBAL PROPERTY STRATA_SLANGC "${slangc}")
 
 	file(GLOB_RECURSE includeFiles CONFIGURE_DEPENDS "${ARG_SOURCE_DIR}/*.glsl")
 	set(outputDir "${CMAKE_CURRENT_BINARY_DIR}/EmbeddedShaders")
