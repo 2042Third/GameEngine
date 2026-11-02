@@ -339,6 +339,15 @@ add_test(NAME StrataSlang.Fetch
 	COMMAND "${CMAKE_COMMAND}" "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/SlangFetchTest/$<CONFIG>"
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/SlangFetchTests.cmake")
 
+# The console route stays open: every embedded shader also compiles to HLSL (slangc -target hlsl over the build's shader
+# manifest, no DXC; Shaders/TargetHLSL.cmake). No label, so every CI job runs it.
+get_property(strataSlangc GLOBAL PROPERTY STRATA_SLANGC)
+get_property(strataShaderEntries GLOBAL PROPERTY STRATA_SHADER_ENTRIES)
+add_test(NAME StrataShaders.TargetHLSL
+	COMMAND "${CMAKE_COMMAND}" "-DSLANGC=${strataSlangc}" "-DENTRIES=${strataShaderEntries}" "-DREPOSITORY=${PROJECT_SOURCE_DIR}"
+		"-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/ShaderTargets/hlsl/$<CONFIG>" -P "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/TargetHLSL.cmake")
+set_tests_properties(StrataShaders.TargetHLSL PROPERTIES TIMEOUT 300)
+
 # Games contain no tooling: the runtime's linker map names no object or library of Dear ImGui, ImGuizmo, the asset
 # pipeline, the network or zstd's compressor (Architecture/CheckNoTooling.cmake; the configure checks what it links).
 if(TARGET StrataRuntime)
