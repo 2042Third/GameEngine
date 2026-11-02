@@ -16,9 +16,10 @@ the work: checklist item 5.
 
 ## Golden rules
 
-1. **Never use code from outside this repository as a reference.** Vendored dependencies under
-   `Strata/vendor/` are part of the repository and may be read (to learn their APIs), never copied
-   into engine code.
+1. **Never read or use other folders of the machine you work on** (this repository, open-source projects fetched for
+   the work and your own scratch directories are not "other"). Open-source code is used only under a permissive license,
+   with its notice kept and its source named; copyleft code only for ideas
+   ([Third-party code](Docs/DeveloperGuide.md#working-with-third-party-code)).
 2. **Everything ships with tests.** New behavior gets unit tests; bug fixes get a regression test.
    All tests must pass before a commit. Never disable, skip or weaken a test to make it pass.
 3. **Review before every commit.** Walk the [review checklist](#pre-commit-review-checklist) for the

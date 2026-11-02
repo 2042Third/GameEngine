@@ -5377,7 +5377,21 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
 ## Working with third-party code
 
 AGENTS.md, [Working with third-party code](../AGENTS.md#working-with-third-party-code), says how submodules are
-upgraded and states the rule for the editor's fonts in short. In full:
+upgraded and states the rule for the editor's fonts in short, and its golden rule 1 the rule for code from other
+projects. In full:
+
+**Code from other projects** (golden rule 1; the owner's ruling of 2026-11-01): nothing is read or used from other folders
+of the machine an agent works on (other checkouts, other projects, personal files); this repository, the open-source
+projects an agent fetches for the work and its own scratch directories are not other folders. Open-source projects, their
+documentation, papers and talks are read as much as helps. Their code is copied, ported or adapted only under a permissive
+license (MIT, BSD, Apache-2.0, zlib, Boost, public domain or CC0): `ThirdPartyNotices.md`'s "Code derived from other
+projects" gains a row (the project with its link, the version or commit, the license, the Strata files that hold the
+derived code, what was derived) and the license's full text below its table, since games ship that file and no submodule
+carries the text, and the commit message names the project, its commit and its files. Copyleft code (GPL, LGPL, AGPL, MPL
+and the like) is read for ideas, never copied or ported: Strata's license is the owner's choice, and copied copyleft code
+would make it. Large pieces still come in as pinned submodules under `Strata/vendor/` by the rules of AGENTS.md's
+[Working with third-party code](../AGENTS.md#working-with-third-party-code); engine code adapted from a submodule follows
+the notice rule above.
 
 The editor's fonts are not submodules: the release files of Inter, JetBrains Mono and Lucide (with Lucide's codepoint
 map) and their licenses are committed in `StrataEditor/Resources/Fonts/` and compiled in (`strata_embed_file`). To

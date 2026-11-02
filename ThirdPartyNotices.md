@@ -41,6 +41,12 @@ The engine embeds the font [Roboto Medium](https://fonts.google.com/specimen/Rob
 compiled in from the copy that Dear ImGui distributes (`Strata/vendor/imgui/misc/fonts/Roboto-Medium.ttf`) and ships in
 every game.
 
+## Code derived from other projects
+
+Code that Strata copied, ported or adapted from open-source projects that are not submodules, each under its permissive
+license (Docs/DeveloperGuide.md, "Working with third-party code"). Each project gets a row of a table here (project,
+version, license, Strata's files, what was derived) and its license's full text below the table. There are no entries yet.
+
 ## Sample assets
 
 The sample projects under `Samples/` (and the games exported from them) use the asset packs below. Each sample's
