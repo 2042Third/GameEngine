@@ -277,12 +277,64 @@ def difference(before, after):
     return differing, largest, mean, out
 
 
-def compare_files(before_path, after_path):
-    """Pixels of two PNG files compared; identical files are identical pictures (one encoder wrote both)."""
+def signed_difference(before, after, gain):
+    """The signed difference of two images as an RGB image: per pixel v, the mean over the first three channels of
+    (after - before), shows as red min(255, round(v * gain)) where the after picture is brighter and as blue
+    min(255, round(-v * gain)) where it is darker. A slip in a shader darkens or brightens a region coherently, which
+    the absolute difference cannot show."""
+    if (before.width, before.height) != (after.width, after.height):
+        raise ToolError(f"sizes differ: {before.width}x{before.height} and {after.width}x{after.height}")
+    channels = min(before.channels, after.channels, 3)
+    out = Image(before.width, before.height, 3)
+    for index in range(before.width * before.height):
+        a = before.data[index * before.channels:index * before.channels + channels]
+        b = after.data[index * after.channels:index * after.channels + channels]
+        if a == b:
+            continue
+        v = sum(b[channel] - a[channel] for channel in range(channels)) / channels
+        if v > 0:
+            out.data[index * 3] = min(255, round(v * gain))
+        elif v < 0:
+            out.data[index * 3 + 2] = min(255, round(-v * gain))
+    return out
+
+
+def compare_files(before_path, after_path, signed_gain=0.0):
+    """Pixels of two PNG files compared; identical files are identical pictures (one encoder wrote both). Returns the
+    numbers, the absolute difference image and, when `signed_gain` is above 0, the signed difference image."""
     if Path(before_path).read_bytes() == Path(after_path).read_bytes():
-        return {"differingPixels": 0, "largestDifference": 0, "meanDifference": 0.0}, None
-    differing, largest, mean, image = difference(read_png(before_path), read_png(after_path))
-    return {"differingPixels": differing, "largestDifference": largest, "meanDifference": mean}, image
+        return {"differingPixels": 0, "largestDifference": 0, "meanDifference": 0.0}, None, None
+    before = read_png(before_path)
+    after = read_png(after_path)
+    differing, largest, mean, image = difference(before, after)
+    signed = signed_difference(before, after, signed_gain) if signed_gain > 0 and differing else None
+    return {"differingPixels": differing, "largestDifference": largest, "meanDifference": mean}, image, signed
+
+
+def picture_mode(name):
+    """The anti-aliasing mode of a picture named <shot>-<width>x<height>-<aa>.png."""
+    return Path(name).stem.rsplit("-", 1)[-1]
+
+
+def summarize_modes(pictures):
+    """Per anti-aliasing mode: the pictures, how many differ, the median of differing pixels over all of them, the
+    median largest difference over the differing ones (0 when none differs), the largest difference and the largest
+    mean difference."""
+    modes = {}
+    for name, numbers in pictures.items():
+        modes.setdefault(picture_mode(name), []).append(numbers)
+    summary = {}
+    for mode, entries in sorted(modes.items()):
+        differing = [numbers for numbers in entries if numbers["differingPixels"]]
+        summary[mode] = {
+            "pictures": len(entries),
+            "differing": len(differing),
+            "medianDifferingPixels": statistics.median(numbers["differingPixels"] for numbers in entries),
+            "medianLargest": statistics.median(numbers["largestDifference"] for numbers in differing) if differing else 0,
+            "maxLargest": max(numbers["largestDifference"] for numbers in entries),
+            "maxMean": max(numbers["meanDifference"] for numbers in entries),
+        }
+    return summary
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -565,7 +617,7 @@ def postprocess(task):
     first, repeats, crops, crop_dir, keep_repeats = task
     outcome = {"selfDifference": [], "crops": []}
     for repeat in repeats:
-        numbers, _ = compare_files(first, repeat)
+        numbers, _, _ = compare_files(first, repeat)
         outcome["selfDifference"].append(numbers["differingPixels"])
         if not keep_repeats:
             Path(repeat).unlink(missing_ok=True)
@@ -796,11 +848,14 @@ def capture_command(args):
 # Compare
 
 def compare_task(task):
-    name, before, after, diff_path = task
-    numbers, image = compare_files(before, after)
+    name, before, after, diff_path, signed_path, signed_gain = task
+    numbers, image, signed = compare_files(before, after, signed_gain)
     if image is not None:
         write_png(diff_path, image)
         numbers["differenceImage"] = str(diff_path)
+    if signed is not None:
+        write_png(signed_path, signed)
+        numbers["signedImage"] = str(signed_path)
     return name, numbers
 
 
@@ -839,12 +894,18 @@ def compare_command(args):
     for side in (before, after):
         if not (side / "shots").is_dir():
             raise ToolError(f"{side} is not a capture set (it has no shots directory)")
+    signed_gain = getattr(args, "signed_gain", 32.0)
+    if signed_gain < 0 or not math.isfinite(signed_gain):
+        raise ToolError(f"--signed-gain {signed_gain} is not a finite number of at least 0")
     (output / "diff").mkdir(parents=True, exist_ok=True)
     (output / "crops").mkdir(parents=True, exist_ok=True)
+    if signed_gain > 0:
+        (output / "signed").mkdir(parents=True, exist_ok=True)
     before_shots = {path.name for path in (before / "shots").glob("*.png")}
     after_shots = {path.name for path in (after / "shots").glob("*.png")}
     missing = sorted(before_shots ^ after_shots)
-    tasks = [(name, str(before / "shots" / name), str(after / "shots" / name), str(output / "diff" / name)) for name in sorted(before_shots & after_shots)]
+    tasks = [(name, str(before / "shots" / name), str(after / "shots" / name), str(output / "diff" / name),
+              str(output / "signed" / name), signed_gain) for name in sorted(before_shots & after_shots)]
     with multiprocessing.Pool(max(1, min(len(tasks), (os.cpu_count() or 2) - 1))) as pool:
         pictures = dict(pool.map(compare_task, tasks)) if tasks else {}
     # The crops of the pictures that differ, side by side (the crops of identical pictures are identical).
@@ -874,13 +935,17 @@ def compare_command(args):
                 continue
             if denominator > 0:
                 ratios[key][column] = round(numerator / denominator, 4)
-    report = {"before": str(before), "after": str(after), "missing": missing, "pictures": pictures, "gpuRatios": ratios}
+    summary = summarize_modes(pictures)
+    report = {"before": str(before), "after": str(after), "missing": missing, "pictures": pictures, "summary": summary,
+              "gpuRatios": ratios}
     (output / "compare.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
     sections = []
     for name, numbers in sorted(pictures.items()):
         if numbers.get("differenceImage"):
-            sections.append((f"{name}: {numbers['differingPixels']} pixels differ, by at most {numbers['largestDifference']}",
-                             [numbers["differenceImage"]]))
+            title = f"{name}: {numbers['differingPixels']} pixels differ, by at most {numbers['largestDifference']}"
+            if numbers.get("signedImage"):
+                title += f" (absolute x 8 | signed x {signed_gain:g}: red brighter after, blue darker)"
+            sections.append((title, [numbers["differenceImage"]] + ([numbers["signedImage"]] if numbers.get("signedImage") else [])))
     if crops:
         sections.append(("Crops, before | after", crops))
     header = ["picture", "gpuBusy after / before"]
@@ -888,6 +953,10 @@ def compare_command(args):
     write_index(output, f"Look-dev compare: {before.name} -> {after.name}", sections, header, rows)
     differing = sum(1 for numbers in pictures.values() if numbers["differingPixels"])
     print(f"{len(pictures)} pictures compared, {differing} differ; {len(missing)} on one side only" + (f": {', '.join(missing)}" if missing else ""))
+    for mode, numbers in summary.items():
+        print(f"  {mode}: {numbers['differing']} of {numbers['pictures']} differ; median differing pixels "
+              f"{numbers['medianDifferingPixels']:g}, median largest {numbers['medianLargest']:g}, "
+              f"max largest {numbers['maxLargest']}, max mean {numbers['maxMean']:.4f}")
     return 1 if missing else 0
 
 
@@ -925,6 +994,41 @@ def selftest_command(args):
         if _unfilter_row(kind, raw, prior, 3, _swar_masks(stride)) != expected:
             problems.append(f"PNG filter type {kind} is not undone")
 
+    # The signed difference: after brighter by a mean of 2 shows red 64 at gain 32, darker by 1 blue 32; the alpha
+    # channel of the 4-channel picture is not compared.
+    before = Image(3, 1, 4)
+    after = Image(3, 1, 3)
+    before.data[0:4] = bytes((10, 20, 30, 255))
+    after.data[0:3] = bytes((12, 22, 32))
+    before.data[4:8] = bytes((100, 100, 100, 7))
+    after.data[3:6] = bytes((99, 98, 100))
+    before.data[8:12] = bytes((5, 6, 7, 0))
+    after.data[6:9] = bytes((5, 6, 7))
+    signed = signed_difference(before, after, 32)
+    if bytes(signed.data) != bytes((64, 0, 0, 0, 0, 32, 0, 0, 0)):
+        problems.append(f"the signed difference is {list(signed.data)}, not red 64, blue 32 and black")
+    if bytes(signed_difference(before, after, 1000).data[0:3]) != bytes((255, 0, 0)):
+        problems.append("the signed difference does not saturate at 255")
+
+    # The per-mode summary of a synthetic set: two TAA pictures (one differs) and one without AA (identical).
+    pictures = {
+        "a.scene-320x180-taa.png": {"differingPixels": 10, "largestDifference": 4, "meanDifference": 0.5},
+        "b.scene-320x180-taa.png": {"differingPixels": 0, "largestDifference": 0, "meanDifference": 0.0},
+        "a.scene-320x180-off.png": {"differingPixels": 0, "largestDifference": 0, "meanDifference": 0.0},
+    }
+    expected_summary = {
+        "off": {"pictures": 1, "differing": 0, "medianDifferingPixels": 0, "medianLargest": 0, "maxLargest": 0, "maxMean": 0.0},
+        "taa": {"pictures": 2, "differing": 1, "medianDifferingPixels": 5, "medianLargest": 4, "maxLargest": 4, "maxMean": 0.5},
+    }
+    if summarize_modes(pictures) != expected_summary:
+        problems.append(f"the per-mode summary is {summarize_modes(pictures)}, not {expected_summary}")
+
+    if not args.build:
+        for problem in problems:
+            print(f"selftest: {problem}")
+        print("selftest: offline checks only (no --build: nothing captured); " + ("passed" if not problems else f"{len(problems)} problems"))
+        return 1 if problems else 0
+
     capture = argparse.Namespace(build=args.build, label="selftest", output=str(output / "capture"), projects="LookDev",
                                  shots="lookdev.contact", sizes="320x180", aa="fxaa", quality="project", debug_view="none", repeat=2, live=False,
                                  live_only=False, keep_work=False, work=None, fresh_work=False)
@@ -956,7 +1060,8 @@ def selftest_command(args):
         index = (output / "capture" / "index.html")
         if not index.is_file() or "lookdev.contact" not in index.read_text(encoding="utf-8"):
             problems.append("index.html does not name the shot")
-        compare = argparse.Namespace(before=str(output / "capture"), after=str(output / "capture"), output=str(output / "compare"))
+        compare = argparse.Namespace(before=str(output / "capture"), after=str(output / "capture"), output=str(output / "compare"),
+                                     signed_gain=32.0)
         if compare_command(compare) != 0:
             problems.append("compare of the capture with itself failed")
         report = load_json(output / "compare" / "compare.json") if (output / "compare" / "compare.json").is_file() else {}
@@ -994,8 +1099,11 @@ def main():
     compare.add_argument("before")
     compare.add_argument("after")
     compare.add_argument("--output", required=True)
-    selftest = commands.add_parser("selftest", help="the CTest: build the look-dev project and capture one shot small")
-    selftest.add_argument("--build", required=True)
+    compare.add_argument("--signed-gain", type=float, default=32.0,
+                         help="the gain of the signed difference images (red brighter after, blue darker); 0 writes none")
+    selftest = commands.add_parser("selftest", help="the CTests: the offline checks, and with --build the look-dev project "
+                                                    "built and one shot captured small")
+    selftest.add_argument("--build", help="the folder with StrataEditor and StrataCLI; without it only the offline checks run")
     selftest.add_argument("--output", required=True)
     args = parser.parse_args()
     try:

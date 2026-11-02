@@ -13,7 +13,7 @@ namespace Strata
 
 	static_assert(TextureTable::c_White == BindlessTextureTable::c_WhiteSlot && TextureTable::c_Black == BindlessTextureTable::c_BlackSlot
 		&& TextureTable::c_FlatNormal == BindlessTextureTable::c_FlatNormalSlot && TextureTable::c_ReservedIndices == BindlessTextureTable::c_ReservedSlots);
-	static_assert(sizeof(TextureTable::GPUEntry) == 8, "TextureTable::GPUEntry must match u_TextureTable's uvec2 (Include/Scene.glsl)");
+	static_assert(sizeof(TextureTable::GPUEntry) == 8, "TextureTable::GPUEntry must match u_TextureTable's uvec2 (Include/Scene.slang)");
 
 	TextureTable::TextureTable(nvrhi::IDevice* device, uint32_t framesInFlight)
 		: m_Device(device), m_FramesInFlight(framesInFlight)

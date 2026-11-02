@@ -15,6 +15,7 @@
 #include "Strata/Renderer/RendererQuality.h"
 #include "Strata/Renderer/SceneOverlay.h"
 #include "Strata/Renderer/SceneRenderData.h"
+#include "Strata/Renderer/SceneVertexLayouts.h"
 #include "Strata/Renderer/ShadowAtlasAllocator.h"
 #include "Strata/Renderer/ShadowFit.h"
 #include "Strata/Renderer/ShadowView.h"
@@ -200,7 +201,7 @@ namespace Strata
 		bool FadeTextureLevels = true;
 		// Geometric specular anti-aliasing (MaterialParams.z): the forward pass widens each surface's specular lobe by how much
 		// its shading normal changes across the pixel, so highlights narrower than a pixel spread over it with their energy
-		// instead of sparkling (Include/PBR.glsl, WidenRoughness). Off only to compare with and without it (tests).
+		// instead of sparkling (Include/PBR.slang, WidenRoughness). Off only to compare with and without it (tests).
 		bool SpecularAntiAliasing = true;
 		// The render scene's GPU copy (RenderSceneGPU, shared by the scene's renderers) uploads new proxies' records and
 		// instances within this many bytes per frame, at least one proxy per frame; the others wait, undrawn
@@ -254,7 +255,7 @@ namespace Strata
 		// render a view several times, such as thumbnails).
 		bool TemporalAntiAliasing = true;
 		// The 8-bit (or 10-bit) output is dithered: triangular noise of one code per channel in the encoded domain
-		// (Include/Dither.glsl), the same every frame, so gradients show no bands, black and white stay exact and every value
+		// (Include/Dither.slang), the same every frame, so gradients show no bands, black and white stay exact and every value
 		// keeps its mean. The last pass that writes the display image dithers it (the tone mapping, or FXAA after it); the
 		// overlays and the copy into a target are exact display colors. Tests that compare exact pixels turn it off
 		// (Tests::ExactSpecification).
@@ -323,7 +324,7 @@ namespace Strata
 	};
 
 	// What a lighting debug view shows instead of the lit image (SceneRenderOptions::LightingView). The values follow the order
-	// of the editor's debug view names and Include/Scene.glsl's ST_LIGHTING_VIEW_* constants; nothing stores them.
+	// of the editor's debug view names and Include/Scene.slang's ST_LIGHTING_VIEW_* constants; nothing stores them.
 	enum class SceneLightingView : uint8_t
 	{
 		None = 0,
@@ -478,7 +479,7 @@ namespace Strata
 		bool ShowMotionVectors = false;
 		// The shadows debug view, drawn first (Overlay/ShadowView.frag): every pixel the scene drew colored by the screen pixels
 		// one texel of the sun's cascade that shades it spans there (a texel's world size over a pixel's facing the camera at the
-		// pixel's view distance, Include/ShadowView.glsl), from ShadowViewColors[0] at one or fewer through [1] at two to [2] at
+		// pixel's view distance, Include/ShadowView.slang), from ShadowViewColors[0] at one or fewer through [1] at two to [2] at
 		// four or more, linear in stops; a checker of the texels where they span more than about 1.4 pixels, white cascade edges
 		// and hatched blend bands. Pixels no cascade covers show the image under a gray veil, the sky the image darkened. The
 		// frame also counts its pixels by cascade and ratio (SceneRenderer::GetShadowViewStats, read back frames later).
@@ -834,7 +835,7 @@ namespace Strata
 		nvrhi::ITexture* GetNormalTexture() const { return m_NormalTexture; }
 		nvrhi::ITexture* GetEntityIDTexture() const { return m_EntityIDTexture; } // Null without one (SceneRendererSpecification::EntityIDs)
 		nvrhi::ITexture* GetAmbientOcclusionTexture() const { return m_AOTexture; } // 1 = unoccluded
-		// The atmosphere's transmittance and sky-view tables (RGBA16_FLOAT, Include/Atmosphere.glsl): null while the sky is not
+		// The atmosphere's transmittance and sky-view tables (RGBA16_FLOAT, Include/Atmosphere.slang): null while the sky is not
 		// the atmosphere.
 		nvrhi::ITexture* GetAtmosphereTransmittanceTable() const { return m_Atmosphere ? m_Atmosphere->Transmittance.Get() : nullptr; }
 		nvrhi::ITexture* GetAtmosphereSkyViewTable() const { return m_Atmosphere ? m_Atmosphere->SkyView.Get() : nullptr; }
@@ -872,7 +873,7 @@ namespace Strata
 		// The lens flare at a quarter of the resolution (RGBA16F, exposed): null until a frame flared, and again once the render
 		// targets are released.
 		nvrhi::ITexture* GetLensFlareTexture() const { return m_LensFlareTexture; }
-		// The exposure of the latest frame (Include/Exposure.glsl): the adapted log2 average luminance and the multiplier of
+		// The exposure of the latest frame (Include/Exposure.slang): the adapted log2 average luminance and the multiplier of
 		// luminance the tone mapping applies.
 		nvrhi::IBuffer* GetExposureBuffer() const { return m_ExposureBuffer; }
 		// The view's depth pyramid occlusion culling tests against (R32_FLOAT, every level): null without the GPU-driven path.
@@ -908,7 +909,7 @@ namespace Strata
 		// The sun's shadow cascades' depth array (Quality.ShadowCascades layers): null until a frame draws a shadowed sun, and
 		// again once the cascades were released (a zero viewport releases them with the render targets).
 		nvrhi::ITexture* GetShadowMap() const { return m_ShadowMap; }
-		// The cascades' depth ranges (Include/Shadows.glsl, Scene/ShadowRanges.comp): made and released with the shadow map.
+		// The cascades' depth ranges (Include/Shadows.slang, Scene/ShadowRanges.comp): made and released with the shadow map.
 		nvrhi::ITexture* GetShadowRanges() const { return m_ShadowRanges; }
 		// The sun's screen-space shadow mask the forward pass read (RG8_UNORM: red the square root of the sun's visibility, green
 		// the pixel's blur radius over c_ScreenShadowMaxBlurPixels; Effects/ScreenShadows.frag): null until a frame draws a
@@ -1287,7 +1288,7 @@ namespace Strata
 			uint32_t PrefilteredSize = 256;   // Texels each way of Prefiltered's first level (RendererQualitySettings::EnvironmentResolution)
 		};
 		// The atmosphere (SceneRendererAtmosphere.cpp): made with the first frame whose sky uses it, released with the first that
-		// does not. Its tables (Include/Atmosphere.glsl) are computed when what they depend on changes; its environment is
+		// does not. Its tables (Include/Atmosphere.slang) are computed when what they depend on changes; its environment is
 		// double-buffered: while the sun moved more than c_AtmosphereRefreshAngle since the current one was computed, or the
 		// settings changed, the other set of maps is computed in c_AtmosphereRefreshSteps steps (one per frame with
 		// SceneRendererSpecification::SpreadLightingUpdates, else all at once) and then takes over; changes meanwhile wait for
@@ -1977,7 +1978,6 @@ namespace Strata
 		nvrhi::ShaderHandle m_MeshVertexShader;
 		nvrhi::ShaderHandle m_SkinnedMeshVertexShader;
 		nvrhi::ShaderHandle m_SkinnedShadowVertexShader;
-		nvrhi::InputLayoutHandle m_SkinnedInputLayout; // m_InputLayout and the skin stream (joints, weights)
 		nvrhi::ShaderHandle m_PrepassPixelShader;
 		nvrhi::ShaderHandle m_ForwardPixelShader;
 		nvrhi::ShaderHandle m_ForwardTransparentPixelShader;
@@ -1986,7 +1986,9 @@ namespace Strata
 		nvrhi::ShaderHandle m_TonemapPixelShader;
 		nvrhi::ShaderHandle m_SkyboxPixelShader;
 		nvrhi::ShaderHandle m_AtmosphereSkyboxPixelShader;
-		nvrhi::InputLayoutHandle m_InputLayout;
+		// By SceneVertexLayout: each scene vertex shader's attributes (SceneVertexLayouts.h), chosen by GetScenePipeline
+		// from the pipeline's vertex shader.
+		std::array<nvrhi::InputLayoutHandle, c_SceneVertexLayoutCount> m_SceneInputLayouts;
 		nvrhi::GraphicsPipelineHandle m_SkyboxPipeline;
 		nvrhi::GraphicsPipelineHandle m_AtmosphereSkyboxPipeline;
 
@@ -2164,7 +2166,7 @@ namespace Strata
 		nvrhi::BindingSetHandle m_ClusterBindingSet;
 		nvrhi::ComputePipelineHandle m_ClusterPipeline;
 		nvrhi::BufferHandle m_LightBoundsBuffer; // View-space bounding spheres, parallel to m_LightBuffer
-		nvrhi::BufferHandle m_ClusterBuffer;     // Per cluster: light count, then light indices (Include/Clusters.glsl)
+		nvrhi::BufferHandle m_ClusterBuffer;     // Per cluster: light count, then light indices (Include/Clusters.slang)
 
 		nvrhi::BindingLayoutHandle m_SceneBindingLayout;
 		nvrhi::BindingSetHandle m_SceneBindingSet;
@@ -2255,7 +2257,7 @@ namespace Strata
 		nvrhi::ComputePipelineHandle m_HistogramPipeline;
 		nvrhi::ComputePipelineHandle m_ExposurePipeline;
 		nvrhi::BufferHandle m_HistogramBuffer;
-		nvrhi::BufferHandle m_ExposureBuffer; // See Include/Exposure.glsl
+		nvrhi::BufferHandle m_ExposureBuffer; // See Include/Exposure.slang
 		nvrhi::BindingLayoutHandle m_BloomBindingLayout;
 		nvrhi::ComputePipelineHandle m_BloomPipeline;
 		nvrhi::TextureHandle m_BloomTexture;

@@ -128,7 +128,7 @@ def render_header(values):
         "namespace Strata::RenderData",
         "{",
         "",
-        "\t// The sun shadows' blue-noise tile (Renderer::GetBlueNoiseTexture, Include/Shadows.glsl): 64x64 bytes, row by row, each",
+        "\t// The sun shadows' blue-noise tile (Renderer::GetBlueNoiseTexture, Include/Shadows.slang): 64x64 bytes, row by row, each",
         "\t// value 0-255 exactly 16 times, neighbors far apart in value.",
         "\tinline constexpr uint32_t c_BlueNoiseSize = 64;",
         "\tinline constexpr uint8_t c_BlueNoise[64 * 64] = {",

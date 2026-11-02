@@ -173,7 +173,7 @@ namespace Strata
 		ACES,
 		AgX,
 		KhronosNeutral,
-		// The engine's camera-like curve (Include/Filmic.glsl, Tools/FitFilmic.py): middle gray shown as middle gray, a soft
+		// The engine's camera-like curve (Include/Filmic.slang, Tools/FitFilmic.py): middle gray shown as middle gray, a soft
 		// shoulder that takes bright colors to white without changing their hue; shaped by PostProcessComponent::Toe, Shoulder
 		Filmic
 	};

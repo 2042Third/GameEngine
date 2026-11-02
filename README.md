@@ -101,7 +101,9 @@ The `perf` tests compare timings with budgets measured on one reference machine,
 Requirements: CMake 3.25+, a C++20 compiler (MSVC 19.40+, GCC 13+, Clang 17+ or Apple Clang 15+) and a
 Vulkan 1.2+ driver; macOS runs Vulkan on Metal through MoltenVK (the Vulkan SDK, or Homebrew's `molten-vk` and
 `vulkan-loader`). The Vulkan SDK is optional elsewhere (it provides the validation layers used by Debug builds). Linux
-also needs the X11, Wayland and GTK 3 development packages. `Docs/DeveloperGuide.md` lists them ("Building").
+also needs the X11, Wayland and GTK 3 development packages. `Docs/DeveloperGuide.md` lists them ("Building"). The first
+configure downloads the shader compiler (Slang, 25-64 MB by platform) into a per-user cache; offline, see
+`Docs/DeveloperGuide.md` ("Shaders").
 
 Binaries land in `build/<preset>/bin/<Config>/`:
 

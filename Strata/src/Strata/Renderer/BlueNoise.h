@@ -8,7 +8,7 @@
 namespace Strata::RenderData
 {
 
-	// The sun shadows' blue-noise tile (Renderer::GetBlueNoiseTexture, Include/Shadows.glsl): 64x64 bytes, row by row, each
+	// The sun shadows' blue-noise tile (Renderer::GetBlueNoiseTexture, Include/Shadows.slang): 64x64 bytes, row by row, each
 	// value 0-255 exactly 16 times, neighbors far apart in value.
 	inline constexpr uint32_t c_BlueNoiseSize = 64;
 	inline constexpr uint8_t c_BlueNoise[64 * 64] = {

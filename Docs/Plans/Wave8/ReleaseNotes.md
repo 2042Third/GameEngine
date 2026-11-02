@@ -69,6 +69,17 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   fullscreen windows were not measured. There only a frame-rate cap paces the editor: File > Preferences > Frame Rate >
   Active frame rate (Unlimited by default).
 
+**Slang (S0.10)**
+
+- `Tools/LookDev.py compare` writes a signed difference image for every picture that differs (red where the new build
+  is brighter, blue where it is darker) and a per-mode summary, so a change that shifts a region one way stands out from
+  rounding; `selftest` runs its offline checks without an editor (`StrataTools.LookDevOffline`, on every CI job).
+- Shaders are written in Slang with HLSL syntax and compiled by slangc 2026.20, still to SPIR-V for Vulkan and MoltenVK:
+  the step toward other platforms' shader compilers. Pictures differ from 0.7.0 by rounding only (at most a few levels on
+  edge pixels; with TAA, small differences spread through the history). Every shader also compiles to HLSL in a test on
+  every CI job, CI validates every embedded module with spirv-val and converts it to Metal, and new shaders follow the
+  rules of `Docs/DeveloperGuide.md` ("Shaders").
+
 **showcase**
 
 - A fifth sample, High Desert Outpost (`Samples/Showcase`, first in the launcher): a derelict fuel stop in a rocky
@@ -95,6 +106,8 @@ projects, the template and scenes or projects without the value get.
 | What | 0.7.0 | 0.8.0 | Where |
 | --- | --- | --- | --- |
 | Contact shadow steps of the Graphics Quality presets | Low 0, Medium 0, High 12, Ultra 16 | 0 in every preset | lane Render |
+| Compiled shaders | glslang | slangc; pictures differ by rounding only | S0.10 |
+| First configure of a clone | offline after submodules | fetches Slang's archive once, or `STRATA_SLANG_ROOT` | S0.10 |
 
 ## Upgrading from 0.7.0
 
@@ -117,6 +130,9 @@ projects, the template and scenes or projects without the value get.
 | **Platform (S0.8)** | | | |
 | `Window::GetNativeWindow` | The `void*` the Vulkan device made its surface from | Gone | A `Window` of your own drops its override; code that needed the OS window uses `GetPlatformHandle`, code that presents through Vulkan `GetVulkanPresentation` |
 | `Window::Create` when no window can be opened | Aborted (`ST_CORE_VERIFY`) | Returns null, with the reason logged | Check the result |
+| **Slang (S0.10)** | | | |
+| The glslang submodule | `Strata/vendor/glslang` | gone: after pulling, the folder (about 900 MB, which git leaves) may be deleted | Keep the folder while you build commits from before 0.8.0 |
+| The shader compiler | glslang, built with the engine | Slang's release archive (25-64 MB), downloaded by the first configure into a per-user cache (`%LOCALAPPDATA%\Strata\Toolchains`, `~/.cache/strata/toolchains`, `~/Library/Caches/Strata/Toolchains`) and checked by its SHA-256 | Offline: download the archive `CMake/StrataSlang.cmake` names on another machine, extract it and configure with `-DSTRATA_SLANG_ROOT=<folder>` |
 
 ## Known issues
 
@@ -133,3 +149,11 @@ projects, the template and scenes or projects without the value get.
 - On the reference machine (NVIDIA RTX 5090, driver 621.1), vsync does not pace windows in windowed mode: FIFO presents
   without waiting, so a windowed editor or game runs as fast as it can unless a frame-rate cap is set. The cause is a
   driver or system setting, not confirmed yet. Borderless and fullscreen windows were not measured.
+
+**Slang (S0.10)**
+
+- Platforms: this release changes every shader. Its GPU tests ran on Windows with an NVIDIA GPU. On the Mac, CI converted
+  every shader to Metal and compiled it (the 15 that read the bindless table only at run time, through MoltenVK's
+  argument buffers, as before), but no GPU test ran through MoltenVK. On Mesa's lavapipe (a CPU driver, tried on CI), 529
+  of 553 GPU tests pass with the new shaders as with the old, and the same 24 fail with both; AMD and Intel GPUs have not
+  run them.

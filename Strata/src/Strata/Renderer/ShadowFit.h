@@ -84,7 +84,7 @@ namespace Strata
 	// over [N, F] (the receivers' range with margins, in quarter stops) and fits every cascade's square but the last one's to
 	// the receivers re-projected through the readback's camera into this frame's camera and light; the last cascade keeps its
 	// slice's sphere and reaches the shadow distance, so a receiver the readback did not see still has a cascade (shaders select
-	// cascades by containment: Include/Shadows.glsl, SelectShadowCascade). The far bound grows at once; the near bound grows at
+	// cascades by containment: Include/Shadows.slang, SelectShadowCascade). The far bound grows at once; the near bound grows at
 	// once for receivers holding c_NearNowShare of the pixels, for a transparent surface and in narrow views, else only after
 	// asking for c_GrowSeconds (c_GrowSecondsMoving on a moving camera); squares grow at once on a moving camera and after
 	// c_GrowSeconds on a still one, keeping the previous square meanwhile; everything shrinks after c_ShrinkReadbacks readbacks

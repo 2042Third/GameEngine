@@ -56,7 +56,7 @@ namespace Strata
 	namespace ShadowView
 	{
 
-		// The bin of a ratio of screen pixels per shadow texel, as Include/ShadowView.glsl's GetShadowViewBin computes it.
+		// The bin of a ratio of screen pixels per shadow texel, as Include/ShadowView.slang's GetShadowViewBin computes it.
 		uint32_t GetBin(float pixelsPerTexel);
 		// The geometric center of a bin: 2^((bin + 0.5) / 8 - 4).
 		float GetBinCenter(uint32_t bin);

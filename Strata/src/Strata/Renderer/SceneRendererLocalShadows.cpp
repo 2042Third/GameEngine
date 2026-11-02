@@ -90,7 +90,7 @@ namespace Strata
 			return glm::dot(offset, offset) <= radius * radius;
 		}
 
-		// Frustum::IsAABBVisible's test, also the GPU culling's (Include/Culling.glsl, IsBoxInFrustum).
+		// Frustum::IsAABBVisible's test, also the GPU culling's (Include/Culling.slang, IsBoxInFrustum).
 		bool BoxInPlanes(const glm::vec3& boxMin, const glm::vec3& boxMax, const std::array<glm::vec4, 6>& planes)
 		{
 			for (const glm::vec4& plane : planes)

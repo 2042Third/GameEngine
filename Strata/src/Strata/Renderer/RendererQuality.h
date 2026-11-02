@@ -131,7 +131,7 @@ namespace Strata
 		// cascades leave out casters below a texel (SceneRendererStats::SubTexelCasters).
 		float MinProjectedPixels = 0.5f;
 		// Taps of the sun's shadow edges where their penumbra is wider than a shadow texel (a Vogel disk turned by a fixed
-		// blue-noise tile, Include/Shadows.glsl): 8, 16, 24 or 32. More taps, less grain.
+		// blue-noise tile, Include/Shadows.slang): 8, 16, 24 or 32. More taps, less grain.
 		uint32_t ShadowFilterQuality = 16;
 		// Steps of the sun's screen-space contact shadows (0 off; else 4 to 32), which ground objects below the cascades' detail.
 		// 0 in every preset (they shimmer in motion); Custom turns them on.

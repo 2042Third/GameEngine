@@ -18,7 +18,8 @@ cmake --build --preset windows-debug --target StrataTests   # just the tests
 ```
 
 - Source files are globbed: a new `.cpp`/`.h` needs a re-configure. Shaders are not globbed: add every new
-  shader to `strata_add_shaders` in `Strata/CMakeLists.txt`.
+  shader (`<name>.slang`, HLSL syntax) to `strata_add_shaders` in `Strata/CMakeLists.txt`. The first configure
+  downloads Slang, the shader compiler; offline, set `STRATA_SLANG_ROOT` (`Docs/DeveloperGuide.md`, "Shaders").
 - The engine is one static library per layer of `StrataTests/Architecture/Layers.json` (`Strata_<Layer>`, made by
   `CMake/StrataLayers.cmake`): a new engine file needs a layer pattern there (the configure names files in no layer or
   in two), a new layer is a table entry, and a vendor library a layer needs is a `strata_layer_link` row in

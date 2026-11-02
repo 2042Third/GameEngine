@@ -158,7 +158,7 @@ TEST_SUITE("GPU.SceneRenderer.Feedback")
 		CHECK(feedbackStats.PrefetchRequests == marksStats.PrefetchRequests);
 		CHECK(marksStats.PrefetchRequests > 0);
 
-		// The GPU's screen sizes and UV pixels (Include/TextureStreaming.glsl) are the CPU's.
+		// The GPU's screen sizes and UV pixels (Include/TextureStreaming.slang) are the CPU's.
 		const std::map<AssetHandle, VisibleMaterialUse> expected = ByMaterial(marks.GetVisibleMaterials());
 		const std::map<AssetHandle, VisibleMaterialUse> actual = ByMaterial(feedback.GetVisibleMaterials());
 		REQUIRE(actual.size() == expected.size());

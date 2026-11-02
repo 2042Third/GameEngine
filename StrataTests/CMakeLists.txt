@@ -120,6 +120,8 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_TEST_SOURCES}
 # The engine with its tooling (the asset pipeline: importers; the network: the RPC tests; ImGui: the UI tests).
 # StrataScriptCore: the scripting tests call the script C ABI directly.
 target_link_libraries(StrataTests PRIVATE Strata StrataTooling StrataScriptCore doctest stb)
+# Renderer.ShaderTool and Renderer.ShaderModules read SPIR-V with the shader tool's code (CMake/StrataShaderTool).
+target_link_libraries(StrataTests PRIVATE StrataShaderToolCore)
 # The glTF tests compress models with meshoptimizer's encoders (EXT_meshopt_compression), which the engine only decodes.
 target_link_libraries(StrataTests PRIVATE meshoptimizer)
 # The physics tests drive box3d directly too, among them box3d's own cross-platform determinism scenario (its golden hash,
@@ -336,6 +338,37 @@ endif()
 # optional pre-release suffix (CMake/StrataPackageVersion.cmake).
 add_test(NAME StrataPackaging.Version COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/Packaging/PackageVersionTests.cmake")
 
+# The Slang pin's fetch (CMake/StrataSlang.cmake): a fake archive through file:// URLs into a private cache, the digest
+# check, cache hits without the archive, the error texts, the per-user folders and the host key in script mode.
+add_test(NAME StrataSlang.Fetch
+	COMMAND "${CMAKE_COMMAND}" "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/SlangFetchTest/$<CONFIG>"
+		-P "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/SlangFetchTests.cmake")
+
+# The console route stays open: every embedded shader also compiles to HLSL (slangc -target hlsl over the build's shader
+# manifest, no DXC; Shaders/TargetHLSL.cmake). No label, so every CI job that runs ctest -LE "gpu|perf" runs it (the Dist
+# job runs only the package tests).
+get_property(strataSlangc GLOBAL PROPERTY STRATA_SLANGC)
+get_property(strataShaderEntries GLOBAL PROPERTY STRATA_SHADER_ENTRIES)
+add_test(NAME StrataShaders.TargetHLSL
+	COMMAND "${CMAKE_COMMAND}" "-DSLANGC=${strataSlangc}" "-DENTRIES=${strataShaderEntries}" "-DREPOSITORY=${PROJECT_SOURCE_DIR}"
+		"-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/ShaderTargets/hlsl/$<CONFIG>" -P "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/TargetHLSL.cmake")
+set_tests_properties(StrataShaders.TargetHLSL PROPERTIES TIMEOUT 300)
+
+# The look-dev harness's checks that need no editor (PNG, signed differences, the per-mode summary): no editor guard, so
+# every build that runs CTest has it, also the one without the editor; StrataTools.LookDev, below, captures with the
+# editor and needs a GPU. The StrataTools.* tests need Python 3; without it at configure time the tests still exist and
+# fail saying so.
+find_package(Python3 3.10 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+	add_test(NAME StrataTools.LookDevOffline
+		COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/Tools/LookDev.py" selftest
+			--output "${CMAKE_CURRENT_BINARY_DIR}/LookDevOffline/$<CONFIG>")
+else()
+	add_test(NAME StrataTools.LookDevOffline
+		COMMAND "${CMAKE_COMMAND}" "-DTEST_NAME=StrataTools.LookDevOffline" -P "${CMAKE_CURRENT_SOURCE_DIR}/Tools/PythonMissing.cmake")
+endif()
+set_tests_properties(StrataTools.LookDevOffline PROPERTIES LABELS "tools" TIMEOUT 120)
+
 # Games contain no tooling: the runtime's linker map names no object or library of Dear ImGui, ImGuizmo, the asset
 # pipeline, the network or zstd's compressor (Architecture/CheckNoTooling.cmake; the configure checks what it links).
 if(TARGET StrataRuntime)
@@ -492,9 +525,8 @@ if(TARGET StrataEditor AND TARGET StrataCLI)
 	set_tests_properties(StrataEditor.Automation PROPERTIES ENVIRONMENT "${STRATA_END_TO_END_ENVIRONMENT}" TIMEOUT 600)
 
 	# The look-dev harness (Tools/LookDev.py) keeps working: it builds the look-dev project with this build's editor,
-	# captures one shot small twice and checks every output (Docs/DeveloperGuide.md, "Look-dev harness"). The StrataTools.*
-	# tests need Python 3; without it at configure time the test still exists and fails saying so.
-	find_package(Python3 3.10 COMPONENTS Interpreter)
+	# captures one shot small twice and checks every output (Docs/DeveloperGuide.md, "Look-dev harness"). Python 3 was
+	# looked for above, beside StrataTools.LookDevOffline.
 	if(Python3_Interpreter_FOUND)
 		add_test(NAME StrataTools.LookDev
 			COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/Tools/LookDev.py" selftest --build "$<TARGET_FILE_DIR:StrataEditor>"

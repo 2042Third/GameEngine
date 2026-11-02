@@ -97,6 +97,7 @@ stays under 40,000 characters (the test `Docs.AgentGuide` fails beyond). How the
   - [Game UI commands](#game-ui-commands)
   - [Output paths](#output-paths)
 - [Rendering](#rendering)
+  - [Shaders](#shaders)
   - [Scene renderer and lighting](#scene-renderer-and-lighting)
   - [Quality settings](#quality-settings)
   - [Render scene](#render-scene)
@@ -133,7 +134,7 @@ modules:
 | `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`, drawn by `GameRenderer`): it runs the `.stgame` manifest next to it, or `--game <file>`; `--headless` runs without window and GPU at 60 frames per second (servers, CI); `--frames N` stops after N frames (a count that is not a positive whole number exits 3, so a mistyped check cannot run forever); `--seconds S` stops at the frame by which the game played S seconds of game time (`GameRuntime::GetPlayedSeconds`: the fixed steps of its scenes from its start on, not the loading scene's; refused like `--frames`; with both, the first reached ends the run), the length of a check whose outcome depends on how far the game got (a picture, a tour), which a count of frames is not: the frame rate differs by machine and configuration; both keep every fixed step (no time dilation, and a frame longer than the scene's most steps per update, `Scene::GetMaxFixedSteps`, plays only the time they simulate, `GameRuntimeOptions::KeepEveryFixedStep`, so the scene's clock and its scripts' frame time agree with the steps counted); `--screenshot out.png` with `--frames N` or `--seconds S` saves the last frame (and fails the run when it shows the missing-camera message, or a black frame because the start scene still loads: scenes load in the background, the manifest's optional `LoadingScene` plays meanwhile); `--asset-budget-mb <n>` sets the GPU texture budget of the game's assets; `--resolution <width>x<height>` renders in a window of exactly that many pixels whatever the display's scale (instead of the manifest's window, which scales with the display; implies `--windowed`); `--quality <low|medium|high|ultra>` draws the run at a Graphics Quality preset and saves nothing (Custom, unknown names and `--headless` exit 3; "Quality settings"); `--perf-log <csv>` writes a row per frame (frame time, frame profiler stages, job threads, asset streaming and mip streaming, the upload queue, the device's memory and its staging, the process's private memory and its peak, the GPU's stages and busy time of the same frame, then a world's streaming and physics columns (capacity, then the last step: `PhysicsStepMs`, `PhysicsLibraryMs`, awake and sleeping bodies, contacts, recycled contacts, the fastest body's speed; [Physics instruments](#physics-instruments)) and what the renderer
 drew: draw calls, instances, triangles, visible and occluded proxies, instance uploads), also headless; `--save-directory <dir>` keeps the game's save files there instead of the player's data directory (tests); `--help` prints the options (`c_Arguments`), and an argument it does not understand or a bad value ends the run with the problem and the usage on stderr and exit code 3, as in the editor (`Core/CommandLineOptions`: `FindUnknownArgument`, `FormatUsage`, `c_UsageExitCode`). Patch packs the manifest lists (`PatchPacks`) are mounted over the game's pack. |
 | `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `ThirdPerson`, `OpenWorld`, `PhysicsPlayground` and `Tetris` (played and exported by the CTests `StrataEditor.ThirdPerson`, `StrataEditor.OpenWorld`, `StrataEditor.PhysicsPlayground` and `StrataEditor.Tetris`), each with `README.md`, `CREDITS.md` and `Picture.png` ([Samples](#samples): how they are made, credited and kept within budgets). `Samples.json` lists them; the build copies them next to the executables (`StrataSamples`), where the launcher's Open Sample and `project.openSample` offer them as copies. Open one in place only to change the sample: `StrataEditor --project Samples/<Game>`. |
-| `Tools/` | Standard-library Python tools: generators whose outputs are committed (`GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/`: PNGs, raw RGBA for the window icon, the `.ico` of the executables; `GenerateIslandTerrain.py` makes the Open World sample's island: its terrain tiles and palette, and the command script that scatters its vegetation; `GenerateBlueNoise.py` writes the sun shadows' 64x64 blue-noise tile, `Strata/src/Strata/Renderer/BlueNoise.h`, and `--check` verifies the committed one; `FitFilmic.py` fits the Filmic tone curve into `FilmicConstants.glsl` and `FilmicConstants.h`, `GenerateWhiteBalance.py` writes the white balance's locus, `Renderer/WhiteBalanceLocus.inl`, and `GenerateAreaTable.py` the morphological anti-aliasing's area table, `Renderer/MorphologicalAreaTable.inl`: see [Post-processing](#post-processing)), `PerfStability.py` (runs the perf tests repeatedly and reports how stable every metric is, see [Testing](#testing)), `PerfLock.py` (runs a command under a lock in the user's temporary directory, so that the measurements of agents run by one user never overlap), `PhysicsSweep.py` (the physics tuning sweep over the settle scenes and the Physics Playground, see [Settling and the sweep](#settling-and-the-sweep)), `CompatLint.py` (compiles changed files with GCC 14 and LLVM 16, the compilers closest to CI's, without precompiled headers, before a push: AGENTS.md, "CI before main") and `CIStatus.py` (the state of a commit's CI runs and the failure annotations its jobs left, readable without a job log) and `LookDev.py` (pictures of fixed shots through headless editors and their comparison between builds, see [Look-dev harness](#look-dev-harness)). |
+| `Tools/` | Standard-library Python tools: generators whose outputs are committed (`GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/`: PNGs, raw RGBA for the window icon, the `.ico` of the executables; `GenerateIslandTerrain.py` makes the Open World sample's island: its terrain tiles and palette, and the command script that scatters its vegetation; `GenerateBlueNoise.py` writes the sun shadows' 64x64 blue-noise tile, `Strata/src/Strata/Renderer/BlueNoise.h`, and `--check` verifies the committed one; `FitFilmic.py` fits the Filmic tone curve into `FilmicConstants.slang` and `FilmicConstants.h` (`--rewrite` writes both from the committed constants), `GenerateWhiteBalance.py` writes the white balance's locus, `Renderer/WhiteBalanceLocus.inl`, and `GenerateAreaTable.py` the morphological anti-aliasing's area table, `Renderer/MorphologicalAreaTable.inl`: see [Post-processing](#post-processing)), `PerfStability.py` (runs the perf tests repeatedly and reports how stable every metric is, see [Testing](#testing)), `PerfLock.py` (runs a command under a lock in the user's temporary directory, so that the measurements of agents run by one user never overlap), `PhysicsSweep.py` (the physics tuning sweep over the settle scenes and the Physics Playground, see [Settling and the sweep](#settling-and-the-sweep)), `CompatLint.py` (compiles changed files with GCC 14 and LLVM 16, the compilers closest to CI's, without precompiled headers, before a push: AGENTS.md, "CI before main") and `CIStatus.py` (the state of a commit's CI runs and the failure annotations its jobs left, readable without a job log) and `LookDev.py` (pictures of fixed shots through headless editors and their comparison between builds, see [Look-dev harness](#look-dev-harness)). |
 | `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, streaming and residency, render scene, animation, scripting, editor, export and runtime), `Roadmap.md` (the pillars, the waves of workstreams and what each landed wave delivered; update its Status when a wave lands), `Manual/` (guides for people making games in the editor: `Scripting.md`), `Releases/` (the notes of each release, `<version>.md`, and the README of the release archives, `PackageReadme.md`). |
 | `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, editor automation, making a game end to end: `strata-make-a-game`). |
 
@@ -153,8 +154,9 @@ Requirements: CMake 3.25+, a C++20 compiler (MSVC 19.40+, GCC 13+, Clang 17+/App
 a Vulkan 1.2+ driver whose device has dynamic rendering, synchronization2, timeline semaphores, descriptor indexing,
 anisotropic filtering and cube map arrays (`imageCubeArray`, which every scene shader's reflection probes need; every
 desktop Vulkan 1.2 GPU has them, MoltenVK included): device selection rejects a device without one and logs which it
-lacks. The Vulkan SDK is **not** required to build (headers and the shader compiler
-are vendored), but installing it enables the Khronos validation layers used by Debug builds.
+lacks. The Vulkan SDK is **not** required to build (the headers are vendored; the shader compiler, Slang, is
+downloaded once at the first configure into a per-user cache, or taken from `STRATA_SLANG_ROOT`: [Shaders](#shaders)),
+but installing it enables the Khronos validation layers used by Debug builds.
 Linux also needs: `libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev
 libxkbcommon-dev libgtk-3-dev` (window system + native file dialogs).
 
@@ -201,7 +203,12 @@ the newest of its branch or main, saved even when tests fail; at most 250 MB for
 Each ref keeps one entry per job: after the save, the job deletes its ref's older entries, so that main's set and the
 active branches' stay below GitHub's 10 GB, beyond which GitHub evicts the least recently used (main's first). A
 Dist build of every target on Windows uses the Visual Studio generator people build with, without a cache, and runs the
-`package` tests, so that the Visual Studio generator's script builds stay tested. Older compilers and other standard
+`package` tests, so that the Visual Studio generator's script builds stay tested. Every job that runs
+`ctest -LE "gpu|perf"` (all but the Dist build) runs `StrataShaders.TargetHLSL` (every shader also compiles to HLSL) and
+`StrataTools.LookDevOffline`, also without the editor; the Linux job validates the embedded shaders with `spirv-val`, and
+the macOS job converts them to Metal and compiles them ([Shaders](#shaders), "The checks"). A failed shader step does
+not skip the job's tests (they run whenever the build succeeded), and the macOS log names the converter's version, since
+Homebrew's `molten-vk` is not pinned. Older compilers and other standard
 libraries reject code that the local ones accept (Apple Clang 15's libc++ has no floating-point `std::from_chars`;
 `size_t` and `uint64_t` are different types on macOS; GCC 14 warns where newer GCCs do not), so a branch that lands many
 changes (a wave's integration) is pushed as `ci/<name>` and waits for green CI before it moves `main`
@@ -673,10 +680,16 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     draws, shadow draws, cached cascades and, where the build reports them, the quality preset and shadow map size),
     `index.html` and `run.json` (the build's version line, the editor's GPU, every shot's outcome). Exit code 1 when a
     shot failed.
-  - `compare <before> <after> --output <dir>`: per picture the two sets share, the differing pixels, the largest and the
-    mean channel difference and a difference image (eight times the difference), the crops side by side, and per picture
-    the ratio of the GPU times; `compare.json` and `index.html`. It reports differences without failing; exit code 1 only
-    when one side has a picture the other lacks.
+  - `compare <before> <after> --output <dir> [--signed-gain <gain>]`: per picture the two sets share, the differing
+    pixels, the largest and the mean channel difference, a difference image (eight times the difference) and a signed
+    one in `signed/` (the mean of the three channels' after minus before times the gain, default 32, 0 writes none: red
+    where the after picture is brighter, blue where it is darker), the crops side by side, and per picture the ratio of
+    the GPU times; `compare.json` and `index.html`, which shows the two images side by side. `compare.json`'s `summary`
+    and one printed line per anti-aliasing mode give the pictures, how many differ, the median of differing pixels over
+    all of them, the median largest difference over the differing ones, the largest difference and the largest mean. A
+    region of one sign that follows geometry, a light's footprint, a shadow's edge or a material is a change of the
+    image, not rounding: look at the signed images of every differing picture. It reports differences without failing;
+    exit code 1 only when one side has a picture the other lacks.
   - A shot's `Setup` runs editor commands on its scene before the captures; a step's `entityName` names the entity, and
     `repoFile` (a path in the repository) gives `asset.import` the file to copy in (`tp.lut` imports the feature project's
     `Warm.cube`).
@@ -688,8 +701,11 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     editors quit.
   - `StrataTools.LookDev` (labels `gpu` and `tools`) runs `selftest` with the build's editor: the look-dev project from its
     command script, one shot at 320x180 with FXAA twice, every output checked (sizes, crops, stats with no pending asset,
-    no difference between the repeats, the page, `compare` of the set with itself), and the PNG reader and writer round
-    trip. It needs Python 3.10 or later found at configure time; without it the test fails saying so.
+    no difference between the repeats, the page, `compare` of the set with itself), and the offline checks: the PNG
+    reader and writer round trip, the signed difference and the per-mode summary. `selftest` without `--build` runs only
+    the offline checks, which `StrataTools.LookDevOffline` (label `tools`, no GPU, no editor) runs on every CI job that
+    runs `ctest -LE "gpu|perf"` (all but the Dist build). Both need Python
+    3.10 or later found at configure time; without it the tests fail saying so.
   - Baselines: Strata 0.6.0's set (bc6ee123's Release build, every shot, both sizes, all modes, 5 repeats) lies in
     `.worktrees/wave7-plan/lookdev/0.6.0/` on the reference machine, outside the repository, with wave 7's step 0 beside it.
     Strata 0.7.0's set (76f28a21's Release build, every shot, both sizes, all modes, 5 repeats, live) lies in
@@ -1758,7 +1774,7 @@ registration (and the tests'), and any a module registers. They hold for every p
   life; its entry follows the slot, with the minimum level of detail of levels fading in). Levels nothing needs drop
   after 30 s (`TextureStreamer::SetIdleDropSeconds`) or under budget pressure, and raised levels fade in over
   `TextureTable::c_FadeInSeconds`; material textures are sampled only through `SampleMaterialTexture`
-  (`Include/MaterialTextures.glsl`), which applies the fade.
+  (`Include/MaterialTextures.slang`), which applies the fade.
   Renderers and tests that compare exact pixels set `SceneRendererSpecification::TextureStreaming = false` (every level,
   pending until resident); tests of whole-asset residency turn the manager's partial loads off
   (`AssetManagerBase::SetPartialLoads(false)`). Tests that watch levels drop shorten the idle drop time and wait by the
@@ -2487,8 +2503,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `GameUIScene::GetVisibleBox` (what the masks leave of its box), as hit tests, `input.click` and the editor's picking
   do.
 - `UIQuad`, `UIClipRect`, the draw parameters and the table formats live in `GameUI/GameUIRenderData.h` and
-  `shaders/GameUI/UIQuad.glsl`: change both together. Images blend in display values (sRGB textures sample linear values
-  and are converted back), corners and borders come from the rect's signed distance, glyphs share `Include/SDFText.glsl`
+  `shaders/GameUI/UIQuad.slang`: change both together. Images blend in display values (sRGB textures sample linear values
+  and are converted back), corners and borders come from the rect's signed distance, glyphs share `Include/SDFText.slang`
   with the text renderer.
 
 ### UI input
@@ -3660,6 +3676,105 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 
 ## Rendering
 
+### Shaders
+
+The engine's shaders are HLSL-syntax Slang in `Strata/shaders`, compiled at build time by a pinned slangc to SPIR-V 1.5
+and embedded; Vulkan runs them, and MoltenVK on the Mac. Plain HLSL keeps the route to other platforms' shader compilers
+open (the owner's reason for the language). Until wave 8 they were GLSL compiled by glslang; the conversion was
+mechanical, so a lighting bug in code nobody changed may be a conversion slip (item 7).
+
+1. **Language.** A stage file is `<registered name>.slang` (`Scene/Forward.frag.slang` for `Scene/Forward.frag`), an
+   include `Include/<Name>.slang` guarded by `STRATA_<NAME>_SLANG`, and every stage file includes `Include/Common.slang`
+   first. The registered name keeps its stage suffix (`.vert`, `.frag`, `.comp`), from which `ShaderLibrary` takes the
+   stage; every entry point is `main`.
+2. **Rules in full** (the HLSL forms that differ from GLSL silently, and what the converted tree follows):
+   - `mul(M, v)` for a matrix times a vector, `mul(A, B)` for a matrix product. `mul(v, w)` of two vectors is their dot
+     product and `M * N` multiplies componentwise: both compile without a word, so `mul` only with a matrix.
+   - Comparisons of vectors give bool vectors: wrap them in `all()` or `any()` where one bool is meant.
+   - `floatNxN(...)` takes rows and `M[row][col]` indexes them; a GLSL column is a `transpose`d row.
+   - `select(condition, ifTrue, ifFalse)` is GLSL's `mix(ifFalse, ifTrue, condition)`: the order is reversed.
+   - `Interlocked*` return the previous value through an out parameter.
+   - Compute shaders sample with `SampleLevel` or `Load`: `Sample` asks for compute derivatives (a capability the device
+     need not have).
+   - Every storage image states its format with `[vk::image_format("...")]` (the build turns unstated ones into Unknown,
+     which `Renderer.ShaderModules` rejects).
+   - Bindless reads index with `NonUniformResourceIndex`.
+   - Vertex and instance ids are `SV_VulkanVertexID` and `SV_VulkanInstanceID`: the draw list is indexed by the instance
+     index including the base instance, which `SV_InstanceID` excludes.
+   - `precise` where fused or reordered math would break an agreement (`Include/LODSelection.slang`: the CPU and GPU choose
+     the same level of detail).
+   - `static const` for constants. No generics, modules, interfaces or extensions; `__target_switch` and `spirv_asm`
+     only in `Include/Common.slang`, each with an HLSL form.
+   - New shaders take their stage inputs as entry-point parameters (`SV_Position`, `SV_DispatchThreadID`...). The
+     converted files' `st_*` globals (`Include/Common.slang`'s last section, which each converted entry point fills
+     before calling its `st_Main`) belong to the conversion until they are moved into parameters.
+   - Fragment shaders take their derivatives before the first `discard` or `clip` ([Lights, shadows and HDR](#lights-shadows-and-hdr)).
+3. **Bindings.** HLSL registers: `register(tN)` sampled textures and read-only buffers, `sN` samplers, `bN` constant
+   buffers, `uN` storage images and read-write buffers, `spaceS` descriptor set S (the binding set's position in the
+   pipeline state; set 1 is the bindless table, or Tonemap's second set). The build shifts the classes to NVRHI's Vulkan
+   ranges: t + 0, s + 128, b + 256, u + 384. Push constants are `[[vk::push_constant]] ConstantBuffer<T>`, their slot
+   only in C++'s `BindingLayoutItem::PushConstants`: give them a slot no constant buffer of the pipeline's other layouts
+   uses. Constant buffers keep std140's layout and structured buffers std430's, as the C++ structs do.
+4. **The build** (`CMake/StrataShaders.cmake`). Every entry of `strata_add_shaders` in `Strata/CMakeLists.txt` takes two
+   commands: slangc writes `EmbeddedShaders/<name>.raw.spv` (validated by SPIRV-Tools, `SLANG_RUN_SPIRV_VALIDATION=1`),
+   then `StrataShaderTool` (`CMake/StrataShaderTool`, a host tool of the standard library only) checks the module,
+   decorates the position `Invariant` for the entries of an `INVARIANT_POSITION` source (`Scene/Mesh.vert` and its
+   variants: the depth prepass's EQUAL test needs the forward pass's positions bit-identical, and Slang cannot say
+   `invariant`) and writes `<name>.spv` and the `<name>.h` the registry includes. `ShaderEntries.txt` lists every entry
+   (name, source, stage, defines) for CI and the tests. slangc's flags, each with its reason in the CMake file:
+   `-target spirv -profile spirv_1_5` (Vulkan 1.2's highest), `-matrix-layout-column-major` (glm's bytes),
+   `-fvk-{t,s,b,u}-shift` (NVRHI's ranges), `-default-image-format-unknown` (no guessed storage formats),
+   `-warnings-disable 39001,41012` (binding overlaps of declarations no entry point uses together, and profile upgrades
+   that are not what a module declares: `Renderer.ShaderModules` checks both properly) and `-warnings-as-errors all` with
+   `STRATA_WARNINGS_AS_ERRORS`. Not passed: `-fvk-invert-y`, `-fvk-use-dx-position-w` (NVRHI flips the viewport),
+   `-fvk-use-dx-layout`, `-fvk-use-scalar-layout` (other buffer offsets), `-g` (configuration-dependent outputs),
+   `-O`, `-source-embed-style` (the header must follow the patch), `-depfile`, `-emit-spirv-via-glsl`. Shader bytes are
+   the same in Debug, Release and Dist. Every entry depends on its own file and every include: editing an include
+   recompiles all shaders, editing `Forward.frag.slang` its six entries.
+5. **The pin** (`CMake/StrataSlang.cmake`). Slang 2026.20's release archives for Windows x64, Linux x64 and macOS (arm64
+   and x64), each with its SHA-256. The first configure downloads the host's archive (25-64 MB) under a file lock into a
+   per-user cache, `%LOCALAPPDATA%\Strata\Toolchains`, `~/Library/Caches/Strata/Toolchains` or
+   `$XDG_CACHE_HOME/strata/toolchains` (else `~/.cache/strata/toolchains`), in a folder `slang-<version>-<host>`, checks
+   the digest, extracts only slangc, the libraries it loads and the licenses, and runs `slangc -v`; later configures and
+   other build trees use the folder without the network (`-- Slang 2026.20: <path> (cached)`). A bump leaves the old
+   folder for the user to delete. Offline, or on a host without a pin, `STRATA_SLANG_ROOT` (a cache variable, default
+   the environment variable) names an extracted release of the pinned version. Every failure stops the configure naming
+   the archive, its digest and the way out. **Bumping** is a commit of its own: the new version and its four digests,
+   each archive downloaded and hashed (not taken from an API alone), the extracted file lists checked, then the Debug and
+   Release GPU suites under the validation layer, a look-dev compare against the previous build (median largest
+   difference 1 without anti-aliasing, the signed images inspected), `StrataShaders.TargetHLSL` and CI's two shader steps
+   green.
+6. **The checks.** `Architecture.Shaders` (derivatives before discards; Slang sources only; HLSL syntax: no Slang-only
+   language, target switches only in `Include/Common.slang`, no GLSL left). `Renderer.ShaderModules` over the embedded
+   modules: SPIR-V 1.5 with entry point `main` of the name's stage; only capabilities every accepted device enables (the
+   allow-list grows only by a feature device selection requires; `StorageImageExtendedFormats` only per named entry with a
+   fallback for devices without `shaderStorageImageExtendedFormats`, and a hint names the known traps: `f32tof16`'s 16-bit
+   types, `Sample` in compute, storage images without a format, `SV_InstanceID`); the four `Scene/Mesh*.vert` entries
+   keep their position invariant; no module binds two used variables to one slot; each scene vertex shader reads exactly
+   the locations and types of its input layout (`Renderer/SceneVertexLayouts.h`, from which `GetScenePipeline` takes a
+   pipeline's layout by its vertex shader: the validation layer only warns about an attribute no shader reads, and the
+   GPU suites count errors). A new scene vertex shader gets a line there. `Renderer.ShaderTool` tests the tool.
+   `GPU.Renderer` creates every module under the validation layer. `StrataShaders.TargetHLSL` compiles every entry to
+   HLSL on every CI job but the Dist build (which runs only the package tests), `StrataSlang.Fetch` checks the pin,
+   `StrataTools.LookDevOffline` the look-dev compare. CI's
+   Linux job validates the final modules with `spirv-val` (Vulkan 1.2; slangc validated them before the patch), and the
+   macOS job converts every module to Metal with MoltenVK's converter and compiles it (a lower bound of what MoltenVK does
+   at run time): `c_KnownFailures` of `.github/scripts/convert_shaders_to_metal.sh` lists the entries the offline
+   conversion refuses whatever compiled them (the bindless table's runtime array, which MoltenVK places in an argument
+   buffer at run time), and only shrinks.
+7. **A conversion slip.** The classes the conversion met: vector comparisons used as one bool, a multiplication across two
+   lines, `texture()` in compute, a matrix column written alone, GLSL's `umulExtended` and the dispatch's size (the hand
+   fixes), and the one that compiled and passed every GPU test: a `mul` of two vectors, which collapsed the local shadows'
+   filter to a dot product and showed only in a look-dev picture. When an image changes where no code did: capture the
+   suspect build (`Tools/LookDev.py capture`), compare it with 0.7.0's set (`.worktrees/wave8-plan/lookdev/0.7.0/`, see
+   [Look-dev harness](#look-dev-harness)) with `compare --signed-gain 32`, and look at the signed images: a region of one
+   sign that follows geometry, a light's footprint, a shadow's edge or a material points at a converted line.
+8. **Other targets.** `slangc -target hlsl` succeeds for every entry (`StrataShaders.TargetHLSL`); a D3D-style target
+   would still need `SV_VulkanInstanceID` and `SV_VulkanVertexID` replaced (with the base instance passed another way),
+   registers for the push constant blocks (their C++ slots), NVRHI's `registerSpace` for set 1, HLSL's constant buffer
+   packing, which differs from std140, and the Forward variants' 3,600-byte `ReflectionProbeBuffer` element within DXC's
+   2,048. Metal runs through MoltenVK's conversion only.
+
 ### Scene renderer and lighting
 
 - `SceneRenderer` draws a `Scene` from a `SceneCamera` into its output texture or a given framebuffer: light clustering,
@@ -3913,13 +4028,13 @@ lights, Post Process and the sky), and never a resolution below the output's.
   one by one, back to front. Draws are gathered in parallel chunks merged in chunk order (results do not depend on
   the threads) and sorted with `RadixSort` (`Core/RadixSort.h`). `RenderData::InstanceData` (64 bytes: a 3x4 world
   matrix, the material slot, the entity ID, flags) persists in a buffer indexed through the frame's draw list
-  (`u_DrawList[gl_InstanceIndex]`); only changed instances, materials and draw list ranges are uploaded, so a still
-  frame uploads nothing (`SceneRendererStats::InstanceBytesUploaded`, `ProxyUpdates`). Shaders derive the normal
-  matrix from the 3x4 rows (`TransformNormal` in `Include/Scene.glsl`).
+  (`u_DrawList[st_InstanceIndex]`, from `SV_VulkanInstanceID`); only changed instances, materials and draw list ranges
+  are uploaded, so a still frame uploads nothing (`SceneRendererStats::InstanceBytesUploaded`, `ProxyUpdates`). Shaders
+  derive the normal matrix from the 3x4 rows (`TransformNormal` in `Include/Scene.slang`).
 - A draw list entry is `RenderData::MakeDrawEntry`: the instance in the low 27 bits (`ST_DRAW_ENTRY_INSTANCE_MASK`; render
   scenes hold at most `c_MaxRenderInstances`, `RenderScene::SetInstanceLimit`), a level-of-detail cross-fade code above.
   While a view instance's level changes, both levels are drawn for `c_LODFadeFrames` frames with complementary 4x4
-  dither masks (`LODSelection::UpdateLODFade` on the CPU path, its copy in `Include/LODSelection.glsl` in `Cull.comp`,
+  dither masks (`LODSelection::UpdateLODFade` on the CPU path, its copy in `Include/LODSelection.slang` in `Cull.comp`,
   each renderer keeping a state per instance); the depth prepass and the forward pass discard by the same test
   (`IsLODFadeDrawn`), so `EQUAL` holds even where the levels cover the same pixels at the same depth. A new opaque scene
   pass does the same; shadow and transparent draws never fade. `GPU.SceneRenderer.LODFade` compares fading frames with
@@ -3962,7 +4077,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   the shadow map follows; `GPU.SceneRenderer.GPUDrivenFallback` takes shaders away with `ShaderLibrary::SetUnavailable`).
 - The rules that decide what is drawn exist twice: on the CPU (`SceneRendererExtraction.cpp`: frustum, screen size
   `MinProjectedPixels`, cascades and sub-texel casters, materials, levels of detail through `LODSelection`) and in
-  `Cull.comp` (`Include/LODSelection.glsl`, `Include/Culling.glsl`). Change both together; `GPU.SceneRenderer.GPUDriven`
+  `Cull.comp` (`Include/LODSelection.slang`, `Include/Culling.slang`). Change both together; `GPU.SceneRenderer.GPUDriven`
   and `IndirectFallback` compare the paths' pixels (within 1/255), entity IDs and counts scene by scene. Shading must not
   depend on the order of draws or of a draw's instances: screen-space derivatives only as the derivative rule allows
   ("Lighting": of the primitive's own interpolants and textures, in control flow uniform over a quad, before any
@@ -3984,7 +4099,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   VisibilityFeedback`, `SceneRendererStats::FeedbackRequests`, `renderStats.feedbackRequests`; Docs/Architecture.md,
   "Render scene"). Feedback marks exactly what the CPU's walk of the view marks (`GPU.SceneRenderer.Feedback` compares the
   two): a change to the CPU's marks (`CullView`, `FindShadowCasters`) or to how texture streaming measures surfaces
-  (`TextureStreamingPolicy`) changes `Cull.comp` and `Include/TextureStreaming.glsl` with it. Tests that check a frame's
+  (`TextureStreamingPolicy`) changes `Cull.comp` and `Include/TextureStreaming.slang` with it. Tests that check a frame's
   requests in the frame its scene changed either wait for the feedback to see the change or set `VisibilityFeedback`
   off; the CPU still walks transparent users (`RenderScene::CollectMaterialUsers`) and skinned proxies itself.
 - The view is occlusion culled in two phases (`SceneRendererSpecification::OcclusionCulling`; Docs/Architecture.md,
@@ -4047,7 +4162,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   (`SceneRenderer::GetVelocityTexture`): its unjittered position in this frame's UV space minus its position in the
   previous one's (`FrameConstants::UnjitteredViewProjection`, `PreviousViewProjection`, built in double relative to the
   current camera, so a still camera gives the same matrix twice and exactly zero motion); 0 where nothing is drawn, where
-  `Include/Motion.glsl` (`GetCameraMotion`) derives the camera's motion from the depth (the sky as a direction).
+  `Include/Motion.slang` (`GetCameraMotion`) derives the camera's motion from the depth (the sky as a direction).
 - Previous transforms and poses come from the renderer's **motion history**, its own copy of the render scene's instance
   and palette buffers as its latest frame drew them (`GetPreviousInstanceBuffer`, `GetPreviousPaletteBuffer`, scene-set
   SRV 20 and 21; without one the shared buffers are bound there): the shared GPU copy cannot hold "previous", since its
@@ -4148,7 +4263,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   fails). Only the TAA reads it. The history's alpha holds the signed view distance (above); screen-space reflections
   fetch only the history's color ("Reflections").
 - **Sharpening** lives in the tone mapping (`Tonemap.frag`, `TonemapParameters::Sharpening`, written only on frames the
-  TAA resolved): four `texelFetch` neighbors, in compressed luminance the center moves from their mean by
+  TAA resolved): four `Load` neighbors, in compressed luminance the center moves from their mean by
   `Sharpening * (1 - R)^8` (R the five taps' range), bounded to the range widened by that amount times R and below
   `(1 + ymax) / 2`, luminance only. It never enters the history, exposure, bloom or `GetResolvedHDRTexture`; captures and
   the project picture show it. The exponent comes from the CPU prototype `Tests::TAA::SharpenLuminance`
@@ -4192,7 +4307,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   frustum culls the records, ranks them by relevance (projected size of their range) and caps them at `MaxLights`.
   `Scene/LightClusters.comp` then lists the lights reaching each cluster of a 16x9x24 froxel grid (exponential depth
   slices), a full cluster keeping its most relevant ones (on the GPU-driven path ranked in the shader:
-  `GetLightRelevance`, `Include/Clusters.glsl`), and `Forward.frag` loops only over its pixel's cluster. The GPU's light
+  `GetLightRelevance`, `Include/Clusters.slang`), and `Forward.frag` loops only over its pixel's cluster. The GPU's light
   counts come back with its other counts (`SceneRendererGPUStats::Lights`, `CulledLights`; `Tests::GetLightCounts`).
   The directional light's shadows are cascades; point and spot lights' are views in an atlas ("Local light shadows").
 - The cascades are one D32 array (`SceneRenderer::GetShadowMap`) of a layer per cascade the quality draws
@@ -4211,7 +4326,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   in parallel chunks merged in chunk order, so its casters do not depend on the threads.
 - Cascade blending (`DirectionalLightComponent::CascadeBlend`, 0 to 0.5, 0.1 by default and for scenes saved before
   it): each cascade's band is the last `CascadeBlend` of its slice's depth range, before its split (the first slice's
-  range counted from the camera). `Include/Shadows.glsl` (`CascadeBlendWeight`) mixes a band's pixels with the next
+  range counted from the camera). `Include/Shadows.slang` (`CascadeBlendWeight`) mixes a band's pixels with the next
   cascade where that one holds them (a fitted square may not: "Sun shadows"), and the last cascade's with no shadow, so no
   seam shows between cascades and shadows fade out by the shadow distance instead of stopping. `FindShadowCasters` starts each next slice at the previous band before fitting
   its sphere, so the next square covers the band; the CPU's caster test, the GPU's `CullConstants::CascadeBoxes`, the
@@ -4223,8 +4338,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
   pipelines with clockwise front faces and flip their tangent handedness (`c_InstanceMirrored`). The ambient occlusion
   targets are R16F where the device stores the extended storage image formats
   (`GraphicsDeviceInfo::SupportsExtendedStorageFormats`, the `*Half.comp` variants of `GTAO` and `AODenoise`), else R32F.
-- Fragment shaders take every derivative (`fwidth`, `dFdx`, `texture` without an explicit level, helpers such as
-  `SDFCoverage`) before their first `discard`: a discard that differs per pixel ends its invocation, which leaves the
+- Fragment shaders take every derivative (`fwidth`, `ddx`/`ddy`, `Sample`/`SampleBias`/`SampleCmp` without an explicit
+  level, helpers such as `SDFCoverage`) before their first `discard` or `clip`: a discard that differs per pixel ends its invocation, which leaves the
   derivatives of the rest of its 2x2 quad undefined (Mesa drops the lane; MoltenVK keeps it, so the Mac shows nothing).
   Multiply coverage into the result and discard once at the end, as `GameUI/UIQuad.frag` does, or sample every texture
   before the discards, as `Scene/Forward.frag` and `Scene/DepthPrepass.frag` do. `Architecture.Shaders` checks every
@@ -4232,7 +4347,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 ### Sun shadows
 
-- **The filter** (`Include/Shadows.glsl`, `SampleCascadeShadow`) is percentage-closer soft shadows at the physical width:
+- **The filter** (`Include/Shadows.slang`, `SampleCascadeShadow`) is percentage-closer soft shadows at the physical width:
   a blocker at separation `s` under a disk of angular radius `a` (half the light's `ShadowSoftness`; the sun is 0.53
   degrees across, the component's default) lights a straight edge from none to full over `2 s tan(a)`, which filtering
   with a disk of radius `s tan(a)` reproduces (`ShadowParams.x` is `tan(a)`; its 10-90% width is `1.374 s tan(a)`, 2.5 cm
@@ -4369,7 +4484,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
     texels on each side, as a square of quarter stops (at least a sixteenth of the slice's sphere; the sphere once it would
     be as large, or when no bin reaches the slice), centered on whole texels of absolute light space. Its depth stays the
     sphere's (`FarZ`, `SphereNearZ`, `Radius`: the search distance), so every point of the slice is in its depth range.
-  - **Containment:** shaders select cascades with `SelectShadowCascade(viewDepth, position)` (`Include/Shadows.glsl`; the
+  - **Containment:** shaders select cascades with `SelectShadowCascade(viewDepth, position)` (`Include/Shadows.slang`; the
     only selection: never by depth alone): from the first cascade whose split lies beyond the depth, the first that holds
     the position 33 texels inside its square (the last one to its edge, as 0.6.0) and in its depth range; a band blends
     into the next cascade only where that one holds the pixel. The debug view selects alike.
@@ -4391,7 +4506,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   loop; pixels in a blend band sample two cascades), contact shadows 0.20, the two blur passes 0.10 (the blurred pixels'
   taps: writing only changed pixels saved nothing), the reduction 0.02. Measured and not kept: gathering the range cells
   four at a time (5-16% slower in registers), the reduction beside the mask's passes (graphics and compute work on one
-  queue do not overlap). The comparisons take level 0 by LOD (`textureLod`, GL_EXT_texture_shadow_lod): sampling the
+  queue do not overlap). The comparisons take level 0 by LOD (`SampleCmpLevelZero`): sampling the
   array with zero gradients made the evaluation cost 2.2-2.4 times as much. `PerfGPU.Renderer.ScreenShadows4K*` and
   `ShadowRedraw4K*` (provisional) measure it on 100,000 shadowed cubes.
 - **Transparent surfaces** are not in the prepass: `Forward.frag`'s transparent and glass variants call
@@ -4404,7 +4519,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   over a screen pixel's world size facing the camera at that distance, `2 d / (Projection[1][1] * rows)` (`2 /
   (Projection[1][1] * rows)` for orthographic views): independent of the surface's orientation, so it compares with the
   shadows audit's numbers. About 1 or less is as fine as the screen; 2.2 at every split was 0.6.0's 2048-texel cascades at
-  2160 rows. `Include/ShadowView.glsl` computes it once for both users: `Overlay/ShadowView.frag` colors receivers
+  2160 rows. `Include/ShadowView.slang` computes it once for both users: `Overlay/ShadowView.frag` colors receivers
   (green at most 1, yellow 2, red 4 and more, linear in stops; a checker of the texels where they span more than about
   1.4 pixels; darkened by the sun's shadow, 0.4 + 0.6 times the visibility of the frame's mask at SRV 23 (white without
   one), so the view shows where the shadows fall on the texels; white cascade edges; hatched blend bands; a gray veil
@@ -4474,7 +4589,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 ### Lighting
 
-- **Energy compensation** (`PBR.glsl`'s `GetSpecularEnergy`): GGX's single-scattering lobe reflects only its directional
+- **Energy compensation** (`PBR.slang`'s `GetSpecularEnergy`): GGX's single-scattering lobe reflects only its directional
   albedo `E = x + y` of the light (the BRDF table's scale and bias of F0 summed: the lobe's albedo for F0 = 1); the rest
   scatters again between the microfacets. The specular light is multiplied by `1 + F0 (1 / E - 1)`, exact for F0 = 1 (the
   lobe then reflects everything) and less for colored metals, whose further bounces absorb `1 - F0` each. The factor
@@ -4486,7 +4601,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   to a dielectric's reflection. A white metal in a white furnace reflects the whole sky at every roughness (0.31 of it at
   roughness 1 before; `GPU.SceneRenderer.Lighting`'s furnace cases): check every shading change with them, and with the
   look-dev furnace (`lookdev.furnace`, Tonemapper None, so the PNG's decoded values at the sphere centers are linear).
-- **Specular anti-aliasing** (`PBR.glsl`'s `WidenRoughness`, `SceneRendererSpecification::SpecularAntiAliasing`, on by
+- **Specular anti-aliasing** (`PBR.slang`'s `WidenRoughness`, `SceneRendererSpecification::SpecularAntiAliasing`, on by
   default, `MaterialParams.z`): a highlight narrower than a pixel lands on some pixels and misses their neighbors, so
   normal-mapped and curved surfaces sparkle at 4K and as they move. The shading normal's change across the pixel is a spread
   of normals within its footprint, so the lobe is widened by its variance: `alpha^2 += min(2 x 0.25 (|dN/dx|^2 +
@@ -4565,7 +4680,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   behind them, while occluders wide on screen keep their samples high.
 - **Multi-bounce** (`PostProcessComponent::AmbientOcclusionMultiBounce`, default on, `AOParams.y`; also for materials'
   occlusion maps, with or without screen AO): the forward pass multiplies diffuse image light by
-  `AOMultiBounce(visibility, albedo (1 - metallic))` (`Include/AmbientOcclusionFit.glsl`, `R/AmbientOcclusionFit.h`), the
+  `AOMultiBounce(visibility, albedo (1 - metallic))` (`Include/AmbientOcclusionFit.slang`, `R/AmbientOcclusionFit.h`), the
   light the occluders of the surface's albedo reflect into it; specular occlusion keeps the visibility. The model,
   `x / (1 - rho (1 - x) h(x, rho))` with a fitted bilinear `h`, and its coefficients come from `Tools/FitAOMultiBounce.py`
   (2D radiosity in grooves and trenches, fitted to the reference's conditional means for visibilities from 0.25; its
@@ -4603,7 +4718,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   - `DirectionalLightComponent::Intensity` is illuminance in lux on a surface facing the light, times `Color`
     (`Forward.frag` shades `Color * Intensity * NoL * BRDF`).
   - `PointLightComponent::Intensity` and `SpotLightComponent::Intensity` are luminous intensity in candela, times
-    `Color`, with an inverse-square falloff windowed to zero at `Range` (`Include/PBR.glsl`). A point light emitting P
+    `Color`, with an inverse-square falloff windowed to zero at `Range` (`Include/PBR.slang`). A point light emitting P
     lumens has P / 4pi cd. A spot light's candela is along its axis and is not spread over its cone: narrowing the cone
     does not brighten it (P lumens in a cone of half angle t would be P / (2pi (1 - cos t)) cd).
   - Luminance in nits (cd/m^2): the sky, which is an environment map's values (or the procedural `ZenithColor`,
@@ -4619,7 +4734,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   (`SceneRenderer::UpdateExposure`; the HDR target holds `L * P`, see the pre-exposure below, and the tone mapping applies
   `M / P`). Manual exposure: `M = 2^Exposure` (registered within [-16, 16]). Automatic
   exposure: `M = 2^Exposure * 0.18 / 2^a * 2^k`, where `a` is the log2 average luminance metered by `Exposure.comp`'s
-  histogram (`Include/Exposure.glsl`: [-12, 16] in 254 bins of 0.11 EV, the pixels outside the
+  histogram (`Include/Exposure.slang`: [-12, 16] in 254 bins of 0.11 EV, the pixels outside the
   `AutoExposureLowPercentile`-`HighPercentile` window left out, weighed by `AutoExposureMetering`), adapted and clamped to
   [`AutoExposureMinEV`, `AutoExposureMaxEV`], and `k` the exposure key ("Post-processing"): the average lands on middle
   gray, and `Exposure` compensates. Where the tone curve shows that middle gray on the display depends on the curve:
@@ -4685,7 +4800,7 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   only through their generators (`Tools/FitFilmic.py`, `Tools/GenerateWhiteBalance.py`), never by hand.
 - **Parameters:** post passes take theirs by push constants or by buffers of their own, never by new `FrameConstants`
   fields (reading them is fine). The tone mapping reads `RenderData::TonemapConstants`, a volatile constant buffer
-  (`m_TonemapConstantBuffer`, `ST_CBV(0)`, std140) written once per frame right before its draw: its parameters outgrew
+  (`m_TonemapConstantBuffer`, `b0`, std140) written once per frame right before its draw: its parameters outgrew
   the 128 bytes NVRHI allows push constants, and it grows only by appending vec4-aligned blocks, whose offsets its
   `static_assert`s check. Its versions need no reservation of their own: every frame that tone-maps writes
   `FrameConstants` first, and `ReserveFrameConstantVersions` starts a frame only while the frames in flight leave room for
@@ -4693,7 +4808,7 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   hold a version of it, within its `c_FrameConstantVersions`. FXAA takes `RenderData::FXAAParameters` by push constants;
   the overlays' copy into a target has a layout of its own (`m_CopyBindingLayout`).
 - **Output and dither:** the last pass that writes the 8-bit (or 10-bit) display image dithers it, so gradients (skies,
-  fog, dark falloffs, the vignette) show no bands. `Include/Dither.glsl`'s `DitherToCodes` turns an encoded value v, in
+  fog, dark falloffs, the vignette) show no bands. `Include/Dither.slang`'s `DitherToCodes` turns an encoded value v, in
   codes of the target (`levels` = 2^bits - 1, v clamped to [0, levels]), into `q = floor(v + n + 0.5)` with triangular
   noise `n = u0 + u1 - 1` of one code where that cannot leave [0, levels] (its noise power does not depend on v, so there
   is no noise modulation), and into `q = floor(v + u0)` within half a code of black or white: the mean of q is exactly v
@@ -4723,7 +4838,7 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
     slower memory of 2026-10-27): 0.021 ms, twice the spec's 0.01 ms target. Six `PixelRandom` values a pixel (two hashes
     each) are what it costs; the noise stays as it is until a cheaper hash of the same statistics replaces it, with its
     CPU twin and `Renderer.PostProcessMath`'s statistics.
-- **Tone curves** (`TonemapOperator`): Filmic (`Include/Filmic.glsl`, `PostProcessMath::ApplyFilmic`) is the default of
+- **Tone curves** (`TonemapOperator`): Filmic (`Include/Filmic.slang`, `PostProcessMath::ApplyFilmic`) is the default of
   new Post Process components, of scenes without one and of the Basic 3D template; ACES, AgX, Khronos Neutral and
   Reinhard are unchanged, so scenes that stored them look as before. Filmic works on an inset color, per channel in the
   highlights after AgX's principle (a per-channel curve on a gamut drawn in toward white takes bright saturated colors
@@ -4740,7 +4855,7 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   `TonemapConstants`' Filmic block (`PostProcessMath::MakeFilmicCurve`). The inset and outset matrices, C0 and tau are
   fitted by `Tools/FitFilmic.py` against targets stated in its header (middle gray, contrast, white, toe, hue in ICtCp
   within 10 and 6 degrees, the path to white, saturation at middle gray, a monotonic shape, and the shadows' saturation:
-  at most 1.30 times the scene's chroma below middle gray) and written to `Include/FilmicConstants.glsl` and
+  at most 1.30 times the scene's chroma below middle gray) and written to `Include/FilmicConstants.slang` and
   `Renderer/FilmicConstants.h`: never edit them by hand (`FitFilmic.py --check` checks the committed ones);
   `Renderer.PostProcessMath` checks the targets again on the C++ reference and `GPU.SceneRenderer.Camera` the shader
   against it. As fitted (C0 1.398): the sky color keeps 1.15 of its chroma from -6 stops to middle gray, skin 1.05,
@@ -4811,7 +4926,7 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   this model (a stored 0.2 darkens those corners 16.5%, where 0.6.0's ring after the curve darkened them 20%). Thumbnails
   changed with both (`ThumbnailCache::c_Version` 7).
 - **Motion blur** (`RenderMotionBlur`, `PostProcess/MotionBlurTiles.comp`, `MotionBlurNeighbors.comp`, `MotionBlur.comp`,
-  `Include/MotionBlur.glsl`; stage `GPU.MotionBlur` between `GPU.TAA` and `GPU.Post`):
+  `Include/MotionBlur.slang`; stage `GPU.MotionBlur` between `GPU.TAA` and `GPU.Post`):
   - When: `SceneRenderOptions::MotionBlur` (on; the editor turns it on only in the live views' scene camera while the
     game plays, never in its editor camera or captures; thumbnails turn it off), not `HDROutput`, the Post Process's
     `MotionBlur` (off by default) with a shutter above 0, after the quality's overrides (`ApplyQualityOverrides`: the
@@ -4873,7 +4988,7 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
     at High, 3840x2160, the camera turning 16 pixels a frame: about 0.18 ms on an RTX 5090, 0.24 ms where every
     neighborhood takes the depth-aware path) and `MotionBlur4KStill` (still: about 0.11 ms), beside `Post4K` (`GPU.Post`
     with every post effect at its default and a grading).
-- **Depth of field** (`RenderDepthOfField`, `PostProcess/DepthOfField*.comp`, `Include/DepthOfField.glsl`; stage
+- **Depth of field** (`RenderDepthOfField`, `PostProcess/DepthOfField*.comp`, `Include/DepthOfField.slang`; stage
   `GPU.DepthOfField`, registered after `GPU.MotionBlur` and timed before it, between `GPU.TAA` and `GPU.MotionBlur`):
   - The lens lives on `CameraComponent` (`DepthOfField`, off; `FocusDistance` 10 m; `FocusEntity`, whose distance along
     the camera's view, at least the near plane, replaces it; `Aperture`, the f-number, 2.8; `SensorHeight` 24 mm), with
@@ -4920,7 +5035,7 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
     (provisional) `PerfGPU.Renderer.DepthOfField4K`, the worst case: every pixel far behind the focus at the largest
     circle (about 0.20 ms on an RTX 5090). The look-dev shot `tp.dof` focuses the Third-Person camera on the robot at f/2.
 - **Film grain and chromatic aberration** (`PostProcessComponent::FilmGrain`, `ChromaticAberration`, 0 to 1, off by
-  default; the aberration in `Tonemap.frag`, the grain in `Include/Grain.glsl`; `TonemapConstants` 144-159):
+  default; the aberration in `Tonemap.frag`, the grain in `Include/Grain.slang`; `TonemapConstants` 144-159):
   - The aberration is read first: red at `0.5 + (uv - 0.5) * (1 + k)`, blue at `(1 - k)`, green unmoved, bilinear, with
     `k = ChromaticAberration * c_ChromaticAberrationScale` (`0.5 / 1920`), so 1 draws red and blue half a pixel apart from
     green at a 3840x2160 image's corners and nothing at its center (the same share of the image at every resolution).
@@ -5034,7 +5149,7 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
 
 - The first active `HeightFogComponent` fogs the scene (`SceneRenderer::FindHeightFog`;
   `SceneRendererStats::HeightFog`). Its extinction is `Density` at `BaseHeight` and
-  `Density * exp(-HeightFalloff * h)` at `h` meters above it (rising below it); `Include/Fog.glsl` integrates it
+  `Density * exp(-HeightFalloff * h)` at `h` meters above it (rising below it); `Include/Fog.slang` integrates it
   analytically along each view ray from `StartDistance` on, per pixel, in `Scene/Forward.frag` (opaque and transparent
   surfaces alike, before `SanitizeHDR`) and `Scene/Skybox.frag` (the sky, at an infinite distance: rays that stay level
   or fall never leave the fog and get `MaxOpacity`). No pass, no target: without the component a uniform branch skips
@@ -5052,7 +5167,7 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   atmosphere `ColorFromSky` takes its sky at the horizon toward each ray's azimuth, read from its sky-view table
   (`FogLight.w` 2), so the fog is brighter toward the sun as the sky is.
 - The atmosphere (`SkyLightSource::Atmosphere`, `SceneRendererAtmosphere.cpp`): Earth's, a planet whose ground is the
-  world's y = 0 plane, its constants in `Renderer/Atmosphere.h`, mirrored by `Include/Atmosphere.glsl` (kilometers;
+  world's y = 0 plane, its constants in `Renderer/Atmosphere.h`, mirrored by `Include/Atmosphere.slang` (kilometers;
   Rayleigh, Mie and ozone coefficients; `AtmosphereDensity` scales the air and the aerosols, `AtmosphereHaze` the aerosols
   again, `GroundAlbedo` the ground's reflection into the sky). The directional light is the sun above the atmosphere:
   its color times intensity is the illuminance there; without one, a sun of 1 lux at `GetDefaultSunDirection`.
@@ -5098,9 +5213,9 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
     atmosphere's resources). The columns are the view rays through the unjittered camera's corners interpolated across the
     screen; slice k's center lies at `D ((k + 0.5) / 32)^2` meters (D the camera's far plane, at most
     `c_AerialMaxDistance`, 32 km), crowding near the camera, and each slice integrates its stretch in two midpoint steps of
-    `AccumulateAtmosphereSegment` (`Include/AtmospherePass.glsl`), the integrand the sky-view table's loop calls too, with
+    `AccumulateAtmosphereSegment` (`Include/AtmospherePass.slang`), the integrand the sky-view table's loop calls too, with
     distances multiplied by the scale (small worlds show the haze of large ones: the Open World uses 6). `Scene/Forward.frag`
-    applies it per pixel (`Include/AerialPerspective.glsl`, SRV 29, two trilinear fetches) to opaque, masked, transparent
+    applies it per pixel (`Include/AerialPerspective.slang`, SRV 29, two trilinear fetches) to opaque, masked, transparent
     and glass surfaces alike, before the height fog (fog lies nearer the camera; under the atmosphere its sky light, the
     sky-view table at the horizon, already holds the air's haze, so the two meet there); the sky is not hazed again, and
     the value debug views skip it. `FogParams.z` holds D and `.w` the scale (0 without: the uniform branch costs nothing
@@ -5122,7 +5237,7 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   their entities do), tests their boxes' bounding spheres against the view and keeps the strongest
   `SceneRendererSpecification::MaxReflectionProbes` (16 at most, `RenderData::c_MaxReflectionProbes`): the higher
   `Priority`, then the smaller box (the more specific place), then the entity. `Scene/Forward.frag` walks that list
-  (`Include/ReflectionProbes.glsl`: at most 16 box tests per pixel, opaque and transparent surfaces alike) and blends the
+  (`Include/ReflectionProbes.slang`: at most 16 box tests per pixel, opaque and transparent surfaces alike) and blends the
   first two whose boxes hold the pixel: the stronger takes its weight, the weaker its weight of the rest.
 - **The probe cache**: a renderer's cube array (RGBA16F, 128 texels across, six levels for roughness 0 to 1 as the sky's
   prefiltered map, a cube per slot of `MaxReflectionProbes`: about 1 MiB a slot, 16 MiB at 16, with a 0.5 MiB scratch
@@ -5172,7 +5287,7 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   **Checkerboard** fetches the previous frame's resolved image, the TAA's history, and leaves its noise to the TAA. From
   the history's second frame on (`SceneRendererStats::ScreenSpaceReflections`), the prepass's surface variant (`ST_PREPASS_SURFACE`, `Scene/DepthPrepassSurface.frag`,
   pipelines with `PipelineKey::Surface`, after the velocity target) also writes the surface target: RGBA16F at full
-  resolution, the normal-mapped view-space normal (octahedral; `GetShadingNormal` of `Include/MaterialTextures.glsl`, as
+  resolution, the normal-mapped view-space normal (octahedral; `GetShadingNormal` of `Include/MaterialTextures.slang`, as
   the forward pass shades it), the roughness and the metallic factor, the maps sampled before any discard; unlit surfaces
   write roughness 1. `Effects/ScreenSpaceReflections.comp` (in `GPU.Reflections`, after the probes' conversions) then
   traces at half resolution, each texel from one pixel of its 2x2 block (another each frame): the view reflected about
@@ -5202,7 +5317,7 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   picture render one more frame for it, keeping the history: `c_MaxCaptureReflectionFrames`,
   `ProjectThumbnail::c_MaxReflectionFrames`), the prepass writes the same surface target and
   `Effects/ScreenSpaceReflectionsSpatial.comp` traces every pixel at full resolution: the same reflected ray
-  (`Include/ScreenReflections.glsl`, shared with Checkerboard's trace), marched against the full-resolution depth over its
+  (`Include/ScreenReflections.slang`, shared with Checkerboard's trace), marched against the full-resolution depth over its
   whole length in 32 steps closer together near its start, a hit where it passed behind a surface by less than the same
   thickness, refined in 6 bisections (SpatialHigh 48 and 8, `RendererQuality::GetScreenReflectionSteps`), its steps offset
   by ambient occlusion's fixed 4x4 order, never by the frame. (A hierarchical march over a nearest-depth pyramid ran out of
@@ -5256,7 +5371,7 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
 ### Clear coat and glass
 
 - **Clear coat** (`MaterialProperties::Clearcoat`, `ClearcoatRoughness`, the coat's strength, roughness and normal maps;
-  `Include/PBR.glsl`'s `EvaluateClearcoat`): a dielectric layer of index 1.5 over the base with its own GGX lobe. Per
+  `Include/PBR.slang`'s `EvaluateClearcoat`): a dielectric layer of index 1.5 over the base with its own GGX lobe. Per
   light the coat reflects `D * V * F` with its own normal and roughness and the base keeps `1 - F` (F the coat's Fresnel
   at the half vector times its strength); the image-based light gets a second prefiltered lookup along the coat's
   reflection (the probes' and the sky's, `SampleSpecularLight`, or the constant ambient as a uniform sky), the split-sum
@@ -5305,9 +5420,9 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
 ### Material texture slots
 
 - Material maps hold texture table indices (`Renderer/TextureTable.h`: 0-2 white, black and flat normal); the table's
-  entries (`u_TextureTable`, read first by `SampleMaterialTexture` in `Include/Scene.glsl`) pack the bindless slot, the
+  entries (`u_TextureTable`, read first by `SampleMaterialTexture` in `Include/Scene.slang`) pack the bindless slot, the
   sampler index and a grayscale bit (`TextureTable::PackEntry`, `RenderData::c_TextureSlotGrayscale`, from
-  `TextureSpecification::Grayscale`). Every pass that samples materials binds the table (`ST_SRV(16)` of the scene
+  `TextureSpecification::Grayscale`). Every pass that samples materials binds the table (`t16` of the scene
   layout) after `TextureTable::RecordUploads` ran in its frame. Normal maps are read as X
   and Y with Z reconstructed (`Forward.frag`), so BC5 and RGBA8 normal maps shade alike; a shader that reads a normal map
   must do the same.
@@ -5315,7 +5430,7 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   them in): base color, metallic-roughness, normal, occlusion, emission, the clear coat's strength (R), roughness (G) and
   normal, and transmission (R). A list of a material's maps (`Material::GetTextureHandles`, `RenderSceneGPU`'s reverse
   index, the material editor's usage warnings in `AssetEdit::FindTextureUsageMismatches`) takes a new one in every place.
-  `RenderData::MaterialData` (144 bytes, `Include/Scene.glsl`) holds the clear coat's strength and roughness, the
+  `RenderData::MaterialData` (144 bytes, `Include/Scene.slang`) holds the clear coat's strength and roughness, the
   transmission, `IOR`, `Thickness` and the volume's absorption per world unit (`MaterialGPU::GetAbsorption`: Beer's law
   from `AttenuationColor` and `AttenuationDistance`, 0 for none); its flags `c_MaterialClearcoat` (16) and
   `c_MaterialTransmissive` (32) are set for lit materials whose `Clearcoat` or `Transmission` is above 0. New `.stmat`
@@ -5353,7 +5468,7 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
 - Levels of detail: generated levels (`MeshUtils::GenerateLODs`) carry their error (`MeshLOD::Error`, in the mesh's
   units) and are chosen by it (`RendererQualitySettings::LODErrorPixels`); levels without one (cooked meshes before
   version 3, meshes made in code) by halving the screen fraction (`LODThreshold`). A change to either rule changes
-  `LODSelection.cpp` and `Include/LODSelection.glsl` together: `GPU.Renderer.LODSelection` compares them on 10,000
+  `LODSelection.cpp` and `Include/LODSelection.slang` together: `GPU.Renderer.LODSelection` compares them on 10,000
   fractions, and the CPU form multiplies once and compares, as the shader's `precise` product does. Meshes made in code
   that want error-based selection give every simplified level a positive `Error`.
 
@@ -5422,7 +5537,7 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   Architecture.md's stage table and the editor-automation skill. Registration order sets the stages' ids and perf-log
   columns, so inserting one moves the later ones; nothing depends on that, since ids are compared only within a build
   and perf-log readers find columns by name. A new resource of the scene layout takes the next free slot that
-  `Include/Scene.glsl`'s comment lists (assigned slots included), and a pass that does not run binds a dummy there.
+  `Include/Scene.slang`'s comment lists (assigned slots included), and a pass that does not run binds a dummy there.
 - Register a module's GPU stages when the module registers (`RegisterRendererModule` registers `RendererGPUStages`), so they
   exist before a perf log writes its header (`GPU.UI` by `RegisterGameUIModule`), and so are the CPU stages its passes
   time (`Render.UI`): a stage `ST_PROFILE_STAGE` first registers in a frame after the header gets no column; a stage of a

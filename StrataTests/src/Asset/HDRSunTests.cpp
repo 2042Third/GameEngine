@@ -47,7 +47,7 @@ TEST_SUITE("Asset.HDRSun")
 {
 	TEST_CASE("Texel directions follow the equirectangular mapping the renderer samples, and solid angles add up to the sphere")
 	{
-		// u = atan(z, x) / 2 pi + 0.5 (Include/IBL.glsl): the middle column looks along +X, the first one toward -X; the top
+		// u = atan(z, x) / 2 pi + 0.5 (Include/IBL.slang): the middle column looks along +X, the first one toward -X; the top
 		// row looks up.
 		CHECK(AngleDegrees(HDRSun::TexelDirection(c_Width / 2, c_Height / 2, c_Width, c_Height), glm::vec3(1.0f, 0.0f, 0.0f)) < 0.2);
 		CHECK(AngleDegrees(HDRSun::TexelDirection(0, c_Height / 2, c_Width, c_Height), glm::vec3(-1.0f, 0.0f, 0.0f)) < 0.2);

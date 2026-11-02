@@ -21,7 +21,7 @@ namespace Strata::LODSelection
 		if (lodCount <= 1 || !(screenFraction > 0.0f && screenFraction < lodThreshold))
 			return 0;
 		// Level 1 below the threshold, and one more for each doubling of the fraction that stays below it. Doubling a float is
-		// exact, so these comparisons give the GPU's culling (Include/LODSelection.glsl) the same level for the same fraction,
+		// exact, so these comparisons give the GPU's culling (Include/LODSelection.slang) the same level for the same fraction,
 		// which a logarithm would not.
 		uint32_t lod = 1;
 		float doubled = screenFraction * 2.0f;

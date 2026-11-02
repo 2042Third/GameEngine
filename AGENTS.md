@@ -34,7 +34,7 @@ the work: checklist item 5.
 
 | Path | Contents |
 | --- | --- |
-| `Strata/` | The engine: a static library per layer. `src/Strata/<Module>/` holds the engine modules, `src/Platform/<OS or backend>/` the platform implementations, `shaders/` the GLSL sources, `vendor/` the pinned third-party submodules. |
+| `Strata/` | The engine: a static library per layer. `src/Strata/<Module>/` holds the engine modules, `src/Platform/<OS or backend>/` the platform implementations, `shaders/` the Slang sources, `vendor/` the pinned third-party submodules. |
 | `StrataEditor/` | The editor: `src/Editor/` its core without UI (`StrataEditorCore`), `src/UI/`, `src/Panels/` and `EditorLayer` its ImGui interface (`StrataEditorUI`) ([details](Docs/DeveloperGuide.md#repository-layout)). |
 | `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`): the `.stgame` manifest next to it, or `--game <file>` ([options](Docs/DeveloperGuide.md#repository-layout)). |
 | `StrataScriptCore/` | Script ABI (C header) and the header-only C++ SDK game scripts are written against. Script modules never link the engine. |
@@ -192,11 +192,13 @@ The threading model, frame loop and pipelines these rules protect are described 
   top-left, NDC +Y is up, depth range is [0, 1] and the engine uses reversed-Z (near = 1, far = 0).
   Fullscreen-pass UVs are `uv = (ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5)`. Front faces are
   counter-clockwise (glTF convention).
-- **Shaders:** GLSL in `Strata/shaders`, compiled to SPIR-V at build time and embedded; every shader
-  must be listed in `strata_add_shaders` in `Strata/CMakeLists.txt` (re-run configure after adding one).
-  Bindings use the `ST_SRV/ST_SAMPLER/ST_CBV/ST_UAV(slot)` macros of `Include/Common.glsl`, matching
-  NVRHI's register mapping. Push constants share the `b` registers with constant buffers: give them a
-  slot no constant buffer of the pipeline's other layouts uses.
+- **Shaders:** HLSL-syntax Slang in `Strata/shaders`, compiled to SPIR-V by the pinned slangc and embedded; every
+  entry is listed in `strata_add_shaders` in `Strata/CMakeLists.txt` (re-run configure after adding one). Bindings are
+  `register(tN|sN|bN|uN, spaceS)`; push constants share the `b` registers with constant buffers: give them a slot no
+  constant buffer of the pipeline's other layouts uses. HLSL only: no generics, `__target_switch` or `spirv_asm` outside
+  `Include/Common.slang`; `mul` only with a matrix; vector comparisons through `all()`/`any()`; matrix constructors take
+  rows; `SampleLevel` in compute. A lighting bug in unchanged code may be a conversion slip
+  ([Shaders](Docs/DeveloperGuide.md#shaders)).
 - **NVRHI pitfalls:** never take the address of a handle (`&m_Pipeline`); dispatches through one binding set that read
   each other's UAV writes need explicit barriers; drop render targets through `Renderer::ReleaseDeferred`.
 - **Assets:** referenced by `AssetHandle` (UUID), never by path at runtime; code handles "not loaded yet" every frame
@@ -468,7 +470,9 @@ Before every commit, review the complete diff (`git diff --staged`) and confirm:
 All dependencies are pinned shallow submodules in `Strata/vendor/`, wrapped by
 `Strata/vendor/CMakeLists.txt` (vendor code builds with warnings disabled and is consumed as SYSTEM
 includes). To upgrade: check out the new tag in the submodule, rebuild, run all tests, update
-`ThirdPartyNotices.md`, commit the submodule bump separately.
+`ThirdPartyNotices.md`, commit the submodule bump separately. Slang is no submodule:
+`CMake/StrataSlang.cmake` pins its release archives by SHA-256, fetched once into a per-user cache (offline:
+`STRATA_SLANG_ROOT`); bump it in its own commit.
 
 The editor's fonts (Inter, JetBrains Mono, Lucide) are committed release files, not submodules: an upgrade replaces
 them, updates `ThirdPartyNotices.md` and, for Lucide, regenerates `UI/Icons.h`

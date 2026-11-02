@@ -11,7 +11,7 @@
 namespace Strata
 {
 
-	// GPU data layouts shared with shaders/Include/Scene.glsl. Every struct is std140/std430 compatible (16-byte
+	// GPU data layouts shared with shaders/Include/Scene.slang. Every struct is std140/std430 compatible (16-byte
 	// aligned members only); keep both sides in sync.
 	namespace RenderData
 	{
@@ -102,7 +102,7 @@ namespace Strata
 		};
 		static_assert(sizeof(FrameConstants) == 8 * 64 + 26 * 16);
 
-		// A directional shadow cascade as shaders read it (u_Cascades, Include/Scene.glsl): written on the GPU by
+		// A directional shadow cascade as shaders read it (u_Cascades, Include/Scene.slang): written on the GPU by
 		// Scene/CascadeFit.comp, which fits its depth range to the casters (CascadeFitConstants).
 		struct CascadeData
 		{
@@ -251,7 +251,7 @@ namespace Strata
 		// light with one view of the light's atlas, a point light with six (a cube's faces: +X, -X, +Y, -Y, +Z, -Z).
 		constexpr uint32_t c_MaxShadowedLocalLights = 16;
 		constexpr uint32_t c_LocalShadowFaces = 6;
-		// A shadowed light as the shaders read it (u_LocalShadows, Include/LocalShadows.glsl), by its shadow slot: the shadow
+		// A shadowed light as the shaders read it (u_LocalShadows, Include/LocalShadows.slang), by its shadow slot: the shadow
 		// pass draws view `slot * c_LocalShadowFaces + face` with its matrix, the forward pass samples the views' tiles.
 		struct LocalShadowData
 		{
@@ -266,7 +266,7 @@ namespace Strata
 		};
 		static_assert(sizeof(LocalShadowData) == c_LocalShadowFaces * 64 + c_LocalShadowFaces * 16 + 2 * 16);
 
-		// Reflection probes (ReflectionProbeComponent; Include/ReflectionProbes.glsl): a renderer keeps at most this many in
+		// Reflection probes (ReflectionProbeComponent; Include/ReflectionProbes.slang): a renderer keeps at most this many in
 		// view, each capture converted into a slot of its cube array (a prefiltered cube, one level per roughness step,
 		// c_ReflectionProbeSize texels across) with its irradiance as spherical-harmonic coefficients.
 		constexpr uint32_t c_MaxReflectionProbes = 16;
@@ -289,7 +289,7 @@ namespace Strata
 		struct ReflectionProbeBuffer
 		{
 			// Per slot, coefficients of the irradiance over pi (what the sky's irradiance map holds) on the real spherical
-			// harmonics of bands 0 to 2, in the order of Include/ReflectionProbes.glsl's ProbeSHBasis; w unused.
+			// harmonics of bands 0 to 2, in the order of Include/ReflectionProbes.slang's ProbeSHBasis; w unused.
 			glm::vec4 Irradiance[c_MaxReflectionProbes * c_ReflectionProbeSHCoefficients];
 			glm::uvec4 Counts; // x: probes in the list
 			ReflectionProbeData Probes[c_MaxReflectionProbes];
@@ -307,7 +307,7 @@ namespace Strata
 		};
 		static_assert(sizeof(ProbeIrradianceParameters) == 16);
 
-		// The push constants of the GPU's light culling passes (Include/Lights.glsl).
+		// The push constants of the GPU's light culling passes (Include/Lights.slang).
 		struct LightCullParameters
 		{
 			glm::vec4 Planes[6] = {};   // The view frustum in camera-relative space, inward (Frustum::GetPlanes)
@@ -349,7 +349,7 @@ namespace Strata
 		};
 		static_assert(sizeof(ProceduralSkyParameters) == 96);
 
-		// IBL/Atmosphere*.comp (Include/AtmospherePass.glsl): the atmosphere's medium (Atmosphere::GetMedium), the sun and the
+		// IBL/Atmosphere*.comp (Include/AtmospherePass.slang): the atmosphere's medium (Atmosphere::GetMedium), the sun and the
 		// viewer the tables are computed for.
 		struct AtmosphereConstants
 		{
@@ -508,7 +508,7 @@ namespace Strata
 		};
 		static_assert(sizeof(MotionCopyParameters) == 16);
 
-		// The shadows debug view (SceneRenderOptions::ShowShadowView, Include/ShadowView.glsl): screen pixels per shadow texel,
+		// The shadows debug view (SceneRenderOptions::ShowShadowView, Include/ShadowView.slang): screen pixels per shadow texel,
 		// binned per cascade in eighths of a stop over [2^c_ShadowViewMinStops, 2^(c_ShadowViewMinStops + c_ShadowViewBins / 8)):
 		// bin b covers [2^(b / 8 - 4), 2^((b + 1) / 8 - 4)), and ratios outside the range count in the first or last bin.
 		constexpr uint32_t c_ShadowViewBins = 64;
@@ -535,7 +535,7 @@ namespace Strata
 		};
 		static_assert(sizeof(ShadowViewCounts) == 1040);
 
-		// The sun shadow cascades' depth ranges (Scene/ShadowRanges.comp, Include/Shadows.glsl): levels of cells of
+		// The sun shadow cascades' depth ranges (Scene/ShadowRanges.comp, Include/Shadows.slang): levels of cells of
 		// c_ShadowRangeCellTexels << level shadow texels each way, the nearest and farthest depth of each packed in 16 bits.
 		constexpr uint32_t c_ShadowRangeLevels = 3;
 		constexpr uint32_t c_ShadowRangeCellTexels = 4;
@@ -582,7 +582,7 @@ namespace Strata
 		constexpr uint32_t c_ShadowFitBinsPerStop = 4;
 
 		// A bin's receivers as a box in the camera's view space: x and y of their positions and their view distance d, each an
-		// EncodeOrderedFloat (Include/OrderedFloat.glsl), and how many pixels hold them. The minima are stored complemented, so
+		// EncodeOrderedFloat (Include/OrderedFloat.slang), and how many pixels hold them. The minima are stored complemented, so
 		// every box field reduces with atomicMax (the count with atomicAdd) and a buffer cleared to 0 holds empty bins (MaxD 0:
 		// no float encodes to 0).
 		struct ShadowFitBin
@@ -628,7 +628,7 @@ namespace Strata
 		// brighter than fresh snow, which no measured material is.
 		constexpr float c_AlbedoLow = 0.03f;
 		constexpr float c_AlbedoHigh = 0.85f;
-		// Effects/LightingViewStats.comp's output, cleared before each dispatch (one 32-bit word per entry; Include/LightingView.glsl
+		// Effects/LightingViewStats.comp's output, cleared before each dispatch (one 32-bit word per entry; Include/LightingView.slang
 		// names the offsets).
 		struct LightingViewStatsData
 		{

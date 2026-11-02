@@ -54,7 +54,7 @@ namespace Strata
 		constexpr uint32_t c_MaterialTextured = 1u << 4;
 		// Transmissive (always with c_MaterialTransparent): drawn as glass, first in the transparent pass.
 		constexpr uint32_t c_MaterialTransmissive = 1u << 5;
-		// The GPU's culling reads these flags from the material table (Include/Culling.glsl).
+		// The GPU's culling reads these flags from the material table (Include/Culling.slang).
 		static_assert(c_MaterialAvailable == RenderData::c_CullMaterialAvailable && c_MaterialDoubleSided == RenderData::c_CullMaterialDoubleSided
 			&& c_MaterialAlphaMask == RenderData::c_CullMaterialAlphaMask && c_MaterialTransparent == RenderData::c_CullMaterialTransparent
 			&& c_MaterialTextured == RenderData::c_CullMaterialTextured && c_MaterialTransmissive == RenderData::c_CullMaterialTransmissive);
@@ -1187,7 +1187,7 @@ namespace Strata
 		}
 		const float mapSize = static_cast<float>(m_ShadowMapSize);
 		const float halfAngle = glm::radians(std::clamp(m_ShadowLight.Softness, 0.0f, 10.0f)) * 0.5f;
-		// The penumbra's half-width per unit of separation (Include/Shadows.glsl filters at it), and the wide penumbrae's taps.
+		// The penumbra's half-width per unit of separation (Include/Shadows.slang filters at it), and the wide penumbrae's taps.
 		frame.ShadowParams = glm::vec4(std::tan(halfAngle), 1.0f / mapSize, m_ShadowLight.CascadeBlend, static_cast<float>(cascadeCount));
 		frame.ShadowBias = glm::vec4(m_ShadowLight.Bias, m_ShadowLight.NormalBias, static_cast<float>(m_Specification.Quality.ShadowFilterQuality), 0.0f);
 		if (!casterDraws)

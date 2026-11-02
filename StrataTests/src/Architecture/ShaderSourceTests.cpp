@@ -12,23 +12,45 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 using namespace Strata;
 
-// Fragment shaders take their derivatives (fwidth, dFdx, implicit-level texture sampling, helpers calling those) before any
-// discard. A discard that differs per pixel ends its invocation (OpKill), which leaves the derivatives of the rest of its
-// 2x2 quad undefined: some drivers (Mesa on Linux) really drop the lane, and edges come out with garbage widths and wrong
-// mip levels, while others (MoltenVK) keep it, so no image on the Mac shows the mistake. The check is textual: after the
-// first discard in a shader's source, nothing may take derivatives.
+// Fragment shaders take their derivatives (fwidth, ddx/ddy, Sample, SampleBias and SampleCmp without an explicit level,
+// helpers calling those) before any discard or clip. A discard that differs per pixel ends its invocation (OpKill), which
+// leaves the derivatives of the rest of its 2x2 quad undefined: some drivers (Mesa on Linux) really drop the lane, and edges
+// come out with garbage widths and wrong mip levels, while others (MoltenVK) keep it, so no image on the Mac shows the
+// mistake. The check is textual: after the first discard or clip in a shader's source, nothing may take derivatives.
+//
+// The shaders are HLSL-syntax Slang (Docs/DeveloperGuide.md, "Shaders"): Slang's own language (modules, generics' keywords,
+// interfaces, target switches outside Include/Common.slang) and GLSL left over from the conversion are refused, so that the
+// sources stay plain HLSL for other platforms' compilers.
 namespace
 {
 
-	// The built-in functions that take screen derivatives (texture* without an explicit level or gradients).
-	constexpr std::array<std::string_view, 13> c_DerivativeBuiltins = {
-		"fwidth", "fwidthFine", "fwidthCoarse", "dFdx", "dFdy", "dFdxFine", "dFdyFine", "dFdxCoarse", "dFdyCoarse",
-		"texture", "textureOffset", "textureProj", "textureProjOffset",
+	// The built-in functions that take screen derivatives (sampling without an explicit level or gradients; methods such as
+	// u_Texture.Sample(...) read as calls of Sample).
+	constexpr std::array<std::string_view, 12> c_DerivativeBuiltins = {
+		"ddx", "ddy", "ddx_fine", "ddy_fine", "ddx_coarse", "ddy_coarse", "fwidth",
+		"Sample", "SampleBias", "SampleCmp", "CalculateLevelOfDetail", "CalculateLevelOfDetailUnclamped",
 	};
+
+	// Slang's target switches and inline SPIR-V: only Include/Common.slang may use them, each with an HLSL form.
+	constexpr std::array<std::string_view, 3> c_TargetSpecific = { "__target_switch", "spirv_asm", "__intrinsic_asm" };
+
+	// Slang's language beyond HLSL: modules, interfaces, extensions, generics' keywords.
+	constexpr std::array<std::string_view, 10> c_SlangOnly = {
+		"import", "__import", "module", "implementing", "__include", "interface", "extension", "__generic", "associatedtype",
+		"__exported",
+	};
+
+	// GLSL's names, which Slang accepts silently or the conversion should have replaced.
+	constexpr std::array<std::string_view, 16> c_GLSLIdentifiers = {
+		"layout", "vec2", "vec3", "vec4", "ivec2", "ivec3", "ivec4", "uvec2", "uvec3", "uvec4", "bvec2", "bvec3", "bvec4",
+		"mat2", "mat3", "mat4",
+	};
+	constexpr std::array<std::string_view, 7> c_GLSLCalls = { "texture", "texelFetch", "textureLod", "mix", "fract", "dFdx", "dFdy" };
 
 	// Keywords followed by parentheses and a block, which are no function definitions.
 	constexpr std::array<std::string_view, 4> c_Statements = { "if", "for", "while", "switch" };
@@ -127,8 +149,11 @@ namespace
 			const std::vector<Token> tokens = Tokenize(source);
 			for (const Token& token : tokens)
 			{
-				// Statements look like definitions here (if (...) { ... }): only functions count.
+				// Statements look like definitions here (if (...) { ... }): only functions count. Entry points are no helpers:
+				// a converted fragment shader's main calls its st_Main, whose own calls are checked where they are.
 				if (!token.Call || c_Statements.end() != std::find(c_Statements.begin(), c_Statements.end(), token.Name))
+					continue;
+				if (token.Name == "main" || token.Name == "st_Main")
 					continue;
 				// A definition: the call's closing parenthesis is followed by a body.
 				const size_t close = source.find(')', token.Offset);
@@ -175,7 +200,7 @@ namespace
 		return functions;
 	}
 
-	// "<name>:<line> takes derivatives (<call>) after the discard at line <n>" for each such call.
+	// "<name>:<line> takes derivatives (<call>) after the discard at line <n>" for each such call (a clip counts as a discard).
 	std::vector<std::string> FindDerivativesAfterDiscard(std::string_view name, std::string_view source, const std::set<std::string>& derivativeFunctions)
 	{
 		std::vector<std::string> problems;
@@ -183,7 +208,7 @@ namespace
 		std::optional<size_t> discardLine;
 		for (const Token& token : Tokenize(stripped))
 		{
-			if (token.Name == "discard")
+			if (token.Name == "discard" || (token.Name == "clip" && token.Call))
 			{
 				if (!discardLine)
 					discardLine = LineOf(stripped, token.Offset);
@@ -195,6 +220,57 @@ namespace
 		return problems;
 	}
 
+	template<size_t Count>
+	bool Contains(const std::array<std::string_view, Count>& names, std::string_view name)
+	{
+		return std::find(names.begin(), names.end(), name) != names.end();
+	}
+
+	// "<name>:<line> <what>" for each token of the source (comments stripped) that is not plain HLSL.
+	std::vector<std::string> FindSyntaxProblems(std::string_view name, std::string_view source)
+	{
+		std::vector<std::string> problems;
+		const std::string stripped = StripComments(source);
+		for (const Token& token : Tokenize(stripped))
+		{
+			const size_t line = LineOf(stripped, token.Offset);
+			if (Contains(c_TargetSpecific, token.Name) && name != "Include/Common.slang")
+				problems.push_back(fmt::format("{}:{} uses {}, which only Include/Common.slang may (with an HLSL form)", name, line, token.Name));
+			else if (Contains(c_SlangOnly, token.Name))
+				problems.push_back(fmt::format("{}:{} uses {}: Slang's language, not HLSL", name, line, token.Name));
+			else if (Contains(c_GLSLIdentifiers, token.Name) || token.Name.starts_with("gl_"))
+				problems.push_back(fmt::format("{}:{} uses GLSL's {}", name, line, token.Name));
+			else if (token.Call && Contains(c_GLSLCalls, token.Name))
+				problems.push_back(fmt::format("{}:{} calls GLSL's {}", name, line, token.Name));
+		}
+		return problems;
+	}
+
+	// The names (relative, forward slashes) and texts of every file under Strata/shaders, sorted by name.
+	std::vector<std::pair<std::string, std::string>> ReadShaderSources()
+	{
+		const std::filesystem::path root = FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "Strata" / "shaders";
+		REQUIRE(std::filesystem::is_directory(root));
+		std::vector<std::pair<std::string, std::string>> files;
+		std::error_code error;
+		for (std::filesystem::recursive_directory_iterator it(root, error), end; it != end && !error; it.increment(error))
+		{
+			if (!it->is_regular_file())
+				continue;
+			const std::optional<std::string> source = FileSystem::ReadText(it->path());
+			REQUIRE(source);
+			files.emplace_back(FileSystem::ToUTF8(it->path().lexically_relative(root).generic_string()), *source);
+		}
+		REQUIRE_FALSE(error);
+		std::sort(files.begin(), files.end());
+		return files;
+	}
+
+	bool EndsWith(std::string_view text, std::string_view suffix)
+	{
+		return text.size() >= suffix.size() && text.substr(text.size() - suffix.size()) == suffix;
+	}
+
 }
 
 TEST_SUITE("Architecture.Shaders")
@@ -202,75 +278,127 @@ TEST_SUITE("Architecture.Shaders")
 	TEST_CASE("The derivative check finds derivatives after a discard, through helpers, and ignores comments")
 	{
 		const std::string helpers =
-			"float Coverage(float d)\n{\n\treturn fwidth(d);\n}\n"
+			"float Coverage(float d)\n{\n\treturn abs(ddx(d)) + abs(ddy(d));\n}\n"
 			"float Wrapped(float d)\n{\n\tif (d > 0.0)\n\t{\n\t\treturn Coverage(d) * 2.0;\n\t}\n\treturn 0.0;\n}\n";
 		const std::set<std::string> functions = FindDerivativeFunctions({ StripComments(helpers) });
 		CHECK(functions.contains("Coverage"));
 		CHECK(functions.contains("Wrapped"));
-		CHECK(functions.contains("texture"));
-		CHECK_FALSE(functions.contains("textureLod"));
+		CHECK(functions.contains("Sample"));
+		CHECK_FALSE(functions.contains("SampleLevel"));
 		CHECK_FALSE(functions.contains("if"));
 
 		const std::string bad =
-			"void main()\n"
+			"void st_Main()\n"
 			"{\n"
 			"\tif (v_Clip <= 0.0)\n"
 			"\t\tdiscard;\n"
 			"\tfloat a = Wrapped(v_D);\n"
-			"\tvec4 t = texture(sampler2D(u_Tex, u_Sampler), v_UV);\n"
-			"\tvec4 l = textureLod(sampler2D(u_Tex, u_Sampler), v_UV, 0.0);\n"
+			"\tfloat4 t = u_Tex.Sample(u_Sampler, v_UV);\n"
+			"\tfloat4 l = u_Tex.SampleLevel(u_Sampler, v_UV, 0.0);\n"
 			"}\n";
 		const std::vector<std::string> problems = FindDerivativesAfterDiscard("Bad.frag", bad, functions);
 		REQUIRE(problems.size() == 2);
 		CHECK(problems[0] == "Bad.frag:5 takes derivatives (Wrapped) after the discard at line 4");
-		CHECK(problems[1] == "Bad.frag:6 takes derivatives (texture) after the discard at line 4");
+		CHECK(problems[1] == "Bad.frag:6 takes derivatives (Sample) after the discard at line 4");
+
+		// HLSL's conditional discard.
+		const std::string clipped =
+			"void st_Main()\n"
+			"{\n"
+			"\tclip(v_Alpha - 0.5);\n"
+			"\tfloat4 t = u_Tex.Sample(u_Sampler, v_UV);\n"
+			"}\n";
+		const std::vector<std::string> clipProblems = FindDerivativesAfterDiscard("Clip.frag", clipped, functions);
+		REQUIRE(clipProblems.size() == 1);
+		CHECK(clipProblems[0] == "Clip.frag:4 takes derivatives (Sample) after the discard at line 3");
 
 		const std::string good =
-			"layout(binding = 0) uniform texture2D u_Textures[];\n"
-			"void main()\n"
+			"Texture2D<float4> u_Textures[] : register(t0, space1);\n"
+			"void st_Main()\n"
 			"{\n"
 			"\tfloat a = fwidth(v_D) * 1e5; // discard\n"
-			"\t/* discard; fwidth(x) */\n"
+			"\t/* discard; clip(a); fwidth(x) */\n"
 			"\tif (a <= 0.0)\n"
 			"\t\tdiscard;\n"
-			"\to_Color = vec4(texelFetch(u_Image, ivec2(0), 0).rgb, a);\n"
+			"\to_Color = float4(u_Image.Load(int3(0, 0, 0)).rgb, a);\n"
 			"}\n";
 		CHECK(FindDerivativesAfterDiscard("Good.frag", good, functions).empty());
 	}
 
 	TEST_CASE("Fragment shaders take every derivative before their first discard")
 	{
-		const std::filesystem::path root = FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "Strata" / "shaders";
-		REQUIRE(std::filesystem::is_directory(root));
-		std::vector<std::filesystem::path> fragments;
+		// The functions come from the includes and the fragment shaders only (as they did in GLSL): a compute or vertex
+		// shader's st_Main is no helper a fragment shader calls.
+		std::vector<std::pair<std::string, std::string>> fragments;
 		std::vector<std::string> sources;
-		std::error_code error;
-		for (std::filesystem::recursive_directory_iterator it(root, error), end; it != end && !error; it.increment(error))
+		for (const std::pair<std::string, std::string>& file : ReadShaderSources())
 		{
-			const std::filesystem::path& path = it->path();
-			if (!it->is_regular_file())
+			const bool fragment = EndsWith(file.first, ".frag.slang");
+			const bool stage = fragment || EndsWith(file.first, ".vert.slang") || EndsWith(file.first, ".comp.slang") || EndsWith(file.first, ".geom.slang");
+			if (stage && !fragment)
 				continue;
-			const std::string extension = FileSystem::ToUTF8(path.extension());
-			if (extension != ".frag" && extension != ".glsl")
-				continue;
-			const std::optional<std::string> source = FileSystem::ReadText(path);
-			REQUIRE(source);
-			sources.push_back(StripComments(*source));
-			if (extension == ".frag")
-				fragments.push_back(path);
+			sources.push_back(StripComments(file.second));
+			if (fragment)
+				fragments.push_back(file);
 		}
-		REQUIRE_FALSE(error);
 		REQUIRE(fragments.size() > 5);
 		// Helpers in the includes that take derivatives count as derivatives (SDFCoverage).
 		const std::set<std::string> functions = FindDerivativeFunctions(sources);
 		CHECK(functions.contains("SDFCoverage"));
-		for (const std::filesystem::path& path : fragments)
+		for (const std::pair<std::string, std::string>& file : fragments)
 		{
-			const std::optional<std::string> source = FileSystem::ReadText(path);
-			REQUIRE(source);
-			const std::string name = FileSystem::ToUTF8(path.lexically_relative(root));
-			CAPTURE(name);
-			for (const std::string& problem : FindDerivativesAfterDiscard(name, *source, functions))
+			CAPTURE(file.first);
+			for (const std::string& problem : FindDerivativesAfterDiscard(file.first, file.second, functions))
+				FAIL_CHECK(problem);
+		}
+	}
+
+	TEST_CASE("Strata/shaders holds Slang sources only")
+	{
+		const std::vector<std::pair<std::string, std::string>> files = ReadShaderSources();
+		REQUIRE_FALSE(files.empty());
+		for (const std::pair<std::string, std::string>& file : files)
+		{
+			CAPTURE(file.first);
+			CHECK(EndsWith(file.first, ".slang"));
+		}
+	}
+
+	TEST_CASE("The syntax check finds Slang's own language and GLSL, outside comments")
+	{
+		const std::string crafted =
+			"import Lighting;\n"
+			"interface ILight { float3 Evaluate(); };\n"
+			"__generic<T> T Twice(T value) { return value; }\n"
+			"uint Pack(float2 v) { __target_switch { case spirv: return spirv_asm { OpNop }; default: return 0u; } }\n"
+			"layout(location = 0) in vec3 a_Position;\n"
+			"float4 Read() { return mix(texture(u_Tex, gl_FragCoord.xy), float4(0.0), 0.5); }\n"
+			"// import, vec3, texture(x), mix(a, b, c) and gl_Position in a comment\n"
+			"float4 Fine(Texture2D<float4> texture) { return texture.Load(int3(0, 0, 0)) + lerp(1.0, 2.0, 0.5); }\n";
+		const std::vector<std::string> expected = {
+			"Crafted.frag.slang:1 uses import: Slang's language, not HLSL",
+			"Crafted.frag.slang:2 uses interface: Slang's language, not HLSL",
+			"Crafted.frag.slang:3 uses __generic: Slang's language, not HLSL",
+			"Crafted.frag.slang:4 uses __target_switch, which only Include/Common.slang may (with an HLSL form)",
+			"Crafted.frag.slang:4 uses spirv_asm, which only Include/Common.slang may (with an HLSL form)",
+			"Crafted.frag.slang:5 uses GLSL's layout",
+			"Crafted.frag.slang:5 uses GLSL's vec3",
+			"Crafted.frag.slang:6 calls GLSL's mix",
+			"Crafted.frag.slang:6 calls GLSL's texture",
+			"Crafted.frag.slang:6 uses GLSL's gl_FragCoord",
+		};
+		CHECK(FindSyntaxProblems("Crafted.frag.slang", crafted) == expected);
+		CHECK(FindSyntaxProblems("Include/Common.slang", "uint Pack(float2 v) { __target_switch { default: return 0u; } }\n").empty());
+	}
+
+	TEST_CASE("Shaders use HLSL syntax")
+	{
+		const std::vector<std::pair<std::string, std::string>> files = ReadShaderSources();
+		REQUIRE(files.size() > 50);
+		for (const std::pair<std::string, std::string>& file : files)
+		{
+			CAPTURE(file.first);
+			for (const std::string& problem : FindSyntaxProblems(file.first, file.second))
 				FAIL_CHECK(problem);
 		}
 	}

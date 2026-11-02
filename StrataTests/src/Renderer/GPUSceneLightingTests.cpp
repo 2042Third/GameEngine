@@ -697,7 +697,7 @@ TEST_SUITE("GPU.SceneRenderer.Lighting")
 
 	TEST_CASE("A white furnace keeps a rough metal's light at every roughness")
 	{
-		// Multiple-scattering compensation (PBR.glsl's GetSpecularEnergy): a white metal (F0 = 1) reflects all the light it
+		// Multiple-scattering compensation (PBR.slang's GetSpecularEnergy): a white metal (F0 = 1) reflects all the light it
 		// receives at every roughness; 0.6.0's single-scattering lobe kept 0.31 of it for silver at roughness 1.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());

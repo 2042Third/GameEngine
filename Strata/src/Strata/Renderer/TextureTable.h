@@ -15,12 +15,12 @@ namespace Strata
 	// Stable indices of the textures materials sample (Renderer::GetTextureTable): a texture keeps its index for its life, and
 	// the index's entry follows the texture's bindless slot (packed with its sampler and grayscale bit: PackEntry). Material
 	// data holds indices, so it stays the same while a texture streams levels and moves from bindless slot to bindless slot;
-	// shaders read the entry first (SampleMaterialTexture, Include/Scene.glsl). Indices 0-2 stand for white, black and flat
+	// shaders read the entry first (SampleMaterialTexture, Include/Scene.slang). Indices 0-2 stand for white, black and flat
 	// normal (BindlessTextureTable's reserved slots).
 	//
 	// An entry also holds a minimum level of detail: a texture that gained levels fades them in (SetFadeIn), from the level
 	// it showed before to its finest, over c_FadeInSeconds, so that new detail does not pop in. SampleMaterialTexture
-	// (Include/MaterialTextures.glsl) scales the sampling gradients up to it, which keeps anisotropic filtering.
+	// (Include/MaterialTextures.slang) scales the sampling gradients up to it, which keeps anisotropic filtering.
 	//
 	// Entries change on any thread (textures finalize and stream on the main thread, and are destroyed on any); renderers
 	// upload the changed ones before they draw (RecordUploads, once per frame for all of them). A freed index draws white
@@ -28,7 +28,7 @@ namespace Strata
 	class TextureTable
 	{
 	public:
-		// What the GPU reads per index (RenderData's std430 layout in Include/Scene.glsl: uvec2).
+		// What the GPU reads per index (RenderData's std430 layout in Include/Scene.slang: uvec2).
 		struct GPUEntry
 		{
 			uint32_t Entry = 0;  // PackEntry

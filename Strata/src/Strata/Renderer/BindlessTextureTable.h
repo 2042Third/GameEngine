@@ -19,7 +19,7 @@ namespace Strata
 	// (re)allocated, never while frames in flight can access them (required by update-after-bind descriptors).
 	// To replace a texture (e.g. after streaming in more mips), allocate a new slot and release the old one.
 	//
-	// GLSL: layout(set = S, binding = 0) uniform texture2D u_Textures[]; indexed with nonuniformEXT(slot).
+	// In the shaders: Texture2D<float4> u_Textures[] : register(t0, spaceS); indexed with NonUniformResourceIndex(slot).
 	class BindlessTextureTable
 	{
 	public:

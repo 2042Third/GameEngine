@@ -52,7 +52,7 @@ namespace Strata
 			return std::max(lens.FocusDistance * 1000.0f, 1.1f * lens.FocalLength);
 		}
 
-		// The levels (2^bits - 1) the output's dither quantizes to in a target of `format` (Include/Dither.glsl): the 8-bit and
+		// The levels (2^bits - 1) the output's dither quantizes to in a target of `format` (Include/Dither.slang): the 8-bit and
 		// 10-bit UNORM formats; 0 (no dither) for the others a target may have (16-bit UNORM, the packed 5-6-5, 5-5-5-1 and
 		// 4-4-4-4 formats), whose own rounding is left as it is.
 		float GetDitherLevels(nvrhi::Format format)
@@ -134,7 +134,7 @@ namespace Strata
 			.setKeepInitialState(true)
 			.setDebugName(m_Specification.DebugName + ".Exposure"));
 		// The automatic exposure's results come back to choose the pre-exposure and for the statistics: three floats
-		// (Include/Exposure.glsl: the adapted log2 luminance, the multiplier, the key's stops).
+		// (Include/Exposure.slang: the adapted log2 luminance, the multiplier, the key's stops).
 		for (ExposureReadback& entry : m_ExposureReadbacks)
 			entry.Readback = CreateScope<BufferReadback>(m_Device, 3 * sizeof(float), m_Specification.DebugName + ".ExposureReadback");
 		const bool exposureReadbacks = std::all_of(m_ExposureReadbacks.begin(), m_ExposureReadbacks.end(),
@@ -179,7 +179,7 @@ namespace Strata
 		copyLayout.visibility = nvrhi::ShaderType::Pixel;
 		copyLayout.bindings = { nvrhi::BindingLayoutItem::Texture_SRV(0), nvrhi::BindingLayoutItem::Sampler(0) };
 		m_CopyBindingLayout = m_Device->createBindingLayout(copyLayout);
-		// Morphological anti-aliasing's passes: every read is a point fetch (texelFetch), so they declare no sampler.
+		// Morphological anti-aliasing's passes: every read is a point fetch (Load), so they declare no sampler.
 		nvrhi::BindingLayoutDesc morphologicalEdgesLayout;
 		morphologicalEdgesLayout.visibility = nvrhi::ShaderType::Pixel;
 		morphologicalEdgesLayout.bindings = { nvrhi::BindingLayoutItem::Texture_SRV(0), nvrhi::BindingLayoutItem::Texture_SRV(1),
@@ -213,7 +213,7 @@ namespace Strata
 		m_MotionBlurNeighborsPipeline = CreateComputePipeline("PostProcess/MotionBlurNeighbors.comp", m_MotionBlurLayout);
 		m_MotionBlurPipeline = CreateComputePipeline("PostProcess/MotionBlur.comp", m_MotionBlurLayout);
 		// Depth of field: one layout for its five passes, as the motion blur's; the composite's bilinear reads use the linear
-		// clamping sampler at Include/Scene.glsl's slot 8.
+		// clamping sampler at Include/Scene.slang's slot 8.
 		nvrhi::BindingLayoutDesc depthOfFieldLayout;
 		depthOfFieldLayout.visibility = nvrhi::ShaderType::Compute;
 		depthOfFieldLayout.bindings = {
