@@ -1,5 +1,5 @@
 {
-	"Description": "The engine's layers, bottom up, and the build: CMake makes one static library per layer from this table (Strata_<Name>, CMake/StrataLayers.cmake), linking exactly the built layers of its MayInclude. Every file under SourceRoot belongs to exactly one layer (Paths minus Exclude, globs relative to SourceRoot) and may include only files of its own layer and of the layers in MayInclude, which must be listed below it, and none of the third-party headers whose path starts with a prefix of its MayNotIncludeExternal. Tooling marks the layers games never contain (their libraries are excluded from all, linked through StrataTooling); Option names the CMake option that builds an optional layer. Architecture.Layering (StrataTests/src/Architecture/LayeringTests.cpp) enforces the includes and Architecture.Libraries the libraries; LayeringAllowlist.txt lists the known exceptions, each with the workstream that removes it, and holds exactly MaxAllowlistEntries lines (lower it when you remove one). Widen a MayInclude only for a proven downward dependency, with the reason in the layer's Notes; never to legalize a sideways or upward include",
+	"Description": "The engine's layers, bottom up, and the build: CMake makes one static library per layer from this table (Strata_<Name>, CMake/StrataLayers.cmake), linking exactly the built layers of its MayInclude. Every file under SourceRoot belongs to exactly one layer (Paths minus Exclude, globs relative to SourceRoot) and may include only files of its own layer and of the layers in MayInclude, which must be listed below it, and none of the third-party headers whose path starts with a prefix of its MayNotIncludeExternal. Tooling marks the layers games never contain (their libraries are excluded from all, linked through StrataTooling); Option names the CMake option that builds an optional layer. Architecture.Layering (StrataTests/src/Architecture/LayeringTests.cpp) enforces the includes and Architecture.Libraries the libraries; LayeringAllowlist.txt lists the known exceptions, each with the workstream that removes it, and holds exactly MaxAllowlistEntries lines (lower it when you remove one). Widen a MayInclude only for a proven downward dependency, with the reason in the layer's Notes; never to legalize a sideways or upward include. ExternalOwners names third-party and system headers only some folders may include, whatever their layer: an include whose path starts with one of an entry's Prefixes (ignoring case) from a file none of its Paths matches is a violation (the window system, the graphics API and the OS stay in their Platform folders)",
 	"SourceRoot": "Strata/src",
 	"MaxAllowlistEntries": 0,
 	"Layers": [
@@ -121,6 +121,33 @@
 			"Notes": "The composition root (Engine/BuiltinModules) and the entry point that calls it (Engine/EntryPoint.h, ApplicationLaunch.h). Both are part of every program, shipped games included, so they name only the modules a game contains: tools hand the asset pipeline in (ModuleRegistrationOptions::AssetPipeline), and programs list their engine modules (ApplicationSpecification::Modules), so the importers, the network and ImGui stay out of games.",
 			"Paths": [ "Strata/Engine/**" ],
 			"MayInclude": [ "Core", "Input", "App", "Asset", "Reflection", "Scene", "Renderer", "Physics", "Audio", "Animation", "Scripting", "World", "GameUI" ]
+		}
+	],
+	"ExternalOwners": [
+		{
+			"Prefixes": [ "GLFW/" ],
+			"Paths": [ "Platform/GLFW/**" ],
+			"Notes": "The window backend. Everything else reaches windows through Core/Window.h, and the Vulkan device presents through Platform/Vulkan/VulkanPresentation.h"
+		},
+		{
+			"Prefixes": [ "vulkan/", "nvrhi/vulkan" ],
+			"Paths": [ "Platform/Vulkan/**" ],
+			"Notes": "The graphics backend. The renderer uses Renderer/GraphicsDevice.h and NVRHI's API-neutral headers"
+		},
+		{
+			"Prefixes": [ "Windows.h", "winsock2.h", "ws2tcpip.h", "mstcpip.h", "shlobj.h", "shellapi.h", "psapi.h", "bcrypt.h", "aclapi.h", "DbgHelp.h", "io.h", "malloc.h" ],
+			"Paths": [ "Platform/Windows/**" ],
+			"Notes": "The Windows implementations of Core's interfaces"
+		},
+		{
+			"Prefixes": [ "unistd.h", "sys/", "pthread.h", "dlfcn.h", "poll.h", "spawn.h", "sched.h", "ucontext.h", "elf.h", "netdb.h", "netinet/", "arpa/", "mach/", "mach-o/", "libproc.h", "crt_externs.h" ],
+			"Paths": [ "Platform/Posix/**" ],
+			"Notes": "The Linux and macOS implementations of Core's interfaces"
+		},
+		{
+			"Prefixes": [ "fcntl.h" ],
+			"Paths": [ "Platform/Windows/**", "Platform/Posix/**" ],
+			"Notes": "File descriptors, on both"
 		}
 	]
 }
