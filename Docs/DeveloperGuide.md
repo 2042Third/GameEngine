@@ -673,6 +673,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     trip. It needs Python 3.10 or later found at configure time; without it the test fails saying so.
   - Baselines: Strata 0.6.0's set (bc6ee123's Release build, every shot, both sizes, all modes, 5 repeats) lies in
     `.worktrees/wave7-plan/lookdev/0.6.0/` on the reference machine, outside the repository, with wave 7's step 0 beside it.
+    Strata 0.7.0's set (76f28a21's Release build, every shot, both sizes, all modes, 5 repeats, live) lies in
+    `.worktrees/wave8-plan/lookdev/0.7.0/`, its Medium stills in `0.7.0-medium/`; `.worktrees/wave8-base` keeps that build
+    for interleaved A/Bs ("Perf tests").
 
 ### End-to-end tests
 
