@@ -2422,7 +2422,10 @@ tool, were rejected.
   without an interpolated parent, and a step longer than box3d's maximum speed times the time it simulated
   (`Scene::c_MaxInterpolatedSpeed`, 400 m/s; `Physics.Settings` checks it against `b3DefaultWorldDef()`: a change of
   either changes both) draw exact poses: a wrong exact pose costs at most a step of judder, a wrong blend draws a streak.
-  An entity created during the steps under an interpolated parent composes with it.
+  An entity created during the steps under an interpolated parent composes with it. A Blend's two poses share their
+  scale's signs: a root's pose keeps its authored ones (Scale (1, 1, -1)) where a decomposed matrix folds a mirror into X,
+  so the pose before the steps is rewritten with the root's signs (the same matrix; blending across would squash it
+  through zero scale), and a mirror that flipped during the steps draws exact.
 - **Breaks.** `Scene::BreakInterpolation` draws an entity and what blends below it where they are until the next step
   moves them: during the steps it applies to the poses they leave, outside them at once (logged as transform changes).
   `PhysicsWorld::Teleport` and `TeleportCharacter` call it; scripts call `ResetInterpolation`.

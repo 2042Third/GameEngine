@@ -2,6 +2,7 @@
 
 #include "Scene/InterpolationTestUtils.h"
 #include "TestHelpers.h"
+#include "Strata/Math/Math.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
@@ -603,6 +604,62 @@ TEST_SUITE("Scene.Timing")
 		RunUntilStep(scene, 1.0f / 1024.0f);
 		CHECK(!scene.GetInterpolatedEntities().empty());
 		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Mirrored roots are drawn mirrored and turning between their steps, also in their first segment")
+	{
+		// A root's pose keeps its authored signs where the decomposed matrix before the steps has its reflection folded into X:
+		// the first segment after an entity starts moving takes its From from that matrix and its To from the entity's pose.
+		for (const glm::vec3& scale : { glm::vec3(1.0f, 1.0f, -1.0f), glm::vec3(-1.0f, -1.0f, 1.0f), glm::vec3(-1.0f, 2.0f, -0.5f) })
+		{
+			INFO("scale ", scale.x, " ", scale.y, " ", scale.z);
+			ScopedFixedMover moverScope;
+			Scene scene("Mirrored");
+			SetTestStep(scene);
+			Entity body = scene.CreateEntity("Body");
+			body.GetComponent<TransformComponent>().Rotation = glm::angleAxis(0.4f, glm::vec3(0.0f, 1.0f, 0.0f));
+			body.GetComponent<TransformComponent>().Scale = scale;
+			body.MarkModified<TransformComponent>();
+			AddFixedMover(scene, body, glm::vec3(c_Speed, 0.0f, 0.0f), 3.0f, glm::normalize(glm::vec3(0.2f, 1.0f, 0.1f)));
+			scene.SetInterpolation(true);
+			scene.OnRuntimeStart();
+
+			// The entity's own pose before the latest stepping frame's steps and after them: the drawn pose lies between.
+			TransformComponent from = body.GetComponent<TransformComponent>();
+			TransformComponent to = from;
+			uint32_t segments = 0;
+			uint32_t between = 0;
+			uint32_t wrong = 0;
+			for (int frame = 0; frame < 200; frame++)
+			{
+				const uint64_t steps = scene.GetFixedStepCount();
+				const TransformComponent before = body.GetComponent<TransformComponent>();
+				scene.OnUpdateRuntime(Timestep(1.0f / 1024.0f));
+				if (scene.GetFixedStepCount() != steps)
+				{
+					from = before;
+					to = body.GetComponent<TransformComponent>();
+					segments++;
+				}
+				if (segments == 0)
+					continue;
+				const float alpha = scene.GetStepAlpha();
+				const glm::quat target = glm::dot(from.Rotation, to.Rotation) < 0.0f ? -to.Rotation : to.Rotation;
+				const glm::quat rotation = glm::normalize(from.Rotation * (1.0f - alpha) + target * alpha);
+				const glm::mat4 expected = Math::ComposeTransform(from.Translation + (to.Translation - from.Translation) * alpha, rotation, scale);
+				const glm::mat4 drawn = GetRenderedTransform(scene, body);
+				// Mirrored as the entity is and never squashed: the determinant stays the scale's product.
+				const bool mirrored = std::abs(glm::determinant(glm::mat3(drawn)) - scale.x * scale.y * scale.z) <= 1.0e-3f;
+				wrong += NearMatrix(drawn, expected, 1.0e-4f) && mirrored ? 0 : 1;
+				between += alpha < 1.0f ? 1 : 0;
+			}
+			CHECK(wrong == 0);
+			CHECK(segments > 10);
+			CHECK(between > 150);
+			CHECK(FindRole(scene, body) == InterpolationRole::Blend);
+			CHECK(scene.ValidateInterpolation());
+			scene.OnRuntimeStop();
+		}
 	}
 }
 

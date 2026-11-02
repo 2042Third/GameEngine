@@ -56,6 +56,45 @@ namespace Strata
 			return std::memcmp(&a, &b, sizeof(glm::mat4)) == 0;
 		}
 
+		// Whether the scales have their negative components on the same axes: a blend between them never passes through zero.
+		bool SameScaleSigns(const glm::vec3& a, const glm::vec3& b)
+		{
+			return (a.x < 0.0f) == (b.x < 0.0f) && (a.y < 0.0f) == (b.y < 0.0f) && (a.z < 0.0f) == (b.z < 0.0f);
+		}
+
+		// Rewrites the pose with the signs of `reference`'s scale, describing the same matrix. A root's pose keeps its authored
+		// signs, e.g. Scale (1, 1, -1), where a decomposed matrix has the reflection folded into X (Math::DecomposeTransform):
+		// Scale (-1, 1, 1) turned half around Y. Blending one into the other would squash the entity through zero scale and turn
+		// it. False when an odd number of signs differ: the matrices' handedness differs, so no pose of either describes both.
+		bool MatchScaleSigns(InterpolationPose& pose, const glm::vec3& reference)
+		{
+			glm::vec3 flip(1.0f);
+			int flipped = 0;
+			int kept = 0;
+			for (int axis = 0; axis < 3; axis++)
+			{
+				if ((pose.Scale[axis] < 0.0f) != (reference[axis] < 0.0f))
+				{
+					flip[axis] = -1.0f;
+					flipped++;
+				}
+				else
+				{
+					kept = axis;
+				}
+			}
+			if (flipped == 0)
+				return true;
+			if (flipped != 2)
+				return false;
+			// R diag(s) = (R D) (D diag(s)) with D = diag(flip): two signs flipped make D the half turn about the third axis.
+			glm::vec3 halfTurnAxis(0.0f);
+			halfTurnAxis[kept] = 1.0f;
+			pose.Rotation = pose.Rotation * glm::quat(0.0f, halfTurnAxis);
+			pose.Scale *= flip;
+			return true;
+		}
+
 		bool MovedPerFrame(const glm::vec3& before, const glm::vec3& after)
 		{
 			return glm::length(after - before) > c_PerFrameMoveTolerance * std::max(1.0f, glm::length(before));
@@ -252,7 +291,9 @@ namespace Strata
 					entry.From = m_InterpolatedEntries[old].To;
 				else
 					entry.From = DecomposePose(capture.Previous, exactFrom);
-				if (!exactTo && !exactFrom && glm::length(entry.To.Translation - entry.From.Translation) <= maxDistance)
+				// Both poses in one convention: a root's To keeps its authored signs, a decomposed From folds them into X.
+				if (!exactTo && !exactFrom && MatchScaleSigns(entry.From, entry.To.Scale)
+					&& glm::length(entry.To.Translation - entry.From.Translation) <= maxDistance)
 					entry.Role = InterpolationRole::Blend;
 			}
 		});
@@ -576,6 +617,8 @@ namespace Strata
 				return fail(fmt::format("the composed entity {} does not name its hierarchy parent", static_cast<uint32_t>(entity)));
 			if (entry.Role == InterpolationRole::Blend && (!IsBlendablePose(entry.From) || !IsBlendablePose(entry.To)))
 				return fail(fmt::format("the blended entity {} has a pose that is not finite or not a rotation", static_cast<uint32_t>(entity)));
+			if (entry.Role == InterpolationRole::Blend && !SameScaleSigns(entry.From.Scale, entry.To.Scale))
+				return fail(fmt::format("the blended entity {} blends between scales of other signs", static_cast<uint32_t>(entity)));
 		}
 		return true;
 	}
