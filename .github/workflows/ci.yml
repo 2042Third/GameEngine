@@ -261,3 +261,39 @@ jobs:
         run: |
           python=$(command -v python3 || command -v python)
           "$python" .github/scripts/annotate_failures.py configure.log build.log test.log
+
+  # Lane Slang's lavapipe try (wave 8, S0.10; on ci/slang-mesa* refs only, never merged): the GPU suites on Mesa's CPU Vulkan
+  # driver, once with glslang's modules and once with Slang's, to see Slang's SPIR-V on a driver other than NVIDIA's.
+  gpu-lavapipe:
+    name: GPU suites (lavapipe)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build gcc-14 g++-14 xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols \
+            libgtk-3-dev libvulkan-dev pkg-config mesa-vulkan-drivers vulkan-validationlayers
+          echo "CC=gcc-14" >> "$GITHUB_ENV"
+          echo "CXX=g++-14" >> "$GITHUB_ENV"
+
+      - name: Configure
+        run: cmake --preset linux
+
+      - name: Build
+        run: cmake --build --preset linux-release --target StrataTests --parallel
+
+      - name: GPU suites on lavapipe
+        shell: bash
+        run: |
+          set -o pipefail
+          ls /usr/share/vulkan/icd.d/
+          VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json build/linux/bin/Release/StrataTests --test-suite='GPU*' \
+            --no-breaks 2>&1 | tee lavapipe.log | tail -300
