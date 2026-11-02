@@ -46,6 +46,8 @@
 	"Perf.Scripting.ScriptedSpawnFrame100k": { "Measured": 2.459, "Budget": 3.688, "Unit": "ms" },
 	"Perf.Scripting.ScriptedDestroy10kOf100kRoots": { "Measured": 21.25, "Budget": 31.87, "Unit": "ms" },
 	"Perf.FrameProfiler.Frame16Stages": { "Measured": 0.6303, "Budget": 0.9454, "Unit": "us" },
+	"Perf.FramePacer.WorstRateError": { "Unit": "ratio", "Provisional": true, "Target": 0.02 },
+	"Perf.FramePacer.WorstIntervalP95": { "Unit": "ratio", "Provisional": true, "Target": 1.25 },
 	"Perf.Jobs.SubmitWait": { "Measured": 1.481, "Budget": 2.221, "Unit": "us" },
 	"Perf.Jobs.SubmitMany": { "Measured": 1.573, "Budget": 2.359, "Unit": "us" },
 	"Perf.Jobs.ParallelForOverhead": { "Measured": 79.65, "Budget": 119.4, "Unit": "us" },
