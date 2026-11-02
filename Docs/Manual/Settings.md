@@ -79,8 +79,8 @@ to find a page or a field), the selected page on the right:
   column is highlighted. Pick a **Preset** with the chips above it: **Low** (smaller shadow maps, three sun shadow
   cascades, four point and spot lights with shadows, coarser levels of detail, lighter ambient occlusion, no
   screen-space reflections and no motion blur: for older or integrated GPUs), **Medium** (Strata 0.6.0's shadow map
-  sizes and sample counts, no contact shadows, screen-space reflections at half resolution, only with TAA), **High**
-  (the default: smoother wide sun penumbrae and contact shadows at every size, sharper sun shadows on displays of 1440
+  sizes and sample counts, screen-space reflections at half resolution, only with TAA), **High**
+  (the default: smoother wide sun penumbrae at every size, sharper sun shadows on displays of 1440
   rows and more, 256 MiB of shadow maps per view instead of 64, denser ambient occlusion, sharper reflections of the
   sky, 512 texels per face instead of 256, and screen-space reflections traced on every pixel with any anti-aliasing,
   about 232 MiB of video memory per view at 3840 x 2160 instead of 79) or **Ultra** (sharper shadows everywhere, larger

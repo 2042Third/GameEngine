@@ -1,6 +1,7 @@
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Strata/Renderer/MeshFactory.h"
 #include "Strata/Renderer/RendererComponents.h"
+#include "Strata/Renderer/RendererQuality.h"
 
 #include <algorithm>
 #include <cmath>
@@ -12,7 +13,7 @@ using namespace Strata::Tests;
 
 // The sun's contact shadows (Effects/ContactShadows.frag: a march toward the sun over the depth buffer): they ground what the
 // cascades are too coarse for, never shadow an open plane or a convex lit surface, have no grain without anti-aliasing,
-// fade with distance and at the screen's edges, and Medium has none.
+// fade with distance and at the screen's edges, and only a Custom quality draws them.
 
 namespace
 {
@@ -412,23 +413,38 @@ TEST_SUITE("GPU.SceneRenderer.ContactShadows")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("Medium draws no contact shadows")
+	TEST_CASE("No preset draws contact shadows")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
 		PlateScene plate;
 		const SceneCamera camera = PlateCamera();
-		SceneRendererSpecification medium;
-		medium.TextureStreaming = false;
-		medium.FitShadowsToView = false; // Two frames are compared pixel by pixel
-		CHECK(medium.Quality.ContactShadows == 0);
-		SceneRenderer renderer(medium);
-		renderer.SetViewportSize(c_Size, c_Size);
-		const ReadbackImage withLength = RenderToImage(renderer, plate.SceneData, camera);
-		plate.SetLength(0.0f);
-		const ReadbackImage without = RenderToImage(renderer, plate.SceneData, camera);
-		CHECK(withLength.Pixels == without.Pixels);
+		// Each frame by a renderer of its own: High's spatial reflections read the previous frame, so two frames of one renderer
+		// can differ with nothing in the scene changed.
+		const auto render = [&](const RendererQualitySettings& quality, float length)
+		{
+			SceneRendererSpecification specification;
+			specification.Quality = quality;
+			specification.TextureStreaming = false;
+			specification.FitShadowsToView = false; // Frames are compared pixel by pixel
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_Size, c_Size);
+			plate.SetLength(length);
+			return RenderToImage(renderer, plate.SceneData, camera);
+		};
+		for (const RendererQualityPreset preset : { RendererQualityPreset::Low, RendererQualityPreset::Medium, RendererQualityPreset::High,
+			RendererQualityPreset::Ultra })
+		{
+			CAPTURE(static_cast<int>(preset));
+			const RendererQualitySettings quality = RendererQuality::GetPreset(preset);
+			CHECK(quality.ContactShadows == 0);
+			CHECK(render(quality, 0.3f).Pixels == render(quality, 0.0f).Pixels);
+		}
+		// The row still works: a Custom quality with steps draws them.
+		RendererQualitySettings custom = RendererQuality::GetPreset(RendererQualityPreset::High);
+		custom.ContactShadows = 12;
+		CHECK(render(custom, 0.3f).Pixels != render(custom, 0.0f).Pixels);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

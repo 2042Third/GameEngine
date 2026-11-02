@@ -8,7 +8,9 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <optional>
 #include <string>
 
 // The sun's cascades fitted to what the camera sees (Docs/DeveloperGuide.md, "Sun shadows"; SceneRendererSpecification::
@@ -20,7 +22,17 @@
 namespace Strata
 {
 
-	void SceneRenderer::UpdateShadowFit(const RenderScene& renderScene, const SceneCamera& camera, bool cameraCut)
+	float SceneRenderer::StepSeconds(std::optional<std::chrono::steady_clock::time_point>& last, const SceneRenderOptions& options)
+	{
+		const auto now = std::chrono::steady_clock::now();
+		float seconds = last ? std::clamp(std::chrono::duration<float>(now - *last).count(), 0.0f, c_MaxStepSeconds) : 0.0f;
+		if (options.AdaptationSeconds)
+			seconds = std::isfinite(*options.AdaptationSeconds) ? std::max(*options.AdaptationSeconds, 0.0f) : 0.0f;
+		last = now;
+		return seconds;
+	}
+
+	void SceneRenderer::UpdateShadowFit(const RenderScene& renderScene, const SceneCamera& camera, bool cameraCut, const SceneRenderOptions& options)
 	{
 		ST_PROFILE_FUNCTION();
 		m_ShadowFitLayout = {};
@@ -97,10 +109,15 @@ namespace Strata
 			if (newest->Readback->Read(&m_ShadowFitScratch.Result, sizeof(RenderData::ShadowFitResult)))
 				readback = &m_ShadowFitScratch;
 		}
+		// Holds are counted in seconds, never frames or readbacks, so they last as long at any frame rate. Frames without a fit
+		// do not tick the clock: their gap comes back capped on a frame that starts an epoch anyway.
+		view.Seconds = StepSeconds(m_LastShadowFitTime, options);
+		view.Holds = m_Specification.ShadowFitHolds;
 		m_ShadowFitLayout = m_ShadowFit.Update(view, readback);
 		m_Stats.ShadowFit = m_ShadowFitLayout.Fitted;
 		m_Stats.ShadowFitSquares = m_ShadowFitLayout.SquaresFitted;
 		m_Stats.ShadowFitSettled = m_ShadowFit.IsSettled();
+		m_Stats.ShadowFitHolding = m_ShadowFit.IsHolding();
 		m_Stats.ShadowFitNear = m_ShadowFitLayout.Near;
 		m_Stats.ShadowFitFar = m_ShadowFitLayout.Far;
 		m_Stats.ShadowFitChanges = m_ShadowFit.GetChanges();

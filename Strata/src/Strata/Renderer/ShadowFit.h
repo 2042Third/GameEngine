@@ -34,6 +34,10 @@ namespace Strata
 		// The view distance of the nearest transparent surface the previous frame drew (transparent surfaces are not in the depth
 		// the readbacks measure); infinity without one.
 		float NearestTransparent = std::numeric_limits<float>::infinity();
+		float Seconds = 0.0f; // Since the previous Update, from SceneRenderer::StepSeconds: what the tracker's holds count
+		// False: Strata 0.7.0's rules (growths at once, shrinks after c_ShrinkReadbacks readbacks), for renderers of single
+		// images (SceneRendererSpecification::ShadowFitHolds).
+		bool Holds = true;
 	};
 
 	// Scene/ShadowFit.comp's result for a frame, with the camera that frame was drawn from: its view-space boxes are re-projected
@@ -80,9 +84,13 @@ namespace Strata
 	// over [N, F] (the receivers' range with margins, in quarter stops) and fits every cascade's square but the last one's to
 	// the receivers re-projected through the readback's camera into this frame's camera and light; the last cascade keeps its
 	// slice's sphere and reaches the shadow distance, so a receiver the readback did not see still has a cascade (shaders select
-	// cascades by containment: Include/Shadows.slang, SelectShadowCascade). Bounds and sides grow at once and shrink only after
-	// c_ShrinkReadbacks readbacks in a row asked for less. Until the first readback of an epoch (Reset: a camera cut, another
-	// scene, other cascades) and without receivers, the layout is Strata 0.6.0's. Pure C++: SceneRenderer feeds it.
+	// cascades by containment: Include/Shadows.slang, SelectShadowCascade). The far bound grows at once; the near bound grows at
+	// once for receivers holding c_NearNowShare of the pixels, for a transparent surface and in narrow views, else only after
+	// asking for c_GrowSeconds (c_GrowSecondsMoving on a moving camera); squares grow at once on a moving camera and after
+	// c_GrowSeconds on a still one, keeping the previous square meanwhile; everything shrinks after c_ShrinkReadbacks readbacks
+	// and c_ShrinkSeconds. Without holds (ShadowFitView::Holds, renderers of single images) growths are made at once and
+	// shrinks after c_ShrinkReadbacks readbacks, as in Strata 0.7.0. Until the first readback of an epoch (Reset: a camera cut,
+	// another scene, other cascades) and without receivers, the layout is Strata 0.6.0's. Pure C++: SceneRenderer feeds it.
 	class ShadowFitTracker
 	{
 	public:
@@ -98,6 +106,16 @@ namespace Strata
 		// Where it would not (fields of view so narrow that the near bound they give lies beyond D (tan^2(fovY / 2) +
 		// tan^2(fovX / 2)), and orthographic views) they are kept.
 		static constexpr double c_NearOutlierShare = 0.01;
+		// Receivers nearer than the near bound holding at least this share of the receiver pixels move it at once (a wall, a
+		// dive); fewer must keep asking for c_GrowSeconds (c_GrowSecondsMoving while the camera moves), so a ball passing the
+		// camera re-cuts no slice. 6.85% for the Physics Playground's ball at spawn; 15.6% for its dive (shadow-jump audit).
+		static constexpr double c_NearNowShare = 0.10;
+		// How long a growth must keep asking before it is made: the near bound's and a square's on a still camera (a square grows
+		// at once on a moving one), the near bound's on a moving camera. ShadowFitView::Seconds, never frames or readbacks.
+		static constexpr float c_GrowSeconds = 0.5f;
+		static constexpr float c_GrowSecondsMoving = 0.12f;
+		// A bound or side shrinks after c_ShrinkReadbacks readbacks in a row asked for less and at least this long.
+		static constexpr float c_ShrinkSeconds = 0.5f;
 		// A fitted square is the receivers' box grown by this factor, and by the filter's reach on each side in its own texels
 		// (the shaders' containment margin).
 		static constexpr double c_SquareGrowth = 1.05;
@@ -119,6 +137,8 @@ namespace Strata
 		// No readback is due that may change the layout: since the latest change or Reset, a readback of a frame drawn with the
 		// current layout arrived and left it unchanged.
 		bool IsSettled() const { return m_Settled; }
+		// A growth of the near bound or of a square waits (never without ShadowFitView::Holds); the layout is not settled meanwhile.
+		bool IsHolding() const { return m_Holding; }
 		// Frames whose layout changed since the tracker was made.
 		uint64_t GetChanges() const { return m_Changes; }
 
@@ -134,8 +154,10 @@ namespace Strata
 	private:
 		struct Hysteresis
 		{
-			uint32_t Count = 0;  // Readbacks in a row that asked for less
-			int32_t Wanted = 0;  // The least shrunk of what they asked for
+			uint32_t Count = 0;   // Readbacks in a row that asked for less
+			int32_t Wanted = 0;   // Shrinking: the least shrunk of what they asked for; growing: the least grown
+			float Seconds = 0.0f; // How long it has asked
+			bool Growing = false; // It asks for more, and waits
 		};
 		struct ReprojectedBin
 		{
@@ -154,8 +176,13 @@ namespace Strata
 		// The square cascade `cascade` of `layout` wants, as quarter stops of its side (c_SphereQuarters: its sphere), and the box of
 		// the receivers it must hold (with the turn's margin) relative to the camera in light view space.
 		int32_t GetSideTarget(const ShadowFitView& view, const ShadowFitLayout& layout, uint32_t cascade, glm::dvec2& boxMin, glm::dvec2& boxMax) const;
-		// Grows at once, shrinks after c_ShrinkReadbacks readbacks in a row; `larger` orders the targets.
-		static void Follow(int32_t target, int32_t& current, Hysteresis& state, bool newReadback, bool larger);
+		// Grows at once when `growNow`, else once it kept asking for `growSeconds`, to the least grown of what it asked for;
+		// shrinks after c_ShrinkReadbacks readbacks in a row and `shrinkSeconds` (c_ShrinkSeconds; 0 without holds), to the
+		// least shrunk; `larger` orders the targets. `seconds`: the frame's ShadowFitView::Seconds.
+		static void Follow(int32_t target, int32_t& current, Hysteresis& state, bool newReadback, bool larger, float seconds, bool growNow,
+			float growSeconds, float shrinkSeconds);
+		// The share of the readback's receiver pixels nearer than `nearBound` (whole bins: a bin straddling it counts).
+		double GetNearerShare(double nearBound) const;
 
 		uint64_t m_Epoch = 1;
 		uint64_t m_LayoutVersion = 1;
@@ -173,6 +200,12 @@ namespace Strata
 		std::array<int32_t, RenderData::c_MaxCascades> m_SideQuarters = {};
 		std::array<Hysteresis, RenderData::c_MaxCascades> m_SideStates = {};
 		ShadowFitLayout m_Layout;
+		bool m_Holding = false;
+		// The previous Update's camera and light: a frame whose three equal them is still (TAA's jitter is in the projection).
+		bool m_HasLastView = false;
+		glm::dvec3 m_LastCameraPosition = glm::dvec3(0.0);
+		glm::mat3 m_LastCameraRotation = glm::mat3(1.0f);
+		glm::dmat3 m_LastLightRotation = glm::dmat3(1.0);
 	};
 
 }

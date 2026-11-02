@@ -3074,7 +3074,7 @@ namespace Strata
 		// The sun's cascades' layout: fitted to the receivers a readback of an earlier frame saw, else Strata 0.6.0's. Layout
 		// changes keep the visibility feedback: on feedback frames every cascade gets the slots of every caster the feedback saw,
 		// and the last cascade, which reaches the shadow distance, holds every caster of every receiver.
-		UpdateShadowFit(renderScene, camera, cameraCut);
+		UpdateShadowFit(renderScene, camera, cameraCut, options);
 		m_FeedbackFrame = UsesFeedback(renderScene);
 		m_Stats.FeedbackRequests = m_FeedbackFrame;
 		if (m_FeedbackFrame)

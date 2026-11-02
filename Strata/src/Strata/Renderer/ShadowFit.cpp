@@ -135,6 +135,7 @@ namespace Strata
 		m_Epoch++;
 		m_LayoutVersion++;
 		m_Settled = false;
+		m_Holding = false;
 		m_HasReadback = false;
 		m_Fitted = false;
 		m_BinCount = 0;
@@ -143,28 +144,64 @@ namespace Strata
 		m_SideStates = {};
 	}
 
-	void ShadowFitTracker::Follow(int32_t target, int32_t& current, Hysteresis& state, bool newReadback, bool larger)
+	void ShadowFitTracker::Follow(int32_t target, int32_t& current, Hysteresis& state, bool newReadback, bool larger, float seconds, bool growNow,
+		float growSeconds, float shrinkSeconds)
 	{
 		const bool grows = larger ? target > current : target < current;
 		if (grows)
 		{
-			current = target;
-			state = {};
+			if (growNow)
+			{
+				current = target;
+				state = {};
+				return;
+			}
+			// Only what keeps asking grows (frames without a readback ask again with the latest one), to the least grown of what
+			// it asked for: a ball passing the camera is gone before the wait ends.
+			if (!state.Growing)
+			{
+				state = {};
+				state.Growing = true;
+				state.Wanted = target;
+			}
+			state.Seconds += seconds;
+			state.Wanted = larger ? std::min(state.Wanted, target) : std::max(state.Wanted, target);
+			if (state.Seconds >= growSeconds)
+			{
+				current = state.Wanted;
+				state = {};
+			}
 			return;
 		}
+		if (state.Growing && newReadback)
+			state = {}; // It stopped asking for more
+		if (!state.Growing && target != current)
+			state.Seconds += seconds;
 		if (!newReadback)
-			return; // Shrinking is counted in readbacks, not frames
+			return; // Shrinks also count readbacks
 		if (target == current)
 		{
 			state = {};
 			return;
 		}
 		state.Wanted = state.Count == 0 ? target : (larger ? std::max(state.Wanted, target) : std::min(state.Wanted, target));
-		if (++state.Count >= c_ShrinkReadbacks)
+		if (++state.Count >= c_ShrinkReadbacks && state.Seconds >= shrinkSeconds)
 		{
 			current = state.Wanted;
 			state = {};
 		}
+	}
+
+	double ShadowFitTracker::GetNearerShare(double nearBound) const
+	{
+		const RenderData::ShadowFitResult& result = m_Readback.Result;
+		uint64_t nearer = 0;
+		for (const RenderData::ShadowFitBin& bin : result.Bins)
+		{
+			if (bin.MaxD != 0 && DecodeOrderedFloat(~bin.MinD) < nearBound)
+				nearer += bin.Pixels;
+		}
+		return static_cast<double>(nearer) / std::max(static_cast<double>(result.SurfacePixels), 1.0);
 	}
 
 	double ShadowFitTracker::GetFittedNearest(const ShadowFitView& view) const
@@ -233,7 +270,9 @@ namespace Strata
 		const glm::dmat3& readRotation = m_Readback.CameraRotation;
 		const glm::dvec3 offset = m_Readback.CameraPosition - view.CameraPosition;
 		const glm::dvec3 forward = -glm::dmat3(view.CameraRotation)[2];
-		const double nearest = GetFittedNearest(view);
+		// Bins wholly nearer than the layout's near bound (a near receiver whose growth waits) stay out of the squares like the
+		// outliers: containment shades them from the last cascade. A settled layout's bound lies below every bin it keeps.
+		const double nearest = std::max(GetFittedNearest(view), std::max(static_cast<double>(view.Near), FromQuarters(m_NearQuarters)));
 		for (const RenderData::ShadowFitBin& bin : m_Readback.Result.Bins)
 		{
 			if (bin.MaxD == 0 || DecodeOrderedFloat(bin.MaxD) < nearest)
@@ -333,6 +372,15 @@ namespace Strata
 			m_Readback = *readback;
 			m_HasReadback = true;
 		}
+		// A camera or sun that moved since the previous frame (the Open World's turning sun counts) grows squares at once and
+		// waits less for the near bound. TAA's jitter is in the projection, not in these.
+		const bool still = m_HasLastView && view.CameraPosition == m_LastCameraPosition && view.CameraRotation == m_LastCameraRotation
+			&& view.LightRotation == m_LastLightRotation;
+		m_HasLastView = true;
+		m_LastCameraPosition = view.CameraPosition;
+		m_LastCameraRotation = view.CameraRotation;
+		m_LastLightRotation = view.LightRotation;
+		const float shrinkSeconds = view.Holds ? c_ShrinkSeconds : 0.0f;
 
 		const uint32_t count = std::min(view.CascadeCount, RenderData::c_MaxCascades);
 		const double distance = static_cast<double>(view.ShadowDistance);
@@ -354,8 +402,24 @@ namespace Strata
 			}
 			else
 			{
-				Follow(nearTarget, m_NearQuarters, m_NearState, newReadback, false);
-				Follow(farTarget, m_FarQuarters, m_FarState, newReadback, true);
+				// A transparent surface nearer than the bound moves it at once: no readback measures it, and it does not pass by.
+				if (std::isfinite(view.NearestTransparent))
+				{
+					const int32_t transparent = QuartersBelow(std::max(static_cast<double>(view.Near), static_cast<double>(view.NearestTransparent) / c_Sqrt2));
+					if (transparent < m_NearQuarters)
+					{
+						m_NearQuarters = transparent;
+						m_NearState = {};
+					}
+				}
+				// Receivers nearer than the bound move it at once when they hold c_NearNowShare of the pixels, or when the last
+				// cascade's sphere could not hold them meanwhile (the bound beyond D k: narrow and orthographic views,
+				// GetFittedNearest's rule); otherwise the growth waits until it has asked long enough.
+				const double nearBound = std::max(static_cast<double>(view.Near), FromQuarters(m_NearQuarters));
+				const bool nearNow = !view.Holds || GetNearerShare(nearBound) >= c_NearNowShare || !(nearBound <= distance * GetSphereReach(view));
+				Follow(nearTarget, m_NearQuarters, m_NearState, newReadback, false, view.Seconds, nearNow, still ? c_GrowSeconds : c_GrowSecondsMoving,
+					shrinkSeconds);
+				Follow(farTarget, m_FarQuarters, m_FarState, newReadback, true, view.Seconds, true, 0.0f, shrinkSeconds);
 			}
 			const double fittedNear = std::max(static_cast<double>(view.Near), FromQuarters(m_NearQuarters));
 			double fittedFar = m_FarQuarters == c_DistanceQuarters ? distance : std::max(FromQuarters(m_FarQuarters), fittedNear * c_Sqrt2);
@@ -405,12 +469,25 @@ namespace Strata
 					}
 					else
 					{
-						Follow(target, m_SideQuarters[cascade], m_SideStates[cascade], newReadback, true);
+						Follow(target, m_SideQuarters[cascade], m_SideStates[cascade], newReadback, true, view.Seconds, !still || !view.Holds, c_GrowSeconds,
+							shrinkSeconds);
 					}
-					// A square is kept only while the frame's own target is one (a sphere target grows to the sphere at once), so
-					// the receivers' center is this frame's.
 					ShadowFitCascade& slice = layout.Cascades[cascade];
 					const int32_t quarters = m_SideQuarters[cascade];
+					const ShadowFitCascade& previous = m_Layout.Cascades[cascade];
+					// A still camera whose square waits for a growth (toward a wider square or the sphere) keeps the previous square
+					// whole (side and center): what lies outside it takes the next cascade that holds it (containment) until the
+					// growth is made.
+					if (!slicesMoved && still && target > quarters && m_Layout.Fitted && cascade < m_Layout.CascadeCount && previous.Fitted)
+					{
+						slice.Fitted = true;
+						slice.Side = previous.Side;
+						slice.Center = previous.Center;
+						layout.SquaresFitted = true;
+						continue;
+					}
+					// A square is kept only while the frame's own target is one (a sphere target grows to the sphere at once on a
+					// moving camera), so the receivers' center is this frame's.
 					if (quarters == c_SphereQuarters || target == c_SphereQuarters)
 						continue;
 					const double side = FromQuarters(quarters);
@@ -422,7 +499,6 @@ namespace Strata
 					const double worldPerTexel = side / static_cast<double>(view.MapSize);
 					const glm::dvec2 receiversMin = glm::dvec2(cameraLight) + boxMin;
 					const glm::dvec2 receiversMax = glm::dvec2(cameraLight) + boxMax;
-					const ShadowFitCascade& previous = m_Layout.Cascades[cascade];
 					const double inner = 0.5 * side - static_cast<double>(c_FilterReachTexels) * worldPerTexel;
 					const bool holds = m_Layout.Fitted && cascade < m_Layout.CascadeCount && previous.Fitted && previous.Side == static_cast<float>(side)
 						&& glm::all(glm::greaterThanEqual(receiversMin, previous.Center - inner)) && glm::all(glm::lessThanEqual(receiversMax, previous.Center + inner));
@@ -436,6 +512,13 @@ namespace Strata
 		if (!fitted)
 			layout = GetUnfittedLayout(view);
 		m_Fitted = fitted;
+		m_Holding = false;
+		if (fitted)
+		{
+			m_Holding = m_NearState.Growing;
+			for (uint32_t cascade = 0; cascade + 1 < count; cascade++)
+				m_Holding = m_Holding || m_SideStates[cascade].Growing;
+		}
 
 		layout.Changed = m_Layout.CascadeCount != 0 && Differs(layout, m_Layout);
 		if (layout.Changed)
@@ -444,10 +527,13 @@ namespace Strata
 			m_Changes++;
 			m_Settled = false;
 		}
-		else if (newReadback && readback->LayoutVersion == m_LayoutVersion)
+		else if (newReadback && readback->LayoutVersion == m_LayoutVersion && !m_Holding)
 		{
 			m_Settled = true; // A frame drawn with this layout measured receivers that keep it
 		}
+		// A layout a waiting growth may still change is not settled.
+		if (m_Holding)
+			m_Settled = false;
 		m_Layout = layout;
 		return m_Layout;
 	}

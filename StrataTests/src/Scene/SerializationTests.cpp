@@ -675,7 +675,7 @@ TEST_SUITE("Scene.Serialization")
 			{ "ShadowNormalBias", 1.5 }, { "ShadowSoftness", 1 } }, warnings);
 		CHECK(warnings.empty());
 		CHECK(loaded.CascadeBlend == doctest::Approx(0.1f));
-		// As 0.6.0 saved it (no contact shadows): the default length, so contact shadows are on for existing scenes at High.
+		// As 0.6.0 saved it (no contact shadows): the default length, so a Custom quality's contact shadows reach existing scenes.
 		CHECK(loaded.ContactShadowLength == doctest::Approx(0.3f));
 		// Nor a cascade distribution: the fitted layout's 0.9.
 		CHECK(loaded.CascadeDistribution == doctest::Approx(0.9f));

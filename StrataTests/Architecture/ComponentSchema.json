@@ -563,7 +563,7 @@
 					"Name": "ContactShadowLength",
 					"Section": "Shadows",
 					"Speed": 0.009999999776482582,
-					"Tooltip": "Meters toward the light over which contact shadows ground objects smaller than the shadow cascades' texels (Graphics Quality's Contact Shadows, High and Ultra); 0 off",
+					"Tooltip": "Meters toward the light over which contact shadows ground objects smaller than the shadow cascades' texels, when Graphics Quality's Contact Shadows has steps (Custom; no preset draws them); 0 off",
 					"Type": "Float"
 				},
 				{

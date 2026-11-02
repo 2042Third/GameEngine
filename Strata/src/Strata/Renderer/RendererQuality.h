@@ -134,6 +134,7 @@ namespace Strata
 		// blue-noise tile, Include/Shadows.slang): 8, 16, 24 or 32. More taps, less grain.
 		uint32_t ShadowFilterQuality = 16;
 		// Steps of the sun's screen-space contact shadows (0 off; else 4 to 32), which ground objects below the cascades' detail.
+		// 0 in every preset (they shimmer in motion); Custom turns them on.
 		uint32_t ContactShadows = 0;
 		// Ambient occlusion's samples per pixel (GetAmbientOcclusionSamples); the scene's Post Process asks for the occlusion.
 		AmbientOcclusionLevel AmbientOcclusionQuality = AmbientOcclusionLevel::Medium;

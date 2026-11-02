@@ -305,7 +305,7 @@ and `SceneRenderer` extracts each frame's draws from it (`SceneRendererExtractio
 `AssetResolveCache`; see [Render scene](#render-scene)). `SceneRenderer` draws a scene (light clustering, the atmosphere's
 aerial perspective volume, shadow cascades and
 point and spot lights' shadow views, depth/normal/entity-ID prepass (with motion vectors and, for screen-space reflections, the
-surface target), the sun's screen-space shadow mask (the cascades' filter at every opaque pixel, contact shadows, an
+surface target), the sun's screen-space shadow mask (the cascades' filter at every opaque pixel, contact shadows when a Custom quality draws them, an
 edge-aware blur) and the cascades' fit's reduction of the prepass depth, GTAO and its denoiser, reflection probes' conversions and the screen-space reflections (the Checkerboard
 trace, or the Spatial modes' full-resolution trace and resolve), forward PBR (hazed by aerial perspective, then
 fogged), sky, a copy of the image so far for glass (and a full-resolution one for the next frame's Spatial reflections),
@@ -925,7 +925,7 @@ The renderer's stages, registered by `RegisterRendererModule` (`RendererGPUStage
 | `GPU.Aerial` | the atmosphere's aerial perspective volume, recorded after the light clusters (frames with an atmosphere sky only) |
 | `GPU.Cull` | culling dispatches and depth pyramids |
 | `GPU.Shadows`, `GPU.Prepass`, `GPU.AO`, `GPU.Opaque` (with the sky), `GPU.Transparent` | the scene passes |
-| `GPU.ScreenShadows` | the sun's screen-space shadow mask, its blur, contact shadows and the reduction that fits the cascades to the view, between `GPU.Prepass` and `GPU.AO` (frames with a shadowed sun) |
+| `GPU.ScreenShadows` | the sun's screen-space shadow mask, its blur, contact shadows when a Custom quality draws them and the reduction that fits the cascades to the view, between `GPU.Prepass` and `GPU.AO` (frames with a shadowed sun) |
 | `GPU.Reflections` | reflection probes' conversions and the screen-space reflections' trace (at Spatial and SpatialHigh with their resolve; their color copy for the next frame is in `GPU.Transparent`), between `GPU.AO` and `GPU.Opaque` |
 | `GPU.TAA` | the motion history's copy (`Scene/MotionCopy.comp`) and the temporal anti-aliasing resolve |
 | `GPU.MotionBlur` | the motion blur's tile maxima, their neighborhoods and its gather (`PostProcess/MotionBlur*.comp`) |
