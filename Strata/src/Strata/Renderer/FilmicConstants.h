@@ -10,7 +10,7 @@
 namespace Strata::FilmicConstants
 {
 
-	// The Filmic curve's gamut (shaders/Include/FilmicConstants.glsl): the inset before the curve and the outset after
+	// The Filmic curve's gamut (shaders/Include/FilmicConstants.slang): the inset before the curve and the outset after
 	// it.
 	inline const glm::mat3 c_Inset = glm::mat3(
 		0.747645398f, 0.115853298f, 0.103259928f,

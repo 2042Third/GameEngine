@@ -7,22 +7,23 @@
 #     [INVARIANT_POSITION <registered name of a source>...]
 #     [INCLUDE_DIRS <dir>...])
 #
-# A registered name is the source's path relative to SOURCE_DIR, or the name given to a variant (the same source compiled
-# with extra defines), and ends in its stage: .vert vertex, .frag fragment, .comp compute, .geom geometry. Every entry
-# takes two commands: the compiler writes <name>.raw.spv, then StrataShaderTool (CMake/StrataShaderTool) checks it,
+# A registered name is the path relative to SOURCE_DIR of its source without the .slang extension, or the name given to a
+# variant (the same source compiled with extra defines), and ends in its stage: .vert vertex, .frag fragment, .comp
+# compute, .geom geometry. Sources are HLSL-syntax Slang (<name>.slang). Every entry takes two commands: slangc writes
+# <name>.raw.spv, then StrataShaderTool (CMake/StrataShaderTool) checks it,
 # decorates the position Invariant for the entries of an INVARIANT_POSITION source and writes the final <name>.spv and
 # <name>.h, the uint32_t array a generated registry embeds into <target>. At run time the shaders are looked up by
 # registered name through Strata::EmbeddedShaders (Strata/Renderer/EmbeddedShaders.h). The outputs do not depend on the
 # configuration: shader bytes are the same in Debug, Release and Dist.
 #
-# Shared code lives in the include files under SOURCE_DIR. Every shader depends on all of them, so editing an include
+# Shared code lives in the include files under SOURCE_DIR (*.slang without a stage suffix). Every shader depends on all of them, so editing an include
 # recompiles all shaders (cheap, and immune to depfile parsing quirks). Only one target per build may embed shaders,
 # since the registry defines the lookup functions.
 #
 # EmbeddedShaders/ShaderEntries.txt (the global property STRATA_SHADER_ENTRIES) lists every entry as
 # <registered name>|<source file relative to the repository>|<stage>|<defines, comma-separated>, for CI's checks and the
-# tests that compile every entry. Slang (CMake/StrataSlang.cmake), the pinned compiler that replaces glslang, is found
-# and checked by every configure; its slangc is the global property STRATA_SLANGC.
+# tests that compile every entry. slangc (CMake/StrataSlang.cmake, the pinned compiler) is found and checked by every
+# configure; its path is the global property STRATA_SLANGC.
 
 include("${CMAKE_CURRENT_LIST_DIR}/StrataSlang.cmake")
 
@@ -47,20 +48,42 @@ function(strata_add_shaders target)
 	if(NOT ARG_SOURCE_DIR)
 		message(FATAL_ERROR "strata_add_shaders: SOURCE_DIR is required")
 	endif()
-	if(NOT TARGET glslang-standalone)
-		message(FATAL_ERROR "strata_add_shaders: the glslang-standalone target is not available")
-	endif()
 	strata_find_slang(slangc)
 	set_property(GLOBAL PROPERTY STRATA_SLANGC "${slangc}")
 	strata_add_shader_tool()
 
-	file(GLOB_RECURSE includeFiles CONFIGURE_DEPENDS "${ARG_SOURCE_DIR}/*.glsl")
+	file(GLOB_RECURSE includeFiles CONFIGURE_DEPENDS "${ARG_SOURCE_DIR}/*.slang")
+	list(FILTER includeFiles EXCLUDE REGEX "\\.(vert|frag|comp|geom)\\.slang$")
 	set(outputDir "${CMAKE_CURRENT_BINARY_DIR}/EmbeddedShaders")
 
-	set(includeArgs "-I${ARG_SOURCE_DIR}")
+	set(includeArgs -I "${ARG_SOURCE_DIR}")
 	foreach(dir IN LISTS ARG_INCLUDE_DIRS)
-		list(APPEND includeArgs "-I${dir}")
+		list(APPEND includeArgs -I "${dir}")
 	endforeach()
+
+	# slangc's flags (Docs/DeveloperGuide.md, "Shaders", says why each is or is not passed):
+	# - SPIR-V 1.5: Vulkan 1.2's highest, the version the engine's modules always had.
+	# - Column-major matrices: glm's bytes in every buffer.
+	# - NVRHI's VulkanBindingOffsets: register(tN) is binding N, sN 128 + N, bN 256 + N, uN 384 + N; spaceS is set S.
+	# - A storage image without [vk::image_format] is Unknown, not a format Slang guesses from its element type (a silent
+	#   mismatch with the view); Unknown needs a capability Renderer.ShaderModules rejects, so every one states its format.
+	# - Warning 39001 (explicit binding overlap) is wrong here: passes that include a header for its helpers declare their
+	#   own resources at slots the header gives to resources they never read, in separate binding layouts;
+	#   Renderer.ShaderModules checks that no module binds two used variables to one slot.
+	# - Warning 41012 (profile implicitly upgraded) is wrong here: Slang widens the profile by the capability atoms of the
+	#   intrinsics an entry calls, which are not what the module declares; Renderer.ShaderModules checks the declared
+	#   capabilities against what the device enables.
+	# - Shaders follow the C++ warning policy.
+	# Not passed: -fvk-invert-y and -fvk-use-dx-position-w (NVRHI already flips the viewport), -fvk-use-dx-layout and
+	# -fvk-use-scalar-layout (they would change the std140/std430 offsets the C++ structs follow), -g (outputs would depend
+	# on the configuration and the source paths), -O (Slang's default), -source-embed-style (it would write the header
+	# before StrataShaderTool's patch), -depfile (every entry depends on every include), -emit-spirv-via-glsl.
+	set(slangFlags -target spirv -profile spirv_1_5 -matrix-layout-column-major
+		-fvk-t-shift 0 all -fvk-s-shift 128 all -fvk-b-shift 256 all -fvk-u-shift 384 all
+		-default-image-format-unknown -warnings-disable 39001,41012)
+	if(STRATA_WARNINGS_AS_ERRORS)
+		list(APPEND slangFlags -warnings-as-errors all)
+	endif()
 
 	set(entries "")
 	foreach(shader IN LISTS ARG_SHADERS)
@@ -126,7 +149,7 @@ function(strata_add_shaders target)
 			message(FATAL_ERROR "strata_add_shaders: '${name}' has no stage suffix (.vert, .frag, .comp or .geom)")
 		endif()
 
-		set(source "${ARG_SOURCE_DIR}/${sourceRelative}")
+		set(source "${ARG_SOURCE_DIR}/${sourceRelative}.slang")
 		if(NOT EXISTS "${source}")
 			message(FATAL_ERROR "strata_add_shaders: shader source '${source}' does not exist")
 		endif()
@@ -144,11 +167,13 @@ function(strata_add_shaders target)
 			set(invariantArgument "--invariant-position")
 		endif()
 
+		# SLANG_RUN_SPIRV_VALIDATION: slangc validates what it writes with SPIRV-Tools and fails the compile on an error
+		# (before StrataShaderTool's patch: CI validates the final modules).
 		add_custom_command(
 			OUTPUT "${rawModule}"
-			COMMAND glslang-standalone -V --target-env vulkan1.2 --quiet
-				${includeArgs} ${defineArgs} -o "${rawModule}" "${source}"
-			DEPENDS "${source}" ${includeFiles} glslang-standalone
+			COMMAND "${CMAKE_COMMAND}" -E env SLANG_RUN_SPIRV_VALIDATION=1
+				"${slangc}" "${source}" -entry main -stage ${stage} ${slangFlags} ${includeArgs} ${defineArgs} -o "${rawModule}"
+			DEPENDS "${source}" ${includeFiles} "${slangc}"
 			COMMENT "Compiling shader ${name}"
 			VERBATIM)
 		add_custom_command(

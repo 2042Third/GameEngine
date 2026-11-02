@@ -6,6 +6,7 @@
 #include <spdlog/fmt/fmt.h>
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <set>
 #include <span>
@@ -237,5 +238,50 @@ TEST_SUITE("Renderer.ShaderModules")
 			}
 		}
 		CHECK(meshEntries == 4);
+	}
+
+	TEST_CASE("No embedded shader binds two used variables to one slot")
+	{
+		// What makes disabling Slang's warning 39001 (explicit binding overlap) safe: passes that include a header for its
+		// helpers declare resources at slots the header gives to others, but no entry point uses two of them.
+		for (const ParsedShader& shader : ParseEmbeddedShaders())
+		{
+			INFO(shader.Name);
+			std::set<uint32_t> interfaceVariables;
+			std::map<uint32_t, uint32_t> descriptorSets;
+			std::map<uint32_t, uint32_t> bindings;
+			for (const SpirvInstruction& instruction : shader.Instructions)
+			{
+				const std::span<const uint32_t> operands = instruction.Operands;
+				if (instruction.Opcode == Spirv::c_OpEntryPoint && operands.size() >= 3)
+				{
+					size_t nameWords = 0;
+					Spirv::ReadLiteralString(operands, 2, nameWords);
+					for (size_t index = 2 + nameWords; nameWords > 0 && index < operands.size(); index++)
+						interfaceVariables.insert(operands[index]);
+				}
+				if (instruction.Opcode == Spirv::c_OpDecorate && operands.size() >= 3)
+				{
+					if (operands[1] == Spirv::c_DecorationDescriptorSet)
+						descriptorSets[operands[0]] = operands[2];
+					else if (operands[1] == Spirv::c_DecorationBinding)
+						bindings[operands[0]] = operands[2];
+				}
+			}
+			std::map<std::pair<uint32_t, uint32_t>, uint32_t> slots;
+			for (const std::pair<const uint32_t, uint32_t>& binding : bindings)
+			{
+				if (!interfaceVariables.contains(binding.first))
+					continue;
+				const auto set = descriptorSets.find(binding.first);
+				const std::pair<uint32_t, uint32_t> slot = { set != descriptorSets.end() ? set->second : 0u, binding.second };
+				const auto inserted = slots.emplace(slot, binding.first);
+				if (!inserted.second)
+				{
+					FAIL_CHECK(fmt::format("{} binds %{} and %{} to set {} binding {}", shader.Name, inserted.first->second, binding.first,
+						slot.first, slot.second));
+				}
+			}
+		}
 	}
 }

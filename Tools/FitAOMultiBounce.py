@@ -37,7 +37,7 @@ largest and RMS error over those means, the RMS over every sample, and for compa
 polynomial's errors; it fails when the model's largest error over the means exceeds MAX_ERROR.
 
 --write writes, each marked as generated:
-  Strata/shaders/Include/AmbientOcclusionFit.glsl          c_AOMultiBounce and AOMultiBounce(visibility, albedo)
+  Strata/shaders/Include/AmbientOcclusionFit.slang         c_AOMultiBounce and AOMultiBounce(visibility, albedo)
   Strata/src/Strata/Renderer/AmbientOcclusionFit.h         the same for C++ (the tests' expected values)
   StrataTests/src/Renderer/AmbientOcclusionFitReference.h  c_AOMultiBounceReference: REFERENCE_SAMPLES conditional means
 """
@@ -206,20 +206,20 @@ def spread(samples, count):
 
 
 def write_outputs(p, picked):
-    glsl = f"""#ifndef STRATA_AMBIENT_OCCLUSION_FIT_GLSL
-#define STRATA_AMBIENT_OCCLUSION_FIT_GLSL
+    slang = f"""#ifndef STRATA_AMBIENT_OCCLUSION_FIT_SLANG
+#define STRATA_AMBIENT_OCCLUSION_FIT_SLANG
 
 // {GENERATED}
 // Ambient occlusion's multi-bounce: the visibility a surface of `albedo` keeps once the occluders, lit like it and of its
 // albedo, reflect light into it (fitted to 2D radiosity in grooves and trenches): visibility / (1 - albedo (1 - visibility)
 // h), h = x + y visibility + albedo (z + w visibility). 1 at visibility 1, the visibility itself at albedo 0, per channel;
 // never above 1 nor below the visibility.
-const vec4 c_AOMultiBounce = vec4({", ".join(f"{c:.9f}" for c in p)});
+static const float4 c_AOMultiBounce = float4({", ".join(f"{c:.9f}" for c in p)});
 
-vec3 AOMultiBounce(float visibility, vec3 albedo)
+float3 AOMultiBounce(float visibility, float3 albedo)
 {{
-	vec3 enclosure = albedo * (1.0 - visibility) * (c_AOMultiBounce.x + c_AOMultiBounce.y * visibility + albedo * (c_AOMultiBounce.z + c_AOMultiBounce.w * visibility));
-	return visibility / max(1.0 - enclosure, vec3(max(visibility, 1e-4)));
+	float3 enclosure = albedo * (1.0 - visibility) * (c_AOMultiBounce.x + c_AOMultiBounce.y * visibility + albedo * (c_AOMultiBounce.z + c_AOMultiBounce.w * visibility));
+	return visibility / max(1.0 - enclosure, float3(max(visibility, 1e-4)));
 }}
 
 #endif
@@ -227,7 +227,7 @@ vec3 AOMultiBounce(float visibility, vec3 albedo)
     header = f"""#pragma once
 
 // {GENERATED}
-// Ambient occlusion's multi-bounce (Include/AmbientOcclusionFit.glsl): the visibility a surface of `albedo` keeps once the
+// Ambient occlusion's multi-bounce (Include/AmbientOcclusionFit.slang): the visibility a surface of `albedo` keeps once the
 // occluders, lit like it and of its albedo, reflect light into it. 1 at visibility 1, the visibility itself at albedo 0.
 
 #include <glm/glm.hpp>
@@ -272,7 +272,7 @@ namespace Strata::Tests
 }}
 """
     outputs = {
-        ROOT / "Strata" / "shaders" / "Include" / "AmbientOcclusionFit.glsl": glsl,
+        ROOT / "Strata" / "shaders" / "Include" / "AmbientOcclusionFit.slang": slang,
         ROOT / "Strata" / "src" / "Strata" / "Renderer" / "AmbientOcclusionFit.h": header,
         ROOT / "StrataTests" / "src" / "Renderer" / "AmbientOcclusionFitReference.h": reference,
     }
@@ -284,7 +284,7 @@ namespace Strata::Tests
 
 def main():
     parser = argparse.ArgumentParser(description="Fits ambient occlusion's multi-bounce to a radiosity reference.")
-    parser.add_argument("--write", action="store_true", help="write the GLSL, C++ and test reference files")
+    parser.add_argument("--write", action="store_true", help="write the Slang, C++ and test reference files")
     args = parser.parse_args()
 
     samples = reference_samples()
