@@ -81,7 +81,7 @@ namespace Strata
 		}
 
 		// Reads steps, seconds or frames (an alias of steps): nullopt when none is given. Seconds become whole fixed steps of the
-		// running scene's fixed timestep, rounded up.
+		// active scene's fixed timestep (Scene::GetFixedTimestep), rounded up.
 		std::optional<int64_t> ReadDuration(const nlohmann::json& parameters, CommandArguments& arguments, const EditorContext& context)
 		{
 			const int given = (arguments.Has("steps") ? 1 : 0) + (arguments.Has("frames") ? 1 : 0) + (arguments.Has("seconds") ? 1 : 0);
@@ -95,7 +95,8 @@ namespace Strata
 			if (!arguments.Has("seconds"))
 				return arguments.Has("steps") ? arguments.GetInt("steps", 1, 1, c_MaxHoldSteps) : arguments.GetInt("frames", 1, 1, c_MaxHoldSteps);
 			const nlohmann::json& seconds = parameters["seconds"];
-			const float fixedStep = context.IsPlaying() ? context.GetActiveScene()->GetSettings().FixedTimestep : SceneSettings().FixedTimestep;
+			// The active scene's step: while not playing the edited scene's, the step play will run.
+			const float fixedStep = context.GetActiveScene()->GetFixedTimestep();
 			if (!seconds.is_number() || !std::isfinite(seconds.get<double>()) || seconds.get<double>() <= 0.0
 				|| seconds.get<double>() / fixedStep > static_cast<double>(c_MaxHoldSteps))
 			{

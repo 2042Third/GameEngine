@@ -26,16 +26,16 @@ namespace Strata
 		}
 
 		// The longest timestep the scene simulates in one update without dropping a fixed step (GameRuntimeOptions::
-		// KeepEveryFixedStep). The scene's accumulator holds at most one step between updates and an update runs up to
-		// MaxFixedStepsPerFrame steps, dropping the backlog only when more than one step is left after them: a scaled
-		// timestep of at most MaxFixedStepsPerFrame steps never leaves more.
+		// KeepEveryFixedStep). The scene's accumulator holds at most one step between updates and an update runs up to its
+		// scene's most steps per update (Scene::GetMaxFixedSteps), dropping the backlog only when more than one step is left
+		// after them: a scaled timestep of at most that many steps never leaves more.
 		Timestep LimitToFixedSteps(const Scene& scene, Timestep timestep)
 		{
 			const float timeScale = scene.GetTimeScale();
 			// Paused or stopped time runs no steps (and stepping a paused scene runs one per update): nothing to limit.
 			if (timeScale <= 0.0f || scene.IsPaused())
 				return timestep;
-			const float maxSteps = static_cast<float>(std::max(1u, scene.GetSettings().MaxFixedStepsPerFrame));
+			const float maxSteps = static_cast<float>(scene.GetMaxFixedSteps());
 			const float limit = maxSteps * scene.GetFixedTimestep() / timeScale;
 			return Timestep(std::min(static_cast<float>(timestep), limit));
 		}

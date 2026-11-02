@@ -49,7 +49,7 @@ namespace Strata
 	// when its hold ends. A tap lasts a number of the game's fixed steps (its physics and FixedUpdate time base), whatever the frame
 	// rate: it goes down in the next input frame (Input::GetFrameIndex), and after the frame in which its last step ran it
 	// goes up in the next one. With one step per frame (stepping, input.sequence) it covers exactly its steps; unpaused, a
-	// frame may run several, so the release may come up to MaxFixedStepsPerFrame - 1 steps later. Input frames stop while the
+	// frame may run several, so the release may come up to Scene::GetMaxFixedSteps() - 1 steps later. Input frames stop while the
 	// game is paused (Input::SetSuspended), so input given then waits for the next step. Holds outlive the client that made them (the
 	// editor's status bar lists them, with a button that releases them); play mode starting or stopping forgets them. Main
 	// thread only.

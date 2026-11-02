@@ -224,6 +224,11 @@ namespace Strata
 		return true;
 	}
 
+	uint32_t Scene::GetMaxFixedSteps() const
+	{
+		return std::max(1u, m_Settings.MaxFixedStepsPerFrame);
+	}
+
 	Ref<Scene> Scene::Copy(const Ref<Scene>& source)
 	{
 		return Copy(source, SceneCopyOptions {});
@@ -2171,7 +2176,7 @@ namespace Strata
 		else
 		{
 			m_FixedTimeAccumulator += deltaTime;
-			const uint32_t maxSteps = std::max(1u, m_Settings.MaxFixedStepsPerFrame);
+			const uint32_t maxSteps = GetMaxFixedSteps();
 			// The wall time one step stands for: the fixed timestep, stretched by slow motion.
 			const double realTimePerStep = static_cast<double>(fixedTimestep) / static_cast<double>(m_TimeScale > 0.0f ? m_TimeScale : 1.0f);
 			// The steps are timed only when time dilation could stop one: it is on and a second step is due (the first always

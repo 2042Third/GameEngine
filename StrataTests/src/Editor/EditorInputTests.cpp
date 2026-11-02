@@ -530,6 +530,25 @@ TEST_SUITE("Editor.Input")
 		CHECK(state["holds"][0]["lastStep"].get<uint64_t>() - state["holds"][0]["firstStep"].get<uint64_t>() == 5);
 	}
 
+	TEST_CASE("Durations in seconds count in the scene's fixed step, also before play starts")
+	{
+		InputHarness harness;
+		harness.Run("scene.setSettings", { { "fixedTimestep", 0.02 } });
+		// Not playing, a duration is checked against the edited scene's step, the one play will run: 1,900 s are 95,000 steps
+		// of 0.02 s, within the 100,000 a duration may last (0.7.0 checked against 1/60 s: 114,000 steps, refused), so only
+		// the missing game refuses the call; 2,100 s are too long, and the message names the scene's step.
+		const EditorCommandResult withinLimit = harness.Fail("input.key", { { "key", "Space" }, { "seconds", 1900 } });
+		CHECK(withinLimit.ErrorKind != EditorCommandError::InvalidParameters);
+		CHECK(withinLimit.Error.find("play.start") != std::string::npos);
+		const EditorCommandResult tooLong = harness.Fail("input.key", { { "key", "Space" }, { "seconds", 2100 } });
+		CHECK(tooLong.ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(tooLong.Error.find("of 0.02 s") != std::string::npos);
+
+		harness.Run("play.start");
+		harness.Frame();
+		CHECK(harness.Run("input.key", { { "key", "Space" }, { "seconds", 0.1 }, { "wait", false } })["steps"] == 5);
+	}
+
 	TEST_CASE("An input sequence gives the same game whatever the frame rate")
 	{
 		const nlohmann::json sequence = {
