@@ -1755,4 +1755,34 @@ TEST_SUITE("Editor.Commands")
 		CHECK(settings["fixedTimestep"].get<double>() == doctest::Approx(0.02));
 		CHECK(harness.Context.GetProject()->GetSettings().FindSection("Scene.Timing") == nullptr);
 	}
+
+	TEST_CASE("A project opened without a start scene runs its fixed rate and layers in the scene the editor keeps")
+	{
+		CommandHarness harness;
+		const std::filesystem::path root = Tests::CreateTemporaryDirectory("EditorFixedRateScenes");
+		const std::filesystem::path first = root / "First";
+		// The empty template has no start scene: the editor keeps the blank scene its opening made.
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(first) }, { "name", "First" } });
+		harness.Run("project.setSettings", { { "section", "Scene.Timing" }, { "value", { { "FixedRate", "120" } } } });
+		harness.Run("project.setCollisionLayers", { { "layerNames", { { "1", "Player" } } } });
+		auto checkProjectRate = [&harness]()
+		{
+			// Not const: a missing key reads as null (the default layers list no names) instead of asserting.
+			nlohmann::json settings = harness.Run("scene.info")["settings"];
+			CHECK(settings["fixedRate"]["source"] == "project");
+			CHECK(settings["fixedRate"]["maxFixedSteps"] == 16);
+			CHECK(settings["physicsLayers"]["names"]["1"] == "Player");
+			CHECK(harness.Context.GetEditScene()->GetFixedTimestep() == 1.0f / 120.0f);
+		};
+		checkProjectRate();
+
+		// Another project without a rate: the scene steps at its own.
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(root / "Second") }, { "name", "Second" }, { "force", true } });
+		CHECK(harness.Run("scene.info")["settings"]["fixedRate"]["source"] == "scene");
+		CHECK(harness.Context.GetEditScene()->GetFixedTimestep() == 1.0f / 60.0f);
+
+		// Back to the first, which has no start scene: the blank scene closing the second left takes the first's rate and layers.
+		harness.Run("project.open", { { "path", FileSystem::ToUTF8(first) }, { "force", true } });
+		checkProjectRate();
+	}
 }

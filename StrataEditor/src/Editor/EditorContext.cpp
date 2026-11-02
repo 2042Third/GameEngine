@@ -379,6 +379,9 @@ namespace Strata
 		m_Project = project;
 		m_ProjectGeneration++;
 		Project::SetActive(m_Project);
+		// The blank scene CloseProject left took the layers and fixed rate of no project. It stays the edited scene when the
+		// project has no start scene or it cannot be opened, so it takes this project's now.
+		ApplyProjectLayers();
 		m_ProjectFileWriter = CreateScope<SettingsFileWriter>([this](const std::string& error) { OnProjectFileWritten(error); });
 
 		// The editor camera and viewport settings continue where they were when the project was last closed.

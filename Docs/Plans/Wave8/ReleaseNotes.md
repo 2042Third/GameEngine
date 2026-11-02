@@ -17,6 +17,9 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   and whether the project or the scene sets it); the Inspector shows the scene's step rows inactive while the project
   sets the rate, and links its page.
 - Scripts: `Time::GetFixedDeltaTime` returns the step the scene runs: the project's rate when it sets one.
+- Fixed: a project opened without a start scene, or whose start scene could not be opened, left the editor's blank
+  scene with the default collision layers (since 0.6.0) until a project setting changed; it takes the project's layers
+  and fixed rate as the project opens.
 
 ## Defaults that change
 

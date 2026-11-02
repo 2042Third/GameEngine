@@ -1147,9 +1147,10 @@ two members). A layer's name means the same in every scene and prefab.
   changes only when the table does, so an edit of another section never replaces a script's change). It runs when the
   scene asset hands its scene over (`SceneAsset::TakePreparedScene` and `CreateScene`: every `SceneLoader` load takes the
   table before its preparation, where physics creates bodies), in `SceneLoadRequest::TakeScene` when the table changed
-  meanwhile, in `EditorContext::ResetScene` and when play mode switches scenes, and after every change of the project's
-  settings, its undo and redo (`ProjectSettingsAction`: the edited scene and the running copy, whose script changes the
-  new table replaces). Sub-scenes and world cells are the host's entities and collide by its copy.
+  meanwhile, in `EditorContext::ResetScene` and when play mode switches scenes, when a project opens or closes (the
+  blank scene the editor keeps when the project has no start scene, or it cannot be opened), and after every change of
+  the project's settings, its undo and redo (`ProjectSettingsAction`: the edited scene and the running copy, whose
+  script changes the new table replaces). Sub-scenes and world cells are the host's entities and collide by its copy.
 - **Stored tables.** 0.5.0 wrote a table into every scene; no writer writes one now, and `SceneSerializer` still reads it
   (`Scene::GetStoredPhysicsLayers`; `ReadStoredPhysicsLayers` reports invalid entries as warnings). A stored table equal to
   the default counts as none. When the project's table replaces another stored one, `Scene::DoStoredLayersDiffer` says so
@@ -1247,10 +1248,10 @@ project's deliberate choice is not an incident.
 - **Hand-over, on the main thread**, exactly where the collision layers are taken ([Collision layers](#collision-layers)):
   `Scene::ApplyProjectTiming()` (`ProjectSceneTiming::Find`: parsed again only when the provider's version changes, with
   a value version that changes only when the rate does) runs in `SceneAsset::TakePreparedScene` and `CreateScene`,
-  `SceneLoadRequest::TakeScene`, when the editor adopts a scene (`EditorContext::AdoptProjectLayers`) and after every
-  change of the project's settings, its undo and redo (`EditorContext::ApplyProjectLayers`: the edited scene and the
-  running one, which steps at a new rate from its next update; the accumulator holds seconds, so the remainder carries
-  over). `Scene::Copy` keeps the rate; it is never saved.
+  `SceneLoadRequest::TakeScene`, when the editor adopts a scene (`EditorContext::AdoptProjectLayers`), when a project
+  opens or closes, and after every change of the project's settings, its undo and redo
+  (`EditorContext::ApplyProjectLayers`: the edited scene and the running one, which steps at a new rate from its next
+  update; the accumulator holds seconds, so the remainder carries over). `Scene::Copy` keeps the rate; it is never saved.
 - **Readers.** Code reads the step through `Scene::GetFixedTimestep()` and the cap through `Scene::GetMaxFixedSteps()`,
   never from `SceneSettings`: the fixed loop, `GameRuntime`'s `LimitToFixedSteps` (`KeepEveryFixedStep`), scripts'
   `Time::GetFixedDeltaTime`, physics' effective contact stiffness, audio's motion and the input commands' durations in

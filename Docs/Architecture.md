@@ -368,9 +368,9 @@ to 32 layers and a symmetric matrix of which collide, everything by default), th
 `Scene.CollisionLayers` (`Scene/ProjectCollisionLayers`), of which each scene runs a working copy
 (`Scene::GetPhysicsLayers`). The copy is taken on the main thread when a scene is handed over (`Scene::ApplyProjectLayers`:
 the scene asset's hand-over, so every `SceneLoader` load before its preparation, `SceneLoadRequest::TakeScene`, the editor's
-adopted scenes and every change of the project's settings); the loader's worker never reads `IProjectSettings`, and a
-program without a project keeps what a 0.5.0 scene document stores. Scripts change the copy for as long as their scene
-runs; sub-scenes and world cells collide by their host's. `PhysicsSystem` gives its world that matrix, restricted by the
+adopted scenes, a project's opening and closing, and every change of the project's settings); the loader's worker never
+reads `IProjectSettings`, and a program without a project keeps what a 0.5.0 scene document stores. Scripts change the
+copy for as long as their scene runs; sub-scenes and world cells collide by their host's. `PhysicsSystem` gives its world that matrix, restricted by the
 default settings' (`GetDefaultSettings`), when it creates the world and before every step after it changed (the project's
 table applied again, scripts' `Physics::SetLayersCollide`, `PhysicsSystem::SetLayersCollide`;
 `PhysicsWorld::SetLayerCollisionMasks` gives the shapes
