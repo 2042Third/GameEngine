@@ -4,6 +4,7 @@
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorFrameRate.h"
 #include "EditorHost.h"
 #include "UI/AboutDialog.h"
 #include "UI/EditorPanelRegistry.h"
@@ -114,17 +115,16 @@ namespace Strata
 	// layer is the panels' EditorShell: it owns the dialogs (New Project, Open Sample, About Strata) and asks about unsaved
 	// changes before anything replaces the scene.
 	//
-	// Idle throttling: a windowed editor redraws at the full rate (vsync) while anything happens - input within the last
-	// c_InputActivitySeconds, a camera or gizmo drag, a running and unpaused scene (or pending steps), loading assets,
-	// pending commands, an automation request within the last c_AutomationActivitySeconds, or a script build - and
-	// otherwise at c_IdleFrameRate (c_UnfocusedIdleFrameRate without the focus). Headless editors, --frames runs and
-	// command scripts are never throttled.
+	// Idle throttling follows the person's Editor.FrameRate preferences (EditorFrameRate::Policy): a windowed editor redraws
+	// at most at the active frame rate (unlimited by default: vsync) while anything happens - input within the last
+	// IdleAfterSeconds, a camera or gizmo drag, a running and unpaused scene (or pending steps), loading assets, pending
+	// commands, an automation request within the last c_AutomationActivitySeconds (or IdleAfterSeconds, if longer), or a
+	// script build - and otherwise at the idle frame rate (the background one without the focus); IdleAfterSeconds 0 never
+	// idles. Pending steps, commands and automation requests run uncapped (RunsUncapped). Headless editors, --frames runs
+	// and command scripts are never throttled.
 	class EditorLayer : public Layer, public EditorShell
 	{
 	public:
-		static constexpr uint32_t c_IdleFrameRate = 30;
-		static constexpr uint32_t c_UnfocusedIdleFrameRate = 10;
-		static constexpr double c_InputActivitySeconds = 0.5;
 		static constexpr double c_AutomationActivitySeconds = 1.0;
 		// Version of the default layout: a saved layout of another version is replaced by the default one. Bump it when the
 		// default layout gains a docked panel that is open by default (4: the Problems panel, and Activity beside it; 5: the
@@ -252,6 +252,8 @@ namespace Strata
 		// cap in effect before comes back once they ran.
 		void UpdateSteppingFrameRate();
 		bool IsBusy(double now) const;
+		// Frames that run work someone waits for by frames (pending steps, commands, automation requests): never capped.
+		bool RunsUncapped() const;
 		// Fills m_FrameStats for this frame's status bar and panels.
 		void UpdateFrameStats();
 		// Whether the open project has a script build (EditorContext::HasScriptBuild), looked up at most once per
@@ -371,6 +373,7 @@ namespace Strata
 		uint64_t m_LastAutomationRequests = 0;
 		std::optional<uint32_t> m_CapBeforeSteps; // The frame rate cap that pending steps lifted (UpdateSteppingFrameRate)
 		bool m_Idle = false;
+		EditorFrameRate::Policy m_FrameRatePolicy; // The preferences' (Editor.FrameRate), read when they change
 		std::deque<double> m_FrameTimes; // Within the last c_FrameRateWindowSeconds
 
 		// Frame timing.

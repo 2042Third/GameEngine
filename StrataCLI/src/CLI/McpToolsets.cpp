@@ -32,6 +32,7 @@ namespace Strata::CLI::McpToolsets
 		constexpr std::pair<std::string_view, std::string_view> c_ExactToolsets[] = {
 			{ "asset.stats", "streaming" },
 			{ "asset.setBudget", "streaming" },
+			{ "asset.place", "scene" },
 			{ "editor.perf", "perf" },
 			{ "project.settings", "settings" },
 			{ "project.setSettings", "settings" },

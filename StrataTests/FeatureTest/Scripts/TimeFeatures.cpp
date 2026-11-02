@@ -5,8 +5,8 @@
 using namespace Strata;
 using namespace FeatureTest;
 
-// The runner advances every frame by 1/60 s; the scene's fixed timestep is 0.02 s. For one frame (SlowFrame) the time
-// scale is 0.5.
+// The runner advances every frame by 1/60 s. The scene stores a 0.02 s step; the project's Scene.Timing sets 60 steps/s,
+// which wins. For one frame (SlowFrame) the time scale is 0.5.
 class TimeFeatures : public FeatureScript
 {
 public:
@@ -22,7 +22,7 @@ public:
 		Journal(*this, "TimeFeatures", "OnCreate");
 		Expect(Time::GetFrameIndex() == 0 && Time::GetElapsedTime() == 0.0, "time starts at zero");
 		Expect(Time::GetTimeScale() == 1.0f, "the time scale starts at 1");
-		Expect(Near(Time::GetFixedDeltaTime(), 0.02f), "the fixed timestep comes from the scene settings");
+		Expect(Near(Time::GetFixedDeltaTime(), 1.0f / 60.0f), "the project's fixed rate (Scene.Timing) overrides the scene's 0.02 s step");
 	}
 
 	void OnUpdate(float deltaTime) override
@@ -49,7 +49,7 @@ public:
 
 	void OnFixedUpdate(float fixedDeltaTime) override
 	{
-		Expect(Near(fixedDeltaTime, 0.02f) && fixedDeltaTime == Time::GetFixedDeltaTime(), "OnFixedUpdate receives the fixed timestep");
+		Expect(Near(fixedDeltaTime, 1.0f / 60.0f) && fixedDeltaTime == Time::GetFixedDeltaTime(), "OnFixedUpdate receives the project's fixed timestep");
 		FixedSteps++;
 	}
 

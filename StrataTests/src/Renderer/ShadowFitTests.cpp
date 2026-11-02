@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 using namespace Strata;
@@ -160,6 +161,128 @@ namespace
 		}
 	}
 
+	// The grid of GetGroundReceivers with a ball of `radius` at `center` in front of the ground: what the depth holds with a
+	// ball in the air (perspective cameras).
+	std::vector<glm::vec3> GetReceiversWithBall(const TestCamera& camera, float maxDistance, float halfBoard, const glm::vec3& center, float radius)
+	{
+		std::vector<glm::vec3> points;
+		const float tanY = std::tan(camera.VerticalFOV * 0.5f);
+		const float tanX = tanY * camera.Aspect;
+		for (int row = 0; row < 90; row++)
+		{
+			for (int column = 0; column < 160; column++)
+			{
+				const glm::vec2 ndc((2.0f * (static_cast<float>(column) + 0.5f) / 160.0f - 1.0f), (1.0f - 2.0f * (static_cast<float>(row) + 0.5f) / 90.0f));
+				const glm::vec3 direction = glm::normalize(camera.Rotation * glm::vec3(ndc.x * tanX, ndc.y * tanY, -1.0f));
+				const glm::vec3 toCenter = center - camera.Position;
+				const float along = glm::dot(toCenter, direction);
+				const float offAxis = glm::dot(toCenter, toCenter) - along * along;
+				if (along > 0.0f && offAxis < radius * radius)
+				{
+					points.push_back(camera.Position + direction * (along - std::sqrt(radius * radius - offAxis)));
+					continue;
+				}
+				if (!(direction.y < -1e-4f))
+					continue;
+				const glm::vec3 point = camera.Position + direction * (camera.Position.y / -direction.y);
+				if (camera.ViewDepth(point) > maxDistance || std::abs(point.x) > halfBoard || std::abs(point.z) > halfBoard)
+					continue;
+				points.push_back(point);
+			}
+		}
+		return points;
+	}
+
+	// Receivers on a patch of the screen (`ndcMin` to `ndcMax`), `columns` x `rows` of them, their view depth from `nearDepth`
+	// on the first row to `farDepth` on the last (a slope facing the camera).
+	std::vector<glm::vec3> GetScreenPatch(const TestCamera& camera, float nearDepth, float farDepth, glm::vec2 ndcMin, glm::vec2 ndcMax, int columns, int rows)
+	{
+		std::vector<glm::vec3> points;
+		const float tanY = std::tan(camera.VerticalFOV * 0.5f);
+		for (int row = 0; row < rows; row++)
+		{
+			for (int column = 0; column < columns; column++)
+			{
+				const glm::vec2 ndc = glm::mix(ndcMin, ndcMax, glm::vec2((static_cast<float>(column) + 0.5f) / static_cast<float>(columns),
+					(static_cast<float>(row) + 0.5f) / static_cast<float>(rows)));
+				const float depth = glm::mix(nearDepth, farDepth, (static_cast<float>(row) + 0.5f) / static_cast<float>(rows));
+				const glm::vec2 halfSize = camera.Orthographic ? 0.5f * camera.OrthographicHeight * glm::vec2(camera.Aspect, 1.0f)
+					: depth * tanY * glm::vec2(camera.Aspect, 1.0f);
+				points.push_back(camera.Position + camera.Rotation * glm::vec3(ndc * halfSize, -depth));
+			}
+		}
+		return points;
+	}
+
+	// The share of `points` nearer to `camera` than `depth` (view depth).
+	double ShareNearer(const TestCamera& camera, const std::vector<glm::vec3>& points, float depth)
+	{
+		size_t nearer = 0;
+		for (const glm::vec3& point : points)
+			nearer += camera.ViewDepth(point) < depth ? 1 : 0;
+		return static_cast<double>(nearer) / static_cast<double>(std::max<size_t>(points.size(), 1));
+	}
+
+	// `points` with receivers added at `depth` in front of the camera, so that they hold `share` of the result.
+	std::vector<glm::vec3> WithNearReceivers(const TestCamera& camera, std::vector<glm::vec3> points, float depth, double share)
+	{
+		const size_t count = static_cast<size_t>(std::ceil(share / (1.0 - share) * static_cast<double>(points.size())));
+		for (size_t index = 0; index < count; index++)
+			points.push_back(camera.Position + camera.Rotation * glm::vec3(0.001f * static_cast<float>(index % 100), 0.001f * static_cast<float>(index / 100), -depth));
+		return points;
+	}
+
+	// The Physics Playground's default view: from (0, 22, 30) toward the origin.
+	TestCamera PlaygroundDefaultCamera()
+	{
+		TestCamera camera;
+		camera.Position = glm::vec3(0.0f, 22.0f, 30.0f);
+		camera.LookAt(glm::vec3(0.0f));
+		return camera;
+	}
+
+	// An epoch's first readback and three confirming ones of `receivers`.
+	void Settle(ShadowFitTracker& tracker, const ShadowFitView& view, const TestCamera& camera, const std::vector<glm::vec3>& receivers, uint64_t& render)
+	{
+		tracker.Update(view, nullptr);
+		for (int frame = 0; frame < 4; frame++)
+		{
+			const ShadowFitReadback readback = MakeReadback(camera, receivers, tracker, render++);
+			tracker.Update(view, &readback);
+		}
+	}
+
+	// Updates of `seconds` each, every one with a readback of `receivers`, until `duration` passed.
+	void Hold(ShadowFitTracker& tracker, const ShadowFitView& view, const TestCamera& camera, const std::vector<glm::vec3>& receivers, uint64_t& render,
+		float duration)
+	{
+		const ShadowFitReadback base = MakeReadback(camera, receivers, tracker, render);
+		const int updates = static_cast<int>(std::lround(duration / view.Seconds));
+		for (int update = 0; update < updates; update++)
+		{
+			ShadowFitReadback readback = base;
+			readback.Render = render++;
+			readback.Epoch = tracker.GetEpoch();
+			readback.LayoutVersion = tracker.GetLayoutVersion();
+			tracker.Update(view, &readback);
+		}
+	}
+
+	bool SameLayout(const ShadowFitLayout& a, const ShadowFitLayout& b)
+	{
+		if (a.Fitted != b.Fitted || a.Near != b.Near || a.Far != b.Far || a.CascadeCount != b.CascadeCount)
+			return false;
+		for (uint32_t cascade = 0; cascade < a.CascadeCount; cascade++)
+		{
+			const ShadowFitCascade& first = a.Cascades[cascade];
+			const ShadowFitCascade& second = b.Cascades[cascade];
+			if (first.SliceNear != second.SliceNear || first.SliceFar != second.SliceFar || first.Radius != second.Radius || first.Fitted != second.Fitted
+				|| first.Side != second.Side || first.Center != second.Center)
+				return false;
+		}
+		return true;
+	}
+
 	// A board seen from above at 45 degrees (the Physics Playground's framing): receivers fill part of the view only.
 	TestCamera BoardCamera()
 	{
@@ -260,10 +383,13 @@ TEST_SUITE("Renderer.ShadowFit")
 		CHECK_FALSE(tracker.Update(view, &distant).Fitted);
 	}
 
-	TEST_CASE("Bounds grow at once and shrink after eight readbacks in a row, to the least shrunk of them")
+	TEST_CASE("Without holds the tracker keeps Strata 0.7.0's rules")
 	{
+		// Renderers of single images (ShadowFitView::Holds false): every growth at once, shrinks at the eighth readback in a row,
+		// however little time passed.
 		const TestCamera camera;
-		const ShadowFitView view = MakeView(camera);
+		ShadowFitView view = MakeView(camera);
+		view.Holds = false;
 		ShadowFitTracker tracker;
 		tracker.Update(view, nullptr);
 		uint64_t render = 1;
@@ -311,6 +437,77 @@ TEST_SUITE("Renderer.ShadowFit")
 			closer.push_back(glm::vec3(0.001f * static_cast<float>(pixel), 0.0f, -1.0f));
 		readback = MakeReadback(camera, closer, tracker, render++);
 		CHECK(tracker.Update(view, &readback).Near < nearBefore);
+		CHECK_FALSE(tracker.IsHolding());
+	}
+
+	TEST_CASE("Far bounds grow at once; bounds shrink after eight readbacks and half a second, to the least shrunk of them")
+	{
+		const TestCamera camera;
+		ShadowFitView view = MakeView(camera);
+		// The loop's 15 updates before the eighth readback last 0.75 s: past c_ShrinkSeconds.
+		view.Seconds = 0.05f;
+		ShadowFitTracker tracker;
+		tracker.Update(view, nullptr);
+		uint64_t render = 1;
+		const std::vector<glm::vec3> near20 = GetGroundReceivers(camera, 20.0f);
+		ShadowFitReadback readback = MakeReadback(camera, near20, tracker, render++);
+		const float far20 = tracker.Update(view, &readback).Far;
+		CHECK(far20 < view.ShadowDistance);
+
+		// Farther receivers: the far bound grows in the frame their readback arrives.
+		std::vector<glm::vec3> near30 = GetGroundReceivers(camera, 30.0f);
+		readback = MakeReadback(camera, near30, tracker, render++);
+		const float far30 = tracker.Update(view, &readback).Far;
+		CHECK(far30 > far20);
+
+		// Seven readbacks asking for less keep it; the eighth shrinks it to the least shrunk they asked for (24 m's, not 20's).
+		const std::vector<glm::vec3> near24 = GetGroundReceivers(camera, 24.0f);
+		for (uint32_t index = 0; index < ShadowFitTracker::c_ShrinkReadbacks - 1; index++)
+		{
+			readback = MakeReadback(camera, index == 3 ? near24 : near20, tracker, render++);
+			CHECK(tracker.Update(view, &readback).Far == far30);
+			// Frames without a new readback do not count.
+			CHECK(tracker.Update(view, nullptr).Far == far30);
+		}
+		readback = MakeReadback(camera, near20, tracker, render++);
+		const float shrunk = tracker.Update(view, &readback).Far;
+		CHECK(shrunk < far30);
+		CHECK(shrunk >= far20);
+		ShadowFitTracker reference;
+		reference.Update(view, nullptr);
+		const ShadowFitReadback only24 = MakeReadback(camera, near24, reference, 1);
+		CHECK(shrunk == reference.Update(view, &only24).Far);
+
+		// A readback that wants as much as there is breaks a run of shrinking ones.
+		for (uint32_t index = 0; index < ShadowFitTracker::c_ShrinkReadbacks + 2; index++)
+		{
+			readback = MakeReadback(camera, index == ShadowFitTracker::c_ShrinkReadbacks - 2 ? near24 : near20, tracker, render++);
+			tracker.Update(view, &readback);
+		}
+		CHECK(tracker.GetLayout().Far == shrunk);
+
+		// A closer receiver on 2% of the pixels (no outlier, but below c_NearNowShare) waits half a second on a still camera,
+		// then lowers the near bound.
+		const float nearBefore = tracker.GetLayout().Near;
+		std::vector<glm::vec3> closer = near20;
+		for (size_t pixel = 0; pixel < near20.size() / 50; pixel++)
+			closer.push_back(glm::vec3(0.001f * static_cast<float>(pixel), 0.0f, -1.0f));
+		readback = MakeReadback(camera, closer, tracker, render++);
+		CHECK(tracker.Update(view, &readback).Near == nearBefore);
+		CHECK(tracker.IsHolding());
+		Hold(tracker, view, camera, closer, render, ShadowFitTracker::c_GrowSeconds);
+		CHECK(tracker.GetLayout().Near < nearBefore);
+		CHECK_FALSE(tracker.IsHolding());
+
+		// One on 11.1% of them (near20.size() / 8 pixels: the share counts them in the total) lowers it at once.
+		ShadowFitTracker wall;
+		Settle(wall, view, camera, near20, render);
+		const float wallBefore = wall.GetLayout().Near;
+		std::vector<glm::vec3> large = near20;
+		for (size_t pixel = 0; pixel < near20.size() / 8; pixel++)
+			large.push_back(glm::vec3(0.001f * static_cast<float>(pixel), 0.0f, -1.0f));
+		readback = MakeReadback(camera, large, wall, render++);
+		CHECK(wall.Update(view, &readback).Near < wallBefore);
 	}
 
 	TEST_CASE("The far bound is the shadow distance from 0.7 of it; below, the other cascades end at it and the last one at the shadow distance")
@@ -416,24 +613,6 @@ TEST_SUITE("Renderer.ShadowFit")
 		// A slope 57-79 m away fills the view, and a post 12-15 m away near its corner covers 0.5% of the pixels: under the
 		// outliers' share. The last cascade's sphere holds what no square holds only while the near end lies within D k (20
 		// degrees at 16:9: k = 0.13, D k = 10.3 m; orthographic: 0), so these views keep the post in the fit.
-		const auto receivers = [](const TestCamera& camera, float nearDepth, float farDepth, glm::vec2 ndcMin, glm::vec2 ndcMax, int columns, int rows)
-		{
-			std::vector<glm::vec3> points;
-			const float tanY = std::tan(camera.VerticalFOV * 0.5f);
-			for (int row = 0; row < rows; row++)
-			{
-				for (int column = 0; column < columns; column++)
-				{
-					const glm::vec2 ndc = glm::mix(ndcMin, ndcMax, glm::vec2((static_cast<float>(column) + 0.5f) / static_cast<float>(columns),
-						(static_cast<float>(row) + 0.5f) / static_cast<float>(rows)));
-					const float depth = glm::mix(nearDepth, farDepth, (static_cast<float>(row) + 0.5f) / static_cast<float>(rows));
-					const glm::vec2 halfSize = camera.Orthographic ? 0.5f * camera.OrthographicHeight * glm::vec2(camera.Aspect, 1.0f)
-						: depth * tanY * glm::vec2(camera.Aspect, 1.0f);
-					points.push_back(camera.Position + camera.Rotation * glm::vec3(ndc * halfSize, -depth));
-				}
-			}
-			return points;
-		};
 		for (const bool orthographic : { false, true })
 		{
 			CAPTURE(orthographic);
@@ -442,8 +621,8 @@ TEST_SUITE("Renderer.ShadowFit")
 			camera.Orthographic = orthographic;
 			camera.OrthographicHeight = 20.0f;
 			const ShadowFitView view = MakeView(camera);
-			std::vector<glm::vec3> points = receivers(camera, 57.0f, 79.0f, glm::vec2(-1.0f), glm::vec2(1.0f), 160, 90);
-			const std::vector<glm::vec3> post = receivers(camera, 12.0f, 15.0f, glm::vec2(-0.95f), glm::vec2(-0.85f, 0.0f), 4, 18);
+			std::vector<glm::vec3> points = GetScreenPatch(camera, 57.0f, 79.0f, glm::vec2(-1.0f), glm::vec2(1.0f), 160, 90);
+			const std::vector<glm::vec3> post = GetScreenPatch(camera, 12.0f, 15.0f, glm::vec2(-0.95f), glm::vec2(-0.85f, 0.0f), 4, 18);
 			REQUIRE(post.size() * 200 <= points.size()); // At most 0.5%
 			points.insert(points.end(), post.begin(), post.end());
 			ShadowFitTracker tracker;
@@ -646,6 +825,323 @@ TEST_SUITE("Renderer.ShadowFit")
 				CHECK(first[frame].Cascades[cascade].Side == second[frame].Cascades[cascade].Side);
 				CHECK(first[frame].Cascades[cascade].Center == second[frame].Cascades[cascade].Center);
 			}
+		}
+	}
+
+	TEST_CASE("A ball shot from the camera leaves the layout alone at any frame rate")
+	{
+		// The Physics Playground's ball (0.25 m) leaves the camera at 1.5 m along the view, at full and half power: at spawn it
+		// holds about 7% of the receivers, under c_NearNowShare, and it is gone before c_GrowSeconds.
+		const TestCamera camera = PlaygroundDefaultCamera();
+		const glm::vec3 forward = camera.Rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+		const std::vector<glm::vec3> ground = GetGroundReceivers(camera, 70.0f, 20.0f);
+		for (const float framesPerSecond : { 60.0f, 240.0f, 1000.0f })
+		{
+			for (const float speed : { 24.0f, 12.0f })
+			{
+				CAPTURE(framesPerSecond);
+				CAPTURE(speed);
+				ShadowFitView view = MakeView(camera, c_Sun, 70.0f);
+				view.MapSize = 2048;
+				view.Seconds = 1.0f / framesPerSecond;
+				ShadowFitTracker tracker;
+				uint64_t render = 1;
+				Settle(tracker, view, camera, ground, render);
+				REQUIRE(tracker.GetLayout().Fitted);
+				const uint64_t changes = tracker.GetChanges();
+				const float nearBound = tracker.GetLayout().Near;
+				const int frames = static_cast<int>(std::lround(framesPerSecond));
+				for (int frame = 0; frame < frames; frame++)
+				{
+					const glm::vec3 ball = camera.Position + forward * (1.5f + speed * static_cast<float>(frame) * view.Seconds);
+					const ShadowFitReadback readback = MakeReadback(camera, GetReceiversWithBall(camera, 70.0f, 20.0f, ball, 0.25f), tracker, render++);
+					tracker.Update(view, &readback);
+				}
+				CHECK(tracker.GetChanges() == changes);
+				CHECK(tracker.GetLayout().Near == nearBound);
+				CHECK_FALSE(tracker.IsHolding());
+			}
+		}
+	}
+
+	TEST_CASE("A receiver that stays near moves the near bound once it persisted, one that fills a tenth of the view at once")
+	{
+		const TestCamera camera = PlaygroundDefaultCamera();
+		const glm::vec3 forward = camera.Rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+		const std::vector<glm::vec3> ground = GetGroundReceivers(camera, 70.0f, 20.0f);
+		ShadowFitView view = MakeView(camera, c_Sun, 70.0f);
+		view.Seconds = 1.0f / 60.0f;
+		ShadowFitTracker tracker;
+		uint64_t render = 1;
+		Settle(tracker, view, camera, ground, render);
+		const float nearBound = tracker.GetLayout().Near;
+
+		// Parked 2 m away, on about 4% of the receivers: for 0.4 s nothing moves, after 0.6 s the bound lies below the ball.
+		const std::vector<glm::vec3> parked = GetReceiversWithBall(camera, 70.0f, 20.0f, camera.Position + forward * 2.0f, 0.25f);
+		const double share = ShareNearer(camera, parked, nearBound);
+		CAPTURE(share);
+		REQUIRE(share > ShadowFitTracker::c_NearOutlierShare);
+		REQUIRE(share < ShadowFitTracker::c_NearNowShare);
+		Hold(tracker, view, camera, parked, render, 0.4f);
+		CHECK(tracker.GetLayout().Near == nearBound);
+		CHECK(tracker.IsHolding());
+		Hold(tracker, view, camera, parked, render, 0.2f);
+		CHECK(tracker.GetLayout().Near < 1.75f);
+		CHECK_FALSE(tracker.IsHolding());
+
+		// A 2 m sphere 3 m away, on a tenth of the receivers or more, moves it in its first readback.
+		ShadowFitTracker wall;
+		Settle(wall, view, camera, ground, render);
+		const std::vector<glm::vec3> large = GetReceiversWithBall(camera, 70.0f, 20.0f, camera.Position + forward * 3.0f, 2.0f);
+		REQUIRE(ShareNearer(camera, large, nearBound) >= ShadowFitTracker::c_NearNowShare);
+		const ShadowFitReadback readback = MakeReadback(camera, large, wall, render++);
+		CHECK(wall.Update(view, &readback).Near < 2.0f);
+	}
+
+	TEST_CASE("A moving camera waits an eighth of a second for the near bound, a still one half a second")
+	{
+		TestCamera camera = PlaygroundDefaultCamera();
+		const glm::vec3 forward = camera.Rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+		const auto makeView = [](const TestCamera& from)
+		{
+			ShadowFitView view = MakeView(from, c_Sun, 70.0f);
+			view.Seconds = 1.0f / 60.0f;
+			return view;
+		};
+		ShadowFitTracker tracker;
+		uint64_t render = 1;
+		Settle(tracker, makeView(camera), camera, GetGroundReceivers(camera, 70.0f, 20.0f), render);
+		const float nearBound = tracker.GetLayout().Near;
+
+		// The parked ball moves with the camera, 1 mm a frame: c_GrowSecondsMoving (0.12 s) is not over after 0.1 s, and over
+		// after 0.15 s.
+		const auto step = [&]()
+		{
+			camera.Position.x += 0.001f;
+			const std::vector<glm::vec3> parked = GetReceiversWithBall(camera, 70.0f, 20.0f, camera.Position + forward * 2.0f, 0.25f);
+			const ShadowFitReadback readback = MakeReadback(camera, parked, tracker, render++);
+			return tracker.Update(makeView(camera), &readback).Near;
+		};
+		for (int frame = 0; frame < 6; frame++)
+			CHECK(step() == nearBound);
+		for (int frame = 0; frame < 3; frame++)
+			step();
+		CHECK(tracker.GetLayout().Near < 1.75f);
+
+		// A still camera waits c_GrowSeconds: nothing after 0.4 s (the case above shows it moving after 0.6 s).
+		ShadowFitTracker still;
+		const ShadowFitView view = makeView(camera);
+		Settle(still, view, camera, GetGroundReceivers(camera, 70.0f, 20.0f), render);
+		Hold(still, view, camera, GetReceiversWithBall(camera, 70.0f, 20.0f, camera.Position + forward * 2.0f, 0.25f), render, 0.4f);
+		CHECK(still.GetLayout().Near == nearBound);
+	}
+
+	TEST_CASE("The nearest transparent surface moves the near bound at once while an opaque growth waits")
+	{
+		const TestCamera camera = PlaygroundDefaultCamera();
+		const glm::vec3 forward = camera.Rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+		ShadowFitView view = MakeView(camera, c_Sun, 70.0f);
+		view.Seconds = 1.0f / 60.0f;
+		ShadowFitTracker tracker;
+		uint64_t render = 1;
+		Settle(tracker, view, camera, GetGroundReceivers(camera, 70.0f, 20.0f), render);
+		const float nearBound = tracker.GetLayout().Near;
+
+		// The parked ball (its nearest point 1.75 m away, about 4% of the receivers) waits.
+		const std::vector<glm::vec3> parked = GetReceiversWithBall(camera, 70.0f, 20.0f, camera.Position + forward * 2.0f, 0.25f);
+		Hold(tracker, view, camera, parked, render, 0.2f);
+		CHECK(tracker.GetLayout().Near == nearBound);
+		CHECK(tracker.IsHolding());
+
+		// Glass 2.5 m away, nearer than the bound but farther than the ball, in no depth a readback measures: the bound reaches
+		// it at once, in a frame without a readback, and stays above the ball's bound, whose growth still waits.
+		view.NearestTransparent = 2.5f;
+		const float withGlass = tracker.Update(view, nullptr).Near;
+		CHECK(withGlass <= 2.5f / std::sqrt(2.0f));
+		CHECK(withGlass > 1.75f / std::sqrt(2.0f));
+		CHECK(tracker.IsHolding());
+		Hold(tracker, view, camera, parked, render, ShadowFitTracker::c_GrowSeconds);
+		CHECK(tracker.GetLayout().Near <= 1.75f / std::sqrt(2.0f));
+		CHECK_FALSE(tracker.IsHolding());
+	}
+
+	TEST_CASE("Narrow and orthographic views grow the near bound at once")
+	{
+		// A slope 57-79 m away fills a 20 degree view at 16:9 (D k = 10.3 m at D = 80) or an orthographic one: the near bound
+		// lies beyond D k, where the last cascade's sphere would not hold a receiver nearer than it, so one on 4% of the
+		// receivers moves it in its first readback.
+		for (const bool orthographic : { false, true })
+		{
+			CAPTURE(orthographic);
+			TestCamera camera;
+			camera.VerticalFOV = glm::radians(20.0f);
+			camera.Orthographic = orthographic;
+			camera.OrthographicHeight = 20.0f;
+			ShadowFitView view = MakeView(camera);
+			view.Seconds = 1.0f / 60.0f;
+			const std::vector<glm::vec3> slope = GetScreenPatch(camera, 57.0f, 79.0f, glm::vec2(-1.0f), glm::vec2(1.0f), 160, 90);
+			ShadowFitTracker tracker;
+			uint64_t render = 1;
+			Settle(tracker, view, camera, slope, render);
+			const float nearBound = tracker.GetLayout().Near;
+			const double tanY = std::tan(0.5 * static_cast<double>(camera.VerticalFOV));
+			const double reach = orthographic ? 0.0 : tanY * tanY * (1.0 + static_cast<double>(camera.Aspect) * static_cast<double>(camera.Aspect));
+			REQUIRE(static_cast<double>(nearBound) > static_cast<double>(view.ShadowDistance) * reach);
+			const ShadowFitReadback readback = MakeReadback(camera, WithNearReceivers(camera, slope, 20.0f, 0.04), tracker, render++);
+			CHECK(tracker.Update(view, &readback).Near <= 20.0f / std::sqrt(2.0f));
+			CHECK_FALSE(tracker.IsHolding());
+		}
+	}
+
+	TEST_CASE("A still camera keeps a square whole while its growth waits; a moving camera grows it at once")
+	{
+		TestCamera camera = BoardCamera();
+		ShadowFitView view = MakeView(camera);
+		view.Seconds = 1.0f / 60.0f;
+		const std::vector<glm::vec3> board = GetGroundReceivers(camera, 1000.0f, 10.0f);
+		ShadowFitTracker tracker;
+		uint64_t render = 1;
+		Settle(tracker, view, camera, board, render);
+		const ShadowFitLayout settled = tracker.GetLayout();
+		uint32_t cascade = 0;
+		while (cascade + 1 < settled.CascadeCount && !settled.Cascades[cascade].Fitted)
+			cascade++;
+		CAPTURE(cascade);
+		REQUIRE(cascade + 1 < settled.CascadeCount);
+		const ShadowFitCascade before = settled.Cascades[cascade];
+
+		// Floor beside the board within that cascade's slice and the board's range of depths widens its box: no bound moves.
+		float nearest = std::numeric_limits<float>::max();
+		float farthest = 0.0f;
+		for (const glm::vec3& point : board)
+		{
+			nearest = std::min(nearest, camera.ViewDepth(point));
+			farthest = std::max(farthest, camera.ViewDepth(point));
+		}
+		std::vector<glm::vec3> wider = board;
+		for (const glm::vec3& point : GetGroundReceivers(camera, 1000.0f, 20.0f))
+		{
+			const float depth = camera.ViewDepth(point);
+			if (std::abs(point.x) > 10.0f && std::abs(point.z) <= 10.0f && depth >= std::max(nearest, before.SliceNear) && depth <= std::min(farthest, before.SliceFar))
+				wider.push_back(point);
+		}
+		REQUIRE(wider.size() > board.size());
+		const uint64_t changes = tracker.GetChanges();
+		Hold(tracker, view, camera, wider, render, 0.4f);
+		CHECK(tracker.GetLayout().Cascades[cascade].Fitted);
+		CHECK(tracker.GetLayout().Cascades[cascade].Side == before.Side);
+		CHECK(tracker.GetLayout().Cascades[cascade].Center == before.Center);
+		CHECK(tracker.GetChanges() == changes);
+		CHECK(tracker.IsHolding());
+		Hold(tracker, view, camera, wider, render, 0.2f);
+		const ShadowFitCascade grown = tracker.GetLayout().Cascades[cascade];
+		CHECK((!grown.Fitted || grown.Side > before.Side));
+		CHECK(tracker.GetLayout().Near == settled.Near);
+		CHECK_FALSE(tracker.IsHolding());
+
+		// A camera moved 1 cm grows it in its first readback.
+		ShadowFitTracker moving;
+		Settle(moving, view, camera, board, render);
+		camera.Position.x += 0.01f;
+		ShadowFitView moved = MakeView(camera);
+		moved.Seconds = view.Seconds;
+		const ShadowFitReadback readback = MakeReadback(camera, wider, moving, render++);
+		const ShadowFitCascade movedSquare = moving.Update(moved, &readback).Cascades[cascade];
+		CHECK((!movedSquare.Fitted || movedSquare.Side > before.Side));
+	}
+
+	TEST_CASE("Shrinks wait for eight readbacks and half a second at any frame rate")
+	{
+		const TestCamera camera;
+		const std::vector<glm::vec3> near20 = GetGroundReceivers(camera, 20.0f);
+		const std::vector<glm::vec3> near24 = GetGroundReceivers(camera, 24.0f);
+		const std::vector<glm::vec3> near30 = GetGroundReceivers(camera, 30.0f);
+		ShadowFitTracker reference;
+		reference.Update(MakeView(camera), nullptr);
+		const ShadowFitReadback only24 = MakeReadback(camera, near24, reference, 1);
+		const float far24 = reference.Update(MakeView(camera), &only24).Far;
+		for (const float seconds : { 0.001f, 1.0f / 60.0f })
+		{
+			CAPTURE(seconds);
+			ShadowFitView view = MakeView(camera);
+			view.Seconds = seconds;
+			ShadowFitTracker tracker;
+			uint64_t render = 1;
+			Settle(tracker, view, camera, near30, render);
+			const float far30 = tracker.GetLayout().Far;
+			REQUIRE(far24 < far30);
+			// Eight readbacks asking for less (one of them 24 m's), in less than half a second: no shrink.
+			for (uint32_t index = 0; index < ShadowFitTracker::c_ShrinkReadbacks; index++)
+			{
+				const ShadowFitReadback readback = MakeReadback(camera, index == 3 ? near24 : near20, tracker, render++);
+				CHECK(tracker.Update(view, &readback).Far == far30);
+			}
+			// Asking on: the shrink comes once half a second passed, to the least shrunk of what they asked for.
+			float elapsed = static_cast<float>(ShadowFitTracker::c_ShrinkReadbacks) * seconds;
+			const ShadowFitReadback asking = MakeReadback(camera, near20, tracker, render);
+			while (tracker.GetLayout().Far == far30 && elapsed < 1.0f)
+			{
+				ShadowFitReadback readback = asking;
+				readback.Render = render++;
+				readback.LayoutVersion = tracker.GetLayoutVersion();
+				tracker.Update(view, &readback);
+				elapsed += seconds;
+			}
+			CHECK(elapsed >= ShadowFitTracker::c_ShrinkSeconds - 0.002f);
+			CHECK(elapsed <= ShadowFitTracker::c_ShrinkSeconds + seconds + 0.002f);
+			CHECK(tracker.GetLayout().Far == far24);
+		}
+	}
+
+	TEST_CASE("A waiting growth keeps the fit unsettled")
+	{
+		const TestCamera camera = PlaygroundDefaultCamera();
+		const glm::vec3 forward = camera.Rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+		ShadowFitView view = MakeView(camera, c_Sun, 70.0f);
+		view.Seconds = 1.0f / 60.0f;
+		ShadowFitTracker tracker;
+		uint64_t render = 1;
+		Settle(tracker, view, camera, GetGroundReceivers(camera, 70.0f, 20.0f), render);
+		CHECK(tracker.IsSettled());
+		CHECK_FALSE(tracker.IsHolding());
+		const std::vector<glm::vec3> parked = GetReceiversWithBall(camera, 70.0f, 20.0f, camera.Position + forward * 2.0f, 0.25f);
+		Hold(tracker, view, camera, parked, render, 0.3f);
+		CHECK(tracker.IsHolding());
+		CHECK_FALSE(tracker.IsSettled());
+		// The growth is made, and a readback of a frame drawn with the new layout settles it.
+		Hold(tracker, view, camera, parked, render, 0.3f);
+		CHECK_FALSE(tracker.IsHolding());
+		Hold(tracker, view, camera, parked, render, view.Seconds);
+		CHECK(tracker.IsSettled());
+	}
+
+	TEST_CASE("Settled layouts are the same with and without holds")
+	{
+		// What the holds keep: wave 7's density. Once nothing waits, a tracker with holds lays out what one without them does.
+		struct Framing
+		{
+			TestCamera Camera;
+			std::vector<glm::vec3> Receivers;
+		};
+		std::vector<Framing> framings(2);
+		framings[0].Camera = BoardCamera();
+		framings[0].Receivers = GetGroundReceivers(framings[0].Camera, 1000.0f, 10.0f);
+		framings[1].Receivers = GetGroundReceivers(framings[1].Camera, 1000.0f);
+		for (const Framing& framing : framings)
+		{
+			ShadowFitView held = MakeView(framing.Camera);
+			held.Seconds = 1.0f / 60.0f;
+			ShadowFitView unheld = MakeView(framing.Camera);
+			unheld.Holds = false;
+			ShadowFitTracker withHolds;
+			ShadowFitTracker withoutHolds;
+			uint64_t render = 1;
+			Settle(withHolds, held, framing.Camera, framing.Receivers, render);
+			Settle(withoutHolds, unheld, framing.Camera, framing.Receivers, render);
+			CHECK(withHolds.IsSettled());
+			CHECK(withoutHolds.IsSettled());
+			CHECK(withHolds.GetLayout().SquaresFitted == withoutHolds.GetLayout().SquaresFitted);
+			CHECK(SameLayout(withHolds.GetLayout(), withoutHolds.GetLayout()));
 		}
 	}
 }

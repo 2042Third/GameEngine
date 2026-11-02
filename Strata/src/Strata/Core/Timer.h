@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Strata/Core/Platform.h"
+
 #include <chrono>
 #include <cstdint>
 #include <thread>
@@ -49,8 +51,8 @@ namespace Strata
 	// Keeps a loop at or below a frame rate by sleeping out the rest of each frame's time slot, e.g. for headless
 	// applications, which have no vsync to pace them. Frames are scheduled at fixed intervals, so a frame that overslept
 	// is followed by a shorter wait. A frame that ends after the next slot has begun lets the next frame start at once,
-	// and the schedule continues from there (late frames are not made up with a burst). Precision is that of the
-	// operating system's sleep.
+	// and the schedule continues from there (late frames are not made up with a burst). It waits with Platform::SleepUntil,
+	// within about a millisecond also on Windows, whose ordinary sleep waits for the system's timer tick.
 	class FramePacer
 	{
 	public:
@@ -91,7 +93,7 @@ namespace Strata
 				m_NextFrame = now + m_Period;
 				m_Scheduled = true;
 			}
-			std::this_thread::sleep_until(m_NextFrame);
+			Platform::SleepUntil(m_NextFrame);
 		}
 	private:
 		uint32_t m_MaxFrameRate = 0;

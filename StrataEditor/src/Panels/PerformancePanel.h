@@ -22,7 +22,9 @@ namespace Strata
 	// the mouse, markers on spikes (frames over twice the median and a 60 FPS frame), the statistics per stage under the
 	// frame's totals and of the job threads, a GPU section (what bounds the frames, the GPU's busy time, its stages), and
 	// Copy as JSON (what editor.perf returns for the 600 frames). Reads FrameProfiler::Get(), whose frames the application
-	// records.
+	// records. Pause (or Space with the panel focused) holds the timeline, its tooltip, the summary, the table and Copy as
+	// JSON still on a copy of the profiler's ring (FrameProfileSnapshot), taken once the GPU times of the frames on screen at
+	// the click arrived; the profiler, editor.perf and the status bar keep measuring, and hiding the panel resumes it.
 	class PerformancePanel : public EditorPanel
 	{
 	public:
@@ -32,6 +34,18 @@ namespace Strata
 
 		void OnUpdate(EditorPanelContext& context) override;
 		void OnImGuiRender(EditorPanelContext& context) override;
+		// Hidden (closed, collapsed or behind another tab): a pause is for reading what is in front of the person, so it resumes
+		// and frees its copy.
+		void OnHidden(EditorPanelContext& context) override;
+
+		// Paused: waiting for the GPU times of the frames at the click, or showing their snapshot.
+		bool IsPaused() const { return m_PauseFrame.has_value() || m_Snapshot.has_value(); }
+		// The frames the paused panel shows (null while live or while the snapshot waits for GPU times).
+		const FrameProfileSnapshot* GetSnapshot() const { return m_Snapshot ? &*m_Snapshot : nullptr; }
+		// What the Pause button and Space do: holds the frames on screen now (FrameProfiler::Get()'s newest), its snapshot taken once
+		// their GPU times arrived; nothing without recorded frames. Resume goes back to the latest frames.
+		void Pause();
+		void Resume();
 
 		// Jobs running or queued, averaged over the last c_JobSamples frames (the status bar's frame pill).
 		float GetAverageJobsInFlight() const;
@@ -46,6 +60,9 @@ namespace Strata
 		static const ImVec4& GetUntimedColor();
 		// editor.perf's JSON of the latest frames (as Copy as JSON puts it on the clipboard).
 		static std::string DescribeProfile(uint32_t frames);
+		// editor.perf's JSON of a snapshot's frames with the jobs as they were, and "paused": {firstFrame, lastFrame} (Copy as
+		// JSON while paused).
+		static std::string DescribeSnapshot(const FrameProfileSnapshot& snapshot, const JobSystemStats& jobs);
 		// The timeline's height in milliseconds: a 1-2-5 step (at least 1 ms) with room above the 95th percentile frame, so
 		// one slow frame does not flatten the others; taller frames are cut at the top.
 		static float GetTimelineScale(const FrameProfileSummary& summary);
@@ -82,9 +99,16 @@ namespace Strata
 		void UpdateTableRows();
 		void DrawSummary();
 		void DrawTimeline(const ImVec2& size);
-		// One strip of the timeline: the CPU's stages and untimed work, or the GPU's stages.
-		void DrawTimelineStrip(const ImVec2& size, bool gpu);
+		// One strip of the timeline: the CPU's stages and untimed work, or the GPU's stages. Frames: FrameProfiler while live,
+		// FrameProfileSnapshot while paused (the same accessors); instantiated in the .cpp only.
+		template<typename Frames>
+		void DrawTimelineStrip(const Frames& frames, const ImVec2& size, bool gpu);
 		void DrawStageTable();
+		// Whether the panel shows the GPU now: ShowsGPU, with the snapshot's expectation while paused.
+		bool ShowsGPUNow() const;
+		// Takes the snapshot once the GPU times of the clicked frame arrived (or are not expected); resumes when the profiler
+		// was reset since the click, or the clicked frame left the ring.
+		void UpdatePause(const FrameProfiler& profiler);
 	private:
 		JobSystemStats m_Jobs;
 		std::array<float, c_JobSamples> m_JobSamples = {};
@@ -98,6 +122,13 @@ namespace Strata
 		double m_LastSummaryTime = -1.0;
 		bool m_Copied = false;
 		double m_CopiedTime = 0.0;
+		// The pause: the newest frame at the click (while its snapshot waits for GPU times) and the profiler's reset count then,
+		// the frames shown and the jobs as they were when taken, and the summary line's note.
+		std::optional<uint64_t> m_PauseFrame;
+		uint32_t m_PauseResets = 0;
+		std::optional<FrameProfileSnapshot> m_Snapshot;
+		JobSystemStats m_SnapshotJobs;
+		std::string m_PausedLabel;
 	};
 
 }

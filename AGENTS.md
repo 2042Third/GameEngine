@@ -224,7 +224,8 @@ The threading model, frame loop and pipelines these rules protect are described 
   on the main thread ([details](Docs/DeveloperGuide.md#collision-layers)).
 - **Physics tuning** is the project's `Physics.Simulation` section, applied by `PhysicsSystem` on the main thread;
   character presence bodies and kinematic bodies never recycle contacts, and what physics reports every frame stays
-  constant time (`IPhysicsDiagnostics`) ([Physics](Docs/DeveloperGuide.md#physics)).
+  constant time (`IPhysicsDiagnostics`); code reads the fixed step through `Scene::GetFixedTimestep` and
+  `GetMaxFixedSteps` (the project's `Scene.Timing` wins) ([Physics](Docs/DeveloperGuide.md#physics)).
 
 These rules in full: [Architecture rules](Docs/DeveloperGuide.md#architecture-rules).
 
@@ -356,6 +357,8 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - Commands never block a frame: one that waits returns `EditorCommandResult::Defer(poll)`, whose poll owns its data and
   allocates nothing per frame, and is registered with `MayDefer`. A command that answers from the whole asset registry sets
   `WaitsForAssets` (it waits for a background scan, as Edit commands do).
+- Content is placed through `asset.place` (`EditorPlacement::Place`): the Scene view's drop and its ghost
+  (`Editor/PlacementPreview`) use one request, and hovering writes nothing.
 - Tools count game time in fixed steps (`Scene::GetFixedStepCount`), never frames
   ([Stepping a paused game](Docs/DeveloperGuide.md#stepping-a-paused-game)).
 - A component property another property can turn off gets an `InactiveReason` (`ComponentRegistry::SetInactiveReason`,

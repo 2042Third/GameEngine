@@ -190,6 +190,12 @@
 				]
 			},
 			"Version": 1
+		},
+		"Scene.Timing": {
+			"Value": {
+				"FixedRate": "60"
+			},
+			"Version": 1
 		}
 	},
 	"Strata": {

@@ -6,6 +6,7 @@
 #include "Editor/EditorContext.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/HierarchyView.h"
+#include "Editor/PlacementPreview.h"
 #include "Editor/PrefabSync.h"
 #include "Editor/SceneRecovery.h"
 #include "Editor/ThumbnailCache.h"
@@ -19,6 +20,7 @@
 #include "TestHelpers.h"
 
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JobSystem.h>
@@ -27,6 +29,7 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/GraphicsDevice.h>
 #include <Strata/Renderer/Material.h>
+#include <Strata/Renderer/MeshFactory.h>
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Renderer/Texture.h>
@@ -704,6 +707,44 @@ TEST_SUITE("Perf.Editor")
 		Perf::CheckBudgetConfirmed("Perf.Editor.DragPrefabInstanceRoot5kMedian", [&] { return measureDrag({ rig.GetUUID() }); });
 		CHECK(rig.GetComponent<PrefabInstanceComponent>().Overrides.size() == 1);
 		Perf::CheckBudgetConfirmed("Perf.Editor.Drag100PrefabInstancesMedian", [&] { return measureDrag(crates); });
+	}
+
+	TEST_CASE("Hovering an asset over a mesh of 199,712 triangles casts within a millisecond")
+	{
+		// A 316 x 316-quad grid (199,712 triangles) as a memory mesh under a mesh renderer, and a cube dragged across it: each
+		// update moves the pointer's ray, so each one casts (the render scene's index, then every triangle of the grid).
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		Tests::RunCommandToCompletion(context, commands, "project.create", { { "directory", FileSystem::ToUTF8(Tests::CreateTemporaryDirectory("PerfPlacementHover") / "Game") },
+			{ "name", "Game" }, { "template", "empty" } });
+		EditorAssetManager& assets = *context.GetAssetManager();
+		const Ref<Mesh> grid = MeshFactory::CreatePlane(100.0f, 316);
+		REQUIRE(grid);
+		AssetMetadata metadata;
+		metadata.Type = AssetType::Mesh;
+		metadata.Name = "Grid";
+		const AssetHandle handle = assets.AddMemoryAsset(grid, metadata);
+		Tests::RunCommandToCompletion(context, commands, "entity.create", { { "name", "Grid" }, { "components", {
+			{ "MeshRenderer", { { "Mesh", UUIDToJson(handle) } } } } } });
+
+		PlacementPreview preview;
+		PlacementPointer pointer;
+		pointer.Asset = BuiltinAssets::CubeMesh;
+		pointer.MaxDistance = 1000.0f;
+		pointer.FallbackDistance = 10.0f;
+		uint32_t step = 0;
+		Perf::CheckBudgetConfirmed("Perf.Editor.PlacementHover200kTriangles", [&]
+		{
+			return Perf::Measure("Perf.Editor.PlacementHover200kTriangles", 10, 200, [&]
+			{
+				step++;
+				pointer.PointerRay = Ray(glm::vec3(-40.0f + static_cast<float>(step % 800) * 0.1f, 20.0f, 3.0f), glm::vec3(0.1f, -1.0f, 0.05f));
+				preview.Update(context, pointer);
+			}).MedianMs;
+		});
+		REQUIRE(preview.GetPlacement());
+		CHECK(preview.GetPlacement()->Source == EditorPlacement::PlacementSource::Surface);
+		CHECK(preview.GetCastCount() >= 200);
 	}
 }
 

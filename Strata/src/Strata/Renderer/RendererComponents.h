@@ -31,7 +31,7 @@ namespace Strata
 		// last one fades out, ending at ShadowDistance): hides the seams between cascades. 0 switches cascades at once.
 		float CascadeBlend = 0.1f;
 		// How far toward the light, in meters, the screen-space contact shadows look for what the cascades are too coarse to show
-		// (at High and Ultra: RendererQualitySettings::ContactShadows); 0 turns them off for this light.
+		// (when the quality's RendererQualitySettings::ContactShadows has steps: Custom only); 0 turns them off for this light.
 		float ContactShadowLength = 0.3f;
 		// How the shadow cascades share the distances from the nearest to the farthest surface the camera sees, once they are
 		// fitted to them (SceneRendererSpecification::FitShadowsToView): 0 evenly, 1 each cascade the same ratio farther than the

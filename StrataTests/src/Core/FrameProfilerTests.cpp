@@ -65,6 +65,116 @@ namespace
 
 TEST_SUITE("Core.FrameProfiler")
 {
+	TEST_CASE("A snapshot keeps its frames while the profiler records on, is reset and registers stages")
+	{
+		ManualProfiler manual;
+		FrameProfiler& profiler = manual.Profiler;
+		const FrameStageID physics = Builtin(profiler, "Scene.Physics");
+		const FrameStageID gpu = profiler.RegisterStage("GPU.Snapshot", false, FrameStageKind::GPU);
+		profiler.SetGPUTimesExpected(true);
+		for (int frame = 0; frame < 20; frame++)
+		{
+			profiler.BeginFrame();
+			{
+				const FrameStageScope scope(profiler, physics);
+				manual.AdvanceMs(1.0 + frame * 0.1);
+			}
+			manual.AdvanceMs(2.0);
+			profiler.EndFrame(0.003 + frame * 0.0001);
+			REQUIRE(profiler.RecordGPUFrame(static_cast<uint64_t>(frame), std::vector<GPUStageTime> { { gpu, 4.0f + frame } }));
+		}
+		const FrameProfileSummary before = profiler.Summarize(600);
+		const uint32_t stages = profiler.GetStageCount();
+		const FrameProfileSnapshot snapshot = profiler.TakeSnapshot(19);
+
+		// The profiler wraps its ring, forgets everything and learns a stage: the snapshot does not change.
+		for (int frame = 0; frame < 700; frame++)
+		{
+			profiler.BeginFrame();
+			manual.AdvanceMs(5.0);
+			profiler.EndFrame(0.005);
+		}
+		profiler.Reset();
+		profiler.RegisterStage("Game.Later");
+		REQUIRE(snapshot.GetRecordedFrameCount() == 20);
+		CHECK(snapshot.GetCapacity() == FrameProfiler::c_DefaultCapacity);
+		CHECK(snapshot.GetFirstFrameIndex() == 0);
+		CHECK(snapshot.GetLastFrameIndex() == 19);
+		CHECK(snapshot.GetStageCount() == stages);
+		CHECK(snapshot.GetStageName(gpu) == "GPU.Snapshot");
+		CHECK(snapshot.GetStageKind(gpu) == FrameStageKind::GPU);
+		CHECK(snapshot.AreGPUTimesExpected());
+		for (uint32_t age = 0; age < 20; age++)
+		{
+			const FrameSample frame = snapshot.GetFrame(age);
+			CHECK(frame.Index == 19 - age);
+			CHECK(StageMs(frame, physics) == doctest::Approx(1.0 + (19 - age) * 0.1).epsilon(1e-4));
+			CHECK(frame.HasGPU);
+		}
+		// One summary code for both: equal to the profiler's before the snapshot.
+		const FrameProfileSummary after = snapshot.Summarize(600);
+		const auto same = [](const FrameTimeStats& a, const FrameTimeStats& b)
+		{
+			return a.Average == b.Average && a.P50 == b.P50 && a.P95 == b.P95 && a.Max == b.Max;
+		};
+		CHECK(after.Frames == before.Frames);
+		CHECK(same(after.Work, before.Work));
+		CHECK(same(after.StageSum, before.StageSum));
+		CHECK(same(after.Untimed, before.Untimed));
+		CHECK(same(after.Interval, before.Interval));
+		CHECK(after.FramesPerSecond == before.FramesPerSecond);
+		CHECK(after.GPU.Frames == before.GPU.Frames);
+		CHECK(same(after.GPU.Busy, before.GPU.Busy));
+		REQUIRE(after.Stages.size() == before.Stages.size());
+		for (size_t index = 0; index < after.Stages.size(); index++)
+		{
+			CHECK(after.Stages[index].Name == before.Stages[index].Name);
+			CHECK(same(after.Stages[index].Time, before.Stages[index].Time));
+		}
+	}
+
+	TEST_CASE("A snapshot up to a frame leaves out the newer ones and keeps GPU times that arrived late")
+	{
+		ManualProfiler manual;
+		FrameProfiler& profiler = manual.Profiler;
+		const FrameStageID gpu = profiler.RegisterStage("GPU.Late", false, FrameStageKind::GPU);
+		profiler.SetGPUTimesExpected(true);
+		for (int frame = 0; frame < 20; frame++)
+		{
+			profiler.BeginFrame();
+			manual.AdvanceMs(2.0);
+			profiler.EndFrame(0.002);
+		}
+		for (uint64_t frame = 5; frame <= 12; frame++)
+			REQUIRE(profiler.RecordGPUFrame(frame, std::vector<GPUStageTime> { { gpu, 3.0f } }));
+		const FrameProfileSnapshot snapshot = profiler.TakeSnapshot(12);
+		REQUIRE(snapshot.GetRecordedFrameCount() == 13);
+		CHECK(snapshot.GetLastFrameIndex() == 12);
+		for (uint32_t age = 0; age < snapshot.GetRecordedFrameCount(); age++)
+		{
+			const FrameSample frame = snapshot.GetFrame(age);
+			CHECK(frame.HasGPU == (frame.Index >= 5));
+			if (frame.HasGPU)
+				CHECK(frame.GPUBusyMs == doctest::Approx(3.0f));
+		}
+	}
+
+	TEST_CASE("A snapshot of a frame no longer in the ring holds nothing")
+	{
+		ManualProfiler manual(8);
+		FrameProfiler& profiler = manual.Profiler;
+		for (int frame = 0; frame < 30; frame++)
+		{
+			profiler.BeginFrame();
+			manual.AdvanceMs(1.0);
+			profiler.EndFrame(0.001);
+		}
+		const FrameProfileSnapshot snapshot = profiler.TakeSnapshot(3);
+		CHECK(snapshot.GetRecordedFrameCount() == 0);
+		CHECK(snapshot.Summarize(600).Frames == 0);
+		CHECK(FrameProfileSnapshot().GetRecordedFrameCount() == 0);
+	}
+
 	TEST_CASE("The built-in stages come first, in their order")
 	{
 		FrameProfiler profiler(FrameProfilerSpecification { 4, nullptr, false });

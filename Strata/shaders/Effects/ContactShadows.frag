@@ -5,7 +5,7 @@
 #include "Include/BlueNoise.glsl"
 #include "Include/Scene.glsl"
 
-// The sun's contact shadows (SceneRenderer::RenderScreenShadows, ScreenShadowParameters.ContactSteps > 0: High and Ultra),
+// The sun's contact shadows (SceneRenderer::RenderScreenShadows, ScreenShadowParameters.ContactSteps > 0: a Custom quality's),
 // a pass of their own between the mask's evaluation (Effects/ScreenShadows.frag, read here as the source) and its blur:
 // from each pixel the sun still reaches whose normal and own face both face it, a march toward the sun over the depth buffer
 // finds what lies below the cascades' texels. A step that ends a little behind the surface the depth buffer holds there (its

@@ -37,7 +37,7 @@ namespace
 	constexpr std::array<float, 4> c_LODErrorPixels = { 2.0f, 1.0f, 1.0f, 0.5f };
 	constexpr std::array<float, 4> c_MinProjectedPixels = { 1.0f, 0.5f, 0.5f, 0.25f };
 	constexpr std::array<uint32_t, 4> c_ShadowFilterQuality = { 8, 16, 24, 32 };
-	constexpr std::array<uint32_t, 4> c_ContactShadows = { 0, 0, 12, 16 };
+	constexpr std::array<uint32_t, 4> c_ContactShadows = { 0, 0, 0, 0 };
 	constexpr std::array<AmbientOcclusionLevel, 4> c_AmbientOcclusionQuality = { AmbientOcclusionLevel::Low, AmbientOcclusionLevel::Medium, AmbientOcclusionLevel::High, AmbientOcclusionLevel::Ultra };
 	constexpr std::array<uint32_t, 4> c_EnvironmentResolution = { 256, 256, 512, 512 };
 	constexpr std::array<ReflectionsQuality, 4> c_Reflections = { ReflectionsQuality::Off, ReflectionsQuality::Checkerboard, ReflectionsQuality::Spatial, ReflectionsQuality::SpatialHigh };
@@ -221,9 +221,9 @@ TEST_SUITE("Renderer.Quality")
 
 	TEST_CASE("High is Medium below 1440 rows but for the rows that differ at every size")
 	{
-		// High's sun shadow filter taps, contact shadows, ambient occlusion (3 x 8 samples), prefiltered sky (512 per face),
-		// screen-space reflections (Spatial) and motion blur samples differ from Medium's (Strata 0.6.0's costs) at every size; the
-		// other knobs equal Medium's below 1440 rows.
+		// High's sun shadow filter taps, ambient occlusion (3 x 8 samples), prefiltered sky (512 per face), screen-space
+		// reflections (Spatial) and motion blur samples differ from Medium's (Strata 0.6.0's costs) at every size; the other knobs
+		// equal Medium's below 1440 rows.
 		const RendererQualitySettings high = RendererQuality::GetPreset(RendererQualityPreset::High);
 		const RendererQualitySettings medium = RendererQuality::GetPreset(RendererQualityPreset::Medium);
 		for (const uint32_t rows : { 720u, 1080u, 1439u })
@@ -235,9 +235,8 @@ TEST_SUITE("Renderer.Quality")
 			// High's wide penumbrae take more taps at every size (the rows streams add that differ below 1440 rows).
 			CHECK(resolved.ShadowFilterQuality == 24);
 			resolved.ShadowFilterQuality = medium.ShadowFilterQuality;
-			CHECK(resolved.ContactShadows == 12);
+			CHECK(high.ContactShadows == 0);
 			CHECK(medium.ContactShadows == 0);
-			resolved.ContactShadows = medium.ContactShadows;
 			// High's ambient occlusion (3 x 8 samples), prefiltered sky (512 per face) and screen-space reflections (Spatial).
 			CHECK(resolved.AmbientOcclusionQuality != medium.AmbientOcclusionQuality);
 			resolved.AmbientOcclusionQuality = medium.AmbientOcclusionQuality;

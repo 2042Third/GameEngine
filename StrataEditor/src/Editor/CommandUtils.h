@@ -26,6 +26,7 @@ namespace Strata
 
 	class EditorAssetManager;
 	class EditorContext;
+	class EntityTemplate;
 	class Scene;
 	class SceneEditTransaction;
 	struct AssetManagerStats;
@@ -86,6 +87,11 @@ namespace Strata
 		// inspector: unknown components or properties, read-only properties, invalid values and references to missing
 		// assets or entities fail (values before the failure may have been applied: roll back).
 		bool ApplyComponents(Entity entity, const nlohmann::json& components, std::string* outError);
+		// Instantiates a prefab or model as prefab.instantiate makes one instance (EditorPrefabCommands.cpp): under `parent`
+		// (null: the top level), its roots tracked as created by `transaction` and linked to the stored prefab
+		// (PrefabInstances::MarkSynced). Returns the roots; on failure none and the error (roll the transaction back).
+		std::vector<Entity> InstantiateTemplate(EditorContext& context, Scene& scene, SceneEditTransaction& transaction, const EntityTemplate& entityTemplate,
+			AssetHandle asset, Entity parent, std::string* outError);
 
 		// The totals of AssetManagerBase::GetStats as asset.stats and editor.status report them (EditorStreamingCommands.cpp).
 		nlohmann::json DescribeAssetStats(const AssetManagerStats& stats);
@@ -138,7 +144,7 @@ namespace Strata
 		// million-entity scenes, record 10,000-13,000 frames at the rate of an editor with pending commands.
 		constexpr size_t c_FrameTimeReserve = 32768;
 
-		// A frame profile as editor.perf reports it (EditorStateCommands.cpp): {"frames", "frame", "framesPerSecond", "stageSum",
+		// A frame profile as editor.perf reports it (EditorStateCommands.cpp): {"frames", "frame", "framesPerSecond", "interval", "stageSum",
 		// "untimed", "jobs", "stages": {"<name>": {"avgMs", "p50Ms", "p95Ms", "maxMs", "inFrameTime"}}}, statistics in
 		// milliseconds; `jobs` adds the job system's current running and queued jobs.
 		nlohmann::json DescribeFrameProfile(const FrameProfileSummary& summary, const JobSystemStats& jobs);

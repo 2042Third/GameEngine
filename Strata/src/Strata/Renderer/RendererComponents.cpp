@@ -289,7 +289,8 @@ namespace Strata
 					"hiding the seams between them; the last one fades out by the Shadow Distance. 0 switches at once"))
 			.Property("ContactShadowLength", &DirectionalLightComponent::ContactShadowLength,
 				WithTooltip(Range(0.0f, DirectionalLightComponent::c_MaxContactShadowLength, 0.01f), "Meters toward the light over which contact "
-					"shadows ground objects smaller than the shadow cascades' texels (Graphics Quality's Contact Shadows, High and Ultra); 0 off"))
+					"shadows ground objects smaller than the shadow cascades' texels, when Graphics Quality's Contact Shadows has steps (Custom; "
+					"no preset draws them); 0 off"))
 			.Property("CascadeDistribution", &DirectionalLightComponent::CascadeDistribution,
 				WithTooltip(Slider(0.0f, 1.0f), "How the cascades share the distance from the nearest to the farthest surface the camera sees: "
 					"0 evenly, 1 each cascade the same ratio farther than the previous. Higher puts more detail near the camera"));

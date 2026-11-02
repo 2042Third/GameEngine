@@ -418,7 +418,7 @@ namespace Strata
 			{
 				const PhysicsSettings& settings = world->GetSettings();
 				result["settings"] = { { "contactRecycleDistance", settings.ContactRecycleDistance }, { "sleepThreshold", settings.SleepThreshold },
-					{ "contactHertz", settings.ContactHertz }, { "effectiveContactHertz", world->GetEffectiveContactHertz(scene->GetSettings().FixedTimestep) },
+					{ "contactHertz", settings.ContactHertz }, { "effectiveContactHertz", world->GetEffectiveContactHertz(scene->GetFixedTimestep()) },
 					{ "contactDampingRatio", settings.ContactDampingRatio },
 					{ "contactPushSpeed", settings.ContactPushSpeed }, { "source", PhysicsSimulationSettings::SourceToString(physics->GetSimulationSource()) } };
 			}

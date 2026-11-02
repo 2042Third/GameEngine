@@ -73,7 +73,8 @@ namespace Strata
 		else if (!project.GetSettings().RestoreStoredEntry(m_Section, state.SectionEntry, m_Context.GetSettingsRegistry(), outError))
 			return false;
 		m_Context.SaveProjectFile();
-		// The scenes take a changed collision layer table now, the running game's too (other sections are read where they apply).
+		// The scenes take a changed collision layer table and fixed rate now, the running game's too (other sections are read
+		// where they apply).
 		m_Context.ApplyProjectLayers();
 		return true;
 	}

@@ -101,7 +101,7 @@ namespace
 	// a decision. The two commands of the editor's window (EditorLayer) are checked in Editor.UI.Dialogs.
 	constexpr std::string_view c_EditCommands[] = {
 		"animation.createController", "animation.setController",
-		"asset.createFolder", "asset.delete", "asset.deleteFolder", "asset.import", "asset.move", "asset.moveFolder", "asset.reimport",
+		"asset.createFolder", "asset.delete", "asset.deleteFolder", "asset.import", "asset.move", "asset.moveFolder", "asset.place", "asset.reimport",
 		"asset.setImportSettings",
 		"component.add", "component.remove", "component.set",
 		"edit.redo", "edit.undo",
@@ -135,7 +135,7 @@ namespace
 		"prefab.status",
 		"preferences.get",
 		"project.exportStatus", "project.info", "project.samples", "project.settings", "project.templates",
-		"scene.hierarchy", "scene.info", "scene.loadStatus", "scene.recoveryStatus",
+		"scene.hierarchy", "scene.info", "scene.loadStatus", "scene.raycast", "scene.recoveryStatus",
 		"script.get", "script.list", "script.status",
 		"selection.get",
 		"ui.hitTest", "ui.layout",
@@ -174,7 +174,7 @@ namespace
 	// when another command defers. A command that starts waiting (a load, a build, a capture, steps of the game) joins it.
 	constexpr std::string_view c_DeferringCommands[] = {
 		"animation.preview",
-		"asset.import", "asset.info", "asset.reimport", "asset.setImportSettings",
+		"asset.import", "asset.info", "asset.place", "asset.reimport", "asset.setImportSettings",
 		"editor.quit", "editor.wait",
 		"input.action", "input.click", "input.gamepadAxis", "input.gamepadButton", "input.key", "input.mouseButton", "input.mouseMove", "input.releaseAll",
 		"input.scroll", "input.sequence", "input.type",

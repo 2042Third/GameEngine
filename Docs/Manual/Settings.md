@@ -50,6 +50,15 @@ to find a page or a field), the selected page on the right:
   at 120, so higher values change nothing. Changes apply to the running game at once. Character controllers and
   kinematic bodies (moving platforms, doors) never reuse contacts, so what they carry or push always meets them where
   they are.
+- **Timing** (under Physics): **Fixed Rate** is how many fixed steps the game runs per second, whatever its frame rate:
+  physics, character controllers, scripts' fixed updates and root motion advance at it. **Scene** (the default) keeps
+  each scene's own **Fixed Timestep** (60 steps per second unless you changed it in the Inspector's scene settings); 30,
+  60, 120 or 240 sets the rate of every scene and of the exported game. With a rate, a frame catches up at most 2/15 of a
+  second of steps (8 at 60, 32 at 240) and a longer delay is dropped. The physics costs grow with the rate: 240 runs four
+  times the steps of 60. At 30 contacts are soft: stiffness can reach only 15 instead of 30, so stacks sag and settle more
+  slowly. A higher rate halves the small step-to-step stutter a fast character shows on a high refresh rate display, but
+  does not remove it. While a rate is set, the Inspector shows the scene's Fixed Timestep and Max Steps per Frame greyed
+  out, and "Fixed rate: the project's" with a link to this page.
 - **Input Actions** (under Input): the game's named controls, which scripts read by name and players can rebind. Actions
   sit in maps (a set the game turns on and off together, such as Gameplay or Vehicle): **Add Map** adds one, and the
   selected map's name, whether it works when the game starts, and the bin to remove it are below the list. **Add Action**
@@ -70,8 +79,8 @@ to find a page or a field), the selected page on the right:
   column is highlighted. Pick a **Preset** with the chips above it: **Low** (smaller shadow maps, three sun shadow
   cascades, four point and spot lights with shadows, coarser levels of detail, lighter ambient occlusion, no
   screen-space reflections and no motion blur: for older or integrated GPUs), **Medium** (Strata 0.6.0's shadow map
-  sizes and sample counts, no contact shadows, screen-space reflections at half resolution, only with TAA), **High**
-  (the default: smoother wide sun penumbrae and contact shadows at every size, sharper sun shadows on displays of 1440
+  sizes and sample counts, screen-space reflections at half resolution, only with TAA), **High**
+  (the default: smoother wide sun penumbrae at every size, sharper sun shadows on displays of 1440
   rows and more, 256 MiB of shadow maps per view instead of 64, denser ambient occlusion, sharper reflections of the
   sky, 512 texels per face instead of 256, and screen-space reflections traced on every pixel with any anti-aliasing,
   about 232 MiB of video memory per view at 3840 x 2160 instead of 79) or **Ultra** (sharper shadows everywhere, larger
@@ -126,6 +135,13 @@ them back on the same page. **Close** or Escape closes the window.
 - **Interface**: the size of the editor's interface, as a percentage of the size Strata picks for your display
   (**Automatic**). It changes at once and holds when you move the window to another display. Starting the editor with
   `--ui-scale` overrides it for that session. It sizes the editor only, not the game you play in it.
+- **Frame Rate**: how fast the editor redraws. **Idle after** is how long after your last input the editor counts as idle
+  and redraws slowly (0: never idle; it then redraws at full speed all the time, also behind other windows, which uses
+  more power). **Idle frame rate** and **Idle frame rate in the background** are how fast it redraws while idle, with its
+  window in front or behind another. **Active frame rate** caps it while anything happens (Unlimited: as fast as the
+  display's vertical sync allows); a cap above your display's refresh rate shows nothing more. Stepping a paused game
+  and commands that wait for frames always run at full speed. The defaults are 0.7.0's: idle after half a second, 30
+  frames per second idle, 10 in the background, no cap while active.
 
 Strata 0.5.0 kept the external editor in `EditorSettings.json` in the same folder. The first time a later editor starts,
 it copies that setting into its preferences; from then on each version keeps its own, so an older editor installed beside

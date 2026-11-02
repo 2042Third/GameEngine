@@ -161,6 +161,7 @@ namespace Strata
 				{ "frames", summary.Frames },
 				{ "frame", DescribeFrameTimeStats(summary.Work) },
 				{ "framesPerSecond", summary.FramesPerSecond },
+				{ "interval", DescribeFrameTimeStats(summary.Interval) },
 				{ "stageSum", DescribeFrameTimeStats(summary.StageSum) },
 				{ "untimed", DescribeFrameTimeStats(summary.Untimed) },
 				{ "jobs", {
@@ -233,7 +234,7 @@ namespace Strata
 				// Whether the cascades were fitted to what the view shows (the slices to the receivers' range, the squares to their
 				// extent) and the fit settled, and the range the slices divide.
 				{ "shadowFit", { { "fitted", stats.ShadowFit }, { "squaresFitted", stats.ShadowFitSquares }, { "settled", stats.ShadowFitSettled },
-					{ "near", stats.ShadowFitNear }, { "far", stats.ShadowFitFar } } },
+					{ "near", stats.ShadowFitNear }, { "far", stats.ShadowFitFar }, { "changes", stats.ShadowFitChanges }, { "holding", stats.ShadowFitHolding } } },
 				{ "localShadowTileSizes", std::move(tileSizes) },
 				{ "gpuDriven", stats.GPUDriven },
 				{ "gpuCulled", stats.GPUCulled },
@@ -912,7 +913,8 @@ namespace Strata
 		registry.Register({ "editor.perf",
 			"Where the editor's frames go: statistics of the latest frames the frame profiler recorded (at most 600). Returns frames (how many "
 			"were summarized), frame (the CPU time of a frame without the waits for the GPU and the display, like the status bar's frame time), "
-			"framesPerSecond, stages (per stage of the main thread: Input, Assets.Update, Assets.Finalize, Scene.Load (swapping in a scene that "
+			"framesPerSecond, interval (the time from one frame's start to the next: what a frame-rate cap, vsync or idle throttling sets), "
+			"stages (per stage of the main thread: Input, Assets.Update, Assets.Finalize, Scene.Load (swapping in a scene that "
 			"finished loading, creating sub-scenes' entities), Scene.UI (the game UI's input), Scene.Scripts, Scene.Animation, Scene.Physics, "
 			"Scene.Audio, Scene.Transforms, Render.Extract, Render.Submit, Render.UI (the game UI pass), Editor.UI and Present, plus stages modules registered; each its self "
 			"time, nested stages excluded, with inFrameTime false for Present: presenting after the frame, and the wait for the display's image at "
@@ -929,7 +931,9 @@ namespace Strata
 			"project.settings shows Renderer.Quality), shadowMapSize (the sun's cascades' texels), cascades (each sun cascade's slice near and far in "
 			"meters of view distance, texelSize in meters, and fitted: its square follows the receivers rather than its slice's sphere), shadowFit "
 			"(fitted: the cascades are laid out over the receivers the frame's depth showed; squaresFitted; settled: no readback is due that may "
-			"change them; near and far: the range the slices divide), localShadowTileSizes (each shadowed point and spot "
+			"change them; near and far: the range the slices divide; changes: the view renderer's layout changes since it was made (count them "
+			"over a run to see re-cuts); holding: a near object or a wider square waits before it re-cuts the cascades (half a second on a still "
+			"camera, an eighth while the camera moves)), localShadowTileSizes (each shadowed point and spot "
 			"light's tile), gpuDriven (the frame took the GPU-driven path: "
 			"its counts are the GPU's, of a frame 2-3 frames older, once gpuCounts is true; transparent surfaces are the CPU's), gpuCulled (the GPU "
 			"culled the scene's mesh renderers and built their draws; false in a scene without mesh renderers, whose frames record no culling and "

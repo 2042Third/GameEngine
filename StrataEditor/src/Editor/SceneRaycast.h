@@ -26,7 +26,8 @@ namespace Strata
 
 	// Rays against the surfaces the editor places content on: the mesh renderers of a scene, found through its render
 	// scene's spatial index (the boxes around the ray) and hit on their loaded meshes' triangles (positions and indices stay
-	// on the CPU), or on their bounds while a mesh is not loaded. Main thread; syncs the scene's render scene.
+	// on the CPU), or on their bounds while a mesh is not loaded. Meshes come from the scene's asset manager
+	// (Scene::GetAssetManager). Main thread; syncs the scene's render scene.
 	namespace SceneRaycast
 	{
 

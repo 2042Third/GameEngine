@@ -7,7 +7,10 @@
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
 
+#include <Strata/Core/StringUtils.h>
+
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
@@ -109,6 +112,72 @@ namespace Strata
 		return CommandUtils::DescribeFrameProfile(FrameProfiler::Get().Summarize(frames), JobSystem::GetStats()).dump(2);
 	}
 
+	std::string PerformancePanel::DescribeSnapshot(const FrameProfileSnapshot& snapshot, const JobSystemStats& jobs)
+	{
+		nlohmann::json profile = CommandUtils::DescribeFrameProfile(snapshot.Summarize(snapshot.GetCapacity()), jobs);
+		profile["paused"] = { { "firstFrame", snapshot.GetFirstFrameIndex() }, { "lastFrame", snapshot.GetLastFrameIndex() } };
+		return profile.dump(2);
+	}
+
+	void PerformancePanel::OnHidden(EditorPanelContext&)
+	{
+		Resume();
+	}
+
+	void PerformancePanel::Pause()
+	{
+		const FrameProfiler& profiler = FrameProfiler::Get();
+		if (profiler.GetRecordedFrameCount() == 0)
+			return;
+		m_PauseFrame = profiler.GetTotalFrameCount() - 1;
+		m_PauseResets = profiler.GetResetCount();
+		m_Snapshot.reset();
+	}
+
+	void PerformancePanel::Resume()
+	{
+		if (!IsPaused())
+			return;
+		m_PauseFrame.reset();
+		m_Snapshot.reset();
+		m_PausedLabel.clear();
+		// The live statistics at once.
+		m_LastSummaryTime = -1.0;
+	}
+
+	void PerformancePanel::UpdatePause(const FrameProfiler& profiler)
+	{
+		if (!m_PauseFrame || m_Snapshot)
+			return;
+		// Frame indices start again at a reset: the index no longer names the clicked frame.
+		if (profiler.GetResetCount() != m_PauseResets)
+		{
+			Resume();
+			return;
+		}
+		// The GPU times of the frames on screen arrive at most c_MaxGPULatencyFrames late.
+		if (profiler.AreGPUTimesExpected() && profiler.GetTotalFrameCount() - 1 < *m_PauseFrame + FrameProfiler::c_MaxGPULatencyFrames)
+			return;
+		m_Snapshot = profiler.TakeSnapshot(*m_PauseFrame);
+		if (m_Snapshot->GetRecordedFrameCount() == 0)
+		{
+			Resume();
+			return;
+		}
+		m_SnapshotJobs = m_Jobs;
+		m_Summary = m_Snapshot->Summarize(m_Snapshot->GetCapacity());
+		UpdateTableRows();
+		m_PausedLabel = fmt::format("Paused \xC2\xB7 frames {}-{}", StringUtils::FormatThousands(m_Snapshot->GetFirstFrameIndex()),
+			StringUtils::FormatThousands(m_Snapshot->GetLastFrameIndex()));
+	}
+
+	bool PerformancePanel::ShowsGPUNow() const
+	{
+		if (m_Snapshot)
+			return m_Summary->GPU.Frames > 0 || m_Snapshot->AreGPUTimesExpected();
+		return ShowsGPU(*m_Summary);
+	}
+
 	void PerformancePanel::OnUpdate(EditorPanelContext&)
 	{
 		m_Jobs = JobSystem::GetStats();
@@ -132,16 +201,27 @@ namespace Strata
 	void PerformancePanel::OnImGuiRender(EditorPanelContext&)
 	{
 		const FrameProfiler& profiler = FrameProfiler::Get();
+		// Space toggles the pause while the panel (or a window inside it) has the keyboard focus, and only while ImGui's
+		// navigation cursor is hidden: while it shows (after an arrow or Tab press) Space presses the item it is on, so one key
+		// press never does two things.
+		if (!ImGui::GetCurrentContext()->NavCursorVisible && ImGui::Shortcut(ImGuiKey_Space, ImGuiInputFlags_RouteFocused))
+		{
+			if (IsPaused())
+				Resume();
+			else
+				Pause();
+		}
+		UpdatePause(profiler);
 		// The statistics move slowly over 600 frames: computed a few times per second, not every frame (but at once while the
-		// last ones had no frames, e.g. when the panel opened with the editor).
+		// last ones had no frames, e.g. when the panel opened with the editor). A paused panel keeps its snapshot's.
 		const double now = ImGui::GetTime();
-		if (!m_Summary || m_Summary->Frames == 0 || now - m_LastSummaryTime >= c_SummaryRefreshSeconds || now < m_LastSummaryTime)
+		if (!m_Snapshot && (!m_Summary || m_Summary->Frames == 0 || now - m_LastSummaryTime >= c_SummaryRefreshSeconds || now < m_LastSummaryTime))
 		{
 			m_Summary = profiler.Summarize(profiler.GetCapacity());
 			m_LastSummaryTime = now;
 			UpdateTableRows();
 		}
-		if (profiler.GetRecordedFrameCount() == 0)
+		if ((m_Snapshot ? m_Snapshot->GetRecordedFrameCount() : profiler.GetRecordedFrameCount()) == 0)
 		{
 			ImGui::TextDisabled("No frames were profiled yet");
 			return;
@@ -173,24 +253,46 @@ namespace Strata
 		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
 		ImGui::AlignTextToFramePadding();
 		ImGui::Text("Frame %.2f ms \xC2\xB7 p95 %.2f \xC2\xB7 max %.2f \xC2\xB7 %.0f FPS", summary.Work.Average, summary.Work.P95, summary.Work.Max, summary.FramesPerSecond);
+		if (m_Snapshot)
+		{
+			ImGui::SameLine();
+			ImGui::TextColored(colors.Accent, "%s", m_PausedLabel.c_str());
+			UI::ItemProbe::Record("Performance.Paused", true, 0, m_PausedLabel);
+		}
+		// The jobs running and queued as they were when the paused frames were taken.
+		const JobSystemStats& jobs = m_Snapshot ? m_SnapshotJobs : m_Jobs;
 		ImGui::SameLine();
 		ImGui::TextColored(colors.TextSecondary, "\xC2\xB7 workers %.0f%% \xC2\xB7 I/O %.0f%% \xC2\xB7 background %.0f%% busy \xC2\xB7 %u jobs running, %llu queued",
 			summary.WorkerBusyPercent, summary.IOBusyPercent, summary.BackgroundBusyPercent,
-			m_Jobs.Workers.RunningJobs + m_Jobs.IO.RunningJobs + m_Jobs.Background.RunningJobs,
-			static_cast<unsigned long long>(m_Jobs.Workers.QueuedJobs + m_Jobs.IO.QueuedJobs + m_Jobs.Background.QueuedJobs));
+			jobs.Workers.RunningJobs + jobs.IO.RunningJobs + jobs.Background.RunningJobs,
+			static_cast<unsigned long long>(jobs.Workers.QueuedJobs + jobs.IO.QueuedJobs + jobs.Background.QueuedJobs));
 		ImGui::PopFont();
 
-		// Copy as JSON at the line's end.
+		// Pause and Copy as JSON at the line's end, as wide as with the longer of Pause's labels, so the line does not move
+		// when it toggles.
 		const char* label = "Copy as JSON";
 		const ImGuiStyle& style = ImGui::GetStyle();
-		const float width = style.FramePadding.x * 2.0f + ImGui::CalcTextSize(Icons::Copy).x + style.ItemInnerSpacing.x + ImGui::CalcTextSize(label).x;
+		const float width = UI::GetToolbarButtonWidth(Icons::Pause, "Resume") + style.ItemSpacing.x + UI::GetToolbarButtonWidth(Icons::Copy, label);
 		ImGui::SameLine();
 		ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - width));
+		const FrameProfiler& profiler = FrameProfiler::Get();
+		const bool paused = IsPaused();
+		if (UI::ToolbarButton("Performance.Pause", paused ? Icons::Play : Icons::Pause, paused ? "Resume" : "Pause",
+			paused ? "Back to the latest frames (Space)" : "Hold the frame breakdown still to read it (Space); the profiler keeps measuring",
+			UI::ButtonStyle { .Enabled = profiler.GetRecordedFrameCount() > 0, .Active = paused }))
+		{
+			if (paused)
+				Resume();
+			else
+				Pause();
+		}
+		ImGui::SameLine();
 		const bool copiedRecently = m_Copied && ImGui::GetTime() - m_CopiedTime < UI::c_CopiedFeedbackSeconds;
 		if (UI::ToolbarButton("Performance.CopyJson", copiedRecently ? Icons::Check : Icons::Copy, label,
-			"Copy the statistics of the last 600 frames as JSON (what editor.perf returns)"))
+			m_Snapshot ? "Copy the statistics of the paused frames as JSON (editor.perf's form; editor.perf itself stays live)"
+				: "Copy the statistics of the last 600 frames as JSON (what editor.perf returns)"))
 		{
-			ImGui::SetClipboardText(DescribeProfile(FrameProfiler::Get().GetCapacity()).c_str());
+			ImGui::SetClipboardText((m_Snapshot ? DescribeSnapshot(*m_Snapshot, m_SnapshotJobs) : DescribeProfile(profiler.GetCapacity())).c_str());
 			m_Copied = true;
 			m_CopiedTime = ImGui::GetTime();
 		}
@@ -223,19 +325,27 @@ namespace Strata
 	{
 		const ImVec2 size(std::max(requestedSize.x, ImGui::GetFontSize()), std::max(requestedSize.y, ImGui::GetFrameHeight()));
 		// The GPU's strip under the CPU's: the same frames in the same columns, at the same scale.
-		const bool gpu = ShowsGPU(*m_Summary);
+		const bool gpu = ShowsGPUNow();
 		const float gap = gpu ? ImGui::GetStyle().ItemSpacing.y : 0.0f;
 		const float stripHeight = gpu ? std::max((size.y - gap) * 0.5f, ImGui::GetFontSize()) : size.y;
-		ImGui::BeginGroup();
-		DrawTimelineStrip(ImVec2(size.x, stripHeight), false);
-		if (gpu)
-			DrawTimelineStrip(ImVec2(size.x, stripHeight), true);
-		ImGui::EndGroup();
+		// The paused frames while paused (a still mouse stays on one frame), else the profiler's.
+		const auto draw = [&](const auto& frames)
+		{
+			ImGui::BeginGroup();
+			DrawTimelineStrip(frames, ImVec2(size.x, stripHeight), false);
+			if (gpu)
+				DrawTimelineStrip(frames, ImVec2(size.x, stripHeight), true);
+			ImGui::EndGroup();
+		};
+		if (m_Snapshot)
+			draw(*m_Snapshot);
+		else
+			draw(FrameProfiler::Get());
 	}
 
-	void PerformancePanel::DrawTimelineStrip(const ImVec2& size, bool gpu)
+	template<typename Frames>
+	void PerformancePanel::DrawTimelineStrip(const Frames& profiler, const ImVec2& size, bool gpu)
 	{
-		const FrameProfiler& profiler = FrameProfiler::Get();
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		const uint32_t capacity = profiler.GetCapacity();
 		const uint32_t frames = profiler.GetRecordedFrameCount();
@@ -359,6 +469,7 @@ namespace Strata
 		std::sort(gpuStages.begin(), gpuStages.end(), byTime);
 		ImGui::BeginTooltip();
 		ImGui::Text("Frame %llu: %.3f ms%s", static_cast<unsigned long long>(frame.Index), frame.WorkMs, frame.WorkMs > spikeMs ? " (spike)" : "");
+		UI::ItemProbe::Record(gpu ? "Performance.GPUHoveredFrame" : "Performance.HoveredFrame", true, 0, std::to_string(frame.Index));
 		ImGui::TextColored(colors.TextSecondary, "%.2f ms after the previous frame \xC2\xB7 workers %.0f%% \xC2\xB7 I/O %.0f%% \xC2\xB7 background %.0f%% busy",
 			frame.IntervalMs, frame.WorkerBusyPercent, frame.IOBusyPercent, frame.BackgroundBusyPercent);
 		for (const auto& [ms, stage] : stages)
@@ -485,7 +596,7 @@ namespace Strata
 		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
 		for (const TableRow& row : m_CPURows)
 			drawRow(row);
-		if (ShowsGPU(*m_Summary))
+		if (ShowsGPUNow())
 		{
 			for (const TableRow& row : m_GPURows)
 				drawRow(row);

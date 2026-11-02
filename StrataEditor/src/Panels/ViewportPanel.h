@@ -37,7 +37,10 @@ namespace Strata
 	// "Game camera" (F8, ViewportSettings::PilotGameCamera) it looks through the scene's primary camera with the editor's
 	// overlays. A toolbar strip above the image (ViewportToolbar) holds the chips: the camera settings, the overlay toggles
 	// (grid, selection outline, scene gizmos, stats), the editor-view settings, the debug view and the game camera; its
-	// bottom border takes the play state's color while the scene runs. Agents show here too: a chip at the toolbar's right
+	// bottom border takes the play state's color while the scene runs. An asset dragged over the image shows where it would
+	// land (PlacementPreview: a box ghost, quieter where nothing is under the pointer, a label saying what a drop would do or
+	// why it cannot) and the release runs asset.place with that request; Escape cancels the drag (UI::CancelDragDropOnEscape).
+	// Agents show here too: a chip at the toolbar's right
 	// names the latest mutating command of an automation client ("Agent: entity.create · 3 s ago"; a click shows it in the
 	// Activity panel), and for c_AgentFlashSeconds the entities it changed are outlined in the accent, fading out.
 	class ViewportPanel : public EditorPanel
@@ -111,7 +114,13 @@ namespace Strata
 		// The projected bounds of the entities the latest automation command changed, outlined in the accent while they fade.
 		void DrawAgentFlash(EditorContext& context, const ViewportView& view);
 		std::chrono::steady_clock::time_point Now() const { return m_Clock ? m_Clock() : std::chrono::steady_clock::now(); }
-		void AcceptAssetDrops(EditorContext& context, const EditorCommandRegistry& commands);
+		// The asset dragged over the image this frame (m_Drag), read right after the image item.
+		void AcceptAssetDrops();
+		// Feeds the placement preview the pointer through the view's final camera while an asset is dragged over the image (it
+		// clears it otherwise), and drops it on the release: asset.place for what it places, component.set for a material.
+		void UpdatePlacement(EditorPanelContext& panelContext, const std::optional<ViewportView>& view, bool canvasMode);
+		// The preview's label at the pointer.
+		void DrawPlacementLabel(EditorContext& context, const ImVec2& imageMin, const ImVec2& imageMax);
 		void EndCameraDrag();
 		void EndGizmoDrag(EditorContext& context);
 	private:
@@ -122,6 +131,16 @@ namespace Strata
 		ViewportImageArea m_Image;
 		CanvasModeView m_CanvasMode; // The 2D canvas mode (ViewportSettings::CanvasMode)
 		CameraDrag m_CameraDrag = CameraDrag::None;
+		// An asset dragged over the image this frame, and whether the release delivers it now.
+		struct AssetDrag
+		{
+			AssetHandle Asset;
+			bool Delivered = false;
+		};
+		std::optional<AssetDrag> m_Drag;
+		// The placement label's lines as the text box takes them, made again when the label changes.
+		std::vector<std::string> m_PlacementLabel;
+		uint64_t m_PlacementLabelVersion = 0;
 		bool m_CursorLocked = false; // By fly mode
 		std::optional<TransformDrag> m_GizmoDrag;
 		// The agent chip's text for the activity and age (in whole seconds) it was made for.

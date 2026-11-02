@@ -1129,4 +1129,16 @@ namespace Strata::UI
 			drawList->AddCallback(platform.DrawCallback_SetSamplerLinear, nullptr);
 	}
 
+
+	void CancelDragDropOnEscape()
+	{
+		// The drag makes its source own the keyboard, but IsKeyPressed asks for any owner, so Escape is seen. The active id is
+		// cleared too: while the source stays active with the button down, it would start the drag again.
+		if (ImGui::IsDragDropActive() && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+		{
+			ImGui::ClearDragDrop();
+			ImGui::ClearActiveID();
+		}
+	}
+
 }

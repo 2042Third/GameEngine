@@ -50,8 +50,9 @@ namespace
 	// The result's shape, which tools and command scripts rely on.
 	void CheckProfileSchema(const nlohmann::json& profile)
 	{
-		CHECK(GetKeys(profile) == std::set<std::string> { "frames", "frame", "framesPerSecond", "stageSum", "untimed", "jobs", "stages", "gpu", "renderStats",
-			"gameRenderStats" });
+		CHECK(GetKeys(profile) == std::set<std::string> { "frames", "frame", "framesPerSecond", "interval", "stageSum", "untimed", "jobs", "stages", "gpu",
+			"renderStats", "gameRenderStats" });
+		CHECK(GetKeys(profile["interval"]) == std::set<std::string> { "avgMs", "p50Ms", "p95Ms", "maxMs" });
 		CHECK(profile["frames"].is_number_unsigned());
 		CHECK(profile["framesPerSecond"].is_number());
 		CHECK(GetKeys(profile["frame"]) == c_TimeKeys);

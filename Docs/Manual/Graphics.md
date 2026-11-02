@@ -21,7 +21,7 @@ what each one costs:
 | Level of detail error (pixels) | 2 | 1 | 1 | 0.5 |
 | Smallest drawn size (pixels) | 1 | 0.5 | 0.5 | 0.25 |
 | Sun shadow filter taps (wide soft edges) | 8 | 16 | 24 | 32 |
-| Contact shadow steps | Off | Off | 12 | 16 |
+| Contact shadow steps | Off | Off | Off | Off |
 | Ambient occlusion samples (slices x steps each side) | 1 x 4 | 2 x 6 | 3 x 8 | 4 x 12 |
 | Sky reflection resolution (per face) | 256 | 256 | 512 | 512 |
 | Screen-space reflections (scenes that use them) | Off | Half resolution, TAA only | Every pixel | Every pixel, longer rays |
@@ -29,12 +29,13 @@ what each one costs:
 | Memory of one view, 1920 x 1080 (see below) | 31 MiB | 175 MiB | 226 MiB | 610 MiB |
 | Memory of one view, 3840 x 2160 | 31 MiB | 308 MiB | 664 MiB | 1.59 GiB |
 
-- **Medium** keeps Strata 0.6.0's shadow map sizes and sample counts, without contact shadows. **High**, the default,
-  adds smoother wide sun penumbrae and contact shadows at every size, and sharper sun shadows from 1440 rows on.
+- **Medium** keeps Strata 0.6.0's shadow map sizes and sample counts. **High**, the default, adds smoother wide sun
+  penumbrae at every size, and sharper sun shadows from 1440 rows on.
   **Ultra** is for large GPUs; **Low** for older and integrated ones.
 - **Sun shadow filter taps** smooth the sun's soft shadow edges where they are wider than a shadow texel, and
-  **contact shadows** ground small objects the shadow maps are too coarse for (each sun's Contact Shadow Length sets
-  how far they reach: [Lighting.md](Lighting.md#shadows)). Neither takes memory of its own; both cost GPU time in the
+  **contact shadows** ground small objects the shadow maps are too coarse for (Custom only: no preset turns them on,
+  because they can shimmer in motion; each sun's Contact Shadow Length sets how far they reach:
+  [Lighting.md](Lighting.md#shadows)). Neither takes memory of its own; both cost GPU time in the
   `GPU.ScreenShadows` stage.
 - **Ambient occlusion samples** set how finely the ambient occlusion that darkens creases and contacts is traced, in
   scenes whose Post Process turns it on: more samples give smoother, truer occlusion for GPU time in the `GPU.AO` stage
