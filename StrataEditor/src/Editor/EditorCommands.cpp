@@ -61,6 +61,7 @@ namespace Strata
 		RegisterUICommands(*this);
 		RegisterUIInputCommands(*this);
 		RegisterBatchCommands(*this);
+		RegisterPlacementCommands(*this);
 
 		Register({ "editor.commands",
 			"Every editor command with its description, the JSON Schema of its parameters and its kind: \"Edit\" (changes the scene, its assets or "

@@ -99,7 +99,8 @@ namespace Strata
 		std::optional<SceneRayHit> Cast(Scene& scene, const Ray& ray, float maxDistance, std::span<const Entity> ignore)
 		{
 			RenderScene& renderScene = RenderScene::Get(scene);
-			renderScene.Sync(AssetManager::GetActive());
+			AssetManagerBase* assets = scene.GetAssetManager();
+			renderScene.Sync(assets ? assets->shared_from_this() : nullptr);
 
 			std::unordered_set<entt::entity> ignored;
 			std::vector<Entity> pending(ignore.begin(), ignore.end());
@@ -152,7 +153,7 @@ namespace Strata
 				if (slot == RenderScene::c_InvalidIndex)
 					continue;
 				const AssetHandle meshHandle = renderScene.GetMeshHandle(slot);
-				const Ref<Mesh> mesh = AssetManager::HasActive() ? AssetManager::GetAsset<Mesh>(meshHandle) : nullptr;
+				const Ref<Mesh> mesh = assets ? assets->GetAsset<Mesh>(meshHandle) : nullptr;
 				if (mesh && !mesh->GetPositions().empty() && !mesh->GetIndices().empty())
 				{
 					if (std::optional<SceneRayHit> hit = CastMesh(*mesh, renderScene.GetWorldTransform(proxy), ray, best ? best->Distance : length))

@@ -22,6 +22,7 @@
 #include <climits>
 #include <cstdio>
 #include <initializer_list>
+#include <thread>
 
 namespace Strata
 {
@@ -328,6 +329,54 @@ namespace Strata
 	{
 		const std::wstring wideName = WindowsUtils::Utf8ToWide(name);
 		SetThreadDescription(GetCurrentThread(), wideName.c_str());
+	}
+
+	namespace
+	{
+
+		// The calling thread's high-resolution waitable timer for SleepUntil: made on the thread's first wait, closed when the
+		// thread ends. Null where the system cannot make one (before Windows 10 1803).
+		class ThreadWaitTimer
+		{
+		public:
+			ThreadWaitTimer()
+				: m_Handle(CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS))
+			{
+			}
+
+			~ThreadWaitTimer()
+			{
+				if (m_Handle)
+					CloseHandle(m_Handle);
+			}
+
+			ThreadWaitTimer(const ThreadWaitTimer&) = delete;
+			ThreadWaitTimer& operator=(const ThreadWaitTimer&) = delete;
+
+			HANDLE Get() const { return m_Handle; }
+		private:
+			HANDLE m_Handle = nullptr;
+		};
+
+		thread_local ThreadWaitTimer t_FrameTimer;
+
+	}
+
+	void Platform::SleepUntil(std::chrono::steady_clock::time_point deadline)
+	{
+		const auto now = std::chrono::steady_clock::now();
+		if (deadline <= now)
+			return;
+		if (const HANDLE timer = t_FrameTimer.Get())
+		{
+			// A due time relative to now, in 100-nanosecond intervals (negative: relative).
+			const int64_t intervals = std::chrono::duration_cast<std::chrono::nanoseconds>(deadline - now).count() / 100;
+			LARGE_INTEGER due = {};
+			due.QuadPart = -std::max<int64_t>(intervals, 1);
+			if (SetWaitableTimerEx(timer, &due, 0, nullptr, nullptr, nullptr, 0) && WaitForSingleObject(timer, INFINITE) == WAIT_OBJECT_0)
+				return;
+		}
+		std::this_thread::sleep_until(deadline);
 	}
 
 	bool Platform::SetCurrentThreadPriority(ThreadPriority priority)

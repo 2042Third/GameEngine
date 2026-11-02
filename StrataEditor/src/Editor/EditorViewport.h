@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Editor/EditorCamera.h"
+#include "Editor/PlacementPreview.h"
 #include "Editor/StreamingView.h"
 #include "Editor/TransformEdit.h"
 #include "Editor/ViewportRenderer.h"
@@ -116,6 +117,9 @@ namespace Strata
 		float ScaleSnap = 0.1f;
 		// The selection outline's display color. Not saved: the editor's theme sets it (its accent).
 		glm::vec4 SelectionColor = SceneRenderOptions().SelectionColor;
+		// The colors of the ghost of an asset dragged over the Scene view (PlacementPreview). Not saved: the editor's theme sets
+		// them.
+		PlacementColors Placement = PlacementColors::Default();
 		// Colors the image by streaming state or level of detail (StreamingView), in every view of the viewport, the game
 		// view too.
 		ViewportDebugView DebugView = ViewportDebugView::None;
@@ -253,6 +257,11 @@ namespace Strata
 		bool Load(const std::filesystem::path& path, std::string* outError = nullptr);
 		// Default camera and settings, no scene cameras (another project is opened).
 		void ResetState();
+
+		// What an asset dragged over the Scene view would do if dropped now: fed by the Scene view's panel, drawn by its
+		// renderer (only there: captures never show it).
+		PlacementPreview& GetPlacementPreview() { return m_PlacementPreview; }
+		const PlacementPreview& GetPlacementPreview() const { return m_PlacementPreview; }
 	private:
 		struct PendingPick
 		{
@@ -273,6 +282,7 @@ namespace Strata
 		Scope<ViewportRenderer> m_GameRenderer;
 		Scope<ViewportRenderer> m_CaptureRenderer;
 		Scope<PendingPick> m_Pick;
+		PlacementPreview m_PlacementPreview;
 	};
 
 }

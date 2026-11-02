@@ -31,6 +31,128 @@ namespace Strata
 			return static_cast<float>(std::clamp(percent, 0.0, 100.0));
 		}
 
+		// The stages a summary covers: their count and tables (FrameProfiler's, or a snapshot's).
+		struct StageTables
+		{
+			uint32_t Count = 0;
+			std::span<const std::string> Names;
+			std::span<const bool> InWorkTime;
+			std::span<const FrameStageKind> Kinds;
+		};
+
+		// The job system's threads a summary reports.
+		struct ThreadCounts
+		{
+			uint32_t Workers = 0;
+			uint32_t IO = 0;
+			uint32_t Background = 0;
+		};
+
+		// The statistics of the latest `count` frames, whatever holds them: recordAt(age) returns the record of that age (0: the
+		// newest). FrameProfiler::Summarize passes the ring, FrameProfileSnapshot::Summarize its copy.
+		template<typename RecordAt>
+		FrameProfileSummary SummarizeFrames(uint32_t count, const RecordAt& recordAt, const StageTables& tables, const ThreadCounts& threads)
+		{
+			FrameProfileSummary summary;
+			summary.Frames = count;
+			summary.WorkerThreads = threads.Workers;
+			summary.IOThreads = threads.IO;
+			summary.BackgroundThreads = threads.Background;
+
+			// The stages by kind, sorted out once rather than for every frame.
+			const uint32_t stageCount = tables.Count;
+			std::array<FrameStageID, FrameProfiler::c_MaxStages> cpuStages;
+			std::array<FrameStageID, FrameProfiler::c_MaxStages> gpuStages;
+			uint32_t cpuStageCount = 0;
+			uint32_t gpuStageCount = 0;
+			for (FrameStageID stage = 0; stage < stageCount; stage++)
+			{
+				if (tables.Kinds[stage] == FrameStageKind::GPU)
+					gpuStages[gpuStageCount++] = stage;
+				else
+					cpuStages[cpuStageCount++] = stage;
+			}
+
+			// Every series in one allocation, a row of `count` samples each: a row per stage (a CPU stage has a sample per frame,
+			// a GPU stage one per frame whose GPU times arrived), then the frames' work, stage sum, untimed time, interval (frames
+			// that have a previous one) and GPU busy time. The statistics reorder each row in place: the rows are this summary's.
+			const uint32_t workRow = stageCount;
+			const uint32_t stageSumRow = stageCount + 1;
+			const uint32_t untimedRow = stageCount + 2;
+			const uint32_t intervalRow = stageCount + 3;
+			const uint32_t gpuBusyRow = stageCount + 4;
+			std::vector<float> samples(static_cast<size_t>(gpuBusyRow + 1) * count);
+			const auto row = [&samples, count](uint32_t index) { return samples.data() + static_cast<size_t>(index) * count; };
+			uint32_t gpuFrames = 0;
+			uint32_t intervalCount = 0;
+			double intervals = 0.0;
+			double gpuLatency = 0.0;
+			double workerBusy = 0.0;
+			double ioBusy = 0.0;
+			double backgroundBusy = 0.0;
+			for (uint32_t age = 0; age < count; age++)
+			{
+				const auto& record = recordAt(age);
+				double sum = 0.0;
+				for (uint32_t index = 0; index < cpuStageCount; index++)
+				{
+					const FrameStageID stage = cpuStages[index];
+					const float ms = record.StageMs[stage];
+					row(stage)[age] = ms;
+					if (tables.InWorkTime[stage])
+						sum += ms;
+				}
+				if (record.HasGPU)
+				{
+					// GPU stages over the frames whose GPU times arrived.
+					for (uint32_t index = 0; index < gpuStageCount; index++)
+						row(gpuStages[index])[gpuFrames] = record.GPUStageMs[gpuStages[index]];
+					row(gpuBusyRow)[gpuFrames] = record.GPUBusyMs;
+					gpuFrames++;
+					gpuLatency += record.GPULatencyFrames;
+				}
+				row(workRow)[age] = record.WorkMs;
+				row(stageSumRow)[age] = static_cast<float>(sum);
+				row(untimedRow)[age] = std::max(record.WorkMs - static_cast<float>(sum), 0.0f);
+				if (record.IntervalMs > 0.0f)
+				{
+					intervals += record.IntervalMs;
+					row(intervalRow)[intervalCount++] = record.IntervalMs;
+				}
+				workerBusy += record.WorkerBusyPercent;
+				ioBusy += record.IOBusyPercent;
+				backgroundBusy += record.BackgroundBusyPercent;
+			}
+
+			const auto stats = [](float* first, uint32_t size) { return FrameProfiler::ComputeStatsInPlace(std::span<float>(first, size)); };
+			summary.Work = stats(row(workRow), count);
+			summary.StageSum = stats(row(stageSumRow), count);
+			summary.Untimed = stats(row(untimedRow), count);
+			summary.Interval = stats(row(intervalRow), intervalCount);
+			summary.FramesPerSecond = intervals > 0.0 ? static_cast<float>(static_cast<double>(intervalCount) * 1000.0 / intervals) : 0.0f;
+			if (count > 0)
+			{
+				summary.WorkerBusyPercent = static_cast<float>(workerBusy / static_cast<double>(count));
+				summary.IOBusyPercent = static_cast<float>(ioBusy / static_cast<double>(count));
+				summary.BackgroundBusyPercent = static_cast<float>(backgroundBusy / static_cast<double>(count));
+			}
+			summary.Stages.reserve(stageCount);
+			for (FrameStageID stage = 0; stage < stageCount; stage++)
+			{
+				const uint32_t size = tables.Kinds[stage] == FrameStageKind::GPU ? gpuFrames : count;
+				summary.Stages.push_back(FrameStageSummary { tables.Names[stage], tables.InWorkTime[stage], tables.Kinds[stage], stats(row(stage), size) });
+			}
+
+			FrameGPUSummary& gpu = summary.GPU;
+			gpu.Frames = gpuFrames;
+			gpu.Busy = stats(row(gpuBusyRow), gpuFrames);
+			if (gpu.Frames > 0)
+			{
+				gpu.LatencyFrames = static_cast<float>(gpuLatency / static_cast<double>(gpu.Frames));
+				gpu.BoundBy = FrameProfiler::ClassifyFrameBound(summary.Work.P50, gpu.Busy.P50, summary.Interval.P50);
+			}
+			return summary;
+		}
 	}
 
 	FrameProfiler::FrameProfiler(const FrameProfilerSpecification& specification)
@@ -201,7 +323,7 @@ namespace Strata
 
 		if (!m_Listeners.empty())
 		{
-			const FrameSample sample = ToSample(record);
+			const FrameSample sample = ToSample(record, GetStageCount());
 			for (const Listener& listener : m_Listeners)
 			{
 				if (listener.Timing == FrameListenerTiming::Immediate)
@@ -268,7 +390,7 @@ namespace Strata
 			const uint64_t laterFrames = m_TotalFrames - 1 - m_NextGPUListenerFrame;
 			if (m_NextGPUListenerFrame >= forcedEnd && m_GPUTimesExpected && !record->GPUResolved && laterFrames < c_MaxGPULatencyFrames)
 				break;
-			const FrameSample sample = ToSample(*record);
+			const FrameSample sample = ToSample(*record, GetStageCount());
 			for (const Listener& listener : m_Listeners)
 			{
 				if (listener.Timing == FrameListenerTiming::WithGPU)
@@ -325,7 +447,7 @@ namespace Strata
 		return static_cast<double>(nanoseconds) / c_NanosecondsPerSecond;
 	}
 
-	FrameSample FrameProfiler::ToSample(const FrameRecord& record) const
+	FrameSample FrameProfiler::ToSample(const FrameRecord& record, uint32_t stageCount)
 	{
 		FrameSample sample;
 		sample.Index = record.Index;
@@ -334,10 +456,10 @@ namespace Strata
 		sample.WorkerBusyPercent = record.WorkerBusyPercent;
 		sample.IOBusyPercent = record.IOBusyPercent;
 		sample.BackgroundBusyPercent = record.BackgroundBusyPercent;
-		sample.StageMs = std::span<const float>(record.StageMs.data(), GetStageCount());
+		sample.StageMs = std::span<const float>(record.StageMs.data(), stageCount);
 		sample.HasGPU = record.HasGPU;
 		sample.GPUBusyMs = record.GPUBusyMs;
-		sample.GPUStageMs = std::span<const float>(record.GPUStageMs.data(), GetStageCount());
+		sample.GPUStageMs = std::span<const float>(record.GPUStageMs.data(), stageCount);
 		sample.GPULatencyFrames = record.GPULatencyFrames;
 		return sample;
 	}
@@ -346,7 +468,7 @@ namespace Strata
 	{
 		ST_CORE_ASSERT(age < m_RecordedFrames, "FrameProfiler::GetFrame: frame {} of {} recorded", age, m_RecordedFrames);
 		const uint32_t index = (m_NextRecord + m_Capacity - 1 - age) % m_Capacity;
-		return ToSample(m_Records[index]);
+		return ToSample(m_Records[index], GetStageCount());
 	}
 
 	FrameTimeStats FrameProfiler::ComputeStats(std::span<const float> samples)
@@ -397,107 +519,85 @@ namespace Strata
 
 	FrameProfileSummary FrameProfiler::Summarize(uint32_t frames) const
 	{
-		FrameProfileSummary summary;
-		const uint32_t count = std::min(frames, m_RecordedFrames);
-		summary.Frames = count;
 		const JobSystemStats jobs = JobSystem::GetStats();
-		summary.WorkerThreads = jobs.Workers.Threads;
-		summary.IOThreads = jobs.IO.Threads;
-		summary.BackgroundThreads = jobs.Background.Threads;
-
-		// The stages by kind, sorted out once rather than for every frame.
 		const uint32_t stageCount = GetStageCount();
-		std::array<FrameStageID, c_MaxStages> cpuStages;
-		std::array<FrameStageID, c_MaxStages> gpuStages;
-		uint32_t cpuStageCount = 0;
-		uint32_t gpuStageCount = 0;
-		for (FrameStageID stage = 0; stage < stageCount; stage++)
+		const StageTables tables { stageCount, std::span<const std::string>(m_StageNames.data(), stageCount),
+			std::span<const bool>(m_StageInWorkTime.data(), stageCount), std::span<const FrameStageKind>(m_StageKinds.data(), stageCount) };
+		const ThreadCounts threads { jobs.Workers.Threads, jobs.IO.Threads, jobs.Background.Threads };
+		return SummarizeFrames(std::min(frames, m_RecordedFrames), [this](uint32_t age) -> const FrameRecord&
 		{
-			if (m_StageKinds[stage] == FrameStageKind::GPU)
-				gpuStages[gpuStageCount++] = stage;
-			else
-				cpuStages[cpuStageCount++] = stage;
-		}
+			return m_Records[(m_NextRecord + m_Capacity - 1 - age) % m_Capacity];
+		}, tables, threads);
+	}
 
-		// Every series in one allocation, a row of `count` samples each: a row per stage (a CPU stage has a sample per frame,
-		// a GPU stage one per frame whose GPU times arrived), then the frames' work, stage sum, untimed time, interval (frames
-		// that have a previous one) and GPU busy time. The statistics reorder each row in place: the rows are this summary's.
-		const uint32_t workRow = stageCount;
-		const uint32_t stageSumRow = stageCount + 1;
-		const uint32_t untimedRow = stageCount + 2;
-		const uint32_t intervalRow = stageCount + 3;
-		const uint32_t gpuBusyRow = stageCount + 4;
-		std::vector<float> samples(static_cast<size_t>(gpuBusyRow + 1) * count);
-		const auto row = [&samples, count](uint32_t index) { return samples.data() + static_cast<size_t>(index) * count; };
-		uint32_t gpuFrames = 0;
-		uint32_t intervalCount = 0;
-		double intervals = 0.0;
-		double gpuLatency = 0.0;
-		double workerBusy = 0.0;
-		double ioBusy = 0.0;
-		double backgroundBusy = 0.0;
-		for (uint32_t age = 0; age < count; age++)
+	FrameProfileSnapshot FrameProfiler::TakeSnapshot(uint64_t newestFrame) const
+	{
+		FrameProfileSnapshot snapshot;
+		snapshot.m_Capacity = m_Capacity;
+		snapshot.m_GPUTimesExpected = m_GPUTimesExpected;
+		const JobSystemStats jobs = JobSystem::GetStats();
+		snapshot.m_WorkerThreads = jobs.Workers.Threads;
+		snapshot.m_IOThreads = jobs.IO.Threads;
+		snapshot.m_BackgroundThreads = jobs.Background.Threads;
 		{
-			const FrameRecord& record = m_Records[(m_NextRecord + m_Capacity - 1 - age) % m_Capacity];
-			double sum = 0.0;
-			for (uint32_t index = 0; index < cpuStageCount; index++)
+			const std::lock_guard<std::mutex> lock(m_StageMutex);
+			snapshot.m_StageCount = GetStageCount();
+			for (uint32_t stage = 0; stage < snapshot.m_StageCount; stage++)
 			{
-				const FrameStageID stage = cpuStages[index];
-				const float ms = record.StageMs[stage];
-				row(stage)[age] = ms;
-				if (m_StageInWorkTime[stage])
-					sum += ms;
+				snapshot.m_StageNames[stage] = m_StageNames[stage];
+				snapshot.m_StageInWorkTime[stage] = m_StageInWorkTime[stage];
+				snapshot.m_StageKinds[stage] = m_StageKinds[stage];
 			}
-			if (record.HasGPU)
-			{
-				// GPU stages over the frames whose GPU times arrived.
-				for (uint32_t index = 0; index < gpuStageCount; index++)
-					row(gpuStages[index])[gpuFrames] = record.GPUStageMs[gpuStages[index]];
-				row(gpuBusyRow)[gpuFrames] = record.GPUBusyMs;
-				gpuFrames++;
-				gpuLatency += record.GPULatencyFrames;
-			}
-			row(workRow)[age] = record.WorkMs;
-			row(stageSumRow)[age] = static_cast<float>(sum);
-			row(untimedRow)[age] = std::max(record.WorkMs - static_cast<float>(sum), 0.0f);
-			if (record.IntervalMs > 0.0f)
-			{
-				intervals += record.IntervalMs;
-				row(intervalRow)[intervalCount++] = record.IntervalMs;
-			}
-			workerBusy += record.WorkerBusyPercent;
-			ioBusy += record.IOBusyPercent;
-			backgroundBusy += record.BackgroundBusyPercent;
 		}
+		// The frames up to the newest one asked for, newest first: one allocation, then copies.
+		uint32_t skipped = 0;
+		while (skipped < m_RecordedFrames && m_Records[(m_NextRecord + m_Capacity - 1 - skipped) % m_Capacity].Index > newestFrame)
+			skipped++;
+		snapshot.m_Records.reserve(m_RecordedFrames - skipped);
+		for (uint32_t age = skipped; age < m_RecordedFrames; age++)
+			snapshot.m_Records.push_back(m_Records[(m_NextRecord + m_Capacity - 1 - age) % m_Capacity]);
+		return snapshot;
+	}
 
-		const auto stats = [](float* first, uint32_t size) { return ComputeStatsInPlace(std::span<float>(first, size)); };
-		summary.Work = stats(row(workRow), count);
-		summary.StageSum = stats(row(stageSumRow), count);
-		summary.Untimed = stats(row(untimedRow), count);
-		summary.Interval = stats(row(intervalRow), intervalCount);
-		summary.FramesPerSecond = intervals > 0.0 ? static_cast<float>(static_cast<double>(intervalCount) * 1000.0 / intervals) : 0.0f;
-		if (count > 0)
-		{
-			summary.WorkerBusyPercent = static_cast<float>(workerBusy / static_cast<double>(count));
-			summary.IOBusyPercent = static_cast<float>(ioBusy / static_cast<double>(count));
-			summary.BackgroundBusyPercent = static_cast<float>(backgroundBusy / static_cast<double>(count));
-		}
-		summary.Stages.reserve(stageCount);
-		for (FrameStageID stage = 0; stage < stageCount; stage++)
-		{
-			const uint32_t size = m_StageKinds[stage] == FrameStageKind::GPU ? gpuFrames : count;
-			summary.Stages.push_back(FrameStageSummary { m_StageNames[stage], m_StageInWorkTime[stage], m_StageKinds[stage], stats(row(stage), size) });
-		}
+	FrameSample FrameProfileSnapshot::GetFrame(uint32_t age) const
+	{
+		ST_CORE_ASSERT(age < m_Records.size(), "FrameProfileSnapshot::GetFrame: frame {} of {} held", age, m_Records.size());
+		return FrameProfiler::ToSample(m_Records[age], m_StageCount);
+	}
 
-		FrameGPUSummary& gpu = summary.GPU;
-		gpu.Frames = gpuFrames;
-		gpu.Busy = stats(row(gpuBusyRow), gpuFrames);
-		if (gpu.Frames > 0)
-		{
-			gpu.LatencyFrames = static_cast<float>(gpuLatency / static_cast<double>(gpu.Frames));
-			gpu.BoundBy = ClassifyFrameBound(summary.Work.P50, gpu.Busy.P50, summary.Interval.P50);
-		}
-		return summary;
+	uint64_t FrameProfileSnapshot::GetFirstFrameIndex() const
+	{
+		return m_Records.empty() ? 0 : m_Records.back().Index;
+	}
+
+	uint64_t FrameProfileSnapshot::GetLastFrameIndex() const
+	{
+		return m_Records.empty() ? 0 : m_Records.front().Index;
+	}
+
+	const std::string& FrameProfileSnapshot::GetStageName(FrameStageID stage) const
+	{
+		static const std::string s_None;
+		return stage < m_StageCount ? m_StageNames[stage] : s_None;
+	}
+
+	bool FrameProfileSnapshot::IsStageInWorkTime(FrameStageID stage) const
+	{
+		return stage < m_StageCount && m_StageInWorkTime[stage];
+	}
+
+	FrameStageKind FrameProfileSnapshot::GetStageKind(FrameStageID stage) const
+	{
+		return stage < m_StageCount ? m_StageKinds[stage] : FrameStageKind::CPU;
+	}
+
+	FrameProfileSummary FrameProfileSnapshot::Summarize(uint32_t frames) const
+	{
+		const StageTables tables { m_StageCount, std::span<const std::string>(m_StageNames.data(), m_StageCount),
+			std::span<const bool>(m_StageInWorkTime.data(), m_StageCount), std::span<const FrameStageKind>(m_StageKinds.data(), m_StageCount) };
+		const ThreadCounts threads { m_WorkerThreads, m_IOThreads, m_BackgroundThreads };
+		const uint32_t count = std::min(frames, GetRecordedFrameCount());
+		return SummarizeFrames(count, [this](uint32_t age) -> const FrameProfiler::FrameRecord& { return m_Records[age]; }, tables, threads);
 	}
 
 	FrameBound FrameProfiler::ClassifyFrameBound(float workMs, float gpuBusyMs, float intervalMs)

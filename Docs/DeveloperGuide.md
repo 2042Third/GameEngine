@@ -1425,7 +1425,7 @@ section; the composition root runs it first, and Input is a module every engine 
 ### Preferences
 
 The person's preferences are the registry's *user* sections (`SettingsScope::User`): the editor's own (the external
-editor, `Editor.ExternalEditor`, and the interface, `Editor.Interface`), registered by `EditorPreferences::RegisterSections` in the editor's `Extra`
+editor, `Editor.ExternalEditor`, the interface, `Editor.Interface`, and the frame rate, `Editor.FrameRate`), registered by `EditorPreferences::RegisterSections` in the editor's `Extra`
 registration (and the tests'), and any a module registers. They hold for every project and never reach a game.
 
 - **The store.** `Editor/EditorPreferences` keeps them in `<user data>/Strata/Preferences.json`
@@ -1462,6 +1462,12 @@ registration (and the tests'), and any a module registers. They hold for every p
   `{ "Command": ... }`); `STRATA_EXTERNAL_EDITOR` still wins. The section checks the template's form only; whether its
   program is there depends on the machine and the PATH the editor started with, so `script.setExternalEditor` (and the
   External Editor page) check that when the person sets one.
+- **The frame rate.** `Editor.FrameRate` (`Editor/EditorFrameRate`, a simple section on the generic page, version 1)
+  holds `IdleAfterSeconds` (0-3600, default 0.5; 0 never idles), `IdleFrameRate` (60, 30, 20, 15, 10 or 5; default 30),
+  `UnfocusedIdleFrameRate` (60, 30, 15, 10 or 5; default 10) and `ActiveFrameRate` (Unlimited or 240, 165, 144, 120, 90 or 60;
+  default Unlimited): 0.7.0's behavior by default. `EditorFrameRate::GetPolicy` reads it into a `Policy` whenever the
+  preferences' version changes, never per frame. No rate under 5 is offered: `FramePacer` sleeps without waking on input.
+  Not called an idle timeout anywhere: `--idle-timeout` closes a headless editor without clients.
 - **The interface scale.** `Editor.Interface` (`Editor/EditorInterface`, a simple section on the generic page) holds
   `Scale`, a percentage of the automatic UI scale: `Automatic` (100%), `75%`, `90%`, `110%`, `125%`, `150%`, `175%` or
   `200%`. Whenever the preferences' version changes (and on the first frame) `EditorLayer` gives the factor to the host
@@ -2509,10 +2515,17 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     own, `ClickItem` by probe key) and `HarnessEditor.h` (an editor on that harness, `ReplaceText` for kit text fields,
     and a temporary directory as `EditorOptions::DefaultProjectLocation`, so the project dialogs never read the user's
     projects folder).
-  - Idle throttling: a windowed editor runs at the full rate while anything happens (input in the last 0.5 s, a running
-    unpaused scene or pending steps, loading assets, pending commands, an automation request in the last second, a
-    script build, a panel's `IsAnimating`) and otherwise at 30 frames per second (10 without the focus), through
-    `EditorHost::SetMaxFrameRate`. Headless editors, `--frames` runs and command scripts are never throttled; a panel that
+  - Idle throttling follows the person's `Editor.FrameRate` policy (`EditorLayer::UpdateFrameRate`): a windowed editor
+    runs at most at `ActiveFrameRate` (0: unlimited) while anything happens (input in the last `IdleAfterSeconds`, a
+    running unpaused scene or pending steps, loading assets, pending commands, an automation request in the last second or
+    `IdleAfterSeconds` if longer, a script build, a panel's `IsAnimating`) and otherwise at `IdleFrameRate`
+    (`UnfocusedIdleFrameRate` without the focus), through `EditorHost::SetMaxFrameRate`; `IdleAfterSeconds` 0 never idles
+    (a branch of its own, not throttling turned off, which would keep the last idle cap). Frames that run work someone
+    waits for by frames (pending steps, commands, automation requests: `EditorLayer::RunsUncapped`) are never capped, so
+    the active cap never overwrites `UpdateSteppingFrameRate`'s lift. `editor.status`'s `editor.frameRate` reports the
+    policy (`idleAfterSeconds`, `idleFrameRate`, `unfocusedIdleFrameRate`, `activeFrameRate`) beside `cap`, `idle` and
+    `throttling`, and `editor.perf`'s `interval` the time from one frame's start to the next, which is how a cap is
+    verified. Headless editors, `--frames` runs and command scripts are never throttled; a panel that
     animates without input reports it through `EditorPanel::IsAnimating`. The frame time the status bar, the viewport's
     stats and `editor.status` (`editor.frameRate.frameMilliseconds`, with the measured rate) show is what frames cost
     (`Application::GetLastFrameWorkTime`: CPU time without the waits for the GPU, the display and the frame rate cap;
@@ -2912,14 +2925,20 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (`CommandJournalTests.cpp`'s `c_DeferringCommands` lists them, checked like the kind lists).
   Poll functions own their data (copy parameters, never capture them by reference) and allocate nothing per frame (frame
   times go into a `CommandUtils::FrameTimeRecorder`, reserved when the command starts: an allocation in a frame can wait
-  milliseconds for the heap while a scene is freed in the background). `editor.wait
+  milliseconds for the heap while a scene is freed in the background). `asset.place` is the model of an Edit command that
+  waits for an asset: it resolves its request when called, then each frame requests the asset and checks, in order,
+  that the project is open (else `Cancelled`), the active scene is the one it was called on, the scene is editable and
+  the asset did not fail; it waits by the clock (`steady_clock`, never frames) for the template (30 s, then it fails)
+  and for its size (5 s, then it places by the bounds known so far, `bounds.pending`), never through `LoadAssetSync`. `editor.wait
   {frames}` returns after that many frames, e.g. to let a playing scene run, with `frameTimes` (count, median, mean, 95th
   percentile and maximum in milliseconds) of the frames that ran entirely while it waited: the CPU time of each frame
   (`Application::GetLastFrameWorkTime`, recorded by `EditorLayer` through `EditorContext::RecordFrameTime`), without the
   waits for the GPU and the display, so command scripts can `expect` frame budgets. `editor.perf {frames?}` says where
   those frames went: the frame profiler's statistics (mean, nearest-rank p50 and p95, maximum) of the latest frames (120 by
   default, at most 600) for the frame, every stage (`stages/<name>`, self times, `inFrameTime` false for Present), the
-  stages added up (`stageSum`, at most the frame), the rest of each frame (`untimed`) and the job threads (busy percent,
+  stages added up (`stageSum`, at most the frame), the rest of each frame (`untimed`), the time from each frame's start to
+  the next (`interval`: what a frame-rate cap, vsync or idle throttling sets; the Performance panel's pause freezes only
+  the panel) and the job threads (busy percent,
   running and queued jobs); `stages` lists the main thread's stages only. `gpu` is the GPU's side of the same frames
   (frames with GPU times, the latency, busy time, per GPU stage, and `boundBy`: `FrameBound` by the 90% rules), and
   `renderStats` the viewport panel's latest frame (`CommandUtils::DescribeRenderStats` of its `SceneRendererStats` and
@@ -3251,15 +3270,40 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `RigidBody`; the "Mesh only" submenu (probes `Create.MeshOnly.<Mesh>`) makes them without.
 - **Placing content** (`Editor/SceneRaycast`, `Editor/EditorPlacement`): new top-level entities from the create menus
   appear under the view's pivot, resting on the surface there (`EditorPlacement::FindPivotSurface`, `RestOn` with the
-  mesh's bounds), with the translation sent through `entity.create`; prefabs and models rest by the bounds of what they
-  draw (`GetPlacementBounds`: the editor's `AssetBounds` measurement once complete, which the viewport requests while the
-  asset is dragged over it, else `GetTemplateBounds`, which requests skeletons but never waits for them) on the surface
-  under the cursor when dropped into the viewport, under the pivot from Add to
-  Scene and drops on the Hierarchy's empty space (`EditorActions::InstantiatePrefab`), a dropped material goes to the
-  mesh under the cursor (`component.set`), and
-  `entity.dropToGround {entities}` (End) moves entities down onto what is below them, one undo step. Rays hit the mesh
-  renderers through the render scene's spatial index and the loaded meshes' triangles: code that needs what is under a
-  point uses `SceneRaycast::Cast`, never a loop over the scene's entities.
+  mesh's bounds), with the translation sent through `entity.create`; Add to Scene and drops on the Hierarchy's empty
+  space put a prefab or model under the pivot by the bounds of what it draws (`EditorActions::InstantiatePrefab`,
+  `GetPlacementBounds`), and `entity.dropToGround {entities}` (End) moves entities down onto what is below them, one
+  undo step. Rays hit the mesh renderers through the render scene's spatial index and the loaded meshes' triangles,
+  reaching meshes through `Scene::GetAssetManager()`: code that needs what is under a point uses `SceneRaycast::Cast`,
+  never a loop over the scene's entities.
+- **Placing along a ray** (`EditorPlacement::Place`): one function decides where an asset lands, for `asset.place` and
+  the Scene view's drop alike. A request is a ray (`MakeRayRequest`, which both build from the same floats, so the drop
+  lands exactly where its ghost stood) or a point with a normal (`At`), with `MaxDistance`, `Snap`, `Rotation` and
+  `Scale`. The ray's first surface wins (`Surface`); on a miss, where it meets the grid plane y = 0 within
+  `c_GridFallbackDistance` (500 m, `Grid`), else on the ray at the fallback distance (`InFront`: the editor camera's
+  distance to its target, 10 m through a scene's camera, at least 0.5 m), unless `RequireSurface`. Snapping rounds the
+  two axes across the normal's dominant one to the step and, on ground facing up, finds the height at the snapped point
+  with a ray from `c_SnapLift` above. The asset rests by its `AssetBounds` measurement turned and scaled as placed
+  (`RestOn`); in front of the camera its box straddles the point. `MakeViewRay` casts through a view's camera
+  camera-relative, so it stays exact far from the origin. A rotated template rests by its axis-aligned box, so it may
+  float by the box's slack (`entity.dropToGround` settles it).
+- **The drop and its ghost** (`Editor/PlacementPreview`, owned by `EditorViewport`): while an asset is dragged over the
+  Scene view's image, the panel feeds the preview the pointer's ray through the view's own camera (Game camera
+  included) and the snap (the toolbar's Snap, inverted by Ctrl), and the Scene view's renderer, only there, draws its
+  ghost as `DebugDraw` lines over the finished image (`ViewportRenderer::Render`'s `placement`; captures never get it):
+  for a prefab, model or mesh on a surface its box tested, the box's hidden edges faint on top and a ring where it
+  touches; for a guess (`Grid`, `InFront`) only a box on top in the quieter color (`ViewportSettings::Placement`, from
+  the theme); a marker while its size loads; for a material, the target mesh's box and a tint first in `EntityTints`.
+  A label at the pointer says what a drop would do, or why it cannot ("Cannot place a Texture here", "Drop a material
+  onto a mesh"): unsupported drops log nothing. Hovering writes nothing (no entity, undo step, selection or version) and
+  casts only when its key changed: the pointer's ray, the render scene's updates, the asset manager's content version.
+  The release runs `asset.place` with `MakeDropParameters` through the command runner (`EditorActions::PlaceAsset`,
+  selecting the root once placed; it waits while the asset loads instead of blocking the frame), a material
+  `component.set` on its target. Escape cancels any drag of the editor's payloads (`UI::CancelDragDropOnEscape`, before
+  the panels). `AssetBounds` keeps pending results and measures again only once the asset or something it waits for
+  was published (or after a second), so a drag over a streaming scene does not instantiate its template every frame. It
+  answers a pending result before working out the content stamp, which allocates, so `asset.place`'s poll allocates
+  nothing.
 
 ### Viewport panel
 
@@ -3305,6 +3349,15 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 
 ### View commands
 
+- **Rays and placing** (`Commands/PlacementCommands.cpp`): `scene.raycast {origin, direction | viewport {x, y, width?,
+  height?}, maxDistance?, ignore?}` (Query) answers what the ray, or a pixel of the Scene view's image through its camera
+  (`ResolveSceneView`: the editor camera, the scene's primary camera with Game camera; 1280 x 720 while the view has no
+  size), hits among the mesh renderers: `{hit, entity, name, point, normal, distance, onTriangle, ray}` or `{hit: false,
+  ray}`, the ray what `asset.place {ray}` takes. `asset.place {asset, ray | viewport | point (+ normal), parent?,
+  rotation?, scale?, snap?, maxDistance?, fallbackDistance?, requireSurface?}` places a prefab, model or mesh (an entity
+  with a Mesh Renderer named after it) by `EditorPlacement::Place`, in one undo step named "Place 'Crate'"; a template's
+  roots move rigidly with the first. It answers `{id, entities, placedOn, hitEntity, point, normal, translation, bounds,
+  snapped}`.
 - **World queries:** `entity.get {world: true}` adds the entity's world transform decomposed (`world: {position, rotation:
   {euler, quaternion}, scale}`) and `bounds: {min, max, size, center, pending}` of it with its descendants
   (`SceneBounds::GetEntityBounds`, skinned meshes in their pose; `pending` when a placeholder box stood in for a loading
@@ -3418,7 +3471,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (`EditorContext::GetFixedStepCountAtResume`; it notices the resume by `GetResumeCount`, also when the game was paused
   again in the same frame), as it does when play mode stops (a quit or a crash too). A scene switch the
   game asks for carries pending steps over. While steps are pending the editor lifts its frame-rate cap (headless editors'
-  60 frames per second and the idle throttling: `EditorLayer::UpdateSteppingFrameRate`), so 600 steps take the frames'
+  60 frames per second, the idle rates and the active cap: `EditorLayer::UpdateSteppingFrameRate`), so 600 steps take the frames'
   work rather than ten seconds; each frame still runs exactly one step. `wait: false` answers at once with
   `pendingSteps`; `frames` is an accepted older name of `steps`. `play.start {paused: true}` pauses the game before its
   first step (`fixedSteps` 0, also after the scripts' build), so tools drive it from step 0.
@@ -5506,7 +5559,9 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
 - **Toolsets:** MCP clients take a limited number of tools (some 128) and pay for every tool definition in tokens, so
   `StrataCLI mcp` lists only the commands of its enabled toolsets (`CLI/McpToolsets`): `core` by default, the commands
   a game is made and tested with (`McpToolsets::GetCoreCommands`), plus one toolset per command group: `scene`
-  (`scene.`, `entity.`, `component.`, `prefab.`, `selection.`, `edit.`, `lighting.`), `assets` (`asset.`, `material.`, `project.`),
+  (`scene.`, `entity.`, `component.`, `prefab.`, `selection.`, `edit.`, `lighting.`, and `asset.place` by its exact name, so
+  an agent placing props gets `scene.raycast`, `asset.place`, `prefab.instantiate` and `entity.dropToGround` together),
+  `assets` (`asset.`, `material.`, `project.`),
   `play` (`play.`, `input.`, `audio.`: game-ui's `input.click` and `input.type` too), `scripts`, `animation`, `viewport`
   (`viewport.`, `camera.`), `streaming` (`asset.stats`, `asset.setBudget`), `perf` (`editor.perf`), `editor` (`editor.`,
   `log.`), `ui` (`ui.create`, `ui.layout`, `ui.hitTest`), `world` (`world.`, `physics.`) and `settings` (the project's
@@ -5525,7 +5580,8 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   ranges and `required` stay (`McpToolsets::MakeCompactToolDefinition`). So the first sentence of a command's
   description says what it does, and a property's first sentence what it is. The default list stays at most 32 tools
   and 30 KiB of `tools/list` JSON (`CLI.McpToolsets`). It is at the tool limit: 27 core commands and 5 generic tools, about 18.6 KB; every command
-  (124 tools) is about 73 KB. A command added to `core` takes the place of another.
+  is about 99 KB of definitions (151 commands; `CLI.McpToolsets` prints the figure). A command added to `core` takes the place
+  of another.
 
 ### Other methods and tests
 

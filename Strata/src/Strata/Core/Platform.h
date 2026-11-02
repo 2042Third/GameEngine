@@ -2,6 +2,7 @@
 
 #include "Strata/Core/Base.h"
 
+#include <chrono>
 #include <filesystem>
 #include <optional>
 #include <span>
@@ -129,6 +130,12 @@ namespace Strata
 
 		static bool IsDebuggerAttached();
 		static void SetCurrentThreadName(std::string_view name);
+		// Sleeps the calling thread until `deadline`, as precisely as the system allows (FramePacer). On Windows through a
+		// high-resolution waitable timer of the thread's own (made on its first wait, closed when the thread ends), which
+		// wakes within about a millisecond where the standard library's sleep waits for the system's timer tick (15.6 ms by
+		// default), without raising the whole system's timer resolution (no timeBeginPeriod); the standard library's sleep
+		// where such a timer cannot be made. Elsewhere the standard library's sleep, which is precise there.
+		static void SleepUntil(std::chrono::steady_clock::time_point deadline);
 		// Sets the calling thread's scheduling priority (ThreadPriority). Returns false if the system refused it: the thread
 		// keeps its priority (Linux lets a thread lower its priority, but raising it again may need privileges).
 		static bool SetCurrentThreadPriority(ThreadPriority priority);

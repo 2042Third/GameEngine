@@ -4,6 +4,8 @@
 #include "Editor/HarnessEditor.h"
 #include "Editor/ImGuiHarness.h"
 #include "Editor/UIRectEdit.h"
+#include "Editor/EditorFrameRate.h"
+#include "Editor/EditorPreferences.h"
 #include "EditorLayer.h"
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Panels/ConsolePanel.h"
@@ -21,6 +23,7 @@
 
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/FrameProfiler.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Events/ApplicationEvent.h>
@@ -52,6 +55,23 @@
 
 using namespace Strata;
 using namespace Strata::Tests;
+
+namespace
+{
+
+	// Editor.FrameRate's defaults, in its stored form.
+	const nlohmann::json c_DefaultFrameRatePreferences = { { "IdleAfterSeconds", 0.5 }, { "IdleFrameRate", "30" }, { "UnfocusedIdleFrameRate", "10" },
+		{ "ActiveFrameRate", "Unlimited" } };
+
+	// preferences.set of Editor.FrameRate: the defaults with `values` over them (the command replaces the whole section).
+	void SetFrameRatePreferences(HarnessEditor& editor, const nlohmann::json& values)
+	{
+		nlohmann::json value = c_DefaultFrameRatePreferences;
+		value.update(values);
+		editor.Run("preferences.set", { { "section", EditorFrameRate::c_SettingsSection }, { "value", value } });
+	}
+
+}
 
 namespace
 {
@@ -605,10 +625,10 @@ TEST_SUITE("Editor.UI")
 		// Nothing for a second: the focused editor idles at 30 frames per second, an unfocused one at 10.
 		editor.Frames(1, 1.0f);
 		CHECK(editor.Layer->IsIdle());
-		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+		CHECK(editor.Host->MaxFrameRate == EditorFrameRate::c_DefaultIdleFrameRate);
 		editor.Host->WindowFocused = false;
 		editor.Frames(1);
-		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_UnfocusedIdleFrameRate);
+		CHECK(editor.Host->MaxFrameRate == EditorFrameRate::c_DefaultUnfocusedIdleFrameRate);
 		editor.Host->WindowFocused = true;
 
 		// Input: the full rate at once, and for half a second after it.
@@ -618,7 +638,7 @@ TEST_SUITE("Editor.UI")
 		editor.Frames(1, 0.3f);
 		CHECK(editor.Host->MaxFrameRate == 0);
 		editor.Frames(1, 0.3f);
-		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+		CHECK(editor.Host->MaxFrameRate == EditorFrameRate::c_DefaultIdleFrameRate);
 		// A held key keeps it up even with the mouse at rest (e.g. flying the camera).
 		editor.Harness.SetKey(ImGuiKey_W, true);
 		editor.Frames(1);
@@ -627,7 +647,7 @@ TEST_SUITE("Editor.UI")
 		editor.Harness.SetKey(ImGuiKey_W, false);
 		editor.Frames(1);
 		editor.Frames(1, 1.0f);
-		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+		CHECK(editor.Host->MaxFrameRate == EditorFrameRate::c_DefaultIdleFrameRate);
 
 		// A running scene needs every frame; a paused one does not, unless it steps.
 		editor.Run("play.start");
@@ -635,7 +655,7 @@ TEST_SUITE("Editor.UI")
 		CHECK(editor.Host->MaxFrameRate == 0);
 		editor.Run("play.pause", { { "paused", true } });
 		editor.Frames(1, 1.0f);
-		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+		CHECK(editor.Host->MaxFrameRate == EditorFrameRate::c_DefaultIdleFrameRate);
 		// play.step answers once its steps ran (Run would wait for that): the runner keeps it pending while the frames step.
 		bool stepped = false;
 		editor.Layer->GetCommandRunner().Run(editor.Context(), editor.Layer->GetCommands(), "play.step", { { "frames", 5 } },
@@ -645,7 +665,7 @@ TEST_SUITE("Editor.UI")
 		REQUIRE(editor.FramesUntil([&stepped]() { return stepped; }));
 		editor.Run("play.stop");
 		editor.Frames(1, 1.0f);
-		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+		CHECK(editor.Host->MaxFrameRate == EditorFrameRate::c_DefaultIdleFrameRate);
 
 		// Commands that take frames run at the full rate.
 		bool waited = false;
@@ -655,13 +675,13 @@ TEST_SUITE("Editor.UI")
 		CHECK(editor.Host->MaxFrameRate == 0);
 		editor.Frames(4, 1.0f);
 		CHECK(waited);
-		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+		CHECK(editor.Host->MaxFrameRate == EditorFrameRate::c_DefaultIdleFrameRate);
 
 		// editor.status reports it.
 		const nlohmann::json status = editor.Run("editor.status", { { "sections", { "editor" } } });
 		const nlohmann::json& frameRate = status["editor"]["frameRate"];
 		CHECK(frameRate["idle"] == true);
-		CHECK(frameRate["cap"] == EditorLayer::c_IdleFrameRate);
+		CHECK(frameRate["cap"] == EditorFrameRate::c_DefaultIdleFrameRate);
 		CHECK(frameRate["throttling"] == true);
 		CHECK(frameRate["average"].get<double>() > 0.0);
 		CHECK(status["editor"]["uiScale"] == 1.0);
@@ -669,15 +689,163 @@ TEST_SUITE("Editor.UI")
 		CHECK(status["editor"]["window"].is_null());
 	}
 
-	TEST_CASE("Scripted and frame-limited editors are never throttled")
+	TEST_CASE("Scripted and frame-limited editors ignore the frame rate preferences")
 	{
 		EditorOptions options;
 		options.MaxFrames = 1000;
 		HarnessEditor editor({}, options);
 		CHECK_FALSE(editor.Layer->IsThrottlingEnabled());
+		SetFrameRatePreferences(editor, { { "IdleAfterSeconds", 0.2 }, { "IdleFrameRate", "15" }, { "UnfocusedIdleFrameRate", "5" },
+			{ "ActiveFrameRate", "60" } });
 		editor.Frames(3, 1.0f);
 		CHECK_FALSE(editor.Layer->IsIdle());
 		CHECK(editor.Host->FrameRateChanges == 0);
+	}
+
+	TEST_CASE("A longer idle delay holds the full rate that long")
+	{
+		HarnessEditor editor;
+		SetFrameRatePreferences(editor, { { "IdleAfterSeconds", 2.0 } });
+		editor.Frames(2);
+		editor.Harness.MoveMouse(ImVec2(400.0f, 300.0f));
+		editor.Frames(1);
+		editor.Frames(1, 1.5f);
+		CHECK(editor.Host->MaxFrameRate == 0);
+		CHECK_FALSE(editor.Layer->IsIdle());
+		editor.Frames(1, 0.6f);
+		CHECK(editor.Host->MaxFrameRate == EditorFrameRate::c_DefaultIdleFrameRate);
+		CHECK(editor.Layer->IsIdle());
+	}
+
+	TEST_CASE("Idle after 0 never idles, and lifts an idle cap at once")
+	{
+		HarnessEditor editor;
+		editor.Frames(2);
+		editor.Frames(1, 1.0f);
+		REQUIRE(editor.Host->MaxFrameRate == EditorFrameRate::c_DefaultIdleFrameRate);
+		SetFrameRatePreferences(editor, { { "IdleAfterSeconds", 0.0 } });
+		editor.Frames(1);
+		CHECK(editor.Host->MaxFrameRate == 0);
+		// Ten seconds without input, focused and in the background.
+		editor.Frames(10, 1.0f);
+		CHECK(editor.Host->MaxFrameRate == 0);
+		editor.Host->WindowFocused = false;
+		editor.Frames(3, 1.0f);
+		CHECK(editor.Host->MaxFrameRate == 0);
+		CHECK_FALSE(editor.Layer->IsIdle());
+		editor.Host->WindowFocused = true;
+	}
+
+	TEST_CASE("An active cap applies while busy, but steps and waiting commands run uncapped")
+	{
+		ScopedAudioEngine audio;
+		REQUIRE(audio.Initialized);
+		HarnessEditor editor;
+		SetFrameRatePreferences(editor, { { "ActiveFrameRate", "60" } });
+		editor.Frames(2);
+		editor.Harness.MoveMouse(ImVec2(400.0f, 300.0f));
+		editor.Frames(1);
+		CHECK(editor.Host->MaxFrameRate == 60);
+		editor.Run("play.start");
+		editor.Frames(1, 1.0f);
+		CHECK(editor.Host->MaxFrameRate == 60);
+		// Steps of a paused game run uncapped (an active cap applied whenever busy would read 60 here).
+		editor.Run("play.pause", { { "paused", true } });
+		editor.Frames(1, 1.0f);
+		bool stepped = false;
+		editor.Layer->GetCommandRunner().Run(editor.Context(), editor.Layer->GetCommands(), "play.step", { { "frames", 5 } },
+			[&stepped](const EditorCommandResult& result) { stepped = result.Success; });
+		editor.Frames(1, 1.0f);
+		CHECK(editor.Host->MaxFrameRate == 0);
+		REQUIRE(editor.FramesUntil([&stepped]() { return stepped; }));
+		editor.Frames(1, 1.0f);
+		CHECK((editor.Host->MaxFrameRate == 60 || editor.Host->MaxFrameRate == EditorFrameRate::c_DefaultIdleFrameRate));
+		editor.Run("play.stop");
+		// A command that waits for frames runs uncapped while pending.
+		bool waited = false;
+		editor.Layer->GetCommandRunner().Run(editor.Context(), editor.Layer->GetCommands(), "editor.wait", { { "frames", 3 } },
+			[&waited](const EditorCommandResult& result) { waited = result.Success; });
+		editor.Frames(1, 1.0f);
+		CHECK(editor.Host->MaxFrameRate == 0);
+		editor.Frames(4, 1.0f);
+		CHECK(waited);
+		// Idle still lowers it.
+		CHECK(editor.Host->MaxFrameRate == EditorFrameRate::c_DefaultIdleFrameRate);
+	}
+
+	TEST_CASE("Idle rates in front and in the background follow the preferences")
+	{
+		HarnessEditor editor;
+		SetFrameRatePreferences(editor, { { "IdleFrameRate", "15" }, { "UnfocusedIdleFrameRate", "5" } });
+		editor.Frames(2);
+		editor.Frames(1, 1.0f);
+		CHECK(editor.Host->MaxFrameRate == 15);
+		editor.Host->WindowFocused = false;
+		editor.Frames(1);
+		CHECK(editor.Host->MaxFrameRate == 5);
+		editor.Host->WindowFocused = true;
+	}
+
+	TEST_CASE("Frame rate preferences refuse values outside their choices and change nothing")
+	{
+		HarnessEditor editor;
+		editor.Frames(2);
+		editor.Frames(1, 1.0f);
+		const uint64_t version = editor.Context().GetPreferences().GetVersion();
+		const uint32_t cap = editor.Host->MaxFrameRate;
+		for (const nlohmann::json& refused : { nlohmann::json { { "IdleFrameRate", "1" } }, nlohmann::json { { "ActiveFrameRate", "1000" } },
+			nlohmann::json { { "IdleAfterSeconds", -1.0 } }, nlohmann::json { { "IdleAfterSeconds", 3601.0 } } })
+		{
+			CAPTURE(refused.dump());
+			nlohmann::json value = c_DefaultFrameRatePreferences;
+			value.update(refused);
+			const EditorCommandResult result = editor.Layer->GetCommands().Execute(editor.Context(), "preferences.set",
+				{ { "section", EditorFrameRate::c_SettingsSection }, { "value", value } });
+			CHECK_FALSE(result.Success);
+			CHECK(result.ErrorKind == EditorCommandError::InvalidParameters);
+		}
+		editor.Frames(1);
+		CHECK(editor.Context().GetPreferences().GetVersion() == version);
+		CHECK(editor.Host->MaxFrameRate == cap);
+		// Reset gives the defaults back.
+		SetFrameRatePreferences(editor, { { "IdleFrameRate", "15" } });
+		editor.Run("preferences.set", { { "section", EditorFrameRate::c_SettingsSection }, { "reset", true } });
+		CHECK(EditorFrameRate::GetPolicy(editor.Context().GetPreferences()) == EditorFrameRate::Policy());
+	}
+
+	TEST_CASE("editor.status reports the frame rate preferences, and editor.perf the frame intervals")
+	{
+		HarnessEditor editor;
+		editor.Frames(2);
+		nlohmann::json frameRate = editor.Run("editor.status", { { "sections", { "editor" } } })["editor"]["frameRate"];
+		CHECK(frameRate["idleAfterSeconds"] == 0.5);
+		CHECK(frameRate["idleFrameRate"] == 30);
+		CHECK(frameRate["unfocusedIdleFrameRate"] == 10);
+		CHECK(frameRate["activeFrameRate"] == 0);
+		SetFrameRatePreferences(editor, { { "IdleAfterSeconds", 3.0 }, { "IdleFrameRate", "20" }, { "UnfocusedIdleFrameRate", "15" },
+			{ "ActiveFrameRate", "120" } });
+		editor.Frames(1);
+		frameRate = editor.Run("editor.status", { { "sections", { "editor" } } })["editor"]["frameRate"];
+		CHECK(frameRate["idleAfterSeconds"] == 3.0);
+		CHECK(frameRate["idleFrameRate"] == 20);
+		CHECK(frameRate["unfocusedIdleFrameRate"] == 15);
+		CHECK(frameRate["activeFrameRate"] == 120);
+
+		// Profiled frames 2 ms apart (the harness's frames are not profiled by themselves): editor.perf's interval says so.
+		FrameProfiler& profiler = FrameProfiler::Get();
+		profiler.Reset();
+		for (int frame = 0; frame < 10; frame++)
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+			profiler.BeginFrame();
+			editor.Frames(1);
+			profiler.EndFrame(0.001);
+		}
+		const nlohmann::json interval = editor.Run("editor.perf", { { "frames", 8 } })["interval"];
+		for (const char* key : { "avgMs", "p50Ms", "p95Ms", "maxMs" })
+			CHECK_MESSAGE(interval.contains(key), key);
+		CHECK(interval["p50Ms"].get<double>() >= 2.0);
+		profiler.Reset();
 	}
 
 	TEST_CASE("The status bar's pills fit side by side in a narrow window: compact at 150% while all show, full again with room")
@@ -833,7 +1001,7 @@ TEST_SUITE("Editor.UI")
 		RpcClient client;
 		REQUIRE_MESSAGE(client.Connect(found[0].Address, found[0].Port, found[0].Token, std::chrono::milliseconds(5000)), client.GetLastError());
 		editor.Frames(1, 1.0f);
-		REQUIRE(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+		REQUIRE(editor.Host->MaxFrameRate == EditorFrameRate::c_DefaultIdleFrameRate);
 		CHECK(editor.GetPillColor("Status.Automation") == ToColor(colors.Info)); // A client is connected
 
 		// A tool's request: the editor answers it in its frames, at the full rate, and stays there for a second.
@@ -845,7 +1013,7 @@ TEST_SUITE("Editor.UI")
 		editor.Frames(1, 0.5f);
 		CHECK(editor.Host->MaxFrameRate == 0);
 		editor.Frames(1, 0.6f);
-		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+		CHECK(editor.Host->MaxFrameRate == EditorFrameRate::c_DefaultIdleFrameRate);
 		client.Close();
 	}
 
@@ -854,7 +1022,7 @@ TEST_SUITE("Editor.UI")
 		HarnessEditor editor({}, WithFeatureProject("EditorUILoading"));
 		editor.Frames(2);
 		editor.Frames(1, 1.0f);
-		REQUIRE(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+		REQUIRE(editor.Host->MaxFrameRate == EditorFrameRate::c_DefaultIdleFrameRate);
 
 		EditorAssetManager* assets = editor.Context().GetAssetManager();
 		REQUIRE(assets);
@@ -874,7 +1042,7 @@ TEST_SUITE("Editor.UI")
 		CHECK(editor.Host->MaxFrameRate == 0);
 		REQUIRE(editor.FramesUntil([&]() { return assets->GetAssetState(unloaded) != AssetState::Loading; }));
 		editor.Frames(1, 1.0f);
-		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+		CHECK(editor.Host->MaxFrameRate == EditorFrameRate::c_DefaultIdleFrameRate);
 	}
 
 	TEST_CASE("The assets pill turns red when an asset fails to load")
@@ -926,7 +1094,7 @@ TEST_SUITE("Editor.UI")
 
 		// A running build keeps the frame rate up, also without a command waiting for it.
 		editor.Frames(1, 1.0f);
-		REQUIRE(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+		REQUIRE(editor.Host->MaxFrameRate == EditorFrameRate::c_DefaultIdleFrameRate);
 		std::string error;
 		REQUIRE_MESSAGE(editor.Context().BuildScripts(&error), error);
 		editor.Frames(1, 1.0f);
@@ -934,7 +1102,7 @@ TEST_SUITE("Editor.UI")
 		CHECK(editor.Host->MaxFrameRate == 0);
 		REQUIRE(editor.FramesUntil([&builder]() { return !builder.IsRunning(); }));
 		editor.Frames(1, 1.0f);
-		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
+		CHECK(editor.Host->MaxFrameRate == EditorFrameRate::c_DefaultIdleFrameRate);
 	}
 
 	TEST_CASE("The scripts pill names the loaded module and counts its classes")

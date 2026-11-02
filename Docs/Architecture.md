@@ -810,7 +810,10 @@ Windowed applications are paced by vsync when it is on (`WindowSpecification::VS
 headless ones by the cap alone, which the editor and the runtime set to 60 (`MaxFrameRate`,
 `StrataEditor/src/EditorApplication.cpp`, `RuntimeApplication.cpp`). The cap is the application's `FramePacer`
 (`Core/Timer.h`) and can change while it runs (`Application::SetMaxFrameRate`; setting the current rate keeps the frame
-schedule): the editor lowers it while it is idle (see [Editor](#editor)), and a windowed runtime caps itself at 60 while
+schedule). It waits with `Platform::SleepUntil`: on Windows a high-resolution waitable timer of the thread's own, since the
+ordinary sleep waits for the system's 15.6 ms timer tick (a 120 Hz cap then ran 20% slow and a 60 Hz one alternated long
+and short frames: `Perf.FramePacer`), never `timeBeginPeriod`, which changes the whole system's timer. The editor
+lowers it while it is idle and caps it while active as the person's `Editor.FrameRate` preferences say (see [Editor](#editor)), and a windowed runtime caps itself at 60 while
 no scene plays (`GameRuntime::GetFrameRateCap`: the cleared frames of a game loading its start scene left the loading
 threads no CPU at 900 a second) and goes back to the game's pacing once one does. The pacer's wait comes after step 8, so
 `Application::GetLastFrameWorkTime` leaves it out as well: a capped frame rate changes the rate, not the cost of a
@@ -878,7 +881,10 @@ also records how busy the job system's worker, I/O and background threads were s
 read without stopping it).
 `Summarize` gives mean, nearest-rank 50th and 95th percentiles and maximum per stage (every series in one allocation, each
 reordered in place by `ComputeStatsInPlace`; a series of equal samples, such as a stage that did not run, needs no
-search); frame listeners
+search). `TakeSnapshot(newestFrame)` copies the frames still in the ring up to that one, with the stage tables, the GPU
+expectation and the job threads, into a `FrameProfileSnapshot`: a value that recording on, a reset or new stages leave
+alone, with the profiler's accessors (`GetFrame`, `GetStageName`...) and the same `Summarize` (one template over a record
+source serves both). Frame listeners
 (`AddFrameListener`) receive every recorded frame. The editor reports it through `editor.perf`, the Performance panel and
 the status bar's frame pill (see [Editor](#editor));
 `StrataRuntime --perf-log` writes it as CSV (`Runtime/FramePerfLog`, see
@@ -3245,8 +3251,9 @@ is the `strata-scripting` skill. The layers:
   fonts' Private Use Area, and behind them the system's fonts for Chinese, Japanese and Korean, read on an I/O thread)
   and the widget kit (`UI/Widgets`), whose widgets record their rectangles in `UI/ItemProbe`. Rules for UI code:
   DeveloperGuide.md, "Editor UI rules". **Idle throttling**: after drawing, `EditorLayer::UpdateFrameRate` sets the cap
-  to 0 (full rate) while anything happens and to 30 (10 unfocused) frames per second otherwise; headless, `--frames` and
-  command-script runs are never throttled. The frame time shown (status bar, viewport stats, `editor.status`) is
+  from the person's `Editor.FrameRate` preferences: the active rate (unlimited by default) while anything happens, the
+  idle rate (30, 10 unfocused by default) otherwise, never idle with `IdleAfterSeconds` 0, and uncapped while steps,
+  commands or automation requests are pending; headless, `--frames` and command-script runs are never throttled. The frame time shown (status bar, viewport stats, `editor.status`) is
   `Application::GetLastFrameWorkTime` averaged over 60 frames: a frame's CPU time without the waits for the GPU, the
   display and the pacer, which panels get in `EditorPanelContext::Frame`. **Instruments**: the Streaming panel
   (`Panels/StreamingPanel`) and the Performance panel (`Panels/PerformancePanel`) are closed until the status bar's
@@ -3285,8 +3292,12 @@ is the `strata-scripting` skill. The layers:
   stage self times of the last 600 frames (newest at the right, untimed work on top, reference lines at 16.7 and 33.3
   ms), scaled to the 95th percentile frame (taller frames are cut at the top), marks spikes (frames over twice the
   median and a 60 FPS frame), explains the frame under the mouse, lists per-stage statistics under the frame's totals
-  (frozen under the header) and copies `editor.perf`'s JSON (Copy as JSON); its statistics, and the table's text with
-  them, are made four times a second, and each strip sorts out the stages it stacks once per frame drawn, not per column
+  (frozen under the header) and copies `editor.perf`'s JSON (Copy as JSON); **Pause** (or Space while the panel has the
+  keyboard focus and ImGui's navigation cursor is hidden, so a key press never also presses a button) holds the timeline,
+  its tooltip (a still mouse stays on one frame), the summary, the table and Copy as JSON on a `FrameProfileSnapshot`
+  taken once the GPU times of the frames on screen at the click arrived (at most `c_MaxGPULatencyFrames` later; a reset
+  meanwhile resumes instead), while the profiler, `editor.perf`, `--perf-log` and the status bar stay live; hiding the
+  panel resumes it and frees the copy. Its statistics, and the table's text with them, are made four times a second, and each strip sorts out the stages it stacks once per frame drawn, not per column
   (the other strip's stages cost its 600 columns nothing). While GPU times arrive (or are expected) a GPU strip under the timeline stacks the GPU stages of the same frames
   at the same scale (frames without GPU times stay blank), and the table ends with a GPU section: what bounds the frames
   (`PerformancePanel::DescribeBound`: GPU-bound, CPU-bound, capped or unknown, by `FrameBound`), the GPU's busy time and
@@ -3870,7 +3881,8 @@ is the `strata-scripting` skill. The layers:
   the command finished). While nothing of this shows the panel does no work for it, and only the fade keeps the editor at
   its full frame rate (`IsAnimating`, from the clock, so a viewport hidden mid-fade does not keep it there).
 - **Viewport** (`EditorViewport.h`, `ViewportRenderer.h`). `EditorViewport` holds the editor camera (and the cameras of
-  the project's other scenes), the settings and three `ViewportRenderer`s, each with render targets of its own size: the
+  the project's other scenes), the settings, the placement preview of an asset dragged over the Scene view
+  (`PlacementPreview`) and three `ViewportRenderer`s, each with render targets of its own size: the
   Scene view's, the Game view's (created on first use; about 72 MB of targets at 1920 x 1080, freed while the Game view is
   hidden or closed) and the captures'. Two panels show them, tabs of one dock node: the Scene view (`ViewportPanel`, id
   `Viewport`) passes `ViewportCameraSource::Editor`, the editor camera on the edited scene or the running one (picking,
@@ -3933,20 +3945,25 @@ drawn at each level chosen by errors (`StreamingViewStats::MaxErrorPixelsPerLOD`
   the mesh renderers of a scene: the scene's `RenderScene` (synced first) answers which boxes lie along the ray (its
   spatial index, asked for a thin prism of planes around the segment), nearest first, and each is hit on its loaded mesh's
   triangles (positions and indices stay on the CPU; submesh bounds skip what the ray misses) or, while the mesh is not
-  loaded, on its bounds; the entities being placed (and their children) are left out. `EditorPlacement` turns that into
-  where content goes: `FindPivotSurface` (what lies under the view's pivot, the camera's target: a ray straight down from
-  just above it, so a roof over the pivot is no surface under it; else the ray through the view's center, else the target),
-  `FindSurfaceAt` and `CastAt` (a cursor's ray, else the pivot's surface), and `RestOn` (the translation that makes a box at
-  the entity's origin touch the surface with its side facing it). The Hierarchy's create menus (the Entity menu too) put
-  new top-level entities under the pivot, resting on the surface by their mesh's bounds (`GetMeshBounds`: the loaded
-  mesh's, else the recorded ones), and send the translation with `entity.create`. Prefabs and models rest by the bounds of
-  what they draw around their root's origin (`GetPlacementBounds`: `EditorContext::GetAssetBounds`'s measurement, made
-  while the asset is dragged over the viewport, else `GetTemplateBounds`: instantiated into a scene of their own, the mesh
-  bounds of the root's subtree with their transforms, skinned meshes in the rest pose once their skeleton is resident,
-  never waiting for it): dropped into the viewport on the cursor's surface, from the Content
-  Browser's, the Asset tab's Add to Scene or a drop on the Hierarchy's empty space under the pivot
-  (`EditorActions::InstantiatePrefab`, `prefab.instantiate` with the translation). A material dropped into the viewport
-  goes to the mesh under the cursor (`component.set`, one undo step). `entity.dropToGround` (End, and Edit > Drop to Ground) moves each
+  loaded, on its bounds; the entities being placed (and their children) are left out; meshes come from the scene's asset
+  manager. `EditorPlacement` turns that into where content goes: `Place` (where an asset with given bounds lands for a
+  request: the surface a ray hits, else the grid plane y = 0 within 500 m, else in front of the camera; or a given point;
+  snapped along the surface, rotated and scaled), `MakeViewRay` (a view camera's ray through a point of its image,
+  camera-relative), `MakeRayRequest` (the one request `asset.place {ray}` and the drag's preview both build),
+  `FindPivotSurface` (what lies under the view's pivot, the camera's target: a ray straight down from just above it, so a
+  roof over the pivot is no surface under it; else the ray through the view's center, else the target) and `RestOn` (the
+  translation that makes a box at the entity's origin touch the surface with its side facing it). The Hierarchy's create
+  menus (the Entity menu too) put new top-level entities under the pivot, resting on the surface by their mesh's bounds
+  (`GetMeshBounds`: the loaded mesh's, else the recorded ones), and send the translation with `entity.create`. Prefabs
+  and models rest by the bounds of what they draw around their root's origin (`EditorContext::GetAssetBounds`'s
+  measurement: instantiated into a scene of their own, the mesh bounds of the root's subtree with their transforms,
+  skinned meshes in the rest pose once their skeleton is resident, never waiting for it; pending results are kept until
+  something they wait for is published): from the Content Browser's and the Asset tab's Add to Scene or a drop on the
+  Hierarchy's empty space under the pivot (`EditorActions::InstantiatePrefab`, `prefab.instantiate` with the
+  translation). An asset dragged over the Scene view feeds `PlacementPreview` (owned by `EditorViewport`), which the Scene
+  view's renderer alone draws as a box ghost (`DebugDraw` lines after TAA) and whose drop runs `asset.place` with the
+  same request, so a person's drop and an agent's call land alike; a material dropped there goes to the mesh under the
+  pointer (`component.set`, one undo step). `entity.dropToGround` (End, and Edit > Drop to Ground) moves each
   entity straight down by the nearest hit of rays from the bottom of its bounds (with its children; the center and four
   inset corners), in one undo step.
 - **Script builds** (`ScriptBuild.h`). `ScriptBuilder` runs CMake configure and build as child processes (one build at a

@@ -26,6 +26,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <system_error>
+#include <thread>
 #include <time.h>
 #include <unistd.h>
 #include <vector>
@@ -489,6 +490,11 @@ namespace Strata
 		const std::string threadName(name.substr(0, 15));
 		pthread_setname_np(pthread_self(), threadName.c_str());
 #endif
+	}
+
+	void Platform::SleepUntil(std::chrono::steady_clock::time_point deadline)
+	{
+		std::this_thread::sleep_until(deadline);
 	}
 
 	bool Platform::SetCurrentThreadPriority(ThreadPriority priority)

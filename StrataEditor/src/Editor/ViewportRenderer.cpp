@@ -3,6 +3,7 @@
 #include "Editor/EditorContext.h"
 #include "Editor/EditorWorld.h"
 #include "Editor/EditorViewport.h"
+#include "Editor/PlacementPreview.h"
 #include "Editor/SceneEdit.h"
 
 #include <Strata/Asset/AssetManager.h>
@@ -47,6 +48,24 @@ namespace Strata
 		// The editor camera asked for by name is always a view for working on the scene (the Scene view while the game
 		// plays); the automatic choice's fallback while playing shows the running game as it is.
 		view.EditorView = source == ViewportCameraSource::Editor || context.GetSceneState() != SceneState::Play;
+		return view;
+	}
+
+	std::optional<ViewportView> ResolveSceneView(EditorContext& context, float aspectRatio)
+	{
+		const ViewportSettings& settings = context.GetViewport().GetSettings();
+		if (settings.PilotGameCamera)
+		{
+			if (std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Scene, aspectRatio))
+			{
+				view->EditorOverlays = true;
+				view->EditorView = true;
+				return view;
+			}
+		}
+		std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Editor, aspectRatio);
+		if (view && settings.PilotGameCamera)
+			view->Notice = "The scene has no primary camera: showing the editor camera";
 		return view;
 	}
 
@@ -160,7 +179,7 @@ namespace Strata
 	}
 
 	bool ViewportRenderer::Render(EditorContext& context, const glm::uvec2& size, const ViewportView& view, const ViewportSettings& settings, bool overlays,
-		const RendererQualitySettings& quality)
+		const RendererQualitySettings& quality, const PlacementPreview* placement)
 	{
 		const Ref<Scene>& scene = context.GetActiveScene();
 		m_Renderer->SetViewportSize(size.x, size.y);
@@ -240,9 +259,22 @@ namespace Strata
 			if (settings.CellBounds)
 				DrawCellBounds(context, view);
 		}
+		// The ghost of a dragged asset: lines over the finished image, like the gizmos (no history, no entity id).
+		const bool ghost = overlays && placement && (placement->GetKind() == PlacementPreview::Kind::Place || placement->GetKind() == PlacementPreview::Kind::Material);
+		if (ghost)
+			placement->Draw(m_DebugDraw, settings.Placement);
 		// The debug view tints what is drawn and boxes what cannot be (meshes that are not there).
 		m_StreamingView.Build(*scene, settings.DebugView, view.Camera, m_Renderer->GetLODCriteria(), settings.DebugColors, m_DebugDraw);
 		options.EntityTints = m_StreamingView.GetTints();
+		if (ghost && placement->GetKind() == PlacementPreview::Kind::Material && placement->GetTarget())
+		{
+			// The material's target first: an entity's first tint wins over the debug view's.
+			const std::span<const SceneEntityTint> debugTints = m_StreamingView.GetTints();
+			m_PlacementTints.clear();
+			m_PlacementTints.push_back(SceneEntityTint { placement->GetTarget(), settings.Placement.Tint });
+			m_PlacementTints.insert(m_PlacementTints.end(), debugTints.begin(), debugTints.end());
+			options.EntityTints = m_PlacementTints;
+		}
 		options.ShowMotionVectors = settings.DebugView == ViewportDebugView::Motion;
 		options.ShowShadowView = settings.DebugView == ViewportDebugView::Shadows;
 		options.ShadowViewColors = settings.DebugColors.ShadowRatio;

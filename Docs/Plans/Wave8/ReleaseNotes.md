@@ -21,6 +21,25 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   scene with the default collision layers (since 0.6.0) until a project setting changed; it takes the project's layers
   and fixed rate as the project opens.
 
+**Lane Editor (S0.7: placing assets).**
+
+- Editor: drag a prefab, model or mesh from the Content Browser into the Scene view: a ghost box shows where it will land,
+  dimmed where nothing is under the pointer (then it lands on the grid, or in front of the camera). A material shows the
+  mesh it would go to. Snap applies, Ctrl inverts it, Escape cancels. Assets that cannot be dropped say so at the pointer.
+- AI agents: `scene.raycast` (what a ray or a Scene view pixel hits) and `asset.place` (place a prefab, model or mesh
+  where it lands, in one undo step), in the `scene` toolset.
+
+**Lane Editor (S0.4, S0.5: the frame rate and the Performance pause).**
+
+- Editor: File > Preferences > Frame Rate: how long until the editor idles (0: never), how fast it redraws while idle, in
+  front and in the background, and an optional cap while it is busy (240, 165, 144, 120, 90 or 60). The defaults are
+  0.7.0's.
+- Editor: frame-rate caps hold on Windows: the frame pacer waits on a high-resolution timer, where it waited for the
+  system's 15.6 ms tick (a 120 Hz cap ran 20% slow, a 60 Hz one alternated long and short frames).
+- Editor: Performance panel: Pause (or Space) holds the frame breakdown still so its frames can be read; the profiler,
+  `editor.perf` and the status bar keep measuring.
+- AI agents: `editor.perf` reports frame intervals (`interval`), `editor.status` the frame rate preferences.
+
 **Slang (S0.10)**
 
 - `Tools/LookDev.py compare` writes a signed difference image for every picture that differs (red where the new build
@@ -49,6 +68,13 @@ projects, the template and scenes or projects without the value get.
 | **Platform (S0.9)** | | | |
 | `input.*` durations in `seconds` before play starts | Checked against 1/60 s | Checked against the edited scene's step (the project's rate when it sets one), the step play will run | Nothing to do: while playing they always counted in the scene's step |
 | Code reading `SceneSettings::FixedTimestep` or `MaxFixedStepsPerFrame` for the step a scene runs | The scene's values | Still the scene's stored values, which a project rate overrides | Read `Scene::GetFixedTimestep` and `Scene::GetMaxFixedSteps` |
+| **Lane Editor (S0.7)** | | | |
+| A prefab dropped through Game camera | Under the editor camera's pivot | Under the pointer, as the scene's camera sees it | Turn Game camera off before dropping |
+| A drop where nothing is under the pointer | Under the view's pivot | On the grid plane (y = 0, within 500 m), else in front of the camera | Use Add to Scene, which places under the pivot |
+| A prefab with several top-level entities | Only the first moved to the drop | All move together, keeping their offsets | None needed: the template's layout is kept |
+| Dropping an asset the view cannot take | A Console warning | A label at the pointer, nothing logged | None |
+| **Lane Editor (S0.4)** | | | |
+| The editor's idle throttling | Constants: idle after 0.5 s, 30 frames per second, 10 in the background | The `Editor.FrameRate` preferences, with those defaults | Nothing to do |
 | **Slang (S0.10)** | | | |
 | The glslang submodule | `Strata/vendor/glslang` | gone: after pulling, the folder (about 900 MB, which git leaves) may be deleted | Keep the folder while you build commits from before 0.8.0 |
 | The shader compiler | glslang, built with the engine | Slang's release archive (25-64 MB), downloaded by the first configure into a per-user cache (`%LOCALAPPDATA%\Strata\Toolchains`, `~/.cache/strata/toolchains`, `~/Library/Caches/Strata/Toolchains`) and checked by its SHA-256 | Offline: download the archive `CMake/StrataSlang.cmake` names on another machine, extract it and configure with `-DSTRATA_SLANG_ROOT=<folder>` |
