@@ -153,6 +153,8 @@ namespace Strata
 		bool SampleJobs = true;
 	};
 
+	class FrameProfileSnapshot;
+
 	// An always-on timer of the main thread's frame stages. The thread that drives the frames (BeginFrame and EndFrame,
 	// Application::RunFrame) times stages with ST_PROFILE_STAGE scopes; scopes on other threads, and outside a frame, do
 	// nothing. Stages nest: each records its self time (the time of the stages nested in it excluded), so the stages of a
@@ -245,11 +247,19 @@ namespace Strata
 		uint32_t AddFrameListener(std::function<void(const FrameSample&)> listener, FrameListenerTiming timing = FrameListenerTiming::Immediate);
 		void RemoveFrameListener(uint32_t id);
 
+		// A copy of the frames still in the ring up to `newestFrame` (FrameSample::Index), newest first, with the stage tables,
+		// the GPU expectation and the job system's thread counts now: what the Performance panel shows while it is paused. Empty
+		// when `newestFrame` is older than every frame in the ring. Allocates once and copies (about 331 KB for a full ring
+		// of 600). The frame thread.
+		FrameProfileSnapshot TakeSnapshot(uint64_t newestFrame) const;
+
 		// Forgets the recorded frames (stages and listeners stay). GPU times recorded for frames before the reset are refused.
 		void Reset();
 		// How often Reset was called: GPU times are attached only to frames of the same reset count as their recording.
 		uint32_t GetResetCount() const { return m_ResetCount; }
 	private:
+		friend class FrameProfileSnapshot;
+
 		struct OpenStage
 		{
 			FrameStageID Stage = c_InvalidFrameStage;
@@ -294,7 +304,8 @@ namespace Strata
 		int64_t Now() const;
 		bool IsFrameThread() const { return std::this_thread::get_id() == m_FrameThread.load(std::memory_order_relaxed); }
 		JobSample SampleJobs() const;
-		FrameSample ToSample(const FrameRecord& record) const;
+		// A record as a sample whose stage spans have `stageCount` entries (valid while the record lives).
+		static FrameSample ToSample(const FrameRecord& record, uint32_t stageCount);
 		// The record of a frame still in the ring, or null.
 		FrameRecord* FindRecord(uint64_t frameIndex);
 		// Calls the WithGPU listeners for the frames they have not heard of, in order, while each one's GPU times are known,
@@ -336,6 +347,40 @@ namespace Strata
 		uint64_t m_NextGPUListenerFrame = 0; // The first frame the WithGPU listeners have not heard of
 		bool m_GPUTimesExpected = false;
 		uint32_t m_ResetCount = 0;
+	};
+
+	// A copy of a FrameProfiler's recorded frames taken at one moment (FrameProfiler::TakeSnapshot): what the Performance panel
+	// shows while it is paused. A value: the profiler recording on, being reset or registering stages changes nothing of it.
+	class FrameProfileSnapshot
+	{
+	public:
+		FrameProfileSnapshot() = default; // Holds no frame
+
+		uint32_t GetCapacity() const { return m_Capacity; }   // The ring's capacity when taken (the timeline's columns)
+		uint32_t GetRecordedFrameCount() const { return static_cast<uint32_t>(m_Records.size()); } // Frames held
+		FrameSample GetFrame(uint32_t age) const;             // Age 0: the newest frame held; spans valid while the snapshot lives
+		uint64_t GetFirstFrameIndex() const;                  // FrameSample::Index of the oldest and the newest frame held (0 when empty)
+		uint64_t GetLastFrameIndex() const;
+		uint32_t GetStageCount() const { return m_StageCount; } // The stages registered when taken; later ones are not in it
+		const std::string& GetStageName(FrameStageID stage) const;
+		bool IsStageInWorkTime(FrameStageID stage) const;
+		FrameStageKind GetStageKind(FrameStageID stage) const;
+		bool AreGPUTimesExpected() const { return m_GPUTimesExpected; }
+		// FrameProfiler::Summarize over the frames held (the job system's thread counts as they were when taken).
+		FrameProfileSummary Summarize(uint32_t frames) const;
+	private:
+		friend class FrameProfiler;
+
+		std::vector<FrameProfiler::FrameRecord> m_Records; // Newest first
+		uint32_t m_Capacity = 0;
+		uint32_t m_StageCount = 0;
+		std::array<std::string, FrameProfiler::c_MaxStages> m_StageNames;
+		std::array<bool, FrameProfiler::c_MaxStages> m_StageInWorkTime = {};
+		std::array<FrameStageKind, FrameProfiler::c_MaxStages> m_StageKinds = {};
+		uint32_t m_WorkerThreads = 0;
+		uint32_t m_IOThreads = 0;
+		uint32_t m_BackgroundThreads = 0;
+		bool m_GPUTimesExpected = false;
 	};
 
 	// Times a stage of the frame for as long as it lives (see FrameProfiler; ST_PROFILE_STAGE makes one).
