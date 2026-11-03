@@ -665,6 +665,18 @@ namespace Strata
 		};
 		static_assert(sizeof(LightingViewParameters) == 80);
 
+		// Global illumination: world-space radiance cascades over a voxel clipmap (Renderer/GlobalIlluminationLayout.h,
+		// VoxelClipmap.h; Docs/DeveloperGuide.md, "Global illumination"). Include/GlobalIllumination.slang mirrors them as ST_GI_*.
+		constexpr uint32_t c_GIScrollVoxels = 4;        // A level's window moves in steps of this many voxels: fewer, larger slabs
+		constexpr uint32_t c_GILevelGuardVoxels = 2;    // A level is never sampled this close to its window's (or valid box's) faces
+		constexpr uint32_t c_GILevelBlendVoxels = 8;    // Samples blend into the next level over this many voxels (by distance from the camera)
+		constexpr uint32_t c_GIRegionBrick = 4;         // Changed boxes snap outward to bricks of this many voxels
+		constexpr uint32_t c_GIMaxRegionVoxels = 64;    // A region is at most this many voxels a side (slabs and windows are cut so)
+		// Windows are addressed from an anchor (a multiple of c_GIAnchorVoxels voxels), kept while the camera stays within
+		// c_GIAnchorMeters of it: what voxelizes relative to the same anchor gives the same voxels whatever the camera.
+		constexpr int64_t c_GIAnchorVoxels = 1024;
+		constexpr double c_GIAnchorMeters = 1000.0;
+
 	}
 
 }
