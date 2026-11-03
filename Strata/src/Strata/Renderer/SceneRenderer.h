@@ -425,6 +425,10 @@ namespace Strata
 		// and no target (Render fails with one). Tools that read the scene's light back (the reflection probe bake) set it with
 		// a forced PreExposure, which they divide out.
 		bool HDROutput = false;
+		// A reflection probe's view (the bake sets it): no sun disk in the atmosphere's background. The directional light lights
+		// the scene; a disk in a capture would light surfaces again from the probe, unshadowed and box-projected to the wrong
+		// place. (The procedural sky's disk is part of its environment cube, as for every surface's image light.)
+		bool ProbeCapture = false;
 		// The time since this renderer's previous frame that automatic exposure adapts over and the sun cascades' fit counts its
 		// holds in (ShadowFitTracker); unset, the wall clock between its frames (at most 0.25 s, so pauses do not turn into one
 		// huge step). Tests and tools that step time, and tests that compare two renderers' frames, set it.

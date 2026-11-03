@@ -80,6 +80,21 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   every CI job, CI validates every embedded module with spirv-val and converts it to Metal, and new shaders follow the
   rules of `Docs/DeveloperGuide.md` ("Shaders").
 
+**Reflections (R1)**
+
+- Screen-space reflections at High and Ultra no longer show a fixed screen-door pattern on rough metal: neighboring
+  pixels' rays are averaged over 5x5 with weights that are the same over a plane at any angle, which cancels the march's
+  offsets exactly (about two pixels softer on mirrors at 3840x2160).
+- Reflections fade only where the reflected ray would leave the screen, not within 10% of every side: no more sky
+  wedges at the sides of wet ground or hard cuts across a metal sheet (Medium too).
+- Ambient occlusion no longer darkens what screen-space reflections found: no dark smudges beside objects on wet ground
+  (Medium too). A material's occlusion map still darkens them.
+- Reflection probe bakes draw no sun disk into their captures: the sun lights the scene; a disk in a probe lit surfaces
+  again, unshadowed and in the wrong place.
+- Look-dev: the specular lab (`Scenes/Specular.stscene`, shots `lookdev.sheet`, `.wet`, `.tank` and more) and shots'
+  `Metrics` (noise, screen-locked pattern, bands) in `metrics.csv`; tests measure flicker in motion with one meter for the
+  wave (`Tests::MeasureFlicker`).
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and
@@ -115,8 +130,17 @@ projects, the template and scenes or projects without the value get.
 | **Slang (S0.10)** | | | |
 | The glslang submodule | `Strata/vendor/glslang` | gone: after pulling, the folder (about 900 MB, which git leaves) may be deleted | Keep the folder while you build commits from before 0.8.0 |
 | The shader compiler | glslang, built with the engine | Slang's release archive (25-64 MB), downloaded by the first configure into a per-user cache (`%LOCALAPPDATA%\Strata\Toolchains`, `~/.cache/strata/toolchains`, `~/Library/Caches/Strata/Toolchains`) and checked by its SHA-256 | Offline: download the archive `CMake/StrataSlang.cmake` names on another machine, extract it and configure with `-DSTRATA_SLANG_ROOT=<folder>` |
+| **Reflections (R1)** | | | |
+| Reflection probes baked under the atmosphere | Their capture holds the sun's disk (clamped to 65,000 nits) | Bakes draw no disk | Bake them again (Bake Reflection Probes, or `lighting.bakeProbes`) to lose the bright patch; nothing to keep |
+| Spatial reflections' resolve | 3x3 neighbors, depth-weighted | 5x5 neighbors, plane-weighted: no screen door, about two pixels softer on mirrors at 4K | None |
 
 ## Known issues
+
+**Reflections (R1)**
+
+- Screen-space reflections at High and Ultra still show ghost columns beside thin objects in front of a grazing metal
+  sheet, and the reflected top edges of walls stay slightly hatched: the crossing test with hit validation (the stream's
+  step 4) is not in this release's R1.
 
 **Lane Render**
 

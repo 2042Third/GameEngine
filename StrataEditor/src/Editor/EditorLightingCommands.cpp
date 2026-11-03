@@ -187,6 +187,7 @@ namespace Strata
 			SceneRenderOptions options;
 			options.HDROutput = true;
 			options.PreExposure = state.PreExposure;
+			options.ProbeCapture = true;
 			bool complete = true;
 			for (uint32_t face = 0; face < 6; face++)
 			{

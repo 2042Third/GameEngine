@@ -1,4 +1,5 @@
 #include "Renderer/SceneRendererTestUtils.h"
+#include "Renderer/TAATestUtils.h"
 #include "Renderer/TextureStreamingTestUtils.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
 #include "Strata/Renderer/RendererComponents.h"
@@ -616,6 +617,65 @@ TEST_SUITE("GPU.SceneRenderer.ReflectionProbes")
 		scene.reset();
 		manager.reset();
 		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("ProbeCapture draws no sun disk and changes nothing else")
+	{
+		// A reflection probe's view (SceneRenderOptions::ProbeCapture): the atmosphere's background without the sun's disk, which
+		// in a capture would light surfaces again, unshadowed and in the wrong place, while the directional light lights them.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().Source = SkyLightSource::Atmosphere;
+		const glm::vec3 travel = SunDirection(30.0f, 0.0f);
+		AddSun(scene, travel, 100000.0f, false);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f) - travel);
+		SceneRenderer renderer(ExactSpecification());
+		constexpr uint32_t c_DiskSize = 256;
+		renderer.SetViewportSize(c_DiskSize, c_DiskSize);
+		SceneRenderOptions options;
+		options.HDROutput = true;
+		options.PreExposure = 1e-5f; // The disk's 1e9 nits stay below the half floats' largest value
+		const auto render = [&](bool probeCapture)
+		{
+			options.ProbeCapture = probeCapture;
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+			do
+			{
+				REQUIRE(renderer.Render(scene, camera, nullptr, options));
+				gpu.GetDevice().WaitForIdle();
+			} while (!renderer.GetStats().EnvironmentLighting && std::chrono::steady_clock::now() < deadline);
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			return TAA::ReadHDR(renderer.GetHDRTexture());
+		};
+		const std::vector<glm::vec3> withDisk = render(false);
+		const std::vector<glm::vec3> withoutDisk = render(true);
+		const glm::vec2 sun = glm::vec2(ProjectToPixel(camera, camera.Position - travel * 100.0f, c_DiskSize)) + glm::vec2(0.5f);
+		uint32_t differingOutside = 0;
+		float sunWith = 0.0f;
+		float sunWithout = 0.0f;
+		for (uint32_t y = 0; y < c_DiskSize; y++)
+		{
+			for (uint32_t x = 0; x < c_DiskSize; x++)
+			{
+				const size_t pixel = static_cast<size_t>(y) * c_DiskSize + x;
+				const float distance = glm::length(glm::vec2(static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f) - sun);
+				if (distance > 6.0f)
+					differingOutside += withDisk[pixel] != withoutDisk[pixel] ? 1u : 0u;
+				else if (distance < 1.0f)
+				{
+					sunWith = std::max(sunWith, withDisk[pixel].r);
+					sunWithout = std::max(sunWithout, withoutDisk[pixel].r);
+				}
+			}
+		}
+		CAPTURE(sunWith);
+		CAPTURE(sunWithout);
+		CHECK(differingOutside == 0u);
+		CHECK(sunWith > 10.0f * sunWithout);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

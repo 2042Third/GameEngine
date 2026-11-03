@@ -792,4 +792,41 @@ TEST_SUITE("GPU.Editor.Lighting")
 		CHECK(stats.SunToSkyRatio >= 5.0f);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("A bake under the atmosphere draws no sun disk into its capture")
+	{
+		// The atmosphere's background draws the sun's disk, about 1e9 nits for the look-dev scene's 100,000 lux sun. In a capture
+		// it would light surfaces again from the probe, unshadowed and box-projected to the wrong place, while the directional
+		// light already lights them with its shadow: bakes draw no disk (SceneRenderOptions::ProbeCapture). The brightest sky
+		// near a sun 30 degrees up is of the order of 1e5 nits.
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		LightingGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GPUEditorBakeSunDisk") / "Game";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		harness.Run("entity.create", { { "name", "Sky" }, { "components", { { "SkyLight", { { "Source", "Atmosphere" } } } } } });
+		harness.Run("entity.create", { { "name", "Sun" }, { "components", { { "Transform", { { "Rotation", { -30, 30, 0 } } } },
+			{ "DirectionalLight", { { "Intensity", 100000 } } } } } });
+		const std::string probe = harness.Run("entity.create", { { "name", "Probe" }, { "components", {
+			{ "Transform", { { "Translation", { 0, 2, 0 } } } }, { "ReflectionProbe", { { "Extents", { 5, 5, 5 } } } } } } })["id"].get<std::string>();
+		harness.Run("scene.saveAs", { { "path", "Scenes/Open.stscene" } });
+		const nlohmann::json bake = harness.Bake();
+		const std::filesystem::path file = harness.GetAssetPath(FindProbe(bake, probe)["path"].get<std::string>());
+		const std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytes(file);
+		REQUIRE(bytes);
+		int width = 0;
+		int height = 0;
+		int channels = 0;
+		float* pixels = stbi_loadf_from_memory(bytes->data(), static_cast<int>(bytes->size()), &width, &height, &channels, 3);
+		REQUIRE(pixels != nullptr);
+		float brightest = 0.0f;
+		for (size_t index = 0; index < static_cast<size_t>(width) * height * 3; index++)
+			brightest = std::max(brightest, pixels[index]);
+		stbi_image_free(pixels);
+		CAPTURE(brightest);
+		CHECK(brightest > 1000.0f); // The sky is there
+		CHECK(brightest < 1e6f);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }

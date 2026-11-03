@@ -193,6 +193,7 @@ a probe shows the scene as it was baked (a day-night cycle or a moving door is n
 
 - **Box Projection** (on by default) makes reflections land where the walls are, as in a room; turn it off for open
   spaces, where what the probe saw is far away.
+- A bake does not draw the sun's disk into the picture: the sun already lights the scene, with its shadows.
 - **Blend Distance** fades the probe out over that many meters before its box's faces, into the sky's lighting or a
   weaker probe's. Where boxes overlap, the higher **Priority** wins, then the smaller box; two probes blend at most.
 - **Intensity** brightens or darkens what the probe shows.
@@ -211,7 +212,10 @@ without TAA, so reflections are sharp and need no history; at **Medium** (Strata
 and need TAA to smooth them; at **Low** there are none.
 
 - Only what is on screen can be reflected. Things behind the camera, beside the view or hidden behind others are not:
-  there the probes and the sky reflect as before. Reflections fade toward the screen's edges.
+  there the probes and the sky reflect as before. A reflection fades only where its ray would have gone on beyond the
+  screen's edge (over the last tenth of the screen before it leaves): a wall beside the edge that the ray reaches stays.
+- Ambient occlusion does not darken what these reflections found (they already see what blocks them); a material's own
+  occlusion map still does.
 - **Screen Space Reflections Max Roughness** (0.5): rougher surfaces get none, and they fade out over the last quarter
   below it. These reflections are sharp, so keep it low; matte materials (roughness near 1, as most low-poly kits use)
   show none at all.

@@ -3220,6 +3220,8 @@ namespace Strata
 			RecordMotionGrowth(commandList);
 		if (!UpdateEnvironment(scene, preview, frame, commandList))
 			degraded = true; // The atmosphere's tables could not be made (reported); the scene has no environment
+		if (options.ProbeCapture)
+			frame.SunDiskDirection.w = 0.0f; // No disk in a probe's capture (SceneRenderOptions::ProbeCapture)
 		SetHeightFog(scene, camera, frame);
 		if (!SetAerialPerspective(camera, frame))
 			degraded = true; // Reported; the frame is drawn without the haze
