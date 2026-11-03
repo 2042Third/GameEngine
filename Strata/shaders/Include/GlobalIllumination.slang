@@ -17,6 +17,7 @@
 #define ST_GI_MAX_TILES 32768u            // c_GIMaxTiles
 #define ST_GI_MASKED_OCCUPANCY 0.15       // c_GIMaskedOccupancy
 #define ST_GI_TWO_SIDED_SUM 0.5           // c_GITwoSidedSum
+#define ST_GI_SNAP_VOXELS (1.0 / 256.0)   // c_GISnapVoxels
 #define ST_GI_NORMAL_FIXED_POINT 256.0    // c_GINormalFixedPoint
 #define ST_GI_STEP_VOXELS 0.75            // c_GIStepVoxels
 

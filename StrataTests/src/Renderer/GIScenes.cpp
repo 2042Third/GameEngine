@@ -305,7 +305,8 @@ namespace Strata::Tests
 		return std::abs(glm::dot(normal, v0)) <= halfSize.x * std::abs(normal.x) + halfSize.y * std::abs(normal.y) + halfSize.z * std::abs(normal.z);
 	}
 
-	std::vector<glm::i64vec3> ReferenceVoxels(const Mesh& mesh, const glm::mat4& world, const glm::i64vec3& anchorVoxel, float voxelSize)
+	std::vector<glm::i64vec3> ReferenceVoxels(const Mesh& mesh, const glm::mat4& world, const glm::i64vec3& anchorVoxel, float voxelSize,
+		std::vector<glm::i64vec3>* outFacing)
 	{
 		const RenderData::AffineTransform rows = RenderData::AffineTransform::FromMatrix(world);
 		const glm::vec3 anchor = glm::vec3(glm::dvec3(anchorVoxel) * static_cast<double>(voxelSize));
@@ -324,14 +325,22 @@ namespace Strata::Tests
 				const glm::vec3 high = glm::max(glm::max(corners[0], corners[1]), corners[2]);
 				const glm::ivec3 first = glm::ivec3(glm::ceil(low)) - 1;
 				const glm::ivec3 last = glm::ivec3(glm::floor(high));
+				// The side the front faces (counter-clockwise; the test meshes are not mirrored).
+				const glm::vec3 facing = glm::cross(corners[1] - corners[0], corners[2] - corners[0]);
 				for (int z = first.z; z <= last.z; z++)
 				{
 					for (int y = first.y; y <= last.y; y++)
 					{
 						for (int x = first.x; x <= last.x; x++)
 						{
-							if (TriangleBoxOverlap(glm::vec3(x, y, z) + 0.5f, glm::vec3(0.5f), corners[0], corners[1], corners[2]))
-								voxels.push_back(anchorVoxel + glm::i64vec3(x, y, z));
+							const glm::vec3 center = glm::vec3(x, y, z) + 0.5f;
+							if (!TriangleBoxOverlap(center, glm::vec3(0.5f), corners[0], corners[1], corners[2]))
+								continue;
+							voxels.push_back(anchorVoxel + glm::i64vec3(x, y, z));
+							// Include/Voxelize.slang's IsVoxelBehind.
+							const float reach = glm::dot(facing, center - corners[0]) + 0.5f * (std::abs(facing.x) + std::abs(facing.y) + std::abs(facing.z));
+							if (outFacing && reach > 0.0f)
+								outFacing->push_back(anchorVoxel + glm::i64vec3(x, y, z));
 						}
 					}
 				}
@@ -340,6 +349,11 @@ namespace Strata::Tests
 		const auto less = [](const glm::i64vec3& a, const glm::i64vec3& b) { return std::tie(a.x, a.y, a.z) < std::tie(b.x, b.y, b.z); };
 		std::sort(voxels.begin(), voxels.end(), less);
 		voxels.erase(std::unique(voxels.begin(), voxels.end()), voxels.end());
+		if (outFacing)
+		{
+			std::sort(outFacing->begin(), outFacing->end(), less);
+			outFacing->erase(std::unique(outFacing->begin(), outFacing->end()), outFacing->end());
+		}
 		return voxels;
 	}
 

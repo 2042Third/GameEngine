@@ -211,8 +211,6 @@ namespace
 			[](const glm::i64vec3& a, const glm::i64vec3& b) { return std::tie(a.x, a.y, a.z) < std::tie(b.x, b.y, b.z); });
 	}
 
-}
-
 	// The CPU's count of the tiles the voxelizer lists for a mesh when it voxelizes every level's whole window: per level, per
 	// region of its window, the 8^3 tiles of each large triangle's bounds within the region that the triangle overlaps. A triangle is
 	// large when its whole bounds (not the region's part) hold more than 64 voxels.
@@ -281,6 +279,8 @@ namespace
 		return counts;
 	}
 
+}
+
 TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 {
 	TEST_CASE("A box voxelizes to its cells")
@@ -325,7 +325,9 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 			{
 				CAPTURE(level);
 				const float voxelSize = clipmap->GetLayout().Levels[level].VoxelSize;
-				const std::vector<glm::i64vec3> surface = ReferenceVoxels(*cube, world, clipmap->GetLevel(level).Anchor, voxelSize);
+				// The surface voxels, and those some face faces: a face on the grid has none behind it (they are inside the box).
+				std::vector<glm::i64vec3> facing;
+				const std::vector<glm::i64vec3> surface = ReferenceVoxels(*cube, world, clipmap->GetLevel(level).Anchor, voxelSize, &facing);
 				REQUIRE_FALSE(surface.empty());
 				const VoxelLevel voxels = ReadLevel(*renderer, level);
 				const glm::i64vec3 low = GlobalIllumination::GetVoxelIndex(glm::dvec3(position - 0.5f * placement.Scale), voxelSize) - int64_t(3);
@@ -335,6 +337,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 				uint32_t wrongInterior = 0;
 				uint32_t surfaceCount = 0;
 				uint32_t interiorCount = 0;
+				uint32_t behindCount = 0;
 				for (int64_t z = low.z; z <= high.z; z++)
 				{
 					for (int64_t y = low.y; y <= high.y; y++)
@@ -354,7 +357,9 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 								surfaceCount++;
 								const bool albedo = std::abs(int(material.r) - int(packedRed & 255u)) <= 1 && std::abs(int(material.g) - int((packedRed >> 8) & 255u)) <= 1
 									&& std::abs(int(material.b) - int((packedRed >> 16) & 255u)) <= 1;
-								if (!albedo || normal.w != 1.0f)
+								const bool faced = Contains(facing, voxel);
+								behindCount += faced ? 0 : 1;
+								if (!albedo || (faced ? normal.w != 1.0f : normal != glm::vec4(0.0f)))
 									wrongSurface++;
 							}
 							else if (inside)
@@ -366,7 +371,12 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 						}
 					}
 				}
-				MESSAGE("level ", level, ": ", surfaceCount, " surface voxels, ", interiorCount, " inside");
+				MESSAGE("level ", level, ": ", surfaceCount, " surface voxels (", behindCount, " behind every face touching them), ", interiorCount, " inside");
+				// Off the grid no face touches a voxel from behind; on it, the layer inside each face is behind it.
+				if (placement.Offset != 0.0f)
+					CHECK(behindCount == 0);
+				else if (placement.Scale == glm::vec3(1.0f))
+					CHECK(behindCount > 0);
 				CHECK(wrongOccupancy == 0);
 				CHECK(wrongSurface == 0);
 				CHECK(wrongInterior == 0);
@@ -429,6 +439,59 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A box resting on a floor leaves the floor at its foot one-sided")
+	{
+		// A closed 1 m box on a closed floor, both on level 0's grid (anchored at the origin: the camera's window starts at positive
+		// voxels, so the coordinates are exact). The box's bottom lies on the floor's top, facing it, and touches the floor's
+		// voxels around its foot only along their edges: those voxels hold the floor's top and the box's side, facing up and
+		// out, and must not go two-sided.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		MaterialProperties white;
+		const AssetHandle material = assets.AddMaterial(white);
+		const AssetHandle cube = assets.Add(MeshFactory::CreateCube(), "Cube");
+		AddMesh(scene, cube, material, glm::vec3(10.5f, 3.75f, 12.5f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(8.0f, 0.5f, 8.0f);
+		AddMesh(scene, cube, material, glm::vec3(10.5f, 4.5f, 12.5f), "Box");
+		Scope<SceneRenderer> renderer = CreateVoxelRenderer();
+		RenderUntilSettled(*renderer, scene, LookAt(glm::vec3(8.0f, 5.5f, 8.0f), glm::vec3(10.5f, 4.0f, 12.5f), c_Aspect));
+		REQUIRE(renderer->GetVoxelClipmap()->GetLevel(0).Anchor == glm::i64vec3(0));
+		const VoxelLevel level0 = ReadLevel(*renderer, 0);
+		// The box covers voxels x 100-109 and z 120-129; the floor's top is at y 40. The ring of floor voxels around the box's foot,
+		// corners included, and a patch of open floor.
+		std::vector<glm::i64vec3> ring;
+		for (int64_t step = 99; step <= 110; step++)
+		{
+			ring.push_back({ step, 40, 119 });
+			ring.push_back({ step, 40, 130 });
+		}
+		for (int64_t step = 120; step <= 129; step++)
+		{
+			ring.push_back({ 99, 40, step });
+			ring.push_back({ 110, 40, step });
+		}
+		uint32_t wrong = 0;
+		for (const glm::i64vec3& voxel : ring)
+		{
+			const glm::vec4 normal = level0.GetNormal(voxel);
+			wrong += level0.GetMaterial(voxel).a != 255 || normal.w != 1.0f || normal.y <= 0.0f ? 1 : 0;
+		}
+		CHECK(wrong == 0);
+		uint32_t wrongOpen = 0;
+		for (int64_t z = 90; z < 100; z++)
+		{
+			for (int64_t x = 70; x < 80; x++)
+			{
+				const glm::vec4 normal = level0.GetNormal(glm::i64vec3(x, 40, z));
+				wrongOpen += normal.w != 1.0f || normal.y < 0.99f ? 1 : 0;
+			}
+		}
+		CHECK(wrongOpen == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Normals face out")
 	{
 		GPUContext gpu;
@@ -443,27 +506,32 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		Scope<SceneRenderer> renderer = CreateVoxelRenderer();
 		RenderUntilSettled(*renderer, scene, LookAt(glm::vec3(-1.0f, 1.5f, -1.0f), glm::vec3(1.0f, 1.0f, 3.0f), c_Aspect));
 		const VoxelLevel level0 = ReadLevel(*renderer, 0);
-		// The face voxels away from the edges (3 voxels in), on both sides of each face: within 10 degrees of the face's normal.
+		// The face voxels away from the edges (3 voxels in). Outside each face: within 10 degrees of the face's normal. Inside it
+		// (the faces lie on voxel boundaries, so they mark the layer behind them too): occupied, no normal (behind every face).
 		const float limit = std::cos(glm::radians(10.0f));
 		uint32_t checked = 0;
 		uint32_t wrong = 0;
+		uint32_t wrongInside = 0;
 		for (int64_t u = 3; u < 17; u++)
 		{
 			for (int64_t v = 3; v < 17; v++)
 			{
-				const std::pair<glm::i64vec3, glm::vec3> faces[] = { { { -1, u, 20 + v }, { -1, 0, 0 } }, { { 0, u, 20 + v }, { -1, 0, 0 } },
-					{ { 19, u, 20 + v }, { 1, 0, 0 } }, { { 20, u, 20 + v }, { 1, 0, 0 } }, { { u, -1, 20 + v }, { 0, -1, 0 } }, { { u, 20, 20 + v }, { 0, 1, 0 } },
-					{ { u, v, 19 }, { 0, 0, -1 } }, { { u, v, 40 }, { 0, 0, 1 } } };
+				const std::pair<glm::i64vec3, glm::vec3> faces[] = { { { -1, u, 20 + v }, { -1, 0, 0 } }, { { 20, u, 20 + v }, { 1, 0, 0 } },
+					{ { u, -1, 20 + v }, { 0, -1, 0 } }, { { u, 20, 20 + v }, { 0, 1, 0 } }, { { u, v, 19 }, { 0, 0, -1 } }, { { u, v, 40 }, { 0, 0, 1 } } };
 				for (const auto& [voxel, expected] : faces)
 				{
 					const glm::vec4 normal = level0.GetNormal(voxel);
 					checked++;
 					wrong += normal.w != 1.0f || glm::dot(glm::normalize(glm::vec3(normal)), expected) < limit ? 1 : 0;
 				}
+				const glm::i64vec3 inside[] = { { 0, u, 20 + v }, { 19, u, 20 + v }, { u, 0, 20 + v }, { u, 19, 20 + v }, { u, v, 20 }, { u, v, 39 } };
+				for (const glm::i64vec3& voxel : inside)
+					wrongInside += level0.GetMaterial(voxel).a != 255 || level0.GetNormal(voxel) != glm::vec4(0.0f) ? 1 : 0;
 			}
 		}
 		CHECK(checked > 1000);
 		CHECK(wrong == 0);
+		CHECK(wrongInside == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -571,6 +639,33 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A 145 m oblique triangle takes the tile path")
+	{
+		// A triangle 145 m across on all three axes (1,450 voxels an axis at level 0, whose product passes 2^31) through the windows:
+		// large in every level, so the voxelizer lists its tiles everywhere, as the CPU counts them.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		const std::vector<glm::vec3> positions = { { 72.5f, -72.5f, 0.0f }, { 0.0f, 72.5f, -72.5f }, { -72.5f, 0.0f, 72.5f } };
+		Submesh submesh;
+		submesh.VertexCount = 3;
+		submesh.LODs = { MeshLOD { 0, 3 } };
+		const Ref<Mesh> slope = Mesh::Create(positions, std::vector<MeshVertexAttributes>(3), { 0, 1, 2 }, { submesh });
+		REQUIRE(slope);
+		MaterialProperties ground;
+		const glm::vec3 position(1.0f, 1.0f, 5.0f);
+		AddMesh(scene, assets.Add(slope, "Slope"), assets.AddMaterial(ground), position, "Slope");
+		Scope<SceneRenderer> renderer = CreateVoxelRenderer();
+		const SceneRendererGPUStats counts = VoxelizeAllAtOnce(*renderer, scene, LookAt(glm::vec3(0.0f, 1.7f, 0.0f), position, c_Aspect));
+		const uint64_t expected = CountListedTiles(*slope, glm::translate(glm::mat4(1.0f), position), *renderer->GetVoxelClipmap());
+		CHECK(expected > 0);
+		CHECK(counts.GITiles == expected);
+		CHECK(counts.GITileOverflow == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Scrolling keeps the voxels")
 	{
 		// The yard, a camera moving +x 5 cm a frame for 100 frames, then +y and -z: after every frame every level holds what a
@@ -641,33 +736,6 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 
 	TEST_CASE("A jump rebuilds in its frame, and the budget spreads a rebuild")
 	{
-	TEST_CASE("A 145 m oblique triangle takes the tile path")
-	{
-		// A triangle 145 m across on all three axes (1,450 voxels an axis at level 0, whose product passes 2^31) through the windows:
-		// large in every level, so the voxelizer lists its tiles everywhere, as the CPU counts them.
-		GPUContext gpu;
-		REQUIRE(gpu.IsValid());
-		SceneTestAssets assets;
-		Scene scene;
-		AddNeutralPostProcess(scene);
-		const std::vector<glm::vec3> positions = { { 72.5f, -72.5f, 0.0f }, { 0.0f, 72.5f, -72.5f }, { -72.5f, 0.0f, 72.5f } };
-		Submesh submesh;
-		submesh.VertexCount = 3;
-		submesh.LODs = { MeshLOD { 0, 3 } };
-		const Ref<Mesh> slope = Mesh::Create(positions, std::vector<MeshVertexAttributes>(3), { 0, 1, 2 }, { submesh });
-		REQUIRE(slope);
-		MaterialProperties ground;
-		const glm::vec3 position(1.0f, 1.0f, 5.0f);
-		AddMesh(scene, assets.Add(slope, "Slope"), assets.AddMaterial(ground), position, "Slope");
-		Scope<SceneRenderer> renderer = CreateVoxelRenderer();
-		const SceneRendererGPUStats counts = VoxelizeAllAtOnce(*renderer, scene, LookAt(glm::vec3(0.0f, 1.7f, 0.0f), position, c_Aspect));
-		const uint64_t expected = CountListedTiles(*slope, glm::translate(glm::mat4(1.0f), position), *renderer->GetVoxelClipmap());
-		CHECK(expected > 0);
-		CHECK(counts.GITiles == expected);
-		CHECK(counts.GITileOverflow == 0);
-		CHECK(gpu.GetNewErrorCount() == 0);
-	}
-
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
@@ -844,8 +912,8 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 	TEST_CASE("20 km out")
 	{
 		// The yard 20 km from the origin (and its camera): the voxels of the origin's yard, but for the floats' rounding there, which
-		// moves the yard's faces up to a millimeter: a face on a voxel boundary marks the voxels on both sides at the origin and one
-		// of them 20 km out. At most 5% of occupied voxels differ, each next to (or diagonally beside) an occupied voxel of the other.
+		// moves the yard's faces up to a millimeter (coordinates within 1/256 voxel of a boundary snap onto it, so faces on the grid
+		// stay there). At most 1% of occupied voxels differ, each next to an occupied voxel of the other (6 neighbors).
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		const glm::vec3 offset(20000.0f, 0.0f, 20000.0f);
@@ -900,12 +968,13 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 						differing++;
 						// Next to an occupied voxel of the other.
 						bool neighbor = false;
-						for (int64_t dz = -1; dz <= 1; dz++)
+						for (int axis = 0; axis < 3; axis++)
 						{
-							for (int64_t dy = -1; dy <= 1; dy++)
+							for (int64_t side = -1; side <= 1; side += 2)
 							{
-								for (int64_t dx = -1; dx <= 1; dx++)
-									neighbor = neighbor || occupiedAt(atOrigin ? 1 : 0, voxel + glm::i64vec3(dx, dy, dz));
+								glm::i64vec3 next = voxel;
+								next[axis] += side;
+								neighbor = neighbor || occupiedAt(atOrigin ? 1 : 0, next);
 							}
 						}
 						isolated += neighbor ? 0 : 1;
@@ -913,9 +982,50 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 				}
 			}
 			MESSAGE("level ", level, ": ", differing, " of ", occupied, " occupied voxels differ");
-			CHECK(differing <= occupied / 20);
+			CHECK(differing <= occupied / 100);
 			CHECK(isolated == 0);
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Frames whose voxels cannot be recorded are not settled, and report once")
+	{
+		// The geometry pool's tables cannot be brought up to date (the CPU path, so only the voxelizer reads them): the frames that
+		// voxelize the yard record nothing, so none of them is settled, and the error is logged when it appears, not every frame.
+		// Once the tables can be uploaded, the voxels are those of a renderer made for the camera alone.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		BuildYard(scene, assets);
+		const SceneCamera camera = YardCamera(glm::vec3(0.0f));
+		SceneRendererSpecification specification = ExactSpecification();
+		specification.GPUDriven = GPUDrivenMode::Off;
+		Scope<SceneRenderer> renderer = CreateVoxelRenderer(specification, 64, 64);
+		// Resident first, so the GI's frames have work.
+		for (uint32_t frame = 0; frame < 100 && (frame < 2 || renderer->GetStats().PendingAssets > 0 || renderer->GetStats().DeferredProxies > 0); frame++)
+			REQUIRE(renderer->Render(scene, camera, nullptr, SceneRenderOptions {}));
+		GeometryPool& pool = *Renderer::GetGeometryPool();
+		size_t reports = 0;
+		{
+			const LogCapture log;
+			pool.SetTablesUnavailable(true);
+			for (uint32_t frame = 0; frame < 4; frame++)
+			{
+				REQUIRE(renderer->Render(scene, camera, nullptr, VoxelView()));
+				CHECK(renderer->GetStats().GlobalIllumination);
+				CHECK_FALSE(renderer->GetStats().GlobalIlluminationSettled);
+			}
+			pool.SetTablesUnavailable(false);
+			for (const LogEntry& entry : log.GetEntries())
+			{
+				if (entry.Message.find("global illumination's voxels wait") != std::string::npos)
+					reports++;
+			}
+		}
+		CHECK(reports == 1);
+		RenderUntilSettled(*renderer, scene, camera);
+		CHECK(CountDifferences(ReadLevels(*renderer), ReadFreshVoxels(scene, camera, camera)) == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -988,47 +1098,6 @@ TEST_SUITE("GPU.SceneRenderer.GPUDriven")
 			levels[path] = ReadLevels(*renderer);
 		}
 		CHECK(CountDifferences(levels[0], levels[1]) == 0);
-	TEST_CASE("Frames whose voxels cannot be recorded are not settled, and report once")
-	{
-		// The geometry pool's tables cannot be brought up to date (the CPU path, so only the voxelizer reads them): the frames that
-		// voxelize the yard record nothing, so none of them is settled, and the error is logged when it appears, not every frame.
-		// Once the tables can be uploaded, the voxels are those of a renderer made for the camera alone.
-		GPUContext gpu;
-		REQUIRE(gpu.IsValid());
-		SceneTestAssets assets;
-		Scene scene;
-		BuildYard(scene, assets);
-		const SceneCamera camera = YardCamera(glm::vec3(0.0f));
-		SceneRendererSpecification specification = ExactSpecification();
-		specification.GPUDriven = GPUDrivenMode::Off;
-		Scope<SceneRenderer> renderer = CreateVoxelRenderer(specification, 64, 64);
-		// Resident first, so the GI's frames have work.
-		for (uint32_t frame = 0; frame < 100 && (frame < 2 || renderer->GetStats().PendingAssets > 0 || renderer->GetStats().DeferredProxies > 0); frame++)
-			REQUIRE(renderer->Render(scene, camera, nullptr, SceneRenderOptions {}));
-		GeometryPool& pool = *Renderer::GetGeometryPool();
-		size_t reports = 0;
-		{
-			const LogCapture log;
-			pool.SetTablesUnavailable(true);
-			for (uint32_t frame = 0; frame < 4; frame++)
-			{
-				REQUIRE(renderer->Render(scene, camera, nullptr, VoxelView()));
-				CHECK(renderer->GetStats().GlobalIllumination);
-				CHECK_FALSE(renderer->GetStats().GlobalIlluminationSettled);
-			}
-			pool.SetTablesUnavailable(false);
-			for (const LogEntry& entry : log.GetEntries())
-			{
-				if (entry.Message.find("global illumination's voxels wait") != std::string::npos)
-					reports++;
-			}
-		}
-		CHECK(reports == 1);
-		RenderUntilSettled(*renderer, scene, camera);
-		CHECK(CountDifferences(ReadLevels(*renderer), ReadFreshVoxels(scene, camera, camera)) == 0);
-		CHECK(gpu.GetNewErrorCount() == 0);
-	}
-
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

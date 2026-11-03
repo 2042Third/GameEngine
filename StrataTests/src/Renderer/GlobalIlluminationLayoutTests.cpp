@@ -337,6 +337,26 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 		}
 	}
 
+	TEST_CASE("Voxel coordinates snap onto voxel boundaries")
+	{
+		// Within c_GISnapVoxels (1/256 voxel) of a boundary a coordinate is the boundary exactly; further off it stays.
+		const RenderData::AffineTransform rows = RenderData::AffineTransform::FromMatrix(glm::mat4(1.0f));
+		const glm::vec3 anchor(-102.4f, 0.0f, 0.0f);
+		const glm::vec3 coordinate = GlobalIllumination::GetVoxelCoordinate(rows, glm::vec3(0.30001f, -0.29999f, 0.301f), anchor, 0.1f);
+		CHECK(coordinate.x == 1027.0f);
+		CHECK(coordinate.y == -3.0f);
+		CHECK(coordinate.z == doctest::Approx(3.01f).epsilon(1e-5));
+		// Two faces meant to meet (a box's bottom on a floor's top), placed through different rows, meet exactly.
+		const RenderData::AffineTransform floorRows = RenderData::AffineTransform::FromMatrix(
+			glm::scale(glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.05f, 0.0f)), glm::vec3(6.4f, 0.1f, 6.4f)));
+		const RenderData::AffineTransform boxRows = RenderData::AffineTransform::FromMatrix(
+			glm::scale(glm::translate(glm::mat4(1.0f), glm::vec3(-10.5f, 0.35f, -3.0f)), glm::vec3(0.5f)));
+		const glm::vec3 floorTop = GlobalIllumination::GetVoxelCoordinate(floorRows, glm::vec3(0.0f, 0.5f, 0.0f), anchor, 0.1f);
+		const glm::vec3 boxBottom = GlobalIllumination::GetVoxelCoordinate(boxRows, glm::vec3(0.0f, -0.5f, 0.0f), anchor, 0.1f);
+		CHECK(floorTop.y == 1.0f);
+		CHECK(boxBottom.y == 1.0f);
+	}
+
 	TEST_CASE("Voxel colors pack as the voxelizer reads them")
 	{
 		// Linear albedo as RGB8, red in the low byte, clamped.

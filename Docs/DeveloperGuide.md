@@ -4775,17 +4775,21 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
 - **Voxelization** (`GPU.RadianceCascades`, `Include/Voxelize.slang`; per batch: the scratch cleared,
   `GI/VoxelTriangles`, `VoxelTiles` dispatched indirectly, `VoxelFill`, `VoxelFinalize`, with explicit UAV barriers
   between them): one thread per triangle transforms its corners through the instance's world rows relative to the anchor
-  (`precise`, as `GlobalIllumination::GetVoxelCoordinate` on the CPU) and writes the voxels Akenine-Moller's test says
-  it overlaps (touching counts) into the scratch with buffer atomics only: the key by `InterlockedMax` (opaque over
-  alpha-masked, then the larger color code), the unit normal times 256 by `InterlockedAdd` (none for double-sided
-  materials), the emission by `InterlockedMax` and its coverage by `InterlockedAdd`. The scratch is independent of the
-  order threads run in, and of how the windows are cut into regions (a triangle's size and coverage follow its whole
-  bounds). A triangle whose whole bounds hold more than 64 voxels (each axis tested first: a 130 m triangle's product
-  passes 2^31) lists the 8^3 tiles of its region it overlaps for `VoxelTiles` (64 threads a tile; a 220 m road triangle
-  would keep one thread busy for milliseconds); when the list (32,768 tiles) is full it walks its tiles itself and
-  counts `GITileOverflow`. Glowing voxels add their small triangles' share of the face (area over the voxels touched in
-  one layer), so a glowing surface's voxels in a layer sum to its area wherever it lies on the grid; the voxel's
-  emission is the brightest triangle's times that share, at most 1.
+  (`precise`, as `GlobalIllumination::GetVoxelCoordinate` on the CPU; coordinates within `c_GISnapVoxels`, 1/256 voxel,
+  of a boundary snap onto it, so faces meant to meet, such as a box's bottom on a floor's top, meet exactly) and writes
+  the voxels Akenine-Moller's test says it overlaps (touching counts) into the scratch with buffer atomics only: the key
+  by `InterlockedMax` (opaque over alpha-masked, then the larger color code), the unit normal times 256 by
+  `InterlockedAdd` (none for double-sided materials, and none into a voxel wholly behind the triangle's plane: a face on
+  a voxel boundary faces only the voxel in front of it, and a resting box's bottom, touching the floor's voxels around
+  its foot from behind, cannot cancel their floor and side), the emission by `InterlockedMax` and its coverage by
+  `InterlockedAdd`. The scratch is independent of the order threads run in, and of how the windows are cut into regions
+  (a triangle's size and coverage follow its whole bounds). A triangle whose whole bounds hold more than 64 voxels (each
+  axis tested first: a 130 m triangle's product passes 2^31) lists the 8^3 tiles of its region it overlaps for
+  `VoxelTiles` (64 threads a tile; a 220 m road triangle would keep one thread busy for milliseconds); when the list
+  (32,768 tiles) is full it walks its tiles itself and counts `GITileOverflow`. Glowing voxels add their small
+  triangles' share of the face (area over the voxels touched in one layer), so a glowing surface's voxels in a layer sum
+  to its area wherever it lies on the grid; the voxel's emission is the brightest triangle's times that share, at
+  most 1.
 - **Closed meshes and the fill** (`MeshUtils::IsClosed`, `Mesh::IsClosed`): positions welded by exact equality, every
   directed edge of the full-detail levels meets exactly one opposite edge. A closed mesh whose every submesh is opaque as
   drawn adds winding steps along +y columns (+1 entering, -1 leaving, at the first voxel whose center is above the
@@ -4797,8 +4801,9 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   alpha-masked voxels; `Emission<l>` R32_UINT: RGB9E5 nits; `Normal<l>` RGBA8_SNORM: the summed normal, w 1; w -1 where
   the sum is shorter than `c_GITwoSidedSum` times the triangles that added (they face against each other: the scratch
   counts them, since a face's triangles touch a voxel once or twice), a **two-sided** voxel holding both faces of a wall
-  thinner than it: it will get no light rather than let one side's into the other; w 0.5 for double-sided materials,
-  whose triangles add no normal). The scene layout binds levels 0-2's material at SRV 38-40, the field at 35 and the
+  thinner than it: it will get no light rather than let one side's into the other; w 0 where every face touching the
+  voxel has it behind (the layer inside a box's faces on the grid); w 0.5 for double-sided materials, whose triangles
+  add no normal). The scene layout binds levels 0-2's material at SRV 38-40, the field at 35 and the
   probes' validity at 37 (the black 3D texture without them). `FrameConstants` gains the GI's fields only with the forward
   pass that reads them (stage 2). Declaring them, though no shader reads them, recompiles every shader that includes
   `Include/Scene.slang`, and two passes then make look-dev's repeats of an unchanged view differ: GTAO

@@ -8,8 +8,9 @@
 // - Normal: with triangles, their summed unit normals normalized, w 1; where the sum's length is below ST_GI_TWO_SIDED_SUM times
 //   the triangles that added (they face against each other), w -1 (two-sided: both faces of a wall thinner than the voxel; it
 //   gets no light rather than let one side's into the other). A face's triangles count by how many touch the voxel (one near its
-//   middle, both on its diagonal), so a plain sum would not cancel. A double-sided material's w 0.5 (lit from either side).
-//   Interior and empty voxels: 0.
+//   middle, both on its diagonal), so a plain sum would not cancel. Faces add only to voxels not wholly behind them (WriteVoxel):
+//   a voxel faces touch only from behind (inside a box on the grid, under a floor's top) has none, w 0. A double-sided
+//   material's w 0.5 (lit from either side). Interior and empty voxels: 0.
 
 [vk::image_format("rgba8")] RWTexture3D<float4> o_Material : register(u0);
 [vk::image_format("r32ui")] RWTexture3D<uint> o_Emission : register(u1);
@@ -54,9 +55,12 @@ void main(uint3 globalID : SV_DispatchThreadID)
 			int(u_Scratch.Load(GetScratchAddress(ST_SCRATCH_NORMALS + 2u, voxel))));
 		float3 summed = float3(sum) / ST_GI_NORMAL_FIXED_POINT;
 		float summedLength = sqrt(dot(summed, summed));
+		uint added = u_Scratch.Load(GetScratchAddress(ST_SCRATCH_NORMAL_COUNT, voxel));
 		if ((key & ST_VOXEL_KEY_DOUBLE_SIDED) != 0u)
 			normal = float4(summedLength > 0.0 ? summed / summedLength : float3(0.0, 0.0, 0.0), 0.5);
-		else if (summedLength >= ST_GI_TWO_SIDED_SUM * float(u_Scratch.Load(GetScratchAddress(ST_SCRATCH_NORMAL_COUNT, voxel))))
+		else if (added == 0u)
+			normal = float4(0.0, 0.0, 0.0, 0.0); // Behind every face that touched it: no surface of its own
+		else if (summedLength >= ST_GI_TWO_SIDED_SUM * float(added))
 			normal = float4(summed / summedLength, 1.0);
 		else
 			normal = float4(0.0, 0.0, 0.0, -1.0);

@@ -291,7 +291,9 @@ namespace Strata
 				const glm::vec4& rows = world.Rows[row];
 				const float translation = rows.w - anchor[row];
 				const float rotated = (rows.x * position.x + rows.y * position.y) + rows.z * position.z;
-				coordinate[row] = (rotated + translation) / voxelSize;
+				const float value = (rotated + translation) / voxelSize;
+				const float boundary = std::round(value);
+				coordinate[row] = std::abs(value - boundary) <= RenderData::c_GISnapVoxels ? boundary : value;
 			}
 			return coordinate;
 		}

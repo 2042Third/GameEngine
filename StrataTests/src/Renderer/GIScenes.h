@@ -39,8 +39,10 @@ namespace Strata::Tests
 
 	// The voxels a mesh's full-detail triangles mark in a level of global illumination's clipmap, as the voxelizer finds them
 	// (Include/Voxelize.slang: the voxel coordinates relative to the anchor, GlobalIllumination::GetVoxelCoordinate, and
-	// Akenine-Moller's triangle-box test, touching included): world voxel indices, sorted, each once.
-	std::vector<glm::i64vec3> ReferenceVoxels(const Mesh& mesh, const glm::mat4& world, const glm::i64vec3& anchorVoxel, float voxelSize);
+	// Akenine-Moller's triangle-box test, touching included): world voxel indices, sorted, each once. `outFacing`, when given,
+	// receives those of them some triangle faces (not wholly behind its plane, IsVoxelBehind): the voxels that get a normal.
+	std::vector<glm::i64vec3> ReferenceVoxels(const Mesh& mesh, const glm::mat4& world, const glm::i64vec3& anchorVoxel, float voxelSize,
+		std::vector<glm::i64vec3>* outFacing = nullptr);
 	// Include/Voxelize.slang's triangle-box test (Akenine-Moller's, touching included), on the CPU.
 	bool TriangleBoxOverlap(const glm::vec3& center, const glm::vec3& halfSize, const glm::vec3& a, const glm::vec3& b, const glm::vec3& c);
 

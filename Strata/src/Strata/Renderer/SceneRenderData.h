@@ -690,6 +690,9 @@ namespace Strata
 		constexpr uint32_t c_GIMovingFrames = 30;        // A proxy placed anew within this many frames is moving: left out of the voxels
 		constexpr float c_GIMaskedOccupancy = 0.15f;     // Guess: alpha-masked surfaces' occupancy
 		constexpr float c_GITwoSidedSum = 0.5f;          // A voxel whose triangles' unit normals sum to less than this times their count is two-sided
+		// Voxel coordinates this close to a voxel boundary snap onto it: faces meant to lie on the grid, or on each other, meet
+		// exactly whatever the floats' rounding (0.4 mm at level 0; four ulps of a coordinate 16,384 voxels from its anchor).
+		constexpr float c_GISnapVoxels = 1.0f / 256.0f;
 		constexpr float c_GINormalFixedPoint = 256.0f;   // Normals add as integers times this
 		constexpr float c_GIStepVoxels = 0.75f;          // Marches step this many voxels of the level they sample
 

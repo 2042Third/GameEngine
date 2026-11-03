@@ -136,6 +136,8 @@ float3 UnpackRGB9E5(uint value)
 
 // The voxel coordinate of a mesh position (GlobalIllumination::GetVoxelCoordinate): the world rows' translation relative to the
 // anchor first, so the result depends on the anchor alone, never on the camera; precise, so the CPU's reference gives the same bits.
+// Within ST_GI_SNAP_VOXELS of a voxel boundary it snaps onto it: faces meant to lie on the grid, or on each other (a box's bottom on
+// a floor's top), meet exactly, whatever the rounding of their instances' rows.
 float3 GetVoxelCoordinate(InstanceData instance, float3 position, uint level)
 {
 	GIVoxelLevel data = u_GI.Levels[level];
@@ -146,7 +148,9 @@ float3 GetVoxelCoordinate(InstanceData instance, float3 position, uint level)
 		float4 rows = instance.WorldRows[row];
 		precise float translation = rows.w - data.Anchor[row];
 		precise float rotated = (rows.x * position.x + rows.y * position.y) + rows.z * position.z;
-		coordinate[row] = (rotated + translation) / data.Origin.w;
+		precise float value = (rotated + translation) / data.Origin.w;
+		float boundary = round(value);
+		coordinate[row] = abs(value - boundary) <= ST_GI_SNAP_VOXELS ? boundary : value;
 	}
 	return coordinate;
 }
@@ -201,6 +205,7 @@ struct VoxelTriangle
 	uint Key;          // What its voxels take with InterlockedMax: class, double-sided bit, albedo
 	float3 Emission;   // Nits (before the coverage)
 	int3 Normal;       // Its unit normal times ST_GI_NORMAL_FIXED_POINT (0 for double-sided items)
+	float3 Facing;     // The side its front faces (not normalized; mirrored instances' turned)
 };
 
 // Triangle `lane` of the frame's triangle group `group`; false past the item's triangles.
@@ -252,12 +257,25 @@ bool LoadVoxelTriangle(uint group, uint lane, out VoxelTriangle triangle)
 	if ((item.Flags & ST_VOXEL_ITEM_MIRRORED) != 0u)
 		normal = -normal;
 	triangle.Normal = doubleSided || !(normalLength > 0.0) ? int3(0, 0, 0) : int3(round(normal / normalLength * ST_GI_NORMAL_FIXED_POINT));
+	triangle.Facing = normal;
 	return true;
+}
+
+// Whether a voxel (anchor-relative index) lies wholly behind a triangle's plane, which then only touches its boundary from behind:
+// the bottom of a box resting on a floor touches the floor's voxels around the box's foot along their edges, and a face on the
+// grid touches the voxels behind it. Exact for faces on the grid (their facing has two zero components; coordinates snapped).
+bool IsVoxelBehind(VoxelTriangle triangle, int3 voxel)
+{
+	float3 facing = triangle.Facing;
+	precise float reach = dot(facing, (float3(voxel) + 0.5) - triangle.A) + 0.5 * (abs(facing.x) + abs(facing.y) + abs(facing.z));
+	return reach <= 0.0;
 }
 
 // The writes of a triangle to a voxel of its region's scratch (local: relative to the region's minimum). A glowing triangle adds
 // the share of the voxel's face it covers (fixed point, integer adds: the same in any order); the voxel's emission is the
-// brightest of its triangles' times their coverage together, at most 1 (GI/VoxelFinalize.comp).
+// brightest of its triangles' times their coverage together, at most 1 (GI/VoxelFinalize.comp). Its normal goes only to voxels
+// not wholly behind it: a face on a voxel boundary faces the voxel in front of it, and one touching a voxel from behind (a resting
+// box's bottom, the floor's top under it) cannot cancel the faces the voxel shows.
 void WriteVoxel(VoxelTriangle triangle, int3 local, uint emission, uint coverage)
 {
 	uint voxel = GetScratchVoxel(triangle.Region, local);
@@ -268,7 +286,7 @@ void WriteVoxel(VoxelTriangle triangle, int3 local, uint emission, uint coverage
 		u_Scratch.InterlockedMax(GetScratchAddress(ST_SCRATCH_EMISSION, voxel), emission, previous);
 		u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_COVERAGE, voxel), coverage, previous);
 	}
-	if (any(triangle.Normal != int3(0, 0, 0)))
+	if (any(triangle.Normal != int3(0, 0, 0)) && !IsVoxelBehind(triangle, triangle.Region.Minimum.xyz + local))
 	{
 		// Signed sums as two's complement words: integer adds, the same whatever the order.
 		u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_NORMALS + 0u, voxel), uint(triangle.Normal.x), previous);

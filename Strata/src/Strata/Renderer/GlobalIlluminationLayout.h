@@ -137,8 +137,9 @@ namespace Strata
 
 		// The voxel coordinate of a mesh position, as Include/Voxelize.slang computes it: the instance's world rows applied to it
 		// with their translation taken relative to the anchor's world position first (anchor: the anchor voxel times the voxel
-		// size, as a float), divided by the voxel size. Its floor is the voxel index relative to the anchor voxel. Independent
-		// of the camera: what voxelizes relative to the same anchor gives the same bits.
+		// size, as a float), divided by the voxel size, and snapped onto a voxel boundary within c_GISnapVoxels of it (faces meant
+		// to meet do). Its floor is the voxel index relative to the anchor voxel. Independent of the camera: what voxelizes
+		// relative to the same anchor gives the same bits.
 		glm::vec3 GetVoxelCoordinate(const RenderData::AffineTransform& world, const glm::vec3& position, const glm::vec3& anchor, float voxelSize);
 
 		// The weight with which a sample at a camera-relative point reads a level rather than the coarser ones: 1 within the
