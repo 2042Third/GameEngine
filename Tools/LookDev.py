@@ -55,7 +55,7 @@ AA_MODES = {
 QUALITIES = ("project", "low", "medium", "high", "ultra")
 # viewport.capture's debug views: the stills of a run show one of them, and its result's debugView (with the shadows and
 # lighting views' statistics) is kept with each repeat's stats.
-DEBUG_VIEWS = ("none", "streaming", "lod", "mip", "motion", "shadows", "lighting", "ao", "indirect", "luminance", "albedo", "voxels")
+DEBUG_VIEWS = ("none", "streaming", "lod", "mip", "motion", "shadows", "lighting", "ao", "indirect", "luminance", "albedo", "voxels", "gi", "open", "probes")
 CROP_SCALE = 4
 CALL_TIMEOUT_MS = 300000
 OPEN_TIMEOUT_MS = 900000
