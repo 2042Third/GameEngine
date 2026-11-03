@@ -711,7 +711,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     white box, a polished panel, a smooth and a rough metal tank, a roughness ladder and four IOR spheres, a wet plane (a
     dark dielectric of roughness 0.06), six thin posts, four crates, three colored walls, two lanterns and a box-projected
     probe (baked, then inactive: shots activate it), under the Clear preset's sun at 30 degrees. Its shots
-    (`lookdev.sheet`, `.sheet.angle`, `.wet`, `.wet.sunward`, `.tank`) measure the reflections' noise and pattern;
+    (`lookdev.sheet`, `.sheet.angle`, `.wet`, `.wet.sunward`, `.tank`) measure the reflections' noise and pattern, and
+    `lookdev.patch` (golden hour, the yard's probe baked without box projection) shows what the probe fills in;
     `Tests::SpecularLab` builds the same lab for the strafe test (`GPU.SceneRenderer.SSR`): change both.
   - Shots and look-dev content are appended, never changed, so that captures of every build keep comparing. GPU times
     are kept only from runs alone on the machine, under `python Tools/PerfLock.py --label lookdev-<label> --limit 90 -- ...`
@@ -5288,7 +5289,11 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   without the sun's disk: about 1e9 nits for a 100,000 lux sun, clamped to 65,000 at conversion, it lit surfaces again
   from the probe, unshadowed and box-projected to the wrong place, while the directional light already lights them; the
   procedural sky's disk is part of its environment cube, as for every surface's image light, and HDR skies have
-  `RemoveSun`), and a forced power-of-two pre-exposure from the
+  `RemoveSun`; and the lights' diffuse light without their specular, `MaterialParams.w` 1 weighting `LightSurface`'s
+  specular by 0: a highlight depends on where it is seen from, and a polished tank's sun streak baked from the probe's
+  center showed on wet ground as a bright blurred patch where screen-space reflections missed, about 370 px from the tank's
+  reflection at 1920x1080 without box projection and 70 px with it, which `lookdev.patch`'s `patch` crop shows; surfaces
+  keep the image light's specular), and a forced power-of-two pre-exposure from the
   scene's brightest directional light (`ProbeBake::ChoosePreExposure`), one probe per frame, again on the next frames
   while what they show loads (by the clock, at most two minutes from the bake's start: `c_MaxBakeWait`; a fresh session's
   imports take that long whatever the frame rate); reads them back (`TextureReadback`, polled), puts them together into a

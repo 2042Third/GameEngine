@@ -191,9 +191,10 @@ the lighting or move things: the new picture replaces the probe's earlier one (w
 see each other's pictures, so a second bake adds light that bounced twice. Pictures are not taken while the game runs:
 a probe shows the scene as it was baked (a day-night cycle or a moving door is not reflected).
 
-- **Box Projection** (on by default) makes reflections land where the walls are, as in a room; turn it off for open
-  spaces, where what the probe saw is far away.
-- A bake does not draw the sun's disk into the picture: the sun already lights the scene, with its shadows.
+- **Box Projection** (on by default) makes reflections land where the walls are, as in a room whose walls are the box's
+  faces; turn it off for open spaces, where what the probe saw is far away, or fit the box to what bounds the yard.
+- A bake does not draw the sun's disk or the lights' highlights into the picture: the sun already lights the scene, with
+  its shadows, and a highlight seen from the probe's position would show on shiny ground in the wrong place.
 - **Blend Distance** fades the probe out over that many meters before its box's faces, into the sky's lighting or a
   weaker probe's. Where boxes overlap, the higher **Priority** wins, then the smaller box; two probes blend at most.
 - **Intensity** brightens or darkens what the probe shows.

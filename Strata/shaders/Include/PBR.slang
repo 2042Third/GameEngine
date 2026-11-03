@@ -94,9 +94,10 @@ struct SurfaceData
 	float3 SpecularEnergy; // GetSpecularEnergy at the surface's NoV and roughness: multiplies its specular light
 };
 
-// EvaluateLight with its diffuse part weighted by `diffuseWeight`: a transmissive surface passes the rest of the light its
-// diffuse part would scatter through itself (Scene/Forward.frag's glass).
-float3 EvaluateLightWeighted(SurfaceData surface, float3 lightDirection, float3 radiance, float diffuseWeight)
+// EvaluateLight with its diffuse part weighted by `diffuseWeight` (a transmissive surface passes the rest of the light its
+// diffuse part would scatter through itself: Scene/Forward.frag's glass) and its specular part by `specularWeight` (0 in a
+// reflection probe's capture).
+float3 EvaluateLightWeighted(SurfaceData surface, float3 lightDirection, float3 radiance, float diffuseWeight, float specularWeight)
 {
 	float3 H = normalize(surface.View + lightDirection);
 	float NoL = clamp(dot(surface.Normal, lightDirection), 0.0, 1.0);
@@ -115,14 +116,14 @@ float3 EvaluateLightWeighted(SurfaceData surface, float3 lightDirection, float3 
 	// Diffuse keeps 1 - F: the compensated light leaves a dielectric's specular under 0.5% brighter, below what the diffuse
 	// lobe's approximation already is off by.
 	float3 diffuse = (1.0 - F) * (1.0 - surface.Metallic) * surface.Albedo * INV_PI * diffuseWeight;
-	return (diffuse + specular) * radiance * NoL;
+	return (diffuse + specular * specularWeight) * radiance * NoL;
 }
 
 // Radiance reflected toward the viewer from light arriving along `lightDirection` (surface to light) with the
 // given irradiance at normal incidence.
 float3 EvaluateLight(SurfaceData surface, float3 lightDirection, float3 radiance)
 {
-	return EvaluateLightWeighted(surface, lightDirection, radiance, 1.0);
+	return EvaluateLightWeighted(surface, lightDirection, radiance, 1.0, 1.0);
 }
 
 // A clear coat over a surface (MaterialProperties::Clearcoat): a dielectric layer of index 1.5 (reflecting 4% at normal

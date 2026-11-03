@@ -95,7 +95,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - Ambient occlusion no longer darkens what screen-space reflections found: no dark smudges beside objects on wet ground
   (Medium too). A material's occlusion map still darkens them.
 - Reflection probe bakes draw no sun disk into their captures: the sun lights the scene; a disk in a probe lit surfaces
-  again, unshadowed and in the wrong place.
+  again, unshadowed and in the wrong place. Nor do they hold the lights' highlights: a polished tank's sun streak, seen
+  from the probe's position, showed on wet ground as a bright patch in the wrong place.
 - Look-dev: the specular lab (`Scenes/Specular.stscene`, shots `lookdev.sheet`, `.wet`, `.tank` and more) and shots'
   `Metrics` (noise, screen-locked pattern, bands) in `metrics.csv`; tests measure flicker in motion with one meter for the
   wave (`Tests::MeasureFlicker`).
@@ -137,6 +138,7 @@ projects, the template and scenes or projects without the value get.
 | The shader compiler | glslang, built with the engine | Slang's release archive (25-64 MB), downloaded by the first configure into a per-user cache (`%LOCALAPPDATA%\Strata\Toolchains`, `~/.cache/strata/toolchains`, `~/Library/Caches/Strata/Toolchains`) and checked by its SHA-256 | Offline: download the archive `CMake/StrataSlang.cmake` names on another machine, extract it and configure with `-DSTRATA_SLANG_ROOT=<folder>` |
 | **Reflections (R1)** | | | |
 | Reflection probes baked under the atmosphere | Their capture holds the sun's disk (clamped to 65,000 nits) | Bakes draw no disk | Bake them again (Bake Reflection Probes, or `lighting.bakeProbes`) to lose the bright patch; nothing to keep |
+| Reflection probes of lit shiny things | Their capture holds the lights' highlights as seen from the probe | Bakes keep the lights' diffuse light only | Bake them again to lose highlights in the wrong places; nothing to keep |
 | Spatial reflections' resolve | 3x3 neighbors, depth-weighted | 5x5 neighbors, plane-weighted: no screen door, about two pixels softer on mirrors at 4K | None |
 
 ## Known issues

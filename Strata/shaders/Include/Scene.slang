@@ -81,7 +81,8 @@ struct FrameConstants
 	float4 AOParams;
 	// x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels); y: the lighting debug view
 	// (ST_LIGHTING_VIEW_*, 0: none); z: specular anti-aliasing's strength (WidenRoughness; 1 with
-	// SceneRendererSpecification::SpecularAntiAliasing, else 0)
+	// SceneRendererSpecification::SpecularAntiAliasing, else 0); w: 1 in a reflection probe's capture (the lights' specular
+	// left out, SceneRenderOptions::ProbeCapture), else 0
 	float4 MaterialParams;
 	// x: 1 when u_PreviousInstances and u_PreviousJoints hold the renderer's previous frame; y: the pre-exposure, a power of two
 	// every writer of the HDR target multiplies its luminance by (SceneRenderer: values near 100,000 lux stay within half

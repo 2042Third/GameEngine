@@ -81,19 +81,22 @@ bool IsLightingValueView(uint view)
 }
 
 // The light a lit surface reflects from one light: the base's, under its clear coat when it has one (the coat reflects some of
-// the light before it reaches the base).
+// the light before it reaches the base). A reflection probe's capture (MaterialParams.w 1: SceneRenderOptions::ProbeCapture)
+// keeps the lights' diffuse light only: their highlights depend on where they are seen from, and looked up from elsewhere they
+// showed as bright patches in the wrong places.
 float3 LightSurface(SurfaceData surface, ClearcoatData coat, float diffuseWeight, float3 lightDirection, float3 radiance)
 {
+	float specularWeight = 1.0 - u_Frame.MaterialParams.w;
 #ifdef ST_FORWARD_GLASS
-	float3 light = EvaluateLightWeighted(surface, lightDirection, radiance, diffuseWeight);
+	float3 light = EvaluateLightWeighted(surface, lightDirection, radiance, diffuseWeight, specularWeight);
 #else
-	float3 light = EvaluateLight(surface, lightDirection, radiance);
+	float3 light = EvaluateLightWeighted(surface, lightDirection, radiance, 1.0, specularWeight);
 #endif
 	if (coat.Strength > 0.0)
 	{
 		float baseWeight;
 		float3 coatLight = EvaluateClearcoat(coat, surface.View, lightDirection, radiance, baseWeight);
-		light = light * baseWeight + coatLight;
+		light = light * baseWeight + coatLight * specularWeight;
 	}
 	return light;
 }

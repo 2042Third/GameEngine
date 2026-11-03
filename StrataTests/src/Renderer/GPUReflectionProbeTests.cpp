@@ -678,4 +678,58 @@ TEST_SUITE("GPU.SceneRenderer.ReflectionProbes")
 		CHECK(sunWith > 10.0f * sunWithout);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("ProbeCapture leaves the lights' highlights out and keeps their diffuse light")
+	{
+		// A light's highlight depends on where it is seen from: baked into a capture from the probe's center and looked up from
+		// elsewhere, a polished tank's sun streak showed on wet ground as a bright patch in the wrong place (lookdev.patch). With
+		// the sun behind the camera, a polished metal ball's highlight faces it; a matte wall behind the ball is lit head-on.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddSun(scene, glm::vec3(0.0f, 0.0f, -1.0f), 3.0f, false);
+		MaterialProperties polished;
+		polished.BaseColor = glm::vec4(1.0f);
+		polished.Metallic = 1.0f;
+		polished.Roughness = 0.2f;
+		AddMesh(scene, BuiltinAssets::SphereMesh, assets.AddMaterial(polished), glm::vec3(0.0f), "Ball");
+		MaterialProperties matte;
+		matte.BaseColor = glm::vec4(1.0f);
+		matte.Metallic = 0.0f;
+		matte.Roughness = 1.0f;
+		Entity wall = AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(matte), glm::vec3(0.0f, 0.0f, -3.0f), "Wall");
+		TransformComponent& wallTransform = wall.GetComponent<TransformComponent>();
+		wallTransform.Rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+		wallTransform.Scale = glm::vec3(20.0f);
+		wall.MarkModified<TransformComponent>();
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 4.0f), glm::vec3(0.0f));
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_Size, c_Size);
+		SceneRenderOptions options;
+		options.HDROutput = true;
+		options.PreExposure = 1.0f;
+		const auto render = [&](bool probeCapture)
+		{
+			options.ProbeCapture = probeCapture;
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			gpu.GetDevice().WaitForIdle();
+			return TAA::ReadHDR(renderer.GetHDRTexture());
+		};
+		const std::vector<glm::vec3> view = render(false);
+		const std::vector<glm::vec3> capture = render(true);
+		const size_t ball = static_cast<size_t>(c_Size / 2) * c_Size + c_Size / 2;
+		// The wall beside the ball, a quarter of the view from its left edge.
+		const size_t wallPixel = static_cast<size_t>(c_Size / 2) * c_Size + c_Size / 8;
+		CAPTURE(view[ball].r);
+		CAPTURE(capture[ball].r);
+		CAPTURE(view[wallPixel].r);
+		CAPTURE(capture[wallPixel].r);
+		CHECK(view[ball].r > 10.0f * capture[ball].r);
+		CHECK(view[wallPixel].r > 0.1f);
+		CHECK(capture[wallPixel].r == doctest::Approx(view[wallPixel].r).epsilon(0.03));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }
