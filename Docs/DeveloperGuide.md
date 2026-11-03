@@ -712,7 +712,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     dark dielectric of roughness 0.06), six thin posts, four crates, three colored walls, two lanterns and a box-projected
     probe (baked, then inactive: shots activate it), under the Clear preset's sun at 30 degrees. Its shots
     (`lookdev.sheet`, `.sheet.angle`, `.wet`, `.wet.sunward`, `.tank`) measure the reflections' noise and pattern, and
-    `lookdev.patch` (golden hour, the yard's probe baked without box projection) shows what the probe fills in;
+    `lookdev.patch` (golden hour, `Probe Patch` at the yard probe's place without box projection) shows what the probe fills
+    in. That probe is saved inactive and unbaked and only that shot bakes it: a bake moves its probe's previous capture to the
+    trash, which would leave the saved scene's yard probe naming a trashed capture for every later shot (projects in a
+    `--work` directory are reused: `--fresh-work` after changing `LookDevScene.json`);
     `Tests::SpecularLab` builds the same lab for the strafe test (`GPU.SceneRenderer.SSR`): change both.
   - Shots and look-dev content are appended, never changed, so that captures of every build keep comparing. GPU times
     are kept only from runs alone on the machine, under `python Tools/PerfLock.py --label lookdev-<label> --limit 90 -- ...`
