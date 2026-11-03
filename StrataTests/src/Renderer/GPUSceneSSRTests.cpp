@@ -267,7 +267,24 @@ namespace
 	{
 		FlickerResult Flicker;
 		double SurfaceShare = 0.0; // The measured surface's pixels (its mask) over all pixels, over the measured frames
+		std::vector<double> SurfaceLight; // Per moving frame: the displayed luminance summed over the surface's mask
 	};
+
+	// How much a strafe's light on the measured surface pumps from frame to frame beyond a steady drift: the mean |second
+	// difference| of the frames' sums over their mean. A highlight that slides smoothly keeps its sum; one narrower than the
+	// pixels it lands between brightens and dims as it moves (it shimmers).
+	double GetLightPumping(const std::vector<double>& light)
+	{
+		REQUIRE(light.size() >= 3);
+		double change = 0.0;
+		double total = 0.0;
+		for (size_t frame = 2; frame < light.size(); frame++)
+			change += std::abs(light[frame] - 2.0 * light[frame - 1] + light[frame - 2]);
+		for (const double value : light)
+			total += value;
+		const double mean = total / static_cast<double>(light.size());
+		return mean > 0.0 ? change / static_cast<double>(light.size() - 2) / mean : 0.0;
+	}
 
 	// A fresh renderer's strafe along a path: settled still frames (the reflections from the third see a frame that had them,
 	// the TAA's history over c_SettleFrames), then two more still frames and 24 moving ones, read as the person sees them and
@@ -293,6 +310,7 @@ namespace
 		RenderFrames(gpu, renderer, lab.Contents, camera, antiAliasing == StrafeAntiAliasing::TAA ? c_SettleFrames : 3);
 		FlickerSequence sequence(c_StillFrames + 1);
 		size_t surfacePixels = 0;
+		std::vector<double> surfaceLight;
 		for (uint32_t frame = 0; frame < c_StillFrames + c_MovingFrames; frame++)
 		{
 			const float moved = static_cast<float>(frame >= c_StillFrames ? frame - c_StillFrames + 1 : 0);
@@ -302,6 +320,13 @@ namespace
 			const size_t kept = MaskFlickerFrame(read, path.Surface);
 			if (frame > c_StillFrames)
 				surfacePixels += kept;
+			if (frame >= c_StillFrames)
+			{
+				double light = 0.0;
+				for (size_t pixel = 0; pixel < read.Value.size(); pixel++)
+					light += read.ViewDepth[pixel] > 0.0f ? read.Value[pixel] : 0.0f;
+				surfaceLight.push_back(light);
+			}
 			sequence.Add(std::move(read));
 			FinishFrame(gpu);
 		}
@@ -310,6 +335,7 @@ namespace
 		StrafeMeasure measure;
 		measure.Flicker = sequence.GetResult();
 		measure.SurfaceShare = static_cast<double>(surfacePixels) / (static_cast<double>(c_MovingFrames - 1) * c_StrafeWidth * c_StrafeHeight);
+		measure.SurfaceLight = std::move(surfaceLight);
 		return measure;
 	}
 
@@ -1368,6 +1394,82 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 					CHECK(on.Flicker.Blocks <= 0.01);
 					CHECK(on.Flicker.Mean - off.Flicker.Mean <= addedMeanBounds[pathIndex]);
 				}
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Sized highlights shimmer no more than points in a strafe over wet ground")
+	{
+		// Highlights judged in motion: the sun's glint column on the wet plane (a 15-degree sun ahead, the camera 1.6 m above the
+		// ground: the glint lies 6 m ahead, on the plane, clear of the posts' and crates' shadows and of the back wall's, which
+		// covers the plane at lookdev.wet.sunward's 12 degrees) and the nearer lantern's glint at dusk (the sun off, the sky at
+		// 1%; lookdev.lantern.wet's view), strafed 1 cm a frame sideways
+		// at Spatial with no AA, FXAA and TAA, as the person sees them, each at an exposure that keeps the point glint's core below
+		// white (everything else then shows black). The sized forms (the sun's 0.53-degree disk, lanterns of SourceRadius 0.06)
+		// spread the same light wider than the point forms (a disk of 0, radius 0): a wider lobe covers more pixels and must not
+		// shimmer more. A highlight slides over the surface as the camera moves, so the flicker meter, which follows world points,
+		// measures the glint's own passing (its profile's curvature, larger for a wider glint over more pixels) as much as any
+		// shimmer: it is reported. What is bounded is shimmer itself, the pumping of the glint's light from frame to frame
+		// (GetLightPumping): a glint narrower than a pixel brightens and dims as it crosses pixel centers.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		SpecularLab lab(assets);
+		struct HighlightPath
+		{
+			StrafePath Path;
+			bool Dusk = false;
+			float Exposure = 0.0f;
+		};
+		const HighlightPath paths[] = {
+			{ { "sun glint", glm::vec3(-23.0f, 1.6f, 2.0f), glm::vec3(-23.0f, 0.3f, 30.0f), 55.0f, glm::vec3(0.01f, 0.0f, 0.0f), SpecularLab::GetWetPlane(), 0.5 },
+				false, -15.0f },
+			{ { "lanterns at dusk", glm::vec3(-13.0f, 1.0f, 20.0f), glm::vec3(-11.0f, 1.0f, 12.0f), 50.0f, glm::vec3(0.01f, 0.0f, 0.0f), SpecularLab::GetWetPlane(),
+				0.5 }, true, -14.0f },
+		};
+		const std::pair<StrafeAntiAliasing, std::string> antiAliasingModes[] = { { StrafeAntiAliasing::Off, "no AA" }, { StrafeAntiAliasing::FXAA, "FXAA" },
+			{ StrafeAntiAliasing::TAA, "TAA" } };
+		DirectionalLightComponent& sun = lab.Sun.GetComponent<DirectionalLightComponent>();
+		for (const HighlightPath& highlightPath : paths)
+		{
+			const StrafePath& path = highlightPath.Path;
+			CAPTURE(path.Name);
+			GetPostProcess(lab.Contents).Exposure = highlightPath.Exposure;
+			lab.Sun.SetActive(!highlightPath.Dusk);
+			lab.Sky.GetComponent<SkyLightComponent>().Intensity = highlightPath.Dusk ? 0.01f : 1.0f;
+			lab.Sky.MarkModified<SkyLightComponent>();
+			lab.Sun.GetComponent<TransformComponent>().Rotation = Math::LookRotation(SunDirection(15.0f, 90.0f));
+			lab.Sun.MarkModified<TransformComponent>();
+			for (Entity lantern : lab.Lanterns)
+				lantern.SetActive(highlightPath.Dusk);
+			const auto setSized = [&](bool sized)
+			{
+				sun.ShadowSoftness = sized ? 0.53f : 0.0f;
+				lab.Sun.MarkModified<DirectionalLightComponent>();
+				for (Entity lantern : lab.Lanterns)
+				{
+					lantern.GetComponent<PointLightComponent>().SourceRadius = sized ? 0.06f : 0.0f;
+					lantern.MarkModified<PointLightComponent>();
+				}
+			};
+			for (const auto& antiAliasing : antiAliasingModes)
+			{
+				CAPTURE(antiAliasing.second);
+				setSized(false);
+				const StrafeMeasure point = MeasureStrafe(gpu, lab, path, ReflectionsQuality::Spatial, antiAliasing.first, true);
+				setSized(true);
+				const StrafeMeasure sized = MeasureStrafe(gpu, lab, path, ReflectionsQuality::Spatial, antiAliasing.first, true);
+				const double pointPumping = GetLightPumping(point.SurfaceLight);
+				const double sizedPumping = GetLightPumping(sized.SurfaceLight);
+				MESSAGE(fmt::format("Highlight strafe {}, {}: point pumping {:.4f}%, Mean {:.4f}%, Blocks {:.4f}%; sized pumping {:.4f}%, Mean {:.4f}%, "
+					"Blocks {:.4f}%; light {:.1f} and {:.1f}; {:.2f}% of the view measured", path.Name, antiAliasing.second, 100.0 * pointPumping,
+					100.0 * point.Flicker.Mean, 100.0 * point.Flicker.Blocks, 100.0 * sizedPumping, 100.0 * sized.Flicker.Mean, 100.0 * sized.Flicker.Blocks,
+					point.SurfaceLight.front(), sized.SurfaceLight.front(), 100.0 * sized.Flicker.MeasuredShare));
+				CHECK(point.Flicker.Frames == 23u);
+				CHECK(sized.Flicker.MeasuredShare > path.MinimumMeasured * sized.SurfaceShare);
+				CHECK(point.SurfaceLight.front() > 0.0); // The glint is in view and below white: what is measured is its light
+				CHECK(sizedPumping <= pointPumping);
 			}
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);

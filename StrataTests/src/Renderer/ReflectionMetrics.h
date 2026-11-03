@@ -34,13 +34,16 @@ namespace Strata::Tests
 	};
 
 	// The specular lab of the look-dev scene Scenes/Specular.stscene (Tools/LookDev/LookDevScene.json: change both), without its
-	// tanks, probe and lanterns: a rough metal sheet beside a white box, three walls, six thin posts, four crates, the
-	// roughness ladder of spheres and a wet (smooth, dark dielectric) plane on the ground, under a two-tone sky and a shadowed
-	// sun at the tests' scale, with neutral post-processing and screen-space reflections on.
+	// tanks, probe and bulbs: a rough metal sheet beside a white box, three walls, six thin posts, four crates, the roughness
+	// ladder of spheres and a wet (smooth, dark dielectric) plane on the ground, under a two-tone sky and a shadowed sun at the
+	// tests' scale, with neutral post-processing and screen-space reflections on. Its two lanterns (the look-dev scene's point
+	// lights, 60 cd, range 18, without shadows here) are inactive until a test turns them on.
 	struct SpecularLab
 	{
 		Scene Contents;
 		Entity Sun;
+		Entity Sky;
+		Entity Lanterns[2];
 
 		explicit SpecularLab(SceneTestAssets& assets);
 

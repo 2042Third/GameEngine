@@ -713,7 +713,13 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     probe (baked, then inactive: shots activate it), under the Clear preset's sun at 30 degrees. Its shots
     (`lookdev.sheet`, `.sheet.angle`, `.wet`, `.wet.sunward`, `.tank`) measure the reflections' noise and pattern, and
     `lookdev.patch` (golden hour, the yard's probe baked without box projection) shows what the probe fills in;
-    `Tests::SpecularLab` builds the same lab for the strafe test (`GPU.SceneRenderer.SSR`): change both.
+    `lookdev.overcast` (the Overcast preset's 10-degree sun on the ladder and the IOR spheres), `lookdev.lantern.wet` and
+    `.lantern.sheet` (at dusk, the sun 3 degrees below the horizon: the lanterns' glints on the wet plane and the sheet) and
+    their `.sized` forms (both lanterns' `SourceRadius` 0.06, the bulbs' radius, set by a `Setup` step so the scene still
+    builds with older editors) judge highlights; `Tests::SpecularLab` builds the same lab (its lanterns inactive until a test
+    turns them on) for the strafe tests (`GPU.SceneRenderer.SSR`): change both. A highlight slides over its surface as the
+    camera moves, so the flicker meter (which follows world points) counts its passing; "Sized highlights shimmer no more
+    than points..." bounds shimmer itself, the pumping of the glint's summed light from frame to frame (`GetLightPumping`).
   - Shots and look-dev content are appended, never changed, so that captures of every build keep comparing. GPU times
     are kept only from runs alone on the machine, under `python Tools/PerfLock.py --label lookdev-<label> --limit 90 -- ...`
     (a full run takes longer than the lock's default limit); the pictures are read and cropped on every core after the
