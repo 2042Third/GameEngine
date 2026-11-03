@@ -5472,7 +5472,9 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   `TextureSpecification::Grayscale`). Every pass that samples materials binds the table (`t16` of the scene
   layout) after `TextureTable::RecordUploads` ran in its frame. Normal maps are read as X
   and Y with Z reconstructed (`Forward.frag`), so BC5 and RGBA8 normal maps shade alike; a shader that reads a normal map
-  must do the same.
+  must do the same. The flat normal (`Renderer::GetFlatNormalTexture`, what a material without a normal map reads) is
+  (0.5, 0.5, 1) exactly, in half floats: in 8 bits 0.5 is 128/255, which tilted every such surface by 0.3 degrees and turned
+  a mirror's reflected rays by twice that (Strata 0.7.0; the surface target case of `GPU.SceneRenderer.Materials` checks it).
 - A material has nine maps (`MaterialGPU::GetTextureMaps`, `c_TextureMapCount`, the order `MaterialGPU::Build` resolves
   them in): base color, metallic-roughness, normal, occlusion, emission, the clear coat's strength (R), roughness (G) and
   normal, and transmission (R). A list of a material's maps (`Material::GetTextureHandles`, `RenderSceneGPU`'s reverse

@@ -48,15 +48,15 @@ namespace Strata
 
 		Scope<RendererData> s_Data;
 
-		// A 1x1 texture of one color: 2D, a cube (six faces) or a cube array of one cube.
-		nvrhi::TextureHandle CreateSolidTexture(nvrhi::ICommandList* commandList, uint32_t rgba, const char* name,
+		// A 1x1 texture of one texel (`texelBytes` bytes of `format`): 2D, a cube (six faces) or a cube array of one cube.
+		nvrhi::TextureHandle CreateSolidTexture(nvrhi::ICommandList* commandList, const void* texel, size_t texelBytes, nvrhi::Format format, const char* name,
 			nvrhi::TextureDimension dimension = nvrhi::TextureDimension::Texture2D)
 		{
 			const bool cube = dimension == nvrhi::TextureDimension::TextureCube || dimension == nvrhi::TextureDimension::TextureCubeArray;
 			nvrhi::TextureDesc desc;
 			desc.width = 1;
 			desc.height = 1;
-			desc.format = nvrhi::Format::RGBA8_UNORM;
+			desc.format = format;
 			desc.dimension = dimension;
 			desc.arraySize = cube ? 6 : 1;
 			desc.debugName = name;
@@ -67,8 +67,15 @@ namespace Strata
 			if (!texture)
 				return nullptr;
 			for (uint32_t slice = 0; slice < desc.arraySize; slice++)
-				commandList->writeTexture(texture, slice, 0, &rgba, sizeof(rgba));
+				commandList->writeTexture(texture, slice, 0, texel, texelBytes);
 			return texture;
+		}
+
+		// A 1x1 texture of one 8-bit color.
+		nvrhi::TextureHandle CreateSolidTexture(nvrhi::ICommandList* commandList, uint32_t rgba, const char* name,
+			nvrhi::TextureDimension dimension = nvrhi::TextureDimension::Texture2D)
+		{
+			return CreateSolidTexture(commandList, &rgba, sizeof(rgba), nvrhi::Format::RGBA8_UNORM, name, dimension);
 		}
 
 	}
@@ -96,7 +103,11 @@ namespace Strata
 		commandList->open();
 		s_Data->WhiteTexture = CreateSolidTexture(commandList, 0xFFFFFFFFu, "WhiteTexture");
 		s_Data->BlackTexture = CreateSolidTexture(commandList, 0xFF000000u, "BlackTexture");
-		s_Data->FlatNormalTexture = CreateSolidTexture(commandList, 0xFFFF8080u, "FlatNormalTexture"); // (0.5, 0.5, 1.0)
+		// (0.5, 0.5, 1, 1) exactly, in half floats: in 8 bits 0.5 is 128/255, which tilted every surface without a normal map by
+		// 0.3 degrees, and a mirror turned its reflected rays by twice that (a wall 10 m away lost the top 8 cm of its image in a
+		// mirror floor).
+		constexpr uint16_t c_FlatNormalTexel[4] = { 0x3800u, 0x3800u, 0x3C00u, 0x3C00u };
+		s_Data->FlatNormalTexture = CreateSolidTexture(commandList, c_FlatNormalTexel, sizeof(c_FlatNormalTexel), nvrhi::Format::RGBA16_FLOAT, "FlatNormalTexture");
 		s_Data->BlackCubeTexture = CreateSolidTexture(commandList, 0xFF000000u, "BlackCubeTexture", nvrhi::TextureDimension::TextureCube);
 		s_Data->BlackCubeArrayTexture = CreateSolidTexture(commandList, 0xFF000000u, "BlackCubeArrayTexture", nvrhi::TextureDimension::TextureCubeArray);
 		{

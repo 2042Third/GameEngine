@@ -257,8 +257,19 @@ TEST_SUITE("GPU.SceneRenderer.Materials")
 		REQUIRE(surface.size() == static_cast<size_t>(c_SpecularViewSize) * c_SpecularViewSize);
 		// The planes' centers: a quarter of the view left and right of the middle row's center.
 		const float half = glm::unpackHalf1x16(glm::packHalf1x16(0.3f));
-		const float flatRoughness = surface[static_cast<size_t>(c_SpecularViewSize / 2) * c_SpecularViewSize + c_SpecularViewSize / 4].z;
-		CHECK(flatRoughness == doctest::Approx(half).epsilon(0.001));
+		const glm::vec4 flatTexel = surface[static_cast<size_t>(c_SpecularViewSize / 2) * c_SpecularViewSize + c_SpecularViewSize / 4];
+		CHECK(flatTexel.z == doctest::Approx(half).epsilon(0.001));
+		// A surface without a normal map keeps its geometric normal (view space, octahedral): the flat normal texture holds 0.5
+		// exactly, where 8 bits gave 128/255 and tilted every such surface by 0.3 degrees (0.004 in each coordinate here).
+		const glm::vec3 viewNormal = glm::normalize(glm::mat3(camera.View) * glm::vec3(0.0f, 1.0f, 0.0f));
+		REQUIRE(viewNormal.z > 0.0f);
+		const glm::vec2 encoded = glm::vec2(viewNormal) / (std::abs(viewNormal.x) + std::abs(viewNormal.y) + std::abs(viewNormal.z));
+		CAPTURE(flatTexel.x);
+		CAPTURE(flatTexel.y);
+		CAPTURE(encoded.x);
+		CAPTURE(encoded.y);
+		CHECK(std::abs(flatTexel.x - encoded.x) < 5e-4f);
+		CHECK(std::abs(flatTexel.y - encoded.y) < 5e-4f);
 		double bumpyRoughness = 0.0;
 		uint32_t samples = 0;
 		for (uint32_t y = c_SpecularViewSize / 2 - 16; y < c_SpecularViewSize / 2 + 16; y++)

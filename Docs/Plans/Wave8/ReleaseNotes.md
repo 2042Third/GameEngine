@@ -87,6 +87,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   offsets exactly (about two pixels softer on mirrors at 3840x2160).
 - Reflections fade only where the reflected ray would leave the screen, not within 10% of every side: no more sky
   wedges at the sides of wet ground or hard cuts across a metal sheet (Medium too).
+- Surfaces without a normal map are exactly flat: their shading normal was tilted by 0.3 degrees, which moved mirror
+  images (a wall 10 m away lost the top 8 cm of its reflection in a polished floor).
 - Ambient occlusion no longer darkens what screen-space reflections found: no dark smudges beside objects on wet ground
   (Medium too). A material's occlusion map still darkens them.
 - Reflection probe bakes draw no sun disk into their captures: the sun lights the scene; a disk in a probe lit surfaces
