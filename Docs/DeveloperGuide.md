@@ -5409,7 +5409,10 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   less the more their mirror directions differ (at 3840x2160 still 0.97: about two pixels of softening). The kernel was
   chosen over a 3x3 order of the march with a 3x3 window by noise (`lookdev.sheet`'s crops at 4K, High and Ultra, every
   anti-aliasing mode: 0.31-0.37% and 0.95-1.01% against 0.38-0.43% and 1.15-1.24%), at 0.43 ms on
-  `PerfGPU.Renderer.SSRSpatial4KStageGPU`. It writes the full-resolution target the
+  `PerfGPU.Renderer.SSRSpatial4KStageGPU`, within its 1.2 ms target (so its separable form was not built). With the
+  validated crossings the stage measures 0.59 ms there at Spatial and 0.70 ms at SpatialHigh (`GPU.Opaque` 0.64 ms), and
+  on `lookdev.sheet` and `tp.scene` at 4K about 2.1 and 2.3 times the base build's `GPU.Reflections` as a share of
+  `GPU.Opaque` (R1's A/B; the plan proposed 1.3 times). It writes the full-resolution target the
   forward pass reads at SRV 18 (the same premultiplied lookup). Memory at 3840x2160: the surface target 63 MiB (as
   Checkerboard's), the trace and the resolve 63 MiB each (RGBA16F), the full-resolution copy 32 MiB (B10G11R11; 63 MiB in
   the RGBA16F fallback), beside the scene-color copy (11 MiB): about 150 MiB more than Checkerboard,
