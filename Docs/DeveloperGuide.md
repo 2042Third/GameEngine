@@ -5410,7 +5410,8 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   shows no screen door (`Pattern3` and `Pattern4` at most 0.2%) and, in a strafe past the sheet and over the wet plane,
   what the reflections add to the flicker meter's `Blocks` and `Mean` ("GPU tests").
   `PerfGPU.Renderer.SSRSpatial4K` (+ `GPU`, `StageGPU`: `GPU.Reflections`, target 1.2 ms; provisional) measures Spatial
-  on the 100,000-cube grid at 3840x2160 with FXAA.
+  on the 100,000-cube grid at 3840x2160 with FXAA, and `SSRSpatialHigh4K` (target 1.8 ms) SpatialHigh there: clutter is
+  where rejected candidates cost.
 - Bindings: scene-set SRV 9 is the cube array (a one-slot black cube array, `Renderer::GetBlackCubeArrayTexture`, without
   probes in view; the device's `imageCubeArray` is required, "Building") and SRV 10 the probe buffer
   (`RenderData::ReflectionProbeBuffer`, 3.6 KB made with the renderer: the slots' coefficients, written on the GPU, then
