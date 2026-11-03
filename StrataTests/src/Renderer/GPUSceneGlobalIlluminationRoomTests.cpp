@@ -204,6 +204,37 @@ namespace
 		return values.empty() ? 0.0f : sum / static_cast<float>(values.size());
 	}
 
+	// The voxels of levels 0-2 lying wholly in a box (world) that hold light: injection's leaks, before any probe.
+	uint32_t CountLitVoxels(const SceneRenderer& renderer, const glm::vec3& cameraPosition, const glm::vec3& minimum, const glm::vec3& maximum)
+	{
+		const RenderData::GIFieldConstants& field = renderer.GetGlobalIlluminationFieldConstants();
+		const glm::ivec3 dimensions(field.VoxelDimensions);
+		uint32_t lit = 0;
+		for (uint32_t level = 0; level < 3; level++)
+		{
+			std::vector<uint8_t> radiance;
+			REQUIRE(renderer.ReadGlobalIlluminationVoxels(level, SceneRenderer::GlobalIlluminationTexture::Radiance, radiance));
+			const float voxel = field.VoxelOrigin[level].w;
+			for (int z = field.VoxelValidMinimum[level].z; z < field.VoxelValidMaximum[level].z; z++)
+			{
+				for (int y = field.VoxelValidMinimum[level].y; y < field.VoxelValidMaximum[level].y; y++)
+				{
+					for (int x = field.VoxelValidMinimum[level].x; x < field.VoxelValidMaximum[level].x; x++)
+					{
+						const glm::vec3 center = cameraPosition + glm::vec3(field.VoxelOrigin[level]) + (glm::vec3(x, y, z) + 0.5f) * voxel;
+						if (glm::any(glm::lessThan(center, minimum + 0.5f * voxel)) || glm::any(glm::greaterThan(center, maximum - 0.5f * voxel)))
+							continue;
+						const glm::ivec3 texel = ((glm::ivec3(x, y, z) + glm::ivec3(field.VoxelTexel[level])) % dimensions + dimensions) % dimensions;
+						uint16_t value[4];
+						std::memcpy(value, radiance.data() + (texel.x + dimensions.x * (texel.y + dimensions.y * texel.z)) * 8, sizeof(value));
+						lit += glm::unpackHalf1x16(value[0]) + glm::unpackHalf1x16(value[1]) + glm::unpackHalf1x16(value[2]) > 0.0f ? 1u : 0u;
+					}
+				}
+			}
+		}
+		return lit;
+	}
+
 	SunRoomOptions DefaultRoom()
 	{
 		SunRoomOptions room;
@@ -269,6 +300,118 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		}
 		MESSAGE("points changed by more than 10%: " << changed);
 		CHECK(changed >= 3);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Paired rooms: the sealed one stays dark")
+	{
+		// Room B is room A moved 6.2 m east (sharing A's east wall), sealed. Room A's light is the nineteen points' mean, as the
+		// sealed room's case takes it: one bounce leaves A's floor nearly dark (its reference is 0-60 nits), so a floor mean alone
+		// made the bound a thousandth of a nit.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SunRoomOptions room = DefaultRoom();
+		room.PairedRoom = true;
+		const glm::vec3 toB(6.2f, 0.0f, 0.0f);
+		RoomRender wallsA(room, c_RoomSize, RoomSpecification());
+		RoomRender floorA(room, c_FloorSize, RoomSpecification());
+		const float meanA = 0.5f * (MeanLuminance(wallsA.Measure(RoomCamera(), GetWallPoints())) + MeanLuminance(floorA.Measure(FloorCamera(), GetFloorPoints())));
+		std::vector<RoomPoint> wallPointsB = GetWallPoints(toB);
+		std::vector<RoomPoint> floorPointsB = GetFloorPoints(toB, true);
+		RoomRender wallsB(room, c_RoomSize, RoomSpecification());
+		RoomRender floorB(room, c_FloorSize, RoomSpecification());
+		const std::vector<glm::vec3> valuesB = wallsB.Measure(RoomCamera(toB), wallPointsB);
+		const std::vector<glm::vec3> floorValuesB = floorB.Measure(FloorCamera(toB), floorPointsB);
+		MESSAGE("room A " << meanA << ", room B walls " << MeanLuminance(valuesB) << ", floor " << MeanLuminance(floorValuesB));
+		CHECK(meanA > 0.0f);
+		for (size_t index = 0; index < wallPointsB.size(); index++)
+		{
+			INFO("room B " << wallPointsB[index].Name);
+			CHECK(Luminance(valuesB[index]) <= c_SealedBound * meanA);
+		}
+		for (size_t index = 0; index < floorPointsB.size(); index++)
+		{
+			INFO("room B " << floorPointsB[index].Name << " " << floorPointsB[index].Point.x << ", " << floorPointsB[index].Point.z);
+			CHECK(Luminance(floorValuesB[index]) <= c_SealedBound * meanA);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The sunlit patch's voxels hold its power")
+	{
+		// Correction 8's split of a miss into geometry and probes: the floor's lit voxel layer (the layer above its top face, which
+		// lies on the 0.1 m grid) at High, its radiance times its area against the reference's sunlit floor sampled at the same
+		// columns. Marching the sun's shadow through filtered occupancy, and marking voxels solid that a box's edge only touches
+		// from outside, closed the window by a voxel or more at each edge: 48% of the power.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const SunRoomOptions room = DefaultRoom();
+		RoomRender render(room, c_RoomSize, RoomSpecification());
+		render.Measure(RoomCamera(), GetWallPoints());
+		const RenderData::GIFieldConstants& field = render.Renderer->GetGlobalIlluminationFieldConstants();
+		std::vector<uint8_t> radiance;
+		REQUIRE(render.Renderer->ReadGlobalIlluminationVoxels(0, SceneRenderer::GlobalIlluminationTexture::Radiance, radiance));
+		const glm::ivec3 dimensions(field.VoxelDimensions);
+		const float voxel = field.VoxelOrigin[0].w;
+		REQUIRE(voxel > 0.0f);
+		// The renderer's origin is the camera's position.
+		const glm::vec3 minimum = glm::vec3(-9.0f, 1.5f, -4.5f) + glm::vec3(field.VoxelOrigin[0]);
+		const int layer = static_cast<int>(std::floor((0.15f - minimum.y) / voxel));
+		REQUIRE(layer >= field.VoxelValidMinimum[0].y);
+		REQUIRE(layer < field.VoxelValidMaximum[0].y);
+		double power = 0.0;
+		double reference = 0.0;
+		uint32_t columns = 0;
+		for (int z = field.VoxelValidMinimum[0].z; z < field.VoxelValidMaximum[0].z; z++)
+		{
+			for (int x = field.VoxelValidMinimum[0].x; x < field.VoxelValidMaximum[0].x; x++)
+			{
+				const glm::vec3 center = minimum + (glm::vec3(x, layer, z) + 0.5f) * voxel;
+				if (center.x < -13.0f || center.x > -7.0f || center.z < -5.0f || center.z > 1.0f)
+					continue;
+				columns++;
+				const glm::ivec3 texel = ((glm::ivec3(x, layer, z) + glm::ivec3(field.VoxelTexel[0])) % dimensions + dimensions) % dimensions;
+				uint16_t value[4];
+				std::memcpy(value, radiance.data() + (texel.x + dimensions.x * (texel.y + dimensions.y * texel.z)) * 8, sizeof(value));
+				const float alpha = glm::unpackHalf1x16(value[3]);
+				if (alpha > 0.0f)
+				{
+					const glm::vec3 color(glm::unpackHalf1x16(value[0]), glm::unpackHalf1x16(value[1]), glm::unpackHalf1x16(value[2]));
+					power += Luminance(color / alpha) / RenderData::c_GIRadianceScale * voxel * voxel;
+				}
+				reference += Luminance(SunRoomRadiance(room, glm::vec3(center.x, 0.1f, center.z), c_Up)) * voxel * voxel;
+			}
+		}
+		MESSAGE("the floor's sunlit power: voxels " << power << ", reference " << reference << " (" << power / reference << ") over " << columns << " columns");
+		CHECK(columns == 3600u);
+		CHECK(power >= 0.9 * reference);
+		CHECK(power <= 1.1 * reference);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The sun lights no voxel inside a sealed room")
+	{
+		// The sun's walk from a voxel whose surface runs on under a wall (the floor under the walls' feet) went through the wall
+		// when it skipped solid voxels holding its own face, or when it started a voxel and more along the ray: 22 floor voxels
+		// along the sealed room's south wall were sunlit at Low.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
+		{
+			const float spacing = GlobalIllumination::ComputeLayout(level)->Cascades.front().Spacing;
+			for (const glm::vec3& offset : { glm::vec3(0.0f), glm::vec3(0.25f * spacing, 0.0f, 0.25f * spacing), glm::vec3(0.5f * spacing, 0.0f, 0.5f * spacing) })
+			{
+				SunRoomOptions room = DefaultRoom();
+				room.SealWindow = true;
+				room.Offset = offset;
+				RoomRender render(room, c_RoomSize, RoomSpecification(level));
+				render.Measure(RoomCamera(offset), GetWallPoints(offset));
+				const uint32_t lit = CountLitVoxels(*render.Renderer, glm::vec3(-9.0f, 1.5f, -4.5f) + offset, glm::vec3(-13.0f, 0.1f, -5.0f) + offset,
+					glm::vec3(-7.0f, 3.0f, 1.0f) + offset);
+				INFO(std::string(level == GlobalIlluminationLevel::High ? "High" : "Low") << ", offset " << offset.x);
+				CHECK(lit == 0u);
+			}
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

@@ -31,7 +31,7 @@ struct GIProbePassParameters
 {
 	uint4 Grid;          // xyz: the cascade's probes per axis; w: the cascade
 	uint4 ParentGrid;    // xyz: the next cascade's probes per axis (0 for the top one); w: its directions per axis
-	float4 Interval;     // x: spacing (m); y: the interval's start, z: its end (negative for the top: until the ray leaves); w: lead-in
+	float4 Interval;     // x: spacing (m); y: the interval's start, z: its end plus its overlap (negative for the top: until the ray leaves); w: lead-in
 	uint DirectionsPerAxis;
 	uint MinimumLevel;
 	uint Level;

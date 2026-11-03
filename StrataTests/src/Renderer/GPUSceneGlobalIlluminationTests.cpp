@@ -304,6 +304,8 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		};
 		const Placement placements[] = { { 0.0f, glm::vec3(1.0f), GlobalIlluminationLevel::High }, { 0.037f, glm::vec3(1.0f), GlobalIlluminationLevel::High },
 			{ 0.0f, glm::vec3(4.0f, 1.05f, 1.8f), GlobalIlluminationLevel::High }, { 0.0f, glm::vec3(4.0f, 1.05f, 1.8f), GlobalIlluminationLevel::Low } };
+		// c_GITouchOccupancy as the RGBA8 texture stores it.
+		constexpr uint8_t c_Touch = static_cast<uint8_t>(RenderData::c_GITouchOccupancy * 255.0f + 0.5f);
 		for (const Placement& placement : placements)
 		{
 			const float offset = placement.Offset;
@@ -358,8 +360,8 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 							const glm::u8vec4 material = voxels.GetMaterial(voxel);
 							const glm::vec4 normal = voxels.GetNormal(voxel);
 							// Opaque where a face reaches in or the box holds it; the layer only touched by faces in front of it at
-							// c_GITouchOccupancy (51 of 255).
-							const uint8_t expected = inside || Contains(solid, voxel) ? 255 : onSurface ? 51 : 0;
+							// c_GITouchOccupancy.
+							const uint8_t expected = inside || Contains(solid, voxel) ? 255 : onSurface ? c_Touch : 0;
 							if (material.a != expected)
 								wrongOccupancy++;
 
@@ -483,11 +485,15 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 			ring.push_back({ 99, 40, step });
 			ring.push_back({ 110, 40, step });
 		}
+		// They lie outside the box and above the floor: the floor's lit layer (c_GITouchOccupancy), not solid, though the box's
+		// bottom touches them along their edges from behind (a box's edge beside a voxel marked it solid, and closed every opening
+		// on the grid by a voxel at its edges).
+		constexpr uint8_t c_Touch = static_cast<uint8_t>(RenderData::c_GITouchOccupancy * 255.0f + 0.5f);
 		uint32_t wrong = 0;
 		for (const glm::i64vec3& voxel : ring)
 		{
 			const glm::vec4 normal = level0.GetNormal(voxel);
-			wrong += level0.GetMaterial(voxel).a != 255 || normal.w != 1.0f || normal.y <= 0.0f ? 1 : 0;
+			wrong += level0.GetMaterial(voxel).a != c_Touch || normal.w != 1.0f || normal.y <= 0.0f ? 1 : 0;
 		}
 		CHECK(wrong == 0);
 		uint32_t wrongOpen = 0;

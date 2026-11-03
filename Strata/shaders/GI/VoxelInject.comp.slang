@@ -5,10 +5,11 @@
 // Light injection (Docs/DeveloperGuide.md, "Global illumination"): every voxel of one level (u_Pass.Level), every frame, so moving
 // the sun re-lights the clipmap in the frame it moved. A surface voxel (its normal's w 1, or 0.5 double-sided) sends
 // albedo * E / pi + emission (luminance, times ST_GI_RADIANCE_SCALE), alpha 1: E the sun's illuminance on the voxel's normal
-// times the transmittance of a march toward the sun through the clipmap from the voxel's own level up (from the surface's plane) (the shadow maps cover the
-// view only; light reaches surfaces behind the camera too). A double-sided voxel turns its normal toward the sun. A two-sided
-// voxel (w -1: both faces of a thin wall) sends nothing but stays a surface (alpha 1), so marches never take a neighbor's light
-// for it. Voxels without a surface, and those outside the level's valid box, are zero. Counts the surface voxels (counter 4).
+// times the transmittance of a walk toward the sun through the clipmap's voxels from the voxel's own level up, from the surface's
+// plane (the shadow maps cover the view only; light reaches surfaces behind the camera too). A double-sided voxel turns its normal
+// toward the sun. A two-sided voxel (w -1: both faces of a thin wall) sends nothing but stays a surface (alpha 1), so marches never
+// take a neighbor's light for it. Voxels without a surface, and those outside the level's valid box, are zero. Counts the surface
+// voxels (counter 4).
 
 Texture3D<uint> u_GIEmission : register(t53);
 [vk::image_format("rgba16f")] RWTexture3D<float4> o_Radiance : register(u0);
@@ -16,22 +17,57 @@ RWByteAddressBuffer o_Counters : register(u7);
 
 groupshared uint s_SurfaceVoxels;
 
-// The transmittance from a camera-relative point toward the sun (`direction`), one voxel of the level sampled a step.
+// The level the sun's march reads at a camera-relative point: the finest from `level` up whose weight there is at least one
+// half (GetLevelWeight: the switch sits in the middle of the level blend and moves with the camera, never with the windows'
+// scrolling); ST_GI_MAX_VOXEL_LEVELS where none holds it (the point left the clipmap).
+uint FindSunLevel(float3 position, uint level)
+{
+	[loop]
+	for (uint candidate = level; candidate < u_GI.Dimensions.w; candidate++)
+	{
+		if (GetLevelWeight(candidate, position) >= 0.5)
+			return candidate;
+	}
+	return ST_GI_MAX_VOXEL_LEVELS;
+}
+
+// The transmittance from a camera-relative point toward the sun (`direction`): a walk through the voxels the ray crosses, each read
+// as it is stored. A trilinear march with the occupancy's gain thickens every occluder by a fraction of a voxel on each side and
+// more at its edges (the sun room's 2 x 1.3 m window lit 48% of its patch's power that way). Solid voxels stop the light; voxels
+// holding only a face on their boundary (ST_GI_TOUCH_OCCUPANCY: their solid neighbor occludes) pass it; partial ones (alpha-
+// masked) attenuate it by their absorption over the share of a voxel crossed.
 float GetSunTransmittance(float3 start, float3 direction, uint level)
 {
 	float transmittance = 1.0;
-	float t = 0.0;
+	float3 position = start;
+	// Axes the ray does not move along are never left.
+	bool3 moving = abs(direction) > 1e-6;
+	float3 inverse = select(moving, float3(1.0, 1.0, 1.0) / select(moving, direction, float3(1.0, 1.0, 1.0)), float3(0.0, 0.0, 0.0));
+	float3 ahead = select(direction > float3(0.0, 0.0, 0.0), float3(1.0, 1.0, 1.0), float3(0.0, 0.0, 0.0));
 	[loop]
 	for (uint step = 0u; step < ST_GI_MAX_MARCH_STEPS; step++)
 	{
-		uint finest;
-		float occupancy = SampleOccupancy(start + direction * t, level, finest);
-		if (finest == ST_GI_MAX_VOXEL_LEVELS)
+		uint current = FindSunLevel(position, level);
+		if (current == ST_GI_MAX_VOXEL_LEVELS)
 			break; // Out of the clipmap: the rest of the way is open
-		transmittance *= 1.0 - saturate(occupancy * ST_GI_OCCUPANCY_GAIN);
-		if (transmittance < ST_GI_TRANSMITTANCE_CUTOFF)
+		GIVoxelLevel data = u_GI.Levels[current];
+		float voxel = data.Origin.w;
+		float3 local = (position - data.Origin.xyz) / voxel;
+		float3 cell = floor(local);
+		// The distance (in voxels) to the cell's exit along the ray.
+		float3 exits = select(moving, (cell + ahead - local) * inverse, float3(1e30, 1e30, 1e30));
+		float exit = max(min(exits.x, min(exits.y, exits.z)), 0.0);
+		float absorbed = saturate(LoadGIMaterial(current, GetVoxelTexel(current, int3(cell))).a * ST_GI_OCCUPANCY_GAIN);
+		if (absorbed >= 1.0)
 			return 0.0;
-		t += u_GI.Levels[finest].Origin.w;
+		if (absorbed > (ST_GI_TOUCH_OCCUPANCY + 0.5 / 255.0) * ST_GI_OCCUPANCY_GAIN)
+		{
+			transmittance *= exp2(log2(1.0 - absorbed) * exit);
+			if (transmittance < ST_GI_TRANSMITTANCE_CUTOFF)
+				return 0.0;
+		}
+		// Into the next cell (a thousandth of a voxel past the boundary, so the cell changes).
+		position += direction * ((exit + 1e-3) * voxel);
 	}
 	return transmittance;
 }
@@ -76,10 +112,13 @@ void main(uint3 globalID : SV_DispatchThreadID, uint localIndex : SV_GroupIndex)
 				{
 					float voxel = data.Origin.w;
 					float3 center = data.Origin.xyz + (float3(local) + 0.5) * voxel;
-					// From the surface's plane (half a voxel behind the center along the normal), the march starts where the ray
-					// toward the sun is ST_GI_SHADOW_START_VOXELS voxels above that plane: clear of the surface's own voxels, and
-					// on the ray through the surface (an offset along the normal would move the sunlit patch toward the window).
-					float3 start = center - n * (0.5 * voxel) + toSun * (ST_GI_SHADOW_START_VOXELS * voxel / max(cosine, 0.25));
+					// A voxel holding only a face on its boundary (the layer in front of a face on the grid) is free: the walk starts on
+					// the face, half a voxel behind the center (the shadow's edges stay where the geometry puts them). A solid one holds
+					// the surface somewhere inside: the walk starts ST_GI_SHADOW_OFFSET_VOXELS along the normal from its center, off the
+					// surface's own voxels, and never skips a solid voxel (the floor runs on under a wall: the wall's voxels at the
+					// floor's height hold the floor's face, and skipping them let the sun into a sealed room).
+					bool touch = LoadGIMaterial(level, texel).a <= ST_GI_TOUCH_OCCUPANCY + 0.5 / 255.0;
+					float3 start = touch ? center - n * (0.49 * voxel) : center + n * (ST_GI_SHADOW_OFFSET_VOXELS * voxel);
 					float transmittance = GetSunTransmittance(start, toSun, level);
 					light += albedo * u_Frame.DirectionalLightColor.rgb * (cosine * transmittance / PI);
 				}

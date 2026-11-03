@@ -44,6 +44,7 @@ namespace
 		float Start;
 		float End;
 		float LeadIn;
+		float Overlap;
 		uint32_t MinimumLevel;
 	};
 
@@ -60,6 +61,7 @@ namespace
 			CHECK(cascade.IntervalStart == expected[k].Start);
 			CHECK(cascade.IntervalEnd == expected[k].End);
 			CHECK(cascade.LeadIn == expected[k].LeadIn);
+			CHECK(cascade.Overlap == expected[k].Overlap);
 			CHECK(cascade.MinimumLevel == expected[k].MinimumLevel);
 			// Every cascade covers the same field.
 			CHECK(glm::vec3(cascade.Grid) * cascade.Spacing == layout.FieldExtent);
@@ -95,10 +97,10 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 			CHECK(extent.z == doctest::Approx(12.8f * static_cast<float>(1u << index)));
 		}
 		CheckCascades(high, {
-			{ 0.5f, { 48, 40, 48 }, 16, 0.0f, 0.5f, 0.0f, 0 },
-			{ 1.0f, { 24, 20, 24 }, 64, 0.5f, 2.0f, 0.5f, 0 },
-			{ 2.0f, { 12, 10, 12 }, 256, 2.0f, 8.0f, 2.0f, 1 },
-			{ 4.0f, { 6, 5, 6 }, 1024, 8.0f, c_Infinity, 8.0f, 2 },
+			{ 0.5f, { 48, 40, 48 }, 16, 0.0f, 0.5f, 0.0f, 0.5f, 0 },
+			{ 1.0f, { 24, 20, 24 }, 64, 0.5f, 2.0f, 0.5f, 1.0f, 0 },
+			{ 2.0f, { 12, 10, 12 }, 256, 2.0f, 8.0f, 2.0f, 2.0f, 1 },
+			{ 4.0f, { 6, 5, 6 }, 1024, 8.0f, c_Infinity, 8.0f, 0.0f, 2 },
 		});
 		CHECK(high.FieldExtent == glm::vec3(24.0f, 20.0f, 24.0f));
 		CHECK(high.FieldSnap == 4.0f);
@@ -120,9 +122,9 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 			CHECK(extent.y == doctest::Approx(6.4f * static_cast<float>(1u << index)));
 		}
 		CheckCascades(low, {
-			{ 1.0f, { 24, 20, 24 }, 16, 0.0f, 1.0f, 0.0f, 0 },
-			{ 2.0f, { 12, 10, 12 }, 64, 1.0f, 4.0f, 1.0f, 0 },
-			{ 4.0f, { 6, 5, 6 }, 256, 4.0f, c_Infinity, 4.0f, 1 },
+			{ 1.0f, { 24, 20, 24 }, 16, 0.0f, 1.0f, 0.0f, 1.0f, 0 },
+			{ 2.0f, { 12, 10, 12 }, 64, 1.0f, 4.0f, 1.0f, 2.0f, 0 },
+			{ 4.0f, { 6, 5, 6 }, 256, 4.0f, c_Infinity, 4.0f, 0.0f, 1 },
 		});
 		CHECK(low.FieldExtent == glm::vec3(24.0f, 20.0f, 24.0f));
 		CHECK(low.FieldSnap == 4.0f);

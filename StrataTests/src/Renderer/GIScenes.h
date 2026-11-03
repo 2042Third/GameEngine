@@ -59,9 +59,6 @@ namespace Strata::Tests
 	// The reference's radiance of a surface point the sun lights directly (albedo times the sun's irradiance over pi, 0 in its
 	// shadow): what the lit image shows of a diffuse surface there.
 	glm::vec3 SunRoomRadiance(const SunRoomOptions& options, const glm::vec3& point, const glm::vec3& normal);
-	// The power of the room floor's sunlit patch: the sun's radiance of the floor's top integrated over it (radiance times area,
-	// sampled every `step` meters), for telling a miss of the geometry (the window's opening as voxels) from one of the probes.
-	float SunRoomPatchPower(const SunRoomOptions& options, float step = 0.05f);
 
 	// The fence strafe: from (-3.5, 1.7, -9.5) toward (2.5, 1.0, -0.5), both moving +x by 0.02 m times `speed` a frame, a
 	// vertical field of view of 55 degrees.

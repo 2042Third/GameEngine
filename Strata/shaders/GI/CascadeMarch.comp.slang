@@ -5,20 +5,19 @@
 // One cascade's rays (Docs/DeveloperGuide.md, "Global illumination"), cascades top down: a thread per ray, the atlas texel
 // (probe.xy * a + direction texel, probe.z). The direction is fixed (GetTileDirection: nothing jitters, nothing blends over
 // frames). A dead probe writes zero. The ray marches the clipmap from the cascade's minimum level up, ST_GI_STEP_VOXELS voxels of
-// the level sampled a step:
-// [start - lead-in, end), light front to back with transmittance. The lead-in reaches back to the probe for every cascade but the
-// first: a wall between a child's interval and its parents' is crossed by a marched side, and the light of surfaces between a
-// child's interval end and its parents' interval start (a floor just below a parent) is not lost; the parent's first surface
-// there is on the child's side of any wall (the weights' march zeroes parents across one), so it never leaks. Within a run of
-// occupied samples, every sample takes the light and normal read where the run began (less than a step past the last empty
-// voxel: the layer the ray entered, never the one behind it, so a thin wall's sunlit outer face does not leak through its inner
-// one).
+// the level sampled a step, over [start - lead-in, end + overlap), light front to back with transmittance. The lead-in reaches
+// back to the probe for every cascade but the first and only absorbs: a wall between a child's interval and its parents' is
+// crossed by a marched side (correction 2). Gathering light there took surfaces beside the parent that the child's line never
+// meets (the sun room's ceiling probes read 2.5-4.8 times the reference through a parent 0.9 m above the floor's sunlit patch);
+// the overlap (ProbeCascadeLayout::Overlap) takes what lies just past the interval's end on the child's own line instead. Within
+// a run of occupied samples, every sample takes the light and normal read where the run began (less than a step past the last
+// empty voxel: the layer the ray entered, never the one behind it, so a thin wall's sunlit outer face does not leak through its
+// inner one).
 // The miss rule: a ray that ends its interval unabsorbed is transparent and continues into the next cascade's merged rays (its
 // eight parents by the probe's weights, each the mean of the four parent directions this one covers), never into the sky; no
 // visible parent: dark. Only the top cascade, marching until it leaves every level, reads the sky. Output: rgb the merged light
 // (scaled luminance), a the merged transmittance to the sky; cascade 0 (not the top) writes its own light and transmittance,
 // unmerged: GI/FieldReduce.comp merges cascade 1 in each of its finer directions.
-
 
 Texture3D<float4> u_Validity : register(t57);
 Texture3D<float4> u_WeightsA : register(t58);
@@ -88,13 +87,16 @@ void main(uint3 globalID : SV_DispatchThreadID)
 			left = true;
 			break;
 		}
-		if (occupancy > 0.0)
+		// The lead-in absorbs only solid voxels (correction 2): partial ones (alpha-masked, the layer in front of a face on the grid)
+		// are taken once, in the interval.
+		if (occupancy > 0.0 && (t >= start || occupancy >= ST_GI_LEAD_IN_OCCUPANCY))
 		{
 			if (!inRun)
 				runRadiance = SampleSurfaceRadiance(position, minimumLevel, direction);
 			inRun = true;
 			float absorbed = saturate(occupancy * ST_GI_OCCUPANCY_GAIN);
-			light += transmittance * absorbed * runRadiance;
+			if (t >= start)
+				light += transmittance * absorbed * runRadiance;
 			transmittance *= 1.0 - absorbed;
 			if (transmittance < ST_GI_TRANSMITTANCE_CUTOFF)
 				break;

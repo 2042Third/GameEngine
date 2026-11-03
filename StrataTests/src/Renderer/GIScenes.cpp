@@ -441,23 +441,6 @@ namespace Strata::Tests
 		return box ? glm::vec3(SunRadiance(boxes, options, *box, origin, n)) : glm::vec3(0.0f);
 	}
 
-	float SunRoomPatchPower(const SunRoomOptions& options, float step)
-	{
-		const std::vector<RoomBox> boxes = GetSunRoomBoxes(options);
-		const RoomBox& floor = boxes[1];
-		const double area = static_cast<double>(step) * step;
-		double power = 0.0;
-		for (double x = floor.Minimum.x + 0.5 * step; x < floor.Maximum.x; x += step)
-		{
-			for (double z = floor.Minimum.z + 0.5 * step; z < floor.Maximum.z; z += step)
-			{
-				const glm::dvec3 radiance = SunRadiance(boxes, options, floor, glm::dvec3(x, floor.Maximum.y, z), glm::dvec3(0.0, 1.0, 0.0));
-				power += (0.2126 * radiance.r + 0.7152 * radiance.g + 0.0722 * radiance.b) * area;
-			}
-		}
-		return static_cast<float>(power);
-	}
-
 	SceneCamera YardStrafe(uint32_t frame, float speed, float aspectRatio)
 	{
 		const glm::vec3 offset(0.02f * speed * static_cast<float>(frame), 0.0f, 0.0f);
@@ -538,10 +521,17 @@ namespace Strata::Tests
 							const float reach = glm::dot(facing, center - corners[0]) + 0.5f * (std::abs(facing.x) + std::abs(facing.y) + std::abs(facing.z));
 							if (outFacing && reach > 0.0f)
 								outFacing->push_back(anchorVoxel + glm::i64vec3(x, y, z));
-							// Include/Voxelize.slang's IsVoxelInFront.
+							// Include/Voxelize.slang's IsVoxelInFront and IsVoxelSolidFor: a triangle not wholly behind the voxel's center
+							// plane reaches into the voxel's inset box; one behind it covers part of the voxel's face (inset along it).
 							const float front = glm::dot(facing, center - corners[0]) - 0.5f * (std::abs(facing.x) + std::abs(facing.y) + std::abs(facing.z));
 							if (outSolid && front < 0.0f)
-								outSolid->push_back(anchorVoxel + glm::i64vec3(x, y, z));
+							{
+								const glm::vec3 inset(0.5f - RenderData::c_GISolidInsetVoxels);
+								const glm::vec3 halfSize = reach > 0.0f ? inset
+									: glm::vec3(facing.x != 0.0f ? 0.5f : inset.x, facing.y != 0.0f ? 0.5f : inset.y, facing.z != 0.0f ? 0.5f : inset.z);
+								if (TriangleBoxOverlap(center, halfSize, corners[0], corners[1], corners[2]))
+									outSolid->push_back(anchorVoxel + glm::i64vec3(x, y, z));
+							}
 						}
 					}
 				}

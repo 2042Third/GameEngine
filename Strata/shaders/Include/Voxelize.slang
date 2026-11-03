@@ -92,8 +92,9 @@ RWByteAddressBuffer u_Counters : register(u6);
 #define ST_GI_COUNTER_TILE_OVERFLOW 4u
 
 // Voxel classes in a key's bits 30-31: the largest key wins, so opaque surfaces win over alpha-masked ones. Bit 29: a triangle
-// reaches into the voxel or touches it from behind (solid); without it every triangle marking the voxel lies on its boundary
-// facing into it (the layer in front of a face on the grid: ST_GI_TOUCH_OCCUPANCY). Bit 28: double-sided.
+// reaches into the voxel or covers part of one of its faces from behind (solid: IsVoxelSolidFor); without it every triangle
+// marking the voxel only touches its boundary (the layer in front of a face on the grid, or a voxel beside a box's edge:
+// ST_GI_TOUCH_OCCUPANCY). Bit 28: double-sided.
 #define ST_VOXEL_CLASS_MASKED 1u
 #define ST_VOXEL_CLASS_INTERIOR 2u
 #define ST_VOXEL_CLASS_OPAQUE 3u
@@ -277,6 +278,23 @@ bool IsVoxelInFront(VoxelTriangle triangle, int3 voxel)
 	return reach >= 0.0;
 }
 
+// Whether a triangle marks a voxel (anchor-relative index) it overlaps solid: it reaches into the voxel's interior, or lies on one
+// of the voxel's faces, covering part of it, with the voxel behind it (the layer behind a face on the grid). Touching the voxel
+// only from the front, or only along an edge or at a corner from behind (a box's edge beside the voxel, which lies wholly
+// outside the box), does not: marking those solid closed every opening on the grid by a voxel at its edges (the sun room's
+// window's sill, lintel and reveals). Exact for faces on the grid (coordinates snapped).
+bool IsVoxelSolidFor(VoxelTriangle triangle, int3 voxel)
+{
+	if (IsVoxelInFront(triangle, voxel))
+		return false;
+	float3 center = float3(voxel) + 0.5;
+	float3 inset = float3(0.5, 0.5, 0.5) - ST_GI_SOLID_INSET_VOXELS;
+	if (!IsVoxelBehind(triangle, voxel))
+		return TriangleBoxOverlap(center, inset, triangle.A, triangle.B, triangle.C);
+	// Behind: the triangle lies in the plane of one of the voxel's faces; inset the box along that face only.
+	return TriangleBoxOverlap(center, select(triangle.Facing != float3(0.0, 0.0, 0.0), float3(0.5, 0.5, 0.5), inset), triangle.A, triangle.B, triangle.C);
+}
+
 // The writes of a triangle to a voxel of its region's scratch (local: relative to the region's minimum). A glowing triangle adds
 // the share of the voxel's face it covers (fixed point, integer adds: the same in any order); the voxel's emission is the
 // brightest of its triangles' times their coverage together, at most 1 (GI/VoxelFinalize.comp). Its normal goes only to voxels
@@ -287,7 +305,7 @@ void WriteVoxel(VoxelTriangle triangle, int3 local, uint emission, uint coverage
 	uint voxel = GetScratchVoxel(triangle.Region, local);
 	uint previous;
 	// Double-sided sheets are solid wherever they touch (both of their sides are surfaces).
-	bool solid = (triangle.Key & ST_VOXEL_KEY_DOUBLE_SIDED) != 0u || !IsVoxelInFront(triangle, triangle.Region.Minimum.xyz + local);
+	bool solid = (triangle.Key & ST_VOXEL_KEY_DOUBLE_SIDED) != 0u || IsVoxelSolidFor(triangle, triangle.Region.Minimum.xyz + local);
 	u_Scratch.InterlockedMax(GetScratchAddress(ST_SCRATCH_KEYS, voxel), triangle.Key | (solid ? ST_VOXEL_KEY_SOLID : 0u), previous);
 	if (emission != 0u)
 	{

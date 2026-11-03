@@ -888,7 +888,7 @@ namespace Strata
 			pass.Grid = glm::uvec4(cascade.Grid, k);
 			if (!top)
 				pass.ParentGrid = glm::uvec4(layout.Cascades[k + 1].Grid, layout.Cascades[k + 1].DirectionsPerAxis);
-			pass.Interval = glm::vec4(cascade.Spacing, cascade.IntervalStart, top ? -1.0f : cascade.IntervalEnd, cascade.LeadIn);
+			pass.Interval = glm::vec4(cascade.Spacing, cascade.IntervalStart, top ? -1.0f : cascade.IntervalEnd + cascade.Overlap, cascade.LeadIn);
 			pass.DirectionsPerAxis = cascade.DirectionsPerAxis;
 			pass.MinimumLevel = cascade.MinimumLevel;
 			return pass;

@@ -55,6 +55,12 @@ namespace Strata
 		// Meters of occlusion-only march before IntervalStart: the whole way from the probe for every cascade but the first, so
 		// a wall between a child's interval and its parents' is always crossed by a marched side.
 		float LeadIn = 0.0f;
+		// Meters its rays march past IntervalEnd, gathering light (one spacing; 0 for the top cascade): a parent's interval starts
+		// from the parent, up to 1.3 parent spacings beside the child, so a surface just past the child's interval end lies
+		// before the parents' starts (in their occlusion-only lead-in). The overlap takes it on the child's own line: the sun
+		// room's floor under a ceiling probe whose near parents sit in the ceiling. Its light ends the ray, so nothing counts
+		// twice.
+		float Overlap = 0.0f;
 		uint32_t MinimumLevel = 0;      // The finest voxel level its samples read: max(0, k - 1)
 	};
 

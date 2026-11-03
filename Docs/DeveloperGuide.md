@@ -5014,20 +5014,30 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   time box (next: run the recompiled GTAO twice over one frame in a test and compare its raw target bit for bit), so
   frame constants a new pass needs check the `ao` view's repeats first.
 - **The light** (`GPU.RadianceCascades` after the voxels, every frame; `Include/GIProbes.slang`): `GI/VoxelInject` lights
-  every surface voxel of every level (albedo times the sun's illuminance on its normal times a march toward the sun
-  through the clipmap from its own level up, started on the ray through the surface's plane `c_GIShadowStartVoxels`
-  above it, plus its emission; radiance times `c_GIRadianceScale`, alpha 1; two-sided voxels a dark surface);
-  `GI/VoxelDownsample` gives each coarser level the mean of the finer level's light where that one holds the scene,
-  blended by the finer level's weight (coarse voxels close small openings: the sun room's window at 0.4 m let a third of
-  its patch in). Faces on the grid mark a lit layer in front of them at `c_GITouchOccupancy` (0.2: openings on the grid
-  keep their size), voxels a face reaches into or touches from behind stay solid. The probe cascades (D10-D12 of the
-  spec) then run top down: `ProbeValidity` (dead probes inside solids), `ProbeWeights` (the eight parents' trilinear
-  weights times their validity and the transmittance between the probes), `CascadeMarch` (one ray a thread, fixed
-  directions, light front to back with transmittance from the probe for every cascade but the first, the run's first
-  sample's light and normal for the whole run, the miss rule: an unabsorbed ray continues into the parents' merged rays,
-  only the top cascade, leaving the clipmap, reads the sky); cascade 0 keeps its own light, and `FieldReduce` merges
-  cascade 1 in each of its 64 directions into the field's ambient cube (six RGBA16F faces per cascade-0 probe: irradiance
-  over pi and the sky share, each part normalized by its directions' cosine sum).
+  every surface voxel of every level (albedo times the sun's illuminance on its normal times a walk toward the sun through
+  the voxels the ray crosses, read unfiltered, from its own level up, switching level where the next one's weight passes
+  one half; plus its emission; radiance times `c_GIRadianceScale`, alpha 1; two-sided voxels a dark surface). A voxel of
+  the lit layer starts the walk on its face; a solid one `c_GIShadowOffsetVoxels` along its normal from its center, and no
+  solid voxel is ever skipped (a floor runs on under its walls: skipping the floor's own voxels let the sun into a sealed
+  room). Solid voxels stop the light, the lit layer passes it, alpha-masked ones attenuate it. A trilinear march with the
+  occupancy's gain thickened every edge by a fraction of a voxel: the sun room's patch had 48% of its power; the walk gives
+  it within 1% (`GlobalIlluminationRoom`'s "The sunlit patch's voxels hold its power"). `GI/VoxelDownsample` gives each
+  coarser level the mean of the finer level's light where that one holds the scene, blended by the finer level's weight
+  (coarse voxels close small openings). Faces on the grid mark a lit layer in front of them at `c_GITouchOccupancy` (0.05:
+  openings on the grid keep their size); a voxel is solid only where a face reaches into it or covers part of one of its
+  faces from behind (`IsVoxelSolidFor`, inset `c_GISolidInsetVoxels`): a box's edge that only touches a voxel from outside
+  leaves it in the lit layer (marking those solid closed every opening on the grid by a voxel at its edges). The probe
+  cascades (D10-D12 of the spec) then run top down: `ProbeValidity` (dead probes inside solids), `ProbeWeights` (the eight
+  parents' trilinear weights times their validity and the transmittance between the probes), `CascadeMarch` (one ray a
+  thread, fixed directions, light front to back with transmittance; for every cascade but the first an occlusion-only
+  lead-in from the probe that absorbs only voxels at least `c_GILeadInOccupancy` full, and every cascade but the top marches
+  `ProbeCascadeLayout::Overlap` (a spacing) past its interval's end, so a surface just past a child's end, which lies in
+  its parents' lead-ins, is taken on the child's own line; gathering light in the lead-in instead took surfaces beside the
+  parent that the child never meets, up to 4.8 times the reference on the sun room's ceiling; the run's first sample's light
+  and normal for the whole run; the miss rule: an unabsorbed ray continues into the parents' merged rays, only the top
+  cascade, leaving the clipmap, reads the sky); cascade 0 keeps its own light, and `FieldReduce` merges cascade 1 in each
+  of its 64 directions into the field's ambient cube (six RGBA16F faces per cascade-0 probe: irradiance over pi and the sky
+  share, each part normalized by its directions' cosine sum).
 - **The field in the forward pass** (`Include/GIField.slang`, the `gi` and `open` views; stage 3 joins it to shading):
   the eight cascade-0 probes around the point moved `c_GIGatherNormalBias` spacings along its geometric normal, each by its
   trilinear weight, validity, whether it lies in front of the surface's plane and its visibility (a march through levels

@@ -16,13 +16,15 @@
 #define ST_GI_TILE_VOXELS 8               // c_GITileVoxels
 #define ST_GI_MAX_TILES 32768u            // c_GIMaxTiles
 #define ST_GI_MASKED_OCCUPANCY 0.15       // c_GIMaskedOccupancy
-#define ST_GI_TOUCH_OCCUPANCY 0.2         // c_GITouchOccupancy
+#define ST_GI_TOUCH_OCCUPANCY 0.05        // c_GITouchOccupancy
 #define ST_GI_TWO_SIDED_SUM 0.5           // c_GITwoSidedSum
 #define ST_GI_SNAP_VOXELS (1.0 / 256.0)   // c_GISnapVoxels
+#define ST_GI_SOLID_INSET_VOXELS (1.0 / 64.0) // c_GISolidInsetVoxels
 #define ST_GI_NORMAL_FIXED_POINT 256.0    // c_GINormalFixedPoint
 #define ST_GI_STEP_VOXELS 0.75            // c_GIStepVoxels
 #define ST_GI_OCCUPANCY_GAIN 2.5          // c_GIOccupancyGain
-#define ST_GI_SHADOW_START_VOXELS 1.5     // c_GIShadowStartVoxels
+#define ST_GI_LEAD_IN_OCCUPANCY 0.3       // c_GILeadInOccupancy
+#define ST_GI_SHADOW_OFFSET_VOXELS 1.0    // c_GIShadowOffsetVoxels
 #define ST_GI_TRANSMITTANCE_CUTOFF 1e-4   // c_GITransmittanceCutoff
 #define ST_GI_RADIANCE_SCALE (1.0 / 16.0) // c_GIRadianceScale
 #define ST_GI_MAX_RADIANCE 60000.0        // c_GIMaxRadiance

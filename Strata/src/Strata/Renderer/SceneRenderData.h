@@ -724,16 +724,20 @@ namespace Strata
 		constexpr float c_GIMaskedOccupancy = 0.15f;     // Guess: alpha-masked surfaces' occupancy
 		// Guess: the occupancy of voxels marked only because a face on their boundary faces into them (the lit layer in front of a
 		// face on the grid): low, so openings on the grid keep their size, yet the layer's light is taken (Include/Voxelize.slang).
-		constexpr float c_GITouchOccupancy = 0.2f;
+		constexpr float c_GITouchOccupancy = 0.05f;
 		constexpr float c_GITwoSidedSum = 0.5f;          // A voxel whose triangles' unit normals sum to less than this times their count is two-sided
 		// Voxel coordinates this close to a voxel boundary snap onto it: faces meant to lie on the grid, or on each other, meet
 		// exactly whatever the floats' rounding (0.4 mm at level 0; four ulps of a coordinate 16,384 voxels from its anchor).
 		constexpr float c_GISnapVoxels = 1.0f / 256.0f;
+		// A triangle marks a voxel solid only where it overlaps the voxel inset by this much (on its face's plane: along the face):
+		// edges and corners touching a voxel from outside do not (more than c_GISnapVoxels, so snapped faces stay exact).
+		constexpr float c_GISolidInsetVoxels = 1.0f / 64.0f;
 		constexpr float c_GINormalFixedPoint = 256.0f;   // Normals add as integers times this
 		constexpr float c_GIStepVoxels = 0.75f;          // Marches step this many voxels of the level they sample
 		// The light (GI/VoxelInject.comp, GI/CascadeMarch.comp, GI/FieldReduce.comp, Include/GIField.slang).
 		constexpr float c_GIOccupancyGain = 2.5f;        // A sample absorbs saturate(occupancy * this): a wall two voxels thick is opaque
-		constexpr float c_GIShadowStartVoxels = 1.5f;    // The sun's march starts where its ray is this many voxels above the surface's plane
+		constexpr float c_GILeadInOccupancy = 0.3f;      // The lead-in absorbs only voxels at least this full (correction 2: not masked ones twice)
+		constexpr float c_GIShadowOffsetVoxels = 1.0f;   // A solid surface voxel's sun walk starts this far from its center along its normal
 		constexpr float c_GITransmittanceCutoff = 1e-4f; // Below it a ray is opaque
 		constexpr float c_GIRadianceScale = 1.0f / 16.0f; // Stored radiance is luminance (nits) times this (half floats)
 		constexpr float c_GIMaxRadiance = 60000.0f;      // ...clamped to this
