@@ -11,12 +11,19 @@ Strata's lights use the units of real light, on one scale, so values taken from 
 reference work as they are. Hover a light's **Intensity** in the Inspector to see its unit.
 
 - A **Directional Light** is the sun or the moon: it lights the whole scene from one direction (the entity's forward
-  axis). Its **Intensity** is illuminance in **lux**: how much light falls on a surface facing it.
+  axis). Its **Intensity** is illuminance in **lux**: how much light falls on a surface facing it. Its **Angular
+  Diameter** is the size of its disk in degrees (the sun 0.53, the default; the Overcast preset's soft sun 10): it softens
+  its shadows (see Shadows) and sizes its highlight on smooth surfaces, so a mirror or a wet road shows the sun's disk at its
+  size and an overcast sun gives a soft glow instead of a pin dot, the same light spread wider. 0 is a point: the smallest
+  highlight. Saved scenes and scripts name it `ShadowSoftness`.
 - A **Point Light** shines in every direction from its position, a **Spot Light** in a cone. Their **Intensity** is
   luminous intensity in **candela** (cd): how bright the light looks from one direction. A lamp sold as P lumens has
   P / 12.57 cd as a point light (an 800 lumen bulb is about 64 cd). A spot light's candela is the brightness along its
   axis: making its cone narrower does not make it brighter. Both fade with the square of the distance and reach zero at
-  **Range**.
+  **Range**. Their **Source Radius** is the radius in meters of the bulb or the flame (0, a point, by default): metal and
+  wet ground show the light's highlight at that size, the same light spread wider, instead of a pin dot. Give it the real
+  size, never more: a lantern's bulb about 0.03 to 0.06, a fire pit's flames about 0.2 to 0.3. Only the highlights change:
+  the light's brightness on matte surfaces and its shadows stay as they are.
 - The **Sky Light** lights the scene from every direction and draws the background. What it shows is luminance in
   **nits** (candela per square meter): an environment map's pixel values, or the procedural sky's colors, times
   **Intensity**. A uniform sky of L nits puts about 3.14 x L lux on the ground.
@@ -119,8 +126,8 @@ follow. Something passing close to the camera, such as a thrown ball, leaves the
 them once, after half a second. **Cascade Distribution** (0 to 1, 0.9 by default) decides how the cascades share those distances: 0 evenly, 1 each
 cascade the same ratio farther than the previous one; higher puts more of the detail near the camera.
 
-**Shadow Softness** is the light's apparent size in degrees: 0.53 is the sun's (the default; scenes saved with another
-value keep it). Shadows are sharp where an object touches the ground and soften with the distance from their caster as a
+**Angular Diameter** is the light's apparent size in degrees: 0.53 is the sun's (the default; scenes saved with another
+value keep it). It sizes the sun's highlight too (see Lights and their units). Shadows are sharp where an object touches the ground and soften with the distance from their caster as a
 real sun's do: a 0.53 degree sun blurs an edge from 10% to 90% of its light over about 0.64 cm per metre between the
 caster and the ground (a pole's shadow 4 m away has a 2.5 cm soft edge), 2 degrees over about 2.4 cm per metre (a hazy
 sun), 0 is a point light's hard edge. The soft edges are the same in every frame, with or without anti-aliasing: nothing
@@ -149,7 +156,7 @@ The project's **Graphics Quality** (Project Settings, [Graphics.md](Graphics.md)
 | Shadow Filter Quality (taps of the wide soft edges) | 8 | 16 | 24 | 32 |
 | Contact Shadows (steps; off in every preset) | off | off | off | off |
 
-More filter taps only matter where soft edges are wider than a shadow texel (a large Shadow Softness, tall casters): they
+More filter taps only matter where soft edges are wider than a shadow texel (a large Angular Diameter, tall casters): they
 cost a little more there and leave less grain for the screen-space blur to remove. Contact shadows, when Custom turns them
 on, cost a march of their
 steps for each lit pixel nearer than the shadow distance (about 0.2-0.3 ms at 3840x2160 on a current GPU).
@@ -182,7 +189,10 @@ They cost more than the sun's shadows, so use them where they show:
 Shiny surfaces reflect the sky everywhere unless something tells them what is around them: in a room, a courtyard or
 a cave, add a **Reflection Probe** (Add Component, Rendering) where a viewer would stand. Its **Capture** is a picture of
 the scene all around the probe (an HDR texture); inside its box (**Extents**, the half size along the entity's axes),
-surfaces reflect that picture and take their ambient light from it instead of from the sky.
+surfaces reflect that picture and take their ambient light from it instead of from the sky. How sharp the reflected picture
+is follows Graphics Quality: 256 texels per face at High and Ultra (polished metal shows nearby things sharply), 128 at Low
+and Medium; a probe's picture is prepared over a frame or two when it first comes into view. No bake needs repeating for
+it.
 
 **Bake**, in the probe's section of the Inspector (or **Bake Reflection Probes** in the Sky section, with nothing
 selected, for all of them; agents use `lighting.bakeProbes`), takes the picture: the editor renders what the probe sees, saves it as
@@ -202,6 +212,16 @@ a probe shows the scene as it was baked (a day-night cycle or a moving door is n
   probe first comes into view (its reflections appear a few frames later), and keeps it (about 1 MB of video memory
   each); afterwards a probe costs only a little shading where its box is on screen.
 
+### Times of day with baked probes
+
+A probe's picture is fixed, but a game that shows a few times of day can bake one probe per time: give each time its own
+probe entities with the same boxes (a yard and a hut at dawn, golden hour and dusk: six probes, never one probe baked
+three times, since a bake trashes that probe's earlier picture), bake each with the sun, fog and lights of its time and
+only its own probes active, and switch them with `SetActive` from a script. Keep the old probes on for a second with the
+new ones' **Priority** raised: a probe whose picture is still being prepared is left out, and its box would show the sky
+meanwhile. A script that asks `Assets::GetLoadProgress` of every probe's **Capture** when the game starts keeps them
+loaded, so a switch never waits. The showcase sample (`Samples/Showcase`) works this way.
+
 ## Screen-space reflections
 
 Probes and the sky reflect a fixed picture. **Screen Space Reflections** (in the **Post Process**) adds what the screen
@@ -215,6 +235,9 @@ and need TAA to smooth them; at **Low** there are none.
 - Only what is on screen can be reflected. Things behind the camera, beside the view or hidden behind others are not:
   there the probes and the sky reflect as before. A reflection fades only where its ray would have gone on beyond the
   screen's edge (over the last tenth of the screen before it leaves): a wall beside the edge that the ray reaches stays.
+- An object in front of a mirror shows its back there, which the screen does not hold: the mirror shows only the part of
+  it the camera also sees (often a crescent), and the probes or the sky where its back would be, never its front's colors
+  in the back's place.
 - Ambient occlusion does not darken what these reflections found (they already see what blocks them); a material's own
   occlusion map still does.
 - **Screen Space Reflections Max Roughness** (0.5): rougher surfaces get none, and they fade out over the last quarter
@@ -236,6 +259,11 @@ light, so a white metal reflects all the light around it however rough it is, an
 color says (since 0.7.0; before, a metal of roughness 1 lost about two thirds of its light and looked dull gray). Colored
 metals such as copper or gold keep less at high roughness, as real ones do: each bounce between the facets takes some of
 the light. Materials made darker to look right before may now be set to their measured colors.
+
+A non-metal's **IOR** sets how much it reflects head-on: water (1.33) reflects 2%, glass and most plastics and paints (1.5,
+the default) 4%, diamond (2.42) 17%, and 1 nothing (every surface still reflects more toward grazing angles). Give water
+and wet ground 1.33: their reflections then have water's strength. Imported glTF materials keep the IOR their file gives
+(`KHR_materials_ior`).
 
 Highlights hold at 4K without sparkling: where a surface's normal map or curvature changes faster than the pixels can
 show, its highlight spreads over the pixels it covers instead of flickering between single bright pixels (specular

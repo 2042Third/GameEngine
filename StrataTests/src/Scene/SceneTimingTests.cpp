@@ -216,11 +216,16 @@ TEST_SUITE("Scene.Timing")
 		const SettingsSection& section = *registry.Find(ProjectSceneTiming::c_SectionId);
 		CHECK(section.Category == "Physics");
 		CHECK(section.Scope == SettingsScope::Project);
-		CHECK(section.GetDefault() == nlohmann::json { { "FixedRate", "Scene" } });
-		REQUIRE(section.Fields.size() == 1);
+		CHECK(section.GetDefault() == nlohmann::json { { "FixedRate", "Scene" }, { "Interpolation", true } });
+		REQUIRE(section.Fields.size() == 2);
 		const SettingsField& field = section.Fields.front();
 		CHECK(field.Description.find("soft") != std::string::npos);
 		CHECK(field.Description.find("30") != std::string::npos);
+		// Interpolation (on by default): a value stored before it existed reads as on, at the section's version 1.
+		CHECK(section.Fields[1].Name == ProjectSceneTiming::c_InterpolationField);
+		const std::optional<nlohmann::json> stored = section.Validate({ { "FixedRate", "60" } }, 1);
+		REQUIRE(stored.has_value());
+		CHECK((*stored)["Interpolation"] == true);
 
 		for (const char* rate : { "Scene", "30", "60", "120", "240" })
 		{

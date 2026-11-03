@@ -40,6 +40,12 @@ namespace Strata
 		constexpr uint32_t c_MultipleScatteringSize = 32;
 		constexpr uint32_t c_SkyViewWidth = 192;
 		constexpr uint32_t c_SkyViewHeight = 108;
+		// The tables of light per lux of sun (multiple scattering, sky view, aerial perspective's in-scattering and the
+		// environment made from the sky view) store it times this (Include/Atmosphere.slang's ST_ATMOSPHERE_STORAGE_SCALE), so the
+		// sky after sunset stays above the smallest normal half float (2^-14) instead of falling into subnormals, whose fixed
+		// step of 2^-24 banded it. A power of two: values that were normal are the same. The environment's intensity
+		// (FrameConstants::EnvironmentParams.x) divides by it, so every reader's product is unchanged.
+		constexpr float c_StorageScale = 16384.0f;
 
 		// The medium's coefficients for the sky light's settings: Density scales the air and the aerosols (and the ozone in the
 		// air), Haze the aerosols once more. Negative or non-finite settings count as 0.

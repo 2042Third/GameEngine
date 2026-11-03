@@ -606,10 +606,10 @@ Windows reference machine, back with a replaced CPU, and landed on main before t
   fix), their GPU busy time at a median ratio of 1.003. High at 3840x2160 costs the samples' scene cameras 0 to 0.52 ms
   of GPU time over Medium.
 
-**Wave 8 in progress (step 0 landed, 2026-11-02).** The owner asked for the wave on 2026-11-01 ("### Wave 8" below,
-with what each step 0 lane landed); its plan, reviewed specs, the orchestrator's rulings and the release notes that each
-landing adds to are in `Docs/Plans/Wave8/`. Step 0's lanes landed on main one by one, and the rendering streams branch
-from its tip:
+**Wave 8 in progress (step 0 landed on 2026-11-02, then landing 1).** The owner asked for the wave on 2026-11-01
+("### Wave 8" below, with what each step 0 lane landed); its plan, reviewed specs, the orchestrator's rulings and the
+release notes that each landing adds to are in `Docs/Plans/Wave8/`. Step 0's lanes landed on main one by one, and the
+rendering streams branch from its tip:
 
 - The 0.7.0 baseline: every look-dev shot of 76f28a21's Release build, both sizes, all three anti-aliasing modes, 5
   repeats and the live shots, is kept on the reference machine in `.worktrees/wave8-plan/lookdev/0.7.0`, its Medium
@@ -629,6 +629,29 @@ from its tip:
   an object that stays near the camera still re-fits the sun cascades once, and one under a tenth of the view waits up
   to 0.5 s in a coarser cascade; without contact shadows the 5 cm plate's shadow edge shows the shadow map's texel
   steps at High (wave 7's `sun-shadows` line).
+- `reflections` R1 landed alone on 2026-11-03 (screen door, ghost columns, edge wedges, SSR's occlusion and the
+  misplaced probe patch). R2 joins landing 1 with highlights first: the sun's highlight takes its Angular Diameter, point
+  and spot lights a Source Radius for highlights only (lantern glints pump 0.3% instead of 1.4% in a strafe without
+  AA), F0 from the IOR (white dielectrics hold 1.0000 in the furnace at every IOR), the twilight sky without bands
+  (`lookdev.night`'s largest step 3 codes, 23 before) and 256-texel probes at High and Ultra (`lookdev.polished` 1.74
+  times sharper). Objects in front of mirrors stay crescents: keeping hits on back faces filled no silhouette, only
+  front-lit rims.
+- `physics-timing` landed in landing 1: games, Play and Simulate draw what fixed steps move between its last two poses
+  (`Scene.Timing`'s Interpolation, on by default), so the Third-Person robot's 29.4 px sawtooth at 700 fps is at most
+  0.37 px from 30 to 730 fps, for half a step more latency on average. A frame that runs a step with 100,000 moving roots
+  costs 2.1 times one without interpolation (target 1.5, `Provisional`), bound by the capture's memory traffic ("Later").
+- `showcase`, High Desert Outpost (`Samples/Showcase`), landed in landing 1: a derelict fuel stop in a rocky desert
+  valley the day after rain, made through the editor from 22 Poly Haven CC0 scans (56 MB) and terrain and props written
+  by committed generators (`Tools/GenerateShowcase*.py`), in the showcase budget class: an 80 s camera tour
+  of six shots at three baked times of day (dawn over the valley, the low sun sliding along a bus's painted and bare
+  sheet steel, the streak on a weathered oil tank, the glint column on a wet apron, the hut's interior, dusk with the fire
+  and lanterns), each time of day with its own reflection probe entities; a first-person walk, free flight and a photo
+  mode (time of day, exposure, lens, the Graphics options, seven bookmarks); High by default. Its metal and wet ground
+  are tuned against 0.7.0's screen-space reflections: `reflections`' adoption pass retunes them, rebakes and retakes.
+  `PerfGPU.Samples.ShowcaseHigh1440` and `.ShowcaseUltra1440` record the tour at 2560 x 1440 (a 4K window does not fit
+  a 4K display). Later: grass with coverage-preserving alpha, people, the B-list of scans, sound, the walk on a
+  character controller (after `physics-timing`), supersampled stills, and sunlight thrown off a sheet onto nearby
+  surfaces (after `radiance-cascades`).
 
 Open items and deferrals later waves own:
 
@@ -926,8 +949,8 @@ Open items and deferrals later waves own:
   recede fast, and Original stays soft in slow pans; probes are baked, so a moving sun does not relight them; at most 16
   shadowed point and spot lights per view. Left for later (also in "Later" below): MSAA (rendering below native
   resolution and temporal upscaling are ruled out: the owner's direction of 2026-10-26, in "Later"); layered shadow
-  rendering, occlusion culling of local shadow views, more than 16 shadowed lights, sized local lights (PCSS) and their
-  contact shadows (wave 7 gave the sun both); run-time probe capture, cube texture assets and clustered probe lists; SSR
+  rendering, occlusion culling of local shadow views, more than 16 shadowed lights, sized local lights' diffuse light and
+  shadows (PCSS; their highlights take `SourceRadius` since wave 8) and their contact shadows (wave 7 gave the sun both); run-time probe capture, cube texture assets and clustered probe lists; SSR
   for transparent surfaces; volumetric fog and light shafts, the atmosphere from altitude (wave 7 added aerial
   perspective); thickness maps, sheen, specular, iridescence and anisotropy, EXR import and area lights; shadows of a
   second directional light (the moon).
@@ -943,7 +966,13 @@ Open items and deferrals later waves own:
   rough surfaces' color level from the lobe's footprint at the hit (3-9% less without TAA, 18% less with it); the
   previous frame's TAA output as the color source (15% less on wet ground with TAA, nothing on the sheet); the march
   without its 4x4 offsets (15% more). Leads: reprojecting reflections along their reflected image's motion, and
-  coverage for hits at thin and curved edges.
+  coverage for hits at thin and curved edges: where a vertical mirror at 45 degrees meets a ball's side at a slant, the
+  march hits 42% of the side's texels at Spatial and 65% at SpatialHigh, missing the rest in vertical stripes
+  (`GPU.SceneRenderer.SSR`'s ball case; the resolve and the probes fill them).
+- Highlights with TAA: a highlight that slides over its surface as the camera moves pumps by 4.5-9.5% of its light from
+  frame to frame with TAA (the sun's and the lanterns' glints in a strafe over the specular lab's wet plane), against
+  0.07-1.4% without anti-aliasing and 0.09-4.2% with FXAA: the history follows the surface, not the highlight. A Source
+  Radius roughly halves it on lanterns (9.5% to 4.5%). Lead: clamping the history of specular peaks separately.
 - Spatial screen-space reflections (wave 7's `light-and-materials`, High and Ultra) are not always repeatable on the
   integration machine (RTX 5090, driver 617.42). `Tools/LookDev.py`'s `lookdev.mirror` at 3840x2160, captured again
   and again in one editor after the look-dev scene's debug views, comes out as one of two images (12-60% of the
@@ -955,7 +984,10 @@ Open items and deferrals later waves own:
   hashes) through another pipeline of the same shader with a plain constant buffer always gives the frame's own image
   of the two; Vulkan's core and synchronization validation report nothing. The same shader on the same data gives one
   of two results by the frame, below the API. More frames in the capture's wait cannot help (each picture traces once
-  from identical inputs). Next: other GPUs and drivers, and a reduced compute test outside the renderer.
+  from identical inputs). After wave 8's repair of the trace (validated crossings, R1), five captures of
+  `lookdev.mirror` at 3840x2160 after the look-dev scene's debug views in one editor were identical, with FXAA and with
+  TAA. That does not prove the second image gone: at the earlier rate of 12-60%, four identical repeats happen 3-60% of
+  the time. Next: more repeats, other GPUs and drivers, and a reduced compute test outside the renderer.
 - Project settings and input actions (wave 6's `project-settings`), left for later: game-shell's macOS app bundle (the
   Finder's icon, the version and copyright in `Info.plist`), installing desktop entries, signing exports (quality
   presets came with wave 7's `Renderer.Quality`) and input only while the game's window has the focus (gamepads are
@@ -1631,7 +1663,8 @@ upscaling, and nothing may need temporal accumulation to look right (TAA stays o
   - What tranche 3 and the streams' cut lines leave.
 - **Rendering after wave 8:** what fell below wave 7's cut lines (supersampled stills,
   `viewport.capture {supersample: 2}`: rendered at twice the size and filtered down with the output's dither, for the
-  showcase's screenshots; point and spot lights with a source radius and the sun's physical filter, up to 8 sun
+  showcase's screenshots; point and spot lights' diffuse light and shadows from their source radius (wave 8 gave their
+  highlights its size) and the sun's physical filter, up to 8 sun
   cascades, distant shadows for open worlds, 16-bit depth for far cascades, per-cascade cache keys that keep cascades
   while the camera moves; bent normals with cone specular occlusion and reflection probes' "Fit to Room",
   coverage-preserving alpha mips for cutouts; the Open World's real sun and moon values, its DayNight's 3 lux sun and
@@ -1642,8 +1675,10 @@ upscaling, and nothing may need temporal accumulation to look right (TAA stays o
   re-fits the cascades once); the Physics Playground's empty first cascade (its nearest receiver at 18.9 m, the first
   split at 18.66 m); MSAA; virtual shadow maps if the shadows debug view shows cascades falling short; frame-level
   variants of the forward shader if `GPU.Opaque` shows the need; more shadowed lights with occlusion culling of their
-  views; run-time probe capture for moving suns; render scale above 1 for live views; area lights; the rest of the open
-  items' list.
+  views; run-time probe capture for moving suns; render scale above 1 for live views; area lights; what fell below
+  wave 8 `reflections`' cut line (keyframed probe captures, a blur of reflections by hit distance, a wet-surface model,
+  normal-map-aware filtering of rough reflections, anisotropy, screen-space reflections on clear coat, probe slots
+  allocated by demand); the rest of the open items' list.
 - **Sunlight thrown off bright metal onto nearby surfaces** (the owner wants it, "not a priority"), planned after
   `radiance-cascades` lands, its technique chosen then.
 - **Physics after wave 7:** what fell below `physics-runtime`'s cut line or did not land ("Physics at runtime" in the
@@ -1666,6 +1701,11 @@ upscaling, and nothing may need temporal accumulation to look right (TAA stays o
   and sculpt and paint tools.
 - **Animation authoring:** wave 9's `animation-tools` and `animation-runtime-2` above.
 - **Exported-game automation:** command scripts, simulated input and expectations in StrataRuntime.
+- **Interpolation, the rest (below `physics-timing`'s cut in wave 8):** world-space game UI and editor gizmos and picking
+  on drawn poses; reflection probes, fog and post-process volumes, the sky and the sun on drawn poses; attachments placed
+  outside their animator's hierarchy following its drawn pose; a cap on interpolated bodies and parallel proxy placement,
+  if a real scene's per-frame proxy work caps its frame rate; a capture that fills per-batch chunks and keeps continuing
+  entries in place, to bring `Perf.Scene.InterpolatedStepFrame100k.Ratio` from 2.1 to its 1.5 target.
 
 Further:
 - JobSystem v2 with work stealing and a frame task graph, once `Perf.Jobs` shows a need.

@@ -2,6 +2,7 @@
 
 #include "Animation/SkinnedMeshTestUtils.h"
 #include "Animation/TestSkinningPoses.h"
+#include "Scene/InterpolationTestUtils.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Renderer/LODSelection.h"
 #include "Strata/Renderer/Mesh.h"
@@ -507,6 +508,65 @@ namespace
 		return View(glm::vec3(0.0f, 2.0f, 4.5f), glm::vec3(0.0f, 0.4f, 0.0f));
 	}
 
+	// Highlights of sized sources: a 10-degree sun, a point light of source radius 0.1 and a spot light of 0.05 over a mirror floor
+	// and a coated sphere (both light paths carry the radius in LightData::SpotAngles.w).
+	SceneCamera BuildSizedHighlights(Scene& scene, SceneTestAssets& assets, TestSkinningPoses&)
+	{
+		AddNeutralPostProcess(scene);
+		AddSun(scene, glm::normalize(glm::vec3(-0.3f, -0.5f, 1.0f)), 3.0f).GetComponent<DirectionalLightComponent>().ShadowSoftness = 10.0f;
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().Source = SkyLightSource::Procedural;
+		MaterialProperties polished;
+		polished.BaseColor = glm::vec4(0.9f, 0.9f, 0.92f, 1.0f);
+		polished.Metallic = 1.0f;
+		polished.Roughness = 0.02f;
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(polished), glm::vec3(0.0f), "Mirror").GetComponent<TransformComponent>().Scale = glm::vec3(8.0f);
+		MaterialProperties coated;
+		coated.BaseColor = glm::vec4(0.6f, 0.1f, 0.1f, 1.0f);
+		coated.Roughness = 0.6f;
+		coated.Clearcoat = 1.0f;
+		coated.ClearcoatRoughness = 0.03f;
+		AddMesh(scene, BuiltinAssets::SphereMesh, assets.AddMaterial(coated), glm::vec3(0.0f, 0.5f, 0.0f), "Coated");
+		AddPointLight(scene, glm::vec3(-1.2f, 1.0f, -1.0f), glm::vec3(1.0f, 0.72f, 0.42f), 4.0f, 6.0f).GetComponent<PointLightComponent>().SourceRadius = 0.1f;
+		Entity spot = scene.CreateEntity("Spot");
+		spot.GetComponent<TransformComponent>().Translation = glm::vec3(1.2f, 1.5f, -1.0f);
+		spot.GetComponent<TransformComponent>().Rotation = glm::vec3(glm::radians(-146.0f), 0.0f, 0.0f); // Down toward the camera's reflection of it
+		SpotLightComponent& light = spot.AddComponent<SpotLightComponent>();
+		light.Intensity = 8.0f;
+		light.Range = 6.0f;
+		light.OuterConeAngle = 50.0f;
+		light.SourceRadius = 0.05f;
+		return View(glm::vec3(0.0f, 1.2f, 3.0f), glm::vec3(0.0f, 0.3f, -0.5f));
+	}
+
+	// Dielectrics of other IORs than glass's (their F0 in MaterialData::Absorption.w) over a mirror floor in a reflection probe's
+	// box, under a 10-degree sun.
+	SceneCamera BuildReflectionsAndDielectrics(Scene& scene, SceneTestAssets& assets, TestSkinningPoses&)
+	{
+		AddNeutralPostProcess(scene);
+		AddSun(scene, glm::normalize(glm::vec3(0.4f, -0.6f, -0.7f)), 3.0f).GetComponent<DirectionalLightComponent>().ShadowSoftness = 10.0f;
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().Source = SkyLightSource::Procedural;
+		Entity probe = scene.CreateEntity("Probe");
+		probe.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 1.0f, 0.0f);
+		ReflectionProbeComponent& box = probe.AddComponent<ReflectionProbeComponent>();
+		box.Capture = assets.Add(CreateEnvironmentTexture(glm::vec3(0.9f, 0.6f, 0.3f), glm::vec3(0.1f, 0.2f, 0.4f)), "Capture");
+		box.Extents = glm::vec3(4.0f, 2.0f, 4.0f);
+		MaterialProperties polished;
+		polished.BaseColor = glm::vec4(0.9f, 0.9f, 0.92f, 1.0f);
+		polished.Metallic = 1.0f;
+		polished.Roughness = 0.02f;
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(polished), glm::vec3(0.0f), "Mirror").GetComponent<TransformComponent>().Scale = glm::vec3(8.0f);
+		const float iors[] = { 1.33f, 2.0f };
+		for (uint32_t index = 0; index < std::size(iors); index++)
+		{
+			MaterialProperties dielectric;
+			dielectric.BaseColor = glm::vec4(0.05f, 0.1f, 0.2f, 1.0f);
+			dielectric.Roughness = 0.1f + 0.2f * static_cast<float>(index);
+			dielectric.IOR = iors[index];
+			AddMesh(scene, BuiltinAssets::SphereMesh, assets.AddMaterial(dielectric), glm::vec3(static_cast<float>(index) * 1.4f - 0.7f, 0.5f, 0.0f), "Dielectric");
+		}
+		return View(glm::vec3(0.0f, 1.2f, 3.0f), glm::vec3(0.0f, 0.3f, -0.5f));
+	}
+
 	// The atmosphere with aerial perspective (scale 8): shapes from near to 300 m, opaque and alpha-blended, hazed by distance.
 	SceneCamera BuildAerialPerspective(Scene& scene, SceneTestAssets& assets, TestSkinningPoses&)
 	{
@@ -544,6 +604,8 @@ namespace
 		{ "Local shadows", BuildLocalShadowed },
 		{ "Lit materials", BuildLitMaterials },
 		{ "Atmosphere and aerial perspective", BuildAerialPerspective },
+		{ "Sized highlights", BuildSizedHighlights },
+		{ "Reflections and dielectrics", BuildReflectionsAndDielectrics },
 	};
 
 	void CompareScenes(GPUContext& gpu, IndirectDrawMode indirect, uint32_t maxDrawsPerCall = 0)
@@ -1316,6 +1378,67 @@ TEST_SUITE("GPU.SceneRenderer.LODFade")
 			}
 			gpu.GetDevice().WaitForIdle();
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+}
+
+// Interpolation (Scene::SetInterpolation): what the fixed steps move is placed between its poses on every frame, on both paths.
+TEST_SUITE("GPU.SceneRenderer.GPUDriven")
+{
+	TEST_CASE("Both paths draw an interpolated frame alike")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!DeviceDrawsGPUDriven())
+			return;
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::DefaultMaterial));
+		ScopedFixedMover moverScope;
+		Scene scene;
+		scene.GetSettings().FixedTimestep = 1.0f / 64.0f;
+		AddNeutralPostProcess(scene);
+		AddSun(scene, glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f)), 3.0f);
+		const AssetHandle material = LitMaterial(assets, glm::vec4(0.6f, 0.4f, 0.3f, 1.0f));
+		Entity ground = AddMesh(scene, BuiltinAssets::PlaneMesh, material, glm::vec3(0.0f, -0.5f, 0.0f), "Ground");
+		ground.GetComponent<TransformComponent>().Scale = glm::vec3(40.0f);
+		// Eight cubes moved by the steps (blended), eight riding a carrier the steps move (composed).
+		Entity carrier = scene.CreateEntity("Carrier");
+		AddFixedMover(scene, carrier, glm::vec3(0.0f, 0.0f, 0.25f * 64.0f), 1.5f);
+		for (uint32_t index = 0; index < 16; index++)
+		{
+			Entity cube = AddMesh(scene, BuiltinAssets::CubeMesh, material, glm::vec3(static_cast<float>(index % 8) * 1.5f - 5.25f, 0.0f,
+				-static_cast<float>(index / 8) * 2.5f), "Cube");
+			if (index < 8)
+				AddFixedMover(scene, cube, glm::vec3(0.1f * 64.0f, 0.0f, 0.0f), 2.0f);
+			else
+				REQUIRE(scene.SetParent(cube, carrier, true));
+		}
+		// A shadowed point light on another mover.
+		Entity lamp = scene.CreateEntity("Lamp");
+		lamp.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 3.0f, -1.0f);
+		PointLightComponent& light = lamp.AddComponent<PointLightComponent>();
+		light.CastShadows = true;
+		light.Range = 15.0f;
+		light.Intensity = 40.0f;
+		AddFixedMover(scene, lamp, glm::vec3(0.15f * 64.0f, 0.0f, 0.0f));
+		scene.SetInterpolation(true);
+		scene.OnRuntimeStart();
+		const SceneCamera camera = View(glm::vec3(0.0f, 14.0f, 12.0f), glm::vec3(0.0f, 0.0f, -2.0f));
+		Comparison comparison(IndirectDrawMode::Auto);
+		// Eight frames between steps of 1/64 s, three steps over.
+		uint32_t between = 0;
+		for (int frame = 0; frame < 24; frame++)
+		{
+			const uint64_t steps = scene.GetFixedStepCount();
+			scene.OnUpdateRuntime(Timestep(1.0f / 512.0f));
+			between += scene.GetFixedStepCount() == steps && !scene.GetInterpolatedEntities().empty() ? 1u : 0u;
+			comparison.Check(scene, camera);
+		}
+		CHECK(between >= 14);
+		scene.OnRuntimeStop();
+		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

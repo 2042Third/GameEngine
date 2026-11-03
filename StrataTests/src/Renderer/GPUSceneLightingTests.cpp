@@ -1,12 +1,16 @@
 #include "Renderer/SceneRendererTestUtils.h"
+#include "Strata/Renderer/MaterialData.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/RendererQuality.h"
 
 #include <glm/gtc/constants.hpp>
+#include <spdlog/fmt/fmt.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <vector>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -82,6 +86,164 @@ namespace
 		properties.Metallic = 1.0f;
 		properties.Roughness = roughness;
 		return properties;
+	}
+
+	// A highlight read from the HDR target's green channel (pre-exposure 1: neutral post-processing), less a render without its
+	// light: the sum over every pixel, the peak and the pixels at half the peak or more.
+	struct Highlight
+	{
+		double Sum = 0.0;
+		float Peak = 0.0f;
+		uint32_t HalfPeakPixels = 0;
+	};
+
+	constexpr uint32_t c_HighlightSize = 512;
+
+	Highlight MeasureHighlight(const ReadbackImage& lit, const ReadbackImage& dark)
+	{
+		REQUIRE(lit.Width == dark.Width);
+		REQUIRE(lit.Height == dark.Height);
+		std::vector<float> values(static_cast<size_t>(lit.Width) * lit.Height);
+		Highlight highlight;
+		for (uint32_t y = 0; y < lit.Height; y++)
+		{
+			for (uint32_t x = 0; x < lit.Width; x++)
+			{
+				const float value = ReadHalfTexel(lit, x, y).g - ReadHalfTexel(dark, x, y).g;
+				values[static_cast<size_t>(y) * lit.Width + x] = value;
+				highlight.Sum += value;
+				highlight.Peak = std::max(highlight.Peak, value);
+			}
+		}
+		for (const float value : values)
+			highlight.HalfPeakPixels += value >= 0.5f * highlight.Peak ? 1u : 0u;
+		return highlight;
+	}
+
+	// A sun 30 degrees off the view axis on a sphere of the built-in mesh (radius 0.5) at the origin, seen orthographically along
+	// -Z over `view` world units around `center`, without sky light: the highlight of a sun of the angular diameter `degrees`
+	// (DirectionalLightComponent::ShadowSoftness) at 1 lux, whose mirror peak (about 20,000 for a point-like sun) stays below the
+	// HDR target's clamp. Specular anti-aliasing is off: at this size it would widen a mirror's lobe more than the sun does.
+	Highlight RenderSunHighlight(AssetHandle material, float degrees, const glm::vec2& center, float view)
+	{
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().AmbientColor = glm::vec3(0.0f);
+		AddMesh(scene, BuiltinAssets::SphereMesh, material, glm::vec3(0.0f), "Sphere");
+		const float angle = glm::radians(30.0f);
+		Entity sun = AddSun(scene, -glm::vec3(std::sin(angle), 0.0f, std::cos(angle)), 1.0f, false);
+		sun.GetComponent<DirectionalLightComponent>().ShadowSoftness = degrees;
+		SceneRendererSpecification specification = ExactSpecification();
+		specification.SpecularAntiAliasing = false;
+		SceneRenderer renderer(specification);
+		renderer.SetViewportSize(c_HighlightSize, c_HighlightSize);
+		const SceneCamera camera = OrthographicLookAt(glm::vec3(center, 3.0f), glm::vec3(center, 0.0f), view);
+		const auto renderHDR = [&]()
+		{
+			REQUIRE(renderer.Render(scene, camera));
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
+			REQUIRE(image.Format == nvrhi::Format::RGBA16_FLOAT);
+			return image;
+		};
+		const ReadbackImage lit = renderHDR();
+		sun.GetComponent<DirectionalLightComponent>().Intensity = 0.0f;
+		sun.MarkModified<DirectionalLightComponent>();
+		return MeasureHighlight(lit, renderHDR());
+	}
+
+	// A point light 1 m above a horizontal plane (10 m wide) at the origin, of `sourceRadius` (PointLightComponent::SourceRadius),
+	// seen from 3 m above looking straight down at the light's reflection with a vertical field of view of c_BulbViewDegrees,
+	// without sky light: the highlight (in the HDR target). With `occluder` a cube between the light and the plane casts a shadow
+	// (the light casts shadows), and `atlas` receives the local shadow atlas's contents.
+	constexpr float c_BulbViewDegrees = 10.0f;
+
+	Highlight RenderBulbHighlight(SceneTestAssets& assets, AssetHandle material, float sourceRadius, float intensity, ReadbackImage* atlas = nullptr)
+	{
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().AmbientColor = glm::vec3(0.0f);
+		AddMesh(scene, BuiltinAssets::PlaneMesh, material, glm::vec3(0.0f), "Plane").GetComponent<TransformComponent>().Scale = glm::vec3(10.0f);
+		Entity lamp = AddPointLight(scene, glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(1.0f), intensity, 10.0f);
+		lamp.GetComponent<PointLightComponent>().SourceRadius = sourceRadius;
+		if (atlas)
+		{
+			lamp.GetComponent<PointLightComponent>().CastShadows = true;
+			const AssetHandle matte = assets.AddMaterial(MaterialProperties());
+			AddMesh(scene, BuiltinAssets::CubeMesh, matte, glm::vec3(0.6f, 0.4f, 0.0f), "Occluder").GetComponent<TransformComponent>().Scale = glm::vec3(0.2f);
+		}
+		SceneRendererSpecification specification = ExactSpecification();
+		specification.SpecularAntiAliasing = false;
+		SceneRenderer renderer(specification);
+		renderer.SetViewportSize(c_HighlightSize, c_HighlightSize);
+		SceneCamera camera = LookAt(glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(0.0f));
+		camera.Projection = Math::PerspectiveReverseZ(glm::radians(c_BulbViewDegrees), 1.0f, 0.1f, 100.0f);
+		camera.VerticalFOV = glm::radians(c_BulbViewDegrees);
+		const auto renderHDR = [&]()
+		{
+			REQUIRE(renderer.Render(scene, camera));
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
+			REQUIRE(image.Format == nvrhi::Format::RGBA16_FLOAT);
+			return image;
+		};
+		const ReadbackImage lit = renderHDR();
+		if (atlas)
+		{
+			REQUIRE(renderer.GetLocalShadowAtlas() != nullptr);
+			REQUIRE(Renderer::ReadTexture(renderer.GetLocalShadowAtlas(), *atlas));
+		}
+		lamp.GetComponent<PointLightComponent>().Intensity = 0.0f;
+		lamp.MarkModified<PointLightComponent>();
+		return MeasureHighlight(lit, renderHDR());
+	}
+
+	// The pixels of the bulb's mirror image in RenderBulbHighlight's view: a sphere of `radius` 1 m below the plane, 4 m from the
+	// camera on its axis, whose silhouette is a disk of angular radius asin(radius / 4).
+	double GetBulbImagePixels(float radius)
+	{
+		const double pixels = std::tan(std::asin(static_cast<double>(radius) / 4.0)) / std::tan(glm::radians(static_cast<double>(c_BulbViewDegrees)) * 0.5)
+			* 0.5 * c_HighlightSize;
+		return glm::pi<double>() * pixels * pixels;
+	}
+
+	// A point light 20 m from RenderSunHighlight's sphere along the sun's direction there, of `sourceRadius`: the same view of the
+	// highlight, from a sphere instead of a disk.
+	Highlight RenderDistantBulbHighlight(AssetHandle material, float sourceRadius)
+	{
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().AmbientColor = glm::vec3(0.0f);
+		AddMesh(scene, BuiltinAssets::SphereMesh, material, glm::vec3(0.0f), "Sphere");
+		const float angle = glm::radians(30.0f);
+		constexpr float c_Distance = 20.0f;
+		Entity lamp = AddPointLight(scene, c_Distance * glm::vec3(std::sin(angle), 0.0f, std::cos(angle)), glm::vec3(1.0f), c_Distance * c_Distance, 100.0f);
+		lamp.GetComponent<PointLightComponent>().SourceRadius = sourceRadius;
+		SceneRendererSpecification specification = ExactSpecification();
+		specification.SpecularAntiAliasing = false;
+		SceneRenderer renderer(specification);
+		renderer.SetViewportSize(c_HighlightSize, c_HighlightSize);
+		const SceneCamera camera = OrthographicLookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f), 1.1f);
+		const auto renderHDR = [&]()
+		{
+			REQUIRE(renderer.Render(scene, camera));
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
+			return image;
+		};
+		const ReadbackImage lit = renderHDR();
+		lamp.GetComponent<PointLightComponent>().Intensity = 0.0f;
+		lamp.MarkModified<PointLightComponent>();
+		return MeasureHighlight(lit, renderHDR());
+	}
+
+	// The angular radius (radians) of the cone of reflected directions a mirror sphere of radius 0.5 seen orthographically shows
+	// in `pixels` of a view of `view` world units over c_HighlightSize pixels: d omega = 4 dA / R^2.
+	double GetMirrorConeRadius(uint32_t pixels, float view)
+	{
+		const double pixelSize = static_cast<double>(view) / c_HighlightSize;
+		const double solidAngle = 4.0 * static_cast<double>(pixels) * pixelSize * pixelSize / (0.5 * 0.5);
+		return std::acos(1.0 - solidAngle / (2.0 * glm::pi<double>()));
 	}
 
 	// A large matte floor (facing +Y) at the origin.
@@ -752,6 +914,47 @@ TEST_SUITE("GPU.SceneRenderer.Lighting")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The furnace keeps a dielectric's light at every IOR, and its reflectance is the IOR's")
+	{
+		// A dielectric reflects head-on what its IOR gives (MaterialGPU::GetDielectricF0: water 0.02, glass 0.04, 3 0.25): a black
+		// one shows that reflectance alone (the split sum compensated for multiple scattering, at the pixel's NoV 1 and roughness
+		// 1), and a white one still reflects the whole furnace, diffuse taking what specular leaves. 0.7.0 reflected 0.04 at every
+		// IOR.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		const AssetHandle sky = assets.Add(CreateEnvironmentTexture(glm::vec3(1.0f), glm::vec3(1.0f)), "Furnace");
+		SceneRendererSpecification specification;
+		specification.TextureStreaming = false;
+		SceneRenderer renderer(specification);
+		for (const float ior : { 1.0f, 1.33f, 1.5f, 2.0f, 3.0f })
+		{
+			CAPTURE(ior);
+			MaterialProperties white;
+			white.BaseColor = glm::vec4(1.0f);
+			white.Roughness = 1.0f;
+			white.IOR = ior;
+			const FurnaceReading lit = RenderFurnace(assets, sky, white, &renderer);
+			for (const glm::vec3& value : { lit.Center, lit.Rim })
+			{
+				CHECK(value.g >= 0.97f);
+				CHECK(value.g <= 1.03f);
+			}
+			MaterialProperties black = white;
+			black.BaseColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+			const FurnaceReading reflected = RenderFurnace(assets, sky, black, &renderer);
+			const glm::vec2 dfg = ReadRoughBRDF(renderer);
+			const float f0 = MaterialGPU::GetDielectricF0(black);
+			const float expected = (f0 * dfg.x + dfg.y) * (1.0f + f0 * (1.0f / (dfg.x + dfg.y) - 1.0f));
+			CAPTURE(f0);
+			CAPTURE(dfg);
+			CHECK(reflected.Center.g == doctest::Approx(expected).epsilon(0.03).scale(0.0)); // Relative: the values are small
+			MESSAGE(fmt::format("Furnace at IOR {}: F0 {:.5f}, white {:.4f} (rim {:.4f}), black {:.5f} (expected {:.5f})", ior, f0, lit.Center.g, lit.Rim.g,
+				reflected.Center.g, expected));
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Direct light's specular is compensated as image light's")
 	{
 		// A white metal plane (F0 = 1, roughness 1) facing an orthographic camera and a sun along its normal: NoL = NoV = NoH =
@@ -802,6 +1005,136 @@ TEST_SUITE("GPU.SceneRenderer.Lighting")
 			CHECK(value.g >= 0.97f);
 			CHECK(value.g <= 1.03f);
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A sized sun widens its highlight to its disk and keeps its light")
+	{
+		// A white mirror sphere (roughness 0) shows the sun's disk at its angular size (DirectionalLightComponent::ShadowSoftness,
+		// the angular diameter), the same light spread wider. Before the disk's lobe a sun of any size was a pin dot of a
+		// half-peak radius of 0.15 degrees.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::SphereMesh));
+		const AssetHandle mirror = assets.AddMaterial(FurnaceMetal(glm::vec3(1.0f), 0.0f));
+		constexpr float c_WholeView = 1.1f;
+
+		// (a) The whole sphere in view: a 5 and a 10 degree disk reflect the same light. A disk under about 2 degrees is not
+		// resolved at this size, which is why these two are compared.
+		const Highlight five = RenderSunHighlight(mirror, 5.0f, glm::vec2(0.0f), c_WholeView);
+		const Highlight ten = RenderSunHighlight(mirror, 10.0f, glm::vec2(0.0f), c_WholeView);
+		CAPTURE(five.Sum);
+		CAPTURE(ten.Sum);
+		REQUIRE(five.Sum > 0.0);
+		CHECK(ten.Sum == doctest::Approx(five.Sum).epsilon(0.05));
+		CHECK(ten.Peak < 0.5f * five.Peak);
+
+		// (b) The 10 degree disk's half-peak cone has its radius, 5 degrees.
+		const double tenRadius = glm::degrees(GetMirrorConeRadius(ten.HalfPeakPixels, c_WholeView));
+		CAPTURE(tenRadius);
+		CHECK(tenRadius >= 0.8 * 5.0);
+		CHECK(tenRadius <= 1.25 * 5.0);
+
+		// (c) The midday sun (0.53 degrees) seen over 0.1 world units around the highlight (the normal halfway between the view and
+		// the sun, 15 degrees off the view axis), where its half-peak cone covers about 110 pixels: a radius of 0.265 degrees.
+		const glm::vec2 highlightCenter(0.5f * std::sin(glm::radians(15.0f)), 0.0f);
+		constexpr float c_NarrowView = 0.1f;
+		const Highlight sun = RenderSunHighlight(mirror, 0.53f, highlightCenter, c_NarrowView);
+		const double sunRadius = glm::degrees(GetMirrorConeRadius(sun.HalfPeakPixels, c_NarrowView));
+		CAPTURE(sun.HalfPeakPixels);
+		CAPTURE(sunRadius);
+		CHECK(sun.Peak < 60000.0f); // Below the HDR target's clamp: the half maximum is the lobe's
+		CHECK(sunRadius >= 0.8 * 0.265);
+		CHECK(sunRadius <= 1.25 * 0.265);
+		// A point-like sun keeps the smallest roughness's pin dot.
+		const Highlight point = RenderSunHighlight(mirror, 0.0f, highlightCenter, c_NarrowView);
+		const double pointRadius = glm::degrees(GetMirrorConeRadius(point.HalfPeakPixels, c_NarrowView));
+		CAPTURE(pointRadius);
+		CHECK(pointRadius < 0.7 * sunRadius);
+
+		// (d) The same on an opaque dielectric (black, so only its highlight shows): the disk sizes every surface's highlight.
+		MaterialProperties dielectric;
+		dielectric.BaseColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+		dielectric.Metallic = 0.0f;
+		dielectric.Roughness = 0.0f;
+		const AssetHandle glossy = assets.AddMaterial(dielectric);
+		const double glossyRadius = glm::degrees(GetMirrorConeRadius(RenderSunHighlight(glossy, 0.53f, highlightCenter, c_NarrowView).HalfPeakPixels,
+			c_NarrowView));
+		const double glossyPointRadius = glm::degrees(GetMirrorConeRadius(RenderSunHighlight(glossy, 0.0f, highlightCenter, c_NarrowView).HalfPeakPixels,
+			c_NarrowView));
+		MESSAGE(fmt::format("Sun highlights: sums at 5 and 10 degrees {:.1f}, {:.1f}; half-peak radius at 10 degrees {:.3f} deg, at 0.53 {:.4f} deg "
+			"(point {:.4f}), on a dielectric {:.4f} deg (point {:.4f})", five.Sum, ten.Sum, tenRadius, sunRadius, pointRadius, glossyRadius, glossyPointRadius));
+		CHECK(glossyRadius == doctest::Approx(sunRadius).epsilon(0.05));
+		CHECK(glossyPointRadius < 0.7 * glossyRadius);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A point light's source radius widens its highlight to the bulb's mirror image and keeps its light")
+	{
+		// A white mirror plane under a point light of PointLightComponent::SourceRadius shows the bulb's mirror image at its size, the
+		// same light spread wider; its diffuse light and its shadows do not change. Before the radius every bulb's highlight was the
+		// smallest roughness's pin dot.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		for (const AssetHandle mesh : { BuiltinAssets::PlaneMesh, BuiltinAssets::SphereMesh, BuiltinAssets::CubeMesh })
+			REQUIRE(assets.Manager->LoadAssetSync(mesh));
+		const AssetHandle mirror = assets.AddMaterial(FurnaceMetal(glm::vec3(1.0f), 0.0f));
+		constexpr float c_Intensity = 1.0f; // The point form's peak (about 20,000) stays below the HDR target's clamp
+
+		// (a) Seen from straight above, the half-peak area is the bulb's mirror image's (a sphere of its radius 1 m below the
+		// plane): for a flat mirror the lobe's half maximum falls on that image's edge. A point is a pin dot.
+		std::string report = "Bulb highlights:";
+		for (const float radius : { 0.05f, 0.1f })
+		{
+			CAPTURE(radius);
+			const Highlight sized = RenderBulbHighlight(assets, mirror, radius, c_Intensity);
+			const double ratio = static_cast<double>(sized.HalfPeakPixels) / GetBulbImagePixels(radius);
+			report += fmt::format(" radius {} half-peak {} px, {:.3f} of the mirror image, peak {:.1f};", radius, sized.HalfPeakPixels, ratio, sized.Peak);
+			CHECK(ratio >= 0.64);
+			CHECK(ratio <= 1.56);
+		}
+		const Highlight point = RenderBulbHighlight(assets, mirror, 0.0f, c_Intensity);
+		const double pointRatio = static_cast<double>(point.HalfPeakPixels) / GetBulbImagePixels(0.05f);
+		report += fmt::format(" a point {} px ({:.4f} of a 0.05 m bulb's image), peak {:.1f};", point.HalfPeakPixels, pointRatio, point.Peak);
+		CHECK(point.Peak < 60000.0f);
+		CHECK(pointRatio < 0.25);
+
+		// (b) The light it reflects: a distant bulb on a mirror sphere seen orthographically, as the sun's disk (projected area maps
+		// to reflected solid angle uniformly, so the whole highlight is in view), spans 5 and 10 degrees at 20 m.
+		const auto radiusFor = [](float degrees) { return 20.0f * std::sin(glm::radians(degrees) * 0.5f); };
+		const Highlight five = RenderDistantBulbHighlight(mirror, radiusFor(5.0f));
+		const Highlight ten = RenderDistantBulbHighlight(mirror, radiusFor(10.0f));
+		const double tenRadius = glm::degrees(GetMirrorConeRadius(ten.HalfPeakPixels, 1.1f));
+		report += fmt::format(" distant sums at 5 and 10 degrees {:.1f}, {:.1f}, half-peak radius at 10 degrees {:.3f} deg;", five.Sum, ten.Sum, tenRadius);
+		REQUIRE(five.Sum > 0.0);
+		CHECK(ten.Sum == doctest::Approx(five.Sum).epsilon(0.05));
+		CHECK(tenRadius >= 0.8 * 5.0);
+		CHECK(tenRadius <= 1.25 * 5.0);
+
+		// (d) A matte dielectric's light is the same at a radius of 0 and 0.1 (diffuse unchanged; its rough specular widens by
+		// a thousandth).
+		MaterialProperties matte;
+		matte.BaseColor = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f);
+		matte.Roughness = 1.0f;
+		const AssetHandle matteMaterial = assets.AddMaterial(matte);
+		const Highlight mattePoint = RenderBulbHighlight(assets, matteMaterial, 0.0f, c_Intensity);
+		const Highlight matteSized = RenderBulbHighlight(assets, matteMaterial, 0.1f, c_Intensity);
+		report += fmt::format(" matte sums {:.3f}, {:.3f};", mattePoint.Sum, matteSized.Sum);
+		REQUIRE(mattePoint.Sum > 0.0);
+		CHECK(matteSized.Sum == doctest::Approx(mattePoint.Sum).epsilon(0.005));
+
+		// (e) Its shadows are the same: the local shadow atlas holds the same depths at both radii.
+		ReadbackImage pointAtlas;
+		ReadbackImage sizedAtlas;
+		RenderBulbHighlight(assets, mirror, 0.0f, c_Intensity, &pointAtlas);
+		RenderBulbHighlight(assets, mirror, 0.1f, c_Intensity, &sizedAtlas);
+		REQUIRE(pointAtlas.Pixels.size() == sizedAtlas.Pixels.size());
+		REQUIRE_FALSE(pointAtlas.Pixels.empty());
+		CHECK(std::count_if(pointAtlas.Pixels.begin(), pointAtlas.Pixels.end(), [](uint8_t byte) { return byte != 0; }) > 0);
+		CHECK(pointAtlas.Pixels == sizedAtlas.Pixels);
+		MESSAGE(report);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

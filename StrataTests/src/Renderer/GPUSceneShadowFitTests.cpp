@@ -1,4 +1,5 @@
 #include "Renderer/SceneRendererTestUtils.h"
+#include "Scene/InterpolationTestUtils.h"
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/ShadowFit.h"
 
@@ -549,6 +550,67 @@ TEST_SUITE("GPU.SceneRenderer.ShadowFit")
 			CHECK(renderer.GetStats().Cascades == cascades);
 		}
 		CHECK_FALSE(renderer.GetStats().ShadowFitHolding);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A ball shot from the camera leaves the cascades alone, also drawn between fixed steps")
+	{
+		// The same shot with the ball on a fixed-step mover in a running scene that interpolates (Scene::SetInterpolation): the
+		// ball is drawn moving on every frame, at 240 and 1,000 frames a second, and the fit's holds count those frames' seconds.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		MaterialProperties matte;
+		const AssetHandle material = assets.AddMaterial(matte);
+		constexpr uint32_t size = 256;
+		constexpr float speed = 24.0f;
+		for (const float frameLength : { 1.0f / 240.0f, 1.0f / 1000.0f })
+		{
+			CAPTURE(frameLength);
+			ScopedFixedMover moverScope;
+			PlaygroundScene playground(assets);
+			Scene& scene = playground.SceneData;
+			scene.GetSettings().FixedTimestep = 1.0f / 64.0f;
+			// Out of view until it is shot.
+			Entity ball = AddMesh(scene, BuiltinAssets::SphereMesh, material, glm::vec3(0.0f, 60.0f, 80.0f), "Ball");
+			ball.GetComponent<TransformComponent>().Scale = glm::vec3(0.5f);
+			ball.MarkModified<TransformComponent>();
+			scene.SetInterpolation(true);
+			scene.OnRuntimeStart();
+			SceneRenderer renderer(FittedSpecification());
+			renderer.SetViewportSize(size, size);
+			const SceneCamera camera = PlaygroundCamera(size, size);
+			CHECK(RenderUntilFitSettled(renderer, scene, camera, 8) <= 8);
+			RenderToImage(renderer, scene, camera, StepOptions(frameLength));
+			REQUIRE(renderer.GetStats().ShadowFit);
+			const uint64_t changes = renderer.GetStats().ShadowFitChanges;
+			const auto cascades = renderer.GetStats().Cascades;
+
+			const glm::vec3 forward = glm::normalize(-camera.Position);
+			ball.GetComponent<TransformComponent>().Translation = camera.Position + forward * 1.5f;
+			ball.MarkModified<TransformComponent>();
+			AddFixedMover(scene, ball, forward * speed);
+			// Until it flew 16 m, as the case above: 160 frames at 240 per second, 667 at 1,000.
+			const int frames = static_cast<int>(std::ceil(16.0f / speed / frameLength));
+			uint32_t between = 0;
+			for (int frame = 0; frame < frames; frame++)
+			{
+				CAPTURE(frame);
+				const uint64_t steps = scene.GetFixedStepCount();
+				scene.OnUpdateRuntime(Timestep(frameLength));
+				RenderToImage(renderer, scene, camera, StepOptions(frameLength));
+				const glm::mat4* drawn = scene.FindDrawnTransform(ball.GetHandle());
+				if (scene.GetFixedStepCount() == steps && drawn && *drawn != scene.GetWorldTransform(ball))
+					between++;
+				CHECK(renderer.GetStats().ShadowFitChanges == changes);
+				CHECK(renderer.GetStats().Cascades == cascades);
+			}
+			// Drawn between its steps on most frames: what this case adds to the one above.
+			CHECK(between > static_cast<uint32_t>(frames) / 2);
+			CHECK_FALSE(renderer.GetStats().ShadowFitHolding);
+			scene.OnRuntimeStop();
+			gpu.GetDevice().WaitForIdle();
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

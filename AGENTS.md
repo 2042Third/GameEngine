@@ -40,7 +40,7 @@ the work: checklist item 5.
 | `StrataScriptCore/` | Script ABI (C header) and the header-only C++ SDK game scripts are written against. Script modules never link the engine. |
 | `StrataCLI/` | Command-line client for the editor automation API; also an MCP server (`StrataCLI mcp`). |
 | `StrataTests/` | doctest unit tests, test helpers, the feature test project, and the layer table (`Architecture/Layers.json`, `LayeringAllowlist.txt`). |
-| `Samples/` | Games an AI agent made through the editor (`ThirdPerson`, `OpenWorld`, `PhysicsPlayground`, `Tetris`), offered as copies by the launcher; open one in place only to change it ([details](Docs/DeveloperGuide.md#samples)). |
+| `Samples/` | Games an AI agent made through the editor (`Showcase`, `ThirdPerson`, `OpenWorld`, `PhysicsPlayground`, `Tetris`), offered as copies by the launcher; open one in place only to change it ([details](Docs/DeveloperGuide.md#samples)). |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest, the build's git commit). |
 | `Tools/` | Standard-library Python tools: generators whose outputs are committed, perf, lint and CI helpers ([details](Docs/DeveloperGuide.md#repository-layout)). |
 | `Docs/` | `README.md` (index), `DeveloperGuide.md` (this file's details), `Architecture.md`, `Roadmap.md` (update its Status when a wave lands), `Manual/`, `Releases/` ([details](Docs/DeveloperGuide.md#repository-layout)). |
@@ -223,6 +223,8 @@ The threading model, frame loop and pipelines these rules protect are described 
   (`Entity::MarkModified<TransformComponent>()`, `registry.patch` or `Scene::MarkTransformChanged`), and so must writes
   to names, tags, `MeshRendererComponent` and light fields. Hierarchy changes go through `Scene` (`SetParent`,
   `DestroyEntities`...), never by editing `RelationshipComponent` or `HierarchyComponent`.
+- **Drawn transforms:** fixed-step motion is drawn between its last two poses (`Scene.Timing`); renderers read
+  `Scene::FindDrawnTransform`, teleports call `BreakInterpolation` ([Interpolation](Docs/DeveloperGuide.md#interpolation)).
 - **Collision layers** are the project's (`Scene.CollisionLayers`); `Scene::GetPhysicsLayers` is a working copy applied
   on the main thread ([details](Docs/DeveloperGuide.md#collision-layers)).
 - **Physics tuning** is the project's `Physics.Simulation` section, applied by `PhysicsSystem` on the main thread;
@@ -237,6 +239,8 @@ These rules in full: [Architecture rules](Docs/DeveloperGuide.md#architecture-ru
 Details: [Asset pipeline](Docs/DeveloperGuide.md#asset-pipeline).
 
 - Sample assets are CC0 or CC-BY, credited in the sample's `CREDITS.md` and `ThirdPartyNotices.md` (`Samples.Content`).
+- The showcase (`Samples/Showcase`) is the presets' reference scene: its terrain, props and stations change only through
+  `Tools/GenerateShowcase*.py`; a change to its look retakes its shots ([Samples](Docs/DeveloperGuide.md#samples)).
 - Every asset file has a committed `<file>.meta` (its handle): move or rename through
   `EditorAssetManager::MoveAsset`/`MoveFolder`, delete through `MoveToTrash`, and read folders and referencers from the
   manager's indexes, never from the disk per frame.
@@ -398,7 +402,8 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - Light keeps its energy and needs no history: specular is compensated for multiple scattering (`GetSpecularEnergy`)
   and screen-space lighting denoises within the frame; check lighting changes with the debug views and the white-furnace
   test ([Lighting](Docs/DeveloperGuide.md#lighting)).
-- Screen-space reflections march fixed steps, keep only validated crossings and fade only where rays leave the screen
+- Screen-space reflections march fixed steps, keep only validated crossings, fade only where rays leave the screen; F0
+  comes from the IOR (1.5 stays 0.04); a light's size widens only its highlight
   ([Reflections](Docs/DeveloperGuide.md#reflections)).
 - Temporal effects jitter only the frame's camera copy and keep history per renderer; single images settle or turn TAA
   off.

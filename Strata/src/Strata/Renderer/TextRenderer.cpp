@@ -102,6 +102,8 @@ namespace Strata
 	bool TextRenderer::Prepare(Scene& scene, const glm::uvec2& viewportSize, bool drawScreenSpace, const glm::vec3& cameraPosition, nvrhi::ICommandList* commandList,
 		TextRenderStats& outStats, const SceneScreenView& screenView)
 	{
+		// World-space text is placed where its entity is drawn (a no-op after the render scene's sync of the frame).
+		scene.UpdateDrawnTransforms();
 		m_Vertices.clear();
 		m_WorldRanges.clear();
 		m_ScreenRanges.clear();
@@ -162,7 +164,8 @@ namespace Strata
 			{
 				// In the entity's XY plane (facing +Z), vertically centered on its origin, FontSize world units per em; the camera's
 				// position comes off the translation before anything is added to it.
-				glm::mat4 relative = world.Matrix;
+				const glm::mat4* drawn = scene.FindDrawnTransform(entity);
+				glm::mat4 relative = drawn ? *drawn : world.Matrix;
 				relative[3] -= glm::vec4(cameraPosition, 0.0f);
 				transform = relative * glm::scale(glm::mat4(1.0f), glm::vec3(size)) * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -m_Layout.Min.y * 0.5f, 0.0f));
 			}

@@ -5,6 +5,8 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 
@@ -100,11 +102,27 @@ namespace Strata
 			glm::vec4 SunDiskDirection;
 			glm::vec4 SunDiskColor;
 			// x: 1 when the frame traced screen-space reflections (SRV 18 holds them); y: 1 when the frame's indirect light
-			// comes from the radiance cascades (SRV 35), z: their intensity (radiance-cascades); w: reflections'. y, z and w
-			// are written 0 until those streams use them.
+			// comes from the radiance cascades (SRV 35), z: their intensity (radiance-cascades); w: the alpha^2 the directional
+			// light's disk adds to its highlight's lobe (GetSunLobeAlpha2; 0 without a directional light). y and z are written 0
+			// until that stream uses them.
 			glm::vec4 ReflectionParams;
 		};
 		static_assert(sizeof(FrameConstants) == 8 * 64 + 26 * 16);
+
+		// The alpha^2 the forward pass adds to a directional light's specular lobe for its disk (ReflectionParams.w): a disk of
+		// angular diameter `degrees` spans the half maximum of a GGX lobe of alpha tan(radius) / c_LobeHalfMaximum (the reflected
+		// angle per alpha at which GGX falls to half its peak: 2 sqrt(sqrt(2) - 1)), less what the shading's smallest roughness
+		// spreads already (Include/PBR.slang's c_MinRoughness^4), so that a mirror shows the disk at its size. Clamped to the
+		// property's 0 to 10 degrees (DirectionalLightComponent::ShadowSoftness, shown as Angular Diameter). Point and spot
+		// lights' spheres take the same lobe in the forward pass (PBR.slang's GetSourceLobeAlpha2, per pixel).
+		inline float GetSunLobeAlpha2(float degrees)
+		{
+			constexpr float c_LobeHalfMaximum = 1.2871885f;
+			constexpr float c_MinAlpha = 0.045f * 0.045f; // PBR.slang's c_MinRoughness, squared
+			const float radius = glm::radians(std::isfinite(degrees) ? std::clamp(degrees, 0.0f, 10.0f) : 0.0f) * 0.5f;
+			const float alpha = std::tan(radius) / c_LobeHalfMaximum;
+			return std::max(alpha * alpha - c_MinAlpha * c_MinAlpha, 0.0f);
+		}
 
 		// A directional shadow cascade as shaders read it (u_Cascades, Include/Scene.slang): written on the GPU by
 		// Scene/CascadeFit.comp, which fits its depth range to the casters (CascadeFitConstants).
@@ -219,7 +237,7 @@ namespace Strata
 			uint32_t ClearcoatNormalMap;
 			uint32_t TransmissionMap;
 			// rgb: what the volume absorbs per world unit (Beer's law: -ln(AttenuationColor) / AttenuationDistance; 0 absorbs
-			// nothing), w: unused.
+			// nothing), w: the dielectric's F0 from the IOR (MaterialGPU::GetDielectricF0).
 			glm::vec4 Absorption;
 		};
 		static_assert(sizeof(MaterialData) == 144);
@@ -229,7 +247,9 @@ namespace Strata
 			glm::vec4 PositionRange; // xyz: camera-relative world position (as uploaded), w: range
 			glm::vec4 Color;         // rgb: color * intensity, w: 1 / range^2
 			glm::vec4 DirectionType; // xyz: direction the light travels, w: type
-			glm::vec4 SpotAngles;    // x: cos(inner), y: cos(outer), z: its shadow slot plus one (0: no shadow; LocalShadowData)
+			// x: cos(inner), y: cos(outer), z: its shadow slot plus one (0: no shadow; LocalShadowData), w: the source radius in
+			// meters (highlights only: LightRecord::Source.x)
+			glm::vec4 SpotAngles;
 		};
 		static_assert(sizeof(LightData) == 64);
 
@@ -244,8 +264,10 @@ namespace Strata
 			// x: cos(inner), y: cos(outer), z: c_LightRecordDrawn or 0, w: c_LightRecordShadowed or 0
 			glm::vec4 SpotAngles = glm::vec4(0.0f);
 			glm::vec4 Bounds = glm::vec4(0.0f);        // xyz: world center, w: radius of the region it reaches
+			// x: the source radius in meters (highlights only; the component's SourceRadius within [0, c_MaxSourceRadius]), yzw: 0
+			glm::vec4 Source = glm::vec4(0.0f);
 		};
-		static_assert(sizeof(LightRecord) == 80);
+		static_assert(sizeof(LightRecord) == 96);
 		// LightRecord::SpotAngles.z of a light that is drawn (active, lit, with a range).
 		constexpr float c_LightRecordDrawn = 1.0f;
 		// LightRecord::SpotAngles.w of a drawn light that casts shadows (its component's CastShadows).
@@ -272,10 +294,21 @@ namespace Strata
 
 		// Reflection probes (ReflectionProbeComponent; Include/ReflectionProbes.slang): a renderer keeps at most this many in
 		// view, each capture converted into a slot of its cube array (a prefiltered cube, one level per roughness step,
-		// c_ReflectionProbeSize texels across) with its irradiance as spherical-harmonic coefficients.
+		// RendererQualitySettings::ReflectionProbeResolution texels across: 128 or 256) with its irradiance as spherical-harmonic
+		// coefficients.
 		constexpr uint32_t c_MaxReflectionProbes = 16;
-		constexpr uint32_t c_ReflectionProbeSize = 128;
 		constexpr uint32_t c_ReflectionProbeMipCount = 6; // Roughness 0, 0.2, ... 1.0, as the sky's prefiltered map
+		// The levels of a cube's whole chain down to 1 texel (the scratch cube a capture is converted through): 8 at 128.
+		constexpr uint32_t GetReflectionProbeMipChain(uint32_t size)
+		{
+			uint32_t count = 1;
+			while (size > 1)
+			{
+				size >>= 1;
+				count++;
+			}
+			return count;
+		}
 		constexpr uint32_t c_ReflectionProbeSHCoefficients = 9; // Bands 0 to 2
 		// A probe in view as the forward pass reads it, in the frame's list (strongest first: priority, then the smaller box).
 		struct ReflectionProbeData

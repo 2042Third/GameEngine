@@ -52,12 +52,26 @@ namespace Strata::ProjectSceneTiming
 			"60 unless changed). A rate here overrides it in every scene and in the exported game, and an update then runs at most 2/15 s of steps "
 			"(4, 8, 16 or 32), dropping a longer backlog. Physics costs at least grow with the rate: 240 runs four times the steps of 60. 30 makes "
 			"contacts soft: box3d stiffens contacts at most to an eighth of its substep rate, 15 Hz at 30 steps/s against 30 Hz at 60, so stacks sag "
-			"and settle more slowly. A higher rate halves the step-to-step motion a moving character shows above the step rate, but does not remove it.";
+			"and settle more slowly. With Interpolation on (the default) motion is smooth at any rate, and a higher rate halves the half step of "
+			"latency interpolation adds; with it off, a higher rate halves the step-to-step motion a moving character shows above the step rate, "
+			"but does not remove it.";
 		fixedRate.Type = SettingsFieldType::Enum;
 		fixedRate.Options.push_back(c_SceneRate);
 		for (const uint32_t rate : c_Rates)
 			fixedRate.Options.push_back(std::to_string(rate));
 		fixedRate.Default = c_SceneRate;
+
+		SettingsField interpolation;
+		interpolation.Name = c_InterpolationField;
+		interpolation.Title = "Interpolation";
+		interpolation.Type = SettingsFieldType::Bool;
+		interpolation.Default = true;
+		interpolation.Description = "Draw what the fixed steps move (physics bodies, character controllers, entities scripts move in OnFixedUpdate, and "
+			"what rides on them: children, lights, cameras) between its last two fixed poses, so that motion is smooth at any frame rate; the "
+			"simulation itself is unchanged. What is drawn is then a constant fixed step behind the game's clock instead of between none and one "
+			"step: half a step more on average (about 8 ms at 60 steps per second; FixedRate 120 halves it), the same at worst. Off draws each "
+			"fixed step's pose as it is, which judders whenever the frame rate is above the step rate. Applies to exported games and the editor's "
+			"Play and Simulate from the next frame; scripted runs (--frames, --seconds, --commands) and tests never interpolate.";
 
 		SettingsSection section;
 		section.Id = c_SectionId;
@@ -65,10 +79,11 @@ namespace Strata::ProjectSceneTiming
 		// Beside Collision Layers and Simulation, where a person looks for the physics rate.
 		section.Category = "Physics";
 		section.Description = "How often the simulation steps (Physics > Timing): the project's fixed rate overrides each scene's Fixed Timestep "
-			"unless it is Scene. Set it with project.setSettings.";
+			"unless it is Scene; Interpolation draws motion between the steps. Set them with project.setSettings.";
 		section.Scope = SettingsScope::Project;
 		section.Version = 1;
 		section.Fields.push_back(std::move(fixedRate));
+		section.Fields.push_back(std::move(interpolation));
 		return section;
 	}
 
@@ -83,11 +98,16 @@ namespace Strata::ProjectSceneTiming
 
 		// The provider holds validated values only (a value its section refuses is not provided: the default applies).
 		uint32_t rate = 0;
+		bool interpolation = true;
 		if (const nlohmann::json* value = settings->FindSection(c_SectionId))
+		{
 			rate = ParseRate(JsonUtils::GetString(*value, c_FixedRateField, c_SceneRate));
-		if (!s_Cache.Valid || rate != s_Cache.Parsed.FixedRate)
+			interpolation = JsonUtils::GetBool(*value, c_InterpolationField, true);
+		}
+		if (!s_Cache.Valid || rate != s_Cache.Parsed.FixedRate || interpolation != s_Cache.Parsed.Interpolation)
 		{
 			s_Cache.Parsed.FixedRate = rate;
+			s_Cache.Parsed.Interpolation = interpolation;
 			s_Cache.Parsed.Version = s_Cache.NextVersion++;
 		}
 		s_Cache.Valid = true;

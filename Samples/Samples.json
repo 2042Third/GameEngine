@@ -5,6 +5,13 @@
 	},
 	"Samples": [
 		{
+			"Directory": "Showcase",
+			"Name": "High Desert Outpost",
+			"Description": "A derelict fuel stop in a rocky high-desert valley the day after rain, built from scans: the low sun's highlights on sheet steel, a weathered oil tank and wet asphalt at three times of day.",
+			"Picture": "Picture.png",
+			"Budget": "Showcase"
+		},
+		{
 			"Directory": "ThirdPerson",
 			"Name": "Third-Person Adventure",
 			"Description": "Sky Islands: an animated robot runs, jumps and pushes a crate across floating islands to collect coins and race to the flag. Main menu, settings, pause menu and an attract mode.",

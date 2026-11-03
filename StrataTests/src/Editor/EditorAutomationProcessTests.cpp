@@ -185,11 +185,37 @@ namespace
 		return result.Json;
 	}
 
-	// Call, for a command that answers only once the editor is ready (an edit while a scan runs): the CLI waits for the
-	// answer up to `timeout` instead of its default 30 s.
-	nlohmann::json CallWaiting(const std::string& method, const nlohmann::json& params, std::chrono::milliseconds timeout)
+	// RunCli, run again while the CLI reached no editor: its connection or its two-second handshake got no answer, so the
+	// request was never sent. On a loaded machine (CI's Windows Debug runners: a scan's jobs on every core beside other
+	// tests) a running editor's network thread can miss that window. Asks for at most c_ProcessTimeout.
+	CliResult RunCliUntilReachable(const std::vector<std::string>& arguments, std::chrono::milliseconds timeout)
 	{
-		const CliResult result = RunCli({ "call", method, params.dump(), "--timeout", std::to_string(timeout.count()) }, timeout + c_ProcessTimeout);
+		const auto deadline = std::chrono::steady_clock::now() + c_ProcessTimeout;
+		CliResult result = RunCli(arguments, timeout);
+		while (result.ExitCode == 2 && result.ErrorOutput.find("No Strata editor is reachable") != std::string::npos
+			&& std::chrono::steady_clock::now() < deadline)
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+			result = RunCli(arguments, timeout);
+		}
+		return result;
+	}
+
+	// Call through RunCliUntilReachable, for an editor busy scanning a large project. A `waitTimeout` above 0 is for a
+	// command that answers only once the editor is ready (an edit while a scan runs): the CLI waits for the answer that
+	// long instead of its default 30 s.
+	nlohmann::json CallUntilReachable(const std::string& method, const nlohmann::json& params,
+		std::chrono::milliseconds waitTimeout = std::chrono::milliseconds(0))
+	{
+		std::vector<std::string> arguments = { "call", method, params.dump() };
+		std::chrono::milliseconds processTimeout = c_ProcessTimeout;
+		if (waitTimeout.count() > 0)
+		{
+			arguments.push_back("--timeout");
+			arguments.push_back(std::to_string(waitTimeout.count()));
+			processTimeout += waitTimeout;
+		}
+		const CliResult result = RunCliUntilReachable(arguments, processTimeout);
 		INFO(method, " ", params.dump(), "\nstdout: ", result.Output, "\nstderr: ", result.ErrorOutput);
 		CHECK(result.ExitCode == 0);
 		return result.Json;
@@ -614,12 +640,13 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 		const std::optional<EditorSessionInfo> session = editor.WaitForSession(environment.SessionDirectory);
 		REQUIRE(session.has_value());
 		// The first answer comes while the project is not ready: its assets are scanned (or, on a fast machine where the scan
-		// just ended, its start scene is still opening; the log below proves the order either way).
-		const nlohmann::json first = Call("editor.status", { { "sections", { "sceneLoad" } } });
+		// just ended, its start scene is still opening; the log below proves the order either way). The calls during the scan
+		// ask again while the CLI reaches no editor (RunCliUntilReachable).
+		const nlohmann::json first = CallUntilReachable("editor.status", { { "sections", { "sceneLoad" } } });
 		REQUIRE(first.contains("sceneLoad"));
 		CHECK((!first["assets"]["scanning"].is_null() || !first["sceneLoad"].is_null()));
 		// Edits wait for it (they answer once it is ready: in CI's Windows Debug build, more than the CLI's default 30 s).
-		const nlohmann::json created = CallWaiting("entity.create", { { "name", "After The Scan" } }, std::chrono::minutes(5));
+		const nlohmann::json created = CallUntilReachable("entity.create", { { "name", "After The Scan" } }, std::chrono::minutes(5));
 		CHECK(created.contains("id"));
 		const nlohmann::json ready = Call("editor.status", { { "sections", { "sceneLoad" } } });
 		CHECK(ready["assets"]["scanning"].is_null());

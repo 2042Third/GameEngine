@@ -1,0 +1,20 @@
+{
+	"Handle": "A18026265C898436",
+	"ImportSettings": {
+		"Compression": "Auto",
+		"Filter": "Linear",
+		"FlipGreen": false,
+		"FlipVertically": false,
+		"GenerateMips": true,
+		"MaxSize": 0,
+		"Quality": "High",
+		"RemoveSun": false,
+		"Usage": "Color",
+		"Wrap": "Repeat"
+	},
+	"Strata": {
+		"Format": "AssetMeta",
+		"Version": 1
+	},
+	"Type": "Texture"
+}

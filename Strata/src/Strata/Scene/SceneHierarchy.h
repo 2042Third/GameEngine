@@ -31,6 +31,9 @@ namespace Strata
 		bool TransformDirty = false;
 		// The SiblingIndex of every child is current. Appending keeps it; other changes of the child list clear it.
 		bool ChildIndicesValid = true;
+		// UpdateWorldTransforms computed the cached world matrix at least once (an interpolation capture tells entities created
+		// during the fixed steps by it).
+		bool HasWorldTransform = false;
 	};
 
 }

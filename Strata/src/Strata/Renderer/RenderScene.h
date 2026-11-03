@@ -400,8 +400,9 @@ namespace Strata
 		void DestroyProxy(uint32_t proxy);
 		// Reads the world transform and activity; returns whether they differed from the proxy's.
 		bool UpdateProxyTransform(uint32_t proxy, const glm::mat4& world, bool active, bool force);
-		// Where the entity is drawn: its world transform, or the one the poses' provider draws it at instead
-		// (ISkinningPoses::GetRenderTransforms, read by UpdateRenderTransforms).
+		// Where the entity is drawn: the transform the poses' provider draws it at instead (ISkinningPoses::GetRenderTransforms,
+		// read by UpdateRenderTransforms), else its drawn transform while the scene interpolates (Scene::FindDrawnTransform),
+		// else its world transform.
 		const glm::mat4& GetDrawnTransform(entt::entity entity, const WorldTransformComponent& world) const;
 		// Takes the provider's render transforms when they changed and places the proxies they add, move or give back.
 		void UpdateRenderTransforms(const ISkinningPoses* poses);
@@ -458,6 +459,7 @@ namespace Strata
 		uint64_t m_Id = 0;
 		Scene* m_Scene = nullptr;
 		uint64_t m_TransformsVersion = 0;
+		uint64_t m_DrawnVersion = 0; // The scene's drawn transforms version the proxies were placed at (Scene::GetDrawnTransformsVersion)
 		std::vector<entt::entity> m_Pending; // Entities whose MeshRendererComponent was created or signaled since the last sync
 		std::vector<uint32_t> m_PendingPositions; // By entt::to_entity: the entity's place in m_Pending
 		// Debug builds' Validate after syncs (c_ValidatedProxiesPerSync); in every configuration, for one layout.
@@ -542,6 +544,7 @@ namespace Strata
 		const ISkinningPoses* m_PosesProvider = nullptr;
 		uint64_t m_PosesVersion = 0;
 		uint64_t m_SkinTransformsVersion = 0;
+		uint64_t m_SkinDrawnVersion = 0; // Drawn animators move on frames without a world transform change
 		uint64_t m_SkinHierarchyVersion = 0;
 
 		RenderSceneStats m_Stats;

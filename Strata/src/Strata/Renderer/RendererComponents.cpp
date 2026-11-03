@@ -91,6 +91,13 @@ namespace Strata
 			return light.CastShadows ? std::string() : "Cast Shadows is off";
 		}
 
+		// The options shown under another name than the stored one's.
+		PropertyOptions Named(PropertyOptions options, std::string displayName)
+		{
+			options.DisplayName = std::move(displayName);
+			return options;
+		}
+
 		// The shadow settings of point and spot lights (their units: texels of the light's shadow tiles, which follow how large
 		// the light looks on screen).
 		constexpr const char* c_LocalShadowBiasTooltip = "Depth offset toward the light, in texels of the light's shadow tiles: raise it if lit "
@@ -100,6 +107,9 @@ namespace Strata
 		constexpr const char* c_LocalShadowFilterTooltip = "Radius of the shadow's soft edge, in texels of the light's shadow tiles (0 to 8)";
 		constexpr const char* c_LocalShadowCastTooltip = "Casts shadows: the renderer gives the most relevant shadowed lights in view (16) tiles "
 			"of its shadow atlas, six for a point light, one for a spot light; each costs drawing its casters again when they move";
+		// Point and spot lights' size (highlights only).
+		constexpr const char* c_SourceRadiusTooltip = "Radius in meters of the light's bulb or flame: smooth and wet surfaces show its highlight at "
+			"that size, the same light spread wider (a lantern about 0.05, a fire about 0.25). Its diffuse light and shadows do not change. 0: a point";
 
 		std::string WithAutoExposure(const PostProcessComponent& post)
 		{
@@ -272,14 +282,16 @@ namespace Strata
 			.Property("Intensity", &DirectionalLightComponent::Intensity,
 				WithTooltip(Range(0.0f, c_Unbounded, 0.05f), "Illuminance in lux on a surface facing the light, times Color: direct sun about 100,000, an "
 					"overcast day 1,000 to 10,000, a full moon 0.25"))
+			// Stored as ShadowSoftness (scenes, scripts, schemas): it sized only the penumbra before it sized the highlight too.
+			.Property("ShadowSoftness", &DirectionalLightComponent::ShadowSoftness, Named(WithTooltip(Range(0.0f, 10.0f, 0.01f), "Angular diameter of "
+				"the light's disk in degrees (the sun: about 0.53; an overcast sky's soft sun up to 10): its shadows' penumbra widens with the "
+				"distance from the caster, and its highlight on smooth surfaces takes the disk's size. 0: the hardest shadow the filter allows and "
+				"a point-like highlight"), "Angular Diameter"))
 			.Section("Shadows")
 			.Property("CastShadows", &DirectionalLightComponent::CastShadows, WithTooltip({}, "Whether the light casts shadows: cascaded shadow maps out "
 				"to Shadow Distance, their resolution and number set by Project Settings > Graphics Quality"))
 			.Property("ShadowDistance", &DirectionalLightComponent::ShadowDistance, WithTooltip(Range(1.0f, 10000.0f, 1.0f), "Meters from the camera the "
 				"shadows reach; the last cascade fades out before it. Shorter spends the same shadow-map texels on less ground: sharper near shadows"))
-			.Property("ShadowSoftness", &DirectionalLightComponent::ShadowSoftness, WithTooltip(Range(0.0f, 10.0f, 0.01f), "Angular diameter of the "
-				"light's disk in degrees (the sun: about 0.53): the penumbra widens with the distance from the caster. 0: the hardest shadow the "
-				"filter allows"))
 			.Property("ShadowBias", &DirectionalLightComponent::ShadowBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), "Depth offset toward the light in "
 				"shadow-map texels: raise it against shadow acne (stripes on lit surfaces), lower it when shadows detach from their casters"))
 			.Property("ShadowNormalBias", &DirectionalLightComponent::ShadowNormalBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), "Offset of the lookup "
@@ -294,7 +306,7 @@ namespace Strata
 			.Property("CascadeDistribution", &DirectionalLightComponent::CascadeDistribution,
 				WithTooltip(Slider(0.0f, 1.0f), "How the cascades share the distance from the nearest to the farthest surface the camera sees: "
 					"0 evenly, 1 each cascade the same ratio farther than the previous. Higher puts more detail near the camera"));
-		SetInactiveReasons<DirectionalLightComponent>({ "ShadowDistance", "ShadowSoftness", "ShadowBias", "ShadowNormalBias", "CascadeBlend", "ContactShadowLength",
+		SetInactiveReasons<DirectionalLightComponent>({ "ShadowDistance", "ShadowBias", "ShadowNormalBias", "CascadeBlend", "ContactShadowLength",
 			"CascadeDistribution" }, &WithShadows<DirectionalLightComponent>);
 
 		ComponentRegistry::Register<PointLightComponent>("PointLight")
@@ -307,6 +319,8 @@ namespace Strata
 				WithTooltip(Range(0.0f, c_Unbounded, 0.1f), "Luminous intensity in candela, times Color, falling off with the square of the distance: a "
 					"bulb of P lumens has P / 12.57 cd (800 lm, about 64 cd), a candle about 1"))
 			.Property("Range", &PointLightComponent::Range, WithTooltip(Range(0.01f, c_Unbounded, 0.1f), "Light fades to zero at this distance"))
+			.Property("SourceRadius", &PointLightComponent::SourceRadius,
+				WithTooltip(Range(0.0f, PointLightComponent::c_MaxSourceRadius, 0.005f), c_SourceRadiusTooltip))
 			.Property("CastShadows", &PointLightComponent::CastShadows, WithTooltip({}, c_LocalShadowCastTooltip))
 			.Property("ShadowBias", &PointLightComponent::ShadowBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), c_LocalShadowBiasTooltip))
 			.Property("ShadowNormalBias", &PointLightComponent::ShadowNormalBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), c_LocalShadowNormalBiasTooltip))
@@ -324,6 +338,8 @@ namespace Strata
 				WithTooltip(Range(0.0f, c_Unbounded, 0.1f), "Luminous intensity in candela along the axis, times Color, falling off with the square of "
 					"the distance; a narrower cone does not make it brighter"))
 			.Property("Range", &SpotLightComponent::Range, Range(0.01f, c_Unbounded, 0.1f))
+			.Property("SourceRadius", &SpotLightComponent::SourceRadius,
+				WithTooltip(Range(0.0f, PointLightComponent::c_MaxSourceRadius, 0.005f), c_SourceRadiusTooltip))
 			.Property("InnerConeAngle", &SpotLightComponent::InnerConeAngle, WithTooltip(Range(0.0f, 89.0f, 0.1f), "Half angle in degrees"))
 			.Property("OuterConeAngle", &SpotLightComponent::OuterConeAngle, WithTooltip(Range(0.1f, 89.9f, 0.1f), "Half angle in degrees"))
 			.Property("CastShadows", &SpotLightComponent::CastShadows, WithTooltip({}, c_LocalShadowCastTooltip))

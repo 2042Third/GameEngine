@@ -1,7 +1,9 @@
 // The third-person camera, on the course's camera: it orbits its target (the player) with the mouse (the cursor is
 // locked while the course plays) or the Look action (the right stick), zooms with the scroll wheel, and shortens its arm
-// where a wall or an island would come between it and the player (a ray from the player's head). The settings' mouse
-// sensitivity and invert-Y apply. In the attract mode it swings behind the walking player by itself.
+// where a wall or an island would come between it and the player (a ray from the player's head), letting it out smoothly
+// once nothing is in the way. It follows the player as drawn between physics steps (GetDrawnPosition), so the player does
+// not judder against it at frame rates above the step rate. The settings' mouse sensitivity and invert-Y apply. In the
+// attract mode it swings behind the walking player by itself.
 
 #include "ThirdPerson.h"
 
@@ -29,12 +31,13 @@ public:
 	float FollowSharpness = 14.0f;   // How quickly the pivot follows the target (1/s)
 	float WallMargin = 0.3f;         // Meters kept between the camera and what its arm hit
 	float ArmLength = 0.0f;          // The arm's length after walls shortened it
+	float ArmReturnSharpness = 6.0f; // How quickly the arm grows back once nothing is in the way (1/s)
 
 	void OnCreate() override
 	{
 		if (Target.IsValid())
 			m_Pivot = Target.GetTransform().GetWorldPosition() + glm::vec3(0.0f, PivotHeight, 0.0f);
-		Place();
+		Place(0.0f);
 	}
 
 	void OnLateUpdate(float) override
@@ -67,23 +70,31 @@ public:
 		}
 		if (Target.IsValid())
 		{
-			const glm::vec3 pivot = Target.GetTransform().GetWorldPosition() + glm::vec3(0.0f, PivotHeight, 0.0f);
+			// Where the player is drawn this frame: between its last two physics steps while the game interpolates.
+			const glm::vec3 pivot = Target.GetTransform().GetDrawnPosition() + glm::vec3(0.0f, PivotHeight, 0.0f);
 			// A respawn or a teleport moves the camera at once; walking is followed smoothly.
 			if (glm::length(pivot - m_Pivot) > 8.0f)
 				m_Pivot = pivot;
 			else
 				m_Pivot = glm::mix(m_Pivot, pivot, 1.0f - std::exp(-FollowSharpness * deltaTime));
 		}
-		Place();
+		Place(deltaTime);
 	}
 private:
-	void Place()
+	// `deltaTime`: the frame's (0 places the arm at its free length at once).
+	void Place(float deltaTime)
 	{
 		const glm::quat rotation = glm::angleAxis(glm::radians(Yaw), glm::vec3(0.0f, 1.0f, 0.0f)) * glm::angleAxis(glm::radians(Pitch), glm::vec3(1.0f, 0.0f, 0.0f));
 		const glm::vec3 back = rotation * glm::vec3(0.0f, 0.0f, 1.0f);
-		ArmLength = Distance;
+		float free = Distance;
 		if (const std::optional<RaycastHit> hit = Physics::Raycast(m_Pivot, back, Distance + WallMargin, Physics::c_AllLayers, Target))
-			ArmLength = std::max(0.4f, hit->Distance - WallMargin);
+			free = std::max(0.4f, hit->Distance - WallMargin);
+		// In at once, so that a wall never hides the player; out smoothly once nothing is in the way, so that the view does not
+		// jump back when something passed between them.
+		if (free <= ArmLength || deltaTime <= 0.0f)
+			ArmLength = free;
+		else
+			ArmLength += (free - ArmLength) * (1.0f - std::exp(-ArmReturnSharpness * deltaTime));
 		TransformComponent transform = GetTransform();
 		transform.SetWorldPosition(m_Pivot + back * ArmLength);
 		transform.SetWorldRotation(rotation);
@@ -109,4 +120,5 @@ ST_SCRIPT_CLASS(FollowCamera)
 	ST_SCRIPT_FIELD(FollowSharpness);
 	ST_SCRIPT_FIELD(WallMargin);
 	ST_SCRIPT_FIELD(ArmLength);
+	ST_SCRIPT_FIELD(ArmReturnSharpness);
 }

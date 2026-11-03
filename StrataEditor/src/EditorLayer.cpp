@@ -106,6 +106,7 @@ namespace Strata
 			// Play mode runs on the wall clock, except in scripted runs (--frames, --commands), which count frames; and projects
 			// open at once with their imports in the background, except in scripted runs, which expect every asset imported.
 			specification.TimeDilation = !options.MaxFrames && options.CommandScript.empty();
+			specification.Interpolation = specification.TimeDilation;
 			specification.ImportInBackground = options.ImportInBackground && !options.MaxFrames && options.CommandScript.empty();
 			if (options.ScriptBuild)
 				specification.ScriptBuild = *options.ScriptBuild;

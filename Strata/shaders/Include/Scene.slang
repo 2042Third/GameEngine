@@ -106,7 +106,8 @@ struct FrameConstants
 	float4 SunDiskDirection;
 	float4 SunDiskColor;
 	// x: 1 when the frame traced screen-space reflections (Forward.frag's u_ScreenReflections, SRV 18); y: 1 when the frame's
-	// indirect light comes from the radiance cascades (SRV 35), z: their intensity (radiance-cascades); w: reflections'.
+	// indirect light comes from the radiance cascades (SRV 35), z: their intensity (radiance-cascades); w: the alpha^2 the
+	// directional light's disk adds to its highlight's lobe (RenderData::GetSunLobeAlpha2; Include/PBR.slang).
 	float4 ReflectionParams;
 };
 
@@ -277,7 +278,7 @@ struct MaterialData
 	uint ClearcoatRoughnessMap;
 	uint ClearcoatNormalMap;
 	uint TransmissionMap;
-	float4 Absorption;         // rgb: absorbed per world unit inside a transmissive volume (Beer's law), w: unused
+	float4 Absorption;         // rgb: absorbed per world unit inside a transmissive volume (Beer's law), w: the dielectric's F0 from its IOR
 };
 
 StructuredBuffer<MaterialData> u_Materials : register(t1);
@@ -287,7 +288,9 @@ struct LightData
 	float4 PositionRange;  // xyz: camera-relative world position, w: range
 	float4 Color;          // rgb: color * intensity, w: 1 / range^2
 	float4 DirectionType;  // xyz: direction the light travels, w: type (ST_LIGHT_*)
-	float4 SpotAngles;     // x: cos(inner cone), y: cos(outer cone), z: its shadow slot plus one (0: no shadow; Include/LocalShadows.slang)
+	// x: cos(inner cone), y: cos(outer cone), z: its shadow slot plus one (0: no shadow; Include/LocalShadows.slang), w: the source
+	// radius in meters (highlights only: Include/PBR.slang's GetSourceLobeAlpha2)
+	float4 SpotAngles;
 };
 
 StructuredBuffer<LightData> u_Lights : register(t2);

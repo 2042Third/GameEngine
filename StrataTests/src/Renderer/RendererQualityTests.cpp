@@ -43,6 +43,7 @@ namespace
 	constexpr std::array<ReflectionsQuality, 4> c_Reflections = { ReflectionsQuality::Off, ReflectionsQuality::Checkerboard, ReflectionsQuality::Spatial, ReflectionsQuality::SpatialHigh };
 	constexpr std::array<MotionBlurSamples, 4> c_MotionBlurQuality = { MotionBlurSamples::Off, MotionBlurSamples::Samples8, MotionBlurSamples::Samples12,
 		MotionBlurSamples::Samples16 };
+	constexpr std::array<uint32_t, 4> c_ReflectionProbeResolution = { 128, 128, 256, 256 };
 
 	void CheckColumn(const RendererQualitySettings& settings, size_t column)
 	{
@@ -60,6 +61,7 @@ namespace
 		CHECK(settings.EnvironmentResolution == c_EnvironmentResolution[column]);
 		CHECK(settings.Reflections == c_Reflections[column]);
 		CHECK(settings.MotionBlurQuality == c_MotionBlurQuality[column]);
+		CHECK(settings.ReflectionProbeResolution == c_ReflectionProbeResolution[column]);
 		// The players' rows follow no preset.
 		CHECK(settings.AntiAliasing == AntiAliasingChoice::Scene);
 		CHECK(settings.MotionBlur == SceneEffectChoice::Scene);
@@ -247,6 +249,9 @@ TEST_SUITE("Renderer.Quality")
 			// High's motion blur takes 12 samples where Medium's takes 8: a cost only scenes with motion blur pay.
 			CHECK(resolved.MotionBlurQuality == MotionBlurSamples::Samples12);
 			resolved.MotionBlurQuality = medium.MotionBlurQuality;
+			// High's reflection probes are 256 texels per face at every size.
+			CHECK(resolved.ReflectionProbeResolution == 256);
+			resolved.ReflectionProbeResolution = medium.ReflectionProbeResolution;
 			CHECK(resolved.HasSameKnobs(medium));
 		}
 		CHECK(RendererQuality::ResolveShadowMapSize(high.ShadowResolution, 1440) != RendererQuality::ResolveShadowMapSize(medium.ShadowResolution, 1440));
@@ -293,10 +298,12 @@ TEST_SUITE("Renderer.Quality")
 		refused({ { "EnvironmentResolution", "1024" } });
 		refused({ { "EnvironmentResolution", 512 } });
 		refused({ { "Reflections", "Mirror" } });
+		refused({ { "ReflectionProbeResolution", "512" } });
+		refused({ { "ReflectionProbeResolution", 256 } });
 
 		const nlohmann::json custom = { { "Preset", "Custom" }, { "ShadowResolution", "4096" }, { "ShadowCascades", 2 }, { "LocalShadowAtlasSize", "2048" },
 			{ "LocalShadowMaxTile", "512" }, { "MaxShadowedLocalLights", 8 }, { "LODErrorPixels", 1.5 }, { "MinProjectedPixels", 0.75 },
-			{ "AmbientOcclusionQuality", "Low" }, { "EnvironmentResolution", "256" }, { "Reflections", "Off" } };
+			{ "AmbientOcclusionQuality", "Low" }, { "EnvironmentResolution", "256" }, { "Reflections", "Off" }, { "ReflectionProbeResolution", "256" } };
 		std::string error;
 		CHECK_MESSAGE(section.Validate(custom, RendererQuality::c_SectionVersion, &error).has_value(), error);
 	}
@@ -310,7 +317,7 @@ TEST_SUITE("Renderer.Quality")
 
 		const nlohmann::json custom = { { "Preset", "Custom" }, { "ShadowResolution", "4096" }, { "ShadowCascades", 2 }, { "LocalShadowAtlasSize", "2048" },
 			{ "LocalShadowMaxTile", "512" }, { "MaxShadowedLocalLights", 8 }, { "LODErrorPixels", 1.5 }, { "MinProjectedPixels", 0.75 },
-			{ "AmbientOcclusionQuality", "Low" }, { "EnvironmentResolution", "256" }, { "Reflections", "Off" } };
+			{ "AmbientOcclusionQuality", "Low" }, { "EnvironmentResolution", "256" }, { "Reflections", "Off" }, { "ReflectionProbeResolution", "256" } };
 		const RendererQualitySettings customSettings = RendererQuality::FromSectionValue(&custom);
 		CHECK(customSettings.Preset == RendererQualityPreset::Custom);
 		CHECK(customSettings.ShadowResolution == ShadowMapResolution::Size4096);
@@ -323,6 +330,10 @@ TEST_SUITE("Renderer.Quality")
 		CHECK(customSettings.AmbientOcclusionQuality == AmbientOcclusionLevel::Low);
 		CHECK(customSettings.EnvironmentResolution == 256);
 		CHECK(customSettings.Reflections == ReflectionsQuality::Off);
+		CHECK(customSettings.ReflectionProbeResolution == 256);
+		// The field round-trips through the section's value.
+		CHECK(RendererQuality::ToSectionValue(customSettings)["ReflectionProbeResolution"] == "256");
+		CHECK(RendererQuality::FromSectionValue(&custom).ReflectionProbeResolution == 256);
 
 		const RendererQualitySettings none = RendererQuality::FromSectionValue(nullptr);
 		CHECK(none.Preset == RendererQualityPreset::High);
@@ -763,12 +774,19 @@ TEST_SUITE("Renderer.Quality")
 		const uint64_t halfCopy1080 = 960ull * 540 + 480 * 270 + 240 * 135 + 120 * 67 + 60 * 33 + 30 * 16;
 		CHECK(MemoryBytes(ultra, { 1920, 1080 }, "Reflections") == 1920ull * 1080 * 28 + halfCopy1080 * 4);
 		CHECK(MemoryBytes(RendererQuality::GetPreset(RendererQualityPreset::Low), { 3840, 2160 }, "Reflections") == 0);
+		// Reflection probes, for a view that shows one: 16 slots of six levels and the scratch cube's whole chain, RGBA16F.
+		CHECK(MemoryBytes(medium, { 3840, 2160 }, "ReflectionProbeResolution") == 17821680);
+		CHECK(MemoryBytes(high, { 1920, 1080 }, "ReflectionProbeResolution") == 71286768);
+		CHECK(MemoryMiB(ultra, { 3840, 2160 }, "ReflectionProbeResolution") == 67); // 67.98: the estimate rounds down
+		RendererQualitySettings oddProbes = high;
+		oddProbes.ReflectionProbeResolution = 512;
+		CHECK(MemoryBytes(oddProbes, { 3840, 2160 }, "ReflectionProbeResolution") == 17821680); // Clamped to 128
 		// The rows that allocate nothing of their own have no estimate.
 		for (const RendererQuality::RowTraits& row : RendererQuality::GetRowTraits())
 		{
 			CAPTURE(std::string(row.Field));
 			CHECK((row.MemoryBytes != nullptr) == (row.Field == "ShadowResolution" || row.Field == "LocalShadowAtlasSize" || row.Field == "EnvironmentResolution"
-				|| row.Field == "Reflections" || row.Field == "MotionBlurQuality"));
+				|| row.Field == "Reflections" || row.Field == "MotionBlurQuality" || row.Field == "ReflectionProbeResolution"));
 		}
 	}
 }

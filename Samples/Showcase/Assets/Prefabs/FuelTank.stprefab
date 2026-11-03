@@ -1,0 +1,7 @@
+{"Strata":{"Format":"Prefab","Version":1},"Prefab":{"EntityCount":5,"Entities":[
+{"Components":{"Name":{"Name":"FuelTank"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0,0]}},"ID":"4C693049DFCA3667"},
+{"Components":{"MeshRenderer":{"CastShadows":true,"Material":"0230C0138BF31B1C","Mesh":"0748E4C194D76EC8"},"Name":{"Name":"FuelTank.Shell"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0,0]}},"ID":"504FEE6BA317C07A","Parent":"4C693049DFCA3667"},
+{"Components":{"MeshRenderer":{"CastShadows":true,"Material":"7FF4C3E4EB768032","Mesh":"0748A58194D79F4F"},"Name":{"Name":"FuelTank.Saddles"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0,0]}},"ID":"45A3BB2B68CBCB4A","Parent":"4C693049DFCA3667"},
+{"Components":{"MeshRenderer":{"CastShadows":true,"Material":"7FF4C3E4EB768032","Mesh":"0748654194D642EC"},"Name":{"Name":"FuelTank.Fittings"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0,0]}},"ID":"E811C19B3073296F","Parent":"4C693049DFCA3667"},
+{"Components":{"MeshCollider":{"Convex":true,"Mesh":"0748240194D6F1CE"},"Name":{"Name":"FuelTank.Collision"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0,0]}},"ID":"12121202BADE7990","Parent":"4C693049DFCA3667"}
+]}}

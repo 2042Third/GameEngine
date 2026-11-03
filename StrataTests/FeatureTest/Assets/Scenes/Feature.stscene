@@ -197,7 +197,8 @@
 						"Range": 7,
 						"ShadowBias": 1.25,
 						"ShadowFilterRadius": 2,
-						"ShadowNormalBias": 1.25
+						"ShadowNormalBias": 1.25,
+						"SourceRadius": 0.05
 					},
 					"Transform": {
 						"Rotation": [
@@ -238,7 +239,8 @@
 						"Range": 14,
 						"ShadowBias": 0.75,
 						"ShadowFilterRadius": 3,
-						"ShadowNormalBias": 2
+						"ShadowNormalBias": 2,
+						"SourceRadius": 0.03
 					},
 					"Transform": {
 						"Rotation": [
@@ -2263,6 +2265,40 @@
 					}
 				},
 				"ID": "F7E0000000000045"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Interpolation Features"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "InterpolationFeatures",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							40,
+							0
+						]
+					}
+				},
+				"ID": "F7E0000000000090"
 			},
 			{
 				"Components": {

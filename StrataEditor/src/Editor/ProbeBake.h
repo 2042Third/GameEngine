@@ -22,7 +22,7 @@ namespace Strata
 	namespace ProbeBake
 	{
 
-		constexpr uint32_t c_FaceSize = 256;       // Twice the renderer's probe cubes (RenderData::c_ReflectionProbeSize)
+		constexpr uint32_t c_FaceSize = 256;       // The largest probe cubes (RendererQualitySettings::ReflectionProbeResolution)
 		constexpr uint32_t c_CaptureWidth = 1024;  // The equirectangular image keeps the faces' detail
 		constexpr uint32_t c_CaptureHeight = 512;
 		constexpr float c_Near = 0.05f;            // Meters

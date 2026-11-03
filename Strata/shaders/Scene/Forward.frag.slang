@@ -83,19 +83,19 @@ bool IsLightingValueView(uint view)
 // The light a lit surface reflects from one light: the base's, under its clear coat when it has one (the coat reflects some of
 // the light before it reaches the base). A reflection probe's capture (MaterialParams.w 1: SceneRenderOptions::ProbeCapture)
 // keeps the lights' diffuse light only: their highlights depend on where they are seen from, and looked up from elsewhere they
-// showed as bright patches in the wrong places.
-float3 LightSurface(SurfaceData surface, ClearcoatData coat, float diffuseWeight, float3 lightDirection, float3 radiance)
+// showed as bright patches in the wrong places. `sourceAlpha2` widens the highlights for the light's size (Include/PBR.slang).
+float3 LightSurface(SurfaceData surface, ClearcoatData coat, float diffuseWeight, float3 lightDirection, float3 radiance, float sourceAlpha2)
 {
 	float specularWeight = 1.0 - u_Frame.MaterialParams.w;
 #ifdef ST_FORWARD_GLASS
-	float3 light = EvaluateLightWeighted(surface, lightDirection, radiance, diffuseWeight, specularWeight);
+	float3 light = EvaluateLightWeighted(surface, lightDirection, radiance, diffuseWeight, specularWeight, sourceAlpha2);
 #else
-	float3 light = EvaluateLightWeighted(surface, lightDirection, radiance, 1.0, specularWeight);
+	float3 light = EvaluateLightWeighted(surface, lightDirection, radiance, 1.0, specularWeight, sourceAlpha2);
 #endif
 	if (coat.Strength > 0.0)
 	{
 		float baseWeight;
-		float3 coatLight = EvaluateClearcoat(coat, surface.View, lightDirection, radiance, baseWeight);
+		float3 coatLight = EvaluateClearcoat(coat, surface.View, lightDirection, radiance, sourceAlpha2, baseWeight);
 		light = light * baseWeight + coatLight * specularWeight;
 	}
 	return light;
@@ -188,7 +188,9 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 	// The split sum's BRDF table at the surface: its specular reflectance of image light and the compensation of its lobe for
 	// multiple scattering, which direct light takes too.
 	float NoV = max(dot(surface.Normal, surface.View), 1e-4);
-	float3 f0 = lerp(float3(0.04), surface.Albedo, surface.Metallic);
+	// A dielectric reflects head-on what its IOR gives (MaterialGPU::GetDielectricF0: 0.04 at 1.5), a metal its albedo.
+	float3 f0 = lerp(float3(material.Absorption.w), surface.Albedo, surface.Metallic);
+	surface.F0 = f0;
 	float2 dfg = u_BRDFLut.SampleLevel(u_LinearClampSampler, float2(NoV, surface.Roughness), 0.0).rg;
 	surface.SpecularEnergy = GetSpecularEnergy(f0, dfg);
 	float coatNoV = 1.0;
@@ -216,7 +218,9 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 			shadow = encoded * encoded;
 #endif
 		}
-		color += LightSurface(surface, coat, diffuseWeight, -u_Frame.DirectionalLightDirection.xyz, u_Frame.DirectionalLightColor.rgb) * shadow;
+		// The sun's highlight takes its disk's size (ReflectionParams.w: RenderData::GetSunLobeAlpha2).
+		color += LightSurface(surface, coat, diffuseWeight, -u_Frame.DirectionalLightDirection.xyz, u_Frame.DirectionalLightColor.rgb,
+			u_Frame.ReflectionParams.w) * shadow;
 	}
 
 	// Punctual lights reaching this pixel's cluster.
@@ -245,7 +249,9 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 				float3 geometricNormal = normalize(v_Normal) * (st_FrontFacing ? 1.0 : -1.0);
 				attenuation *= SampleLocalShadow(shadowSlot - 1u, surface.Position, geometricNormal, st_FragCoord.xy);
 			}
-			color += LightSurface(surface, coat, diffuseWeight, normalize(toLight), light.Color.rgb * attenuation);
+			// The highlight takes the bulb's or flame's angular size (SpotAngles.w: its radius; 0, a point, skips it).
+			float sourceAlpha2 = GetSourceLobeAlpha2(light.SpotAngles.w, distanceSquared);
+			color += LightSurface(surface, coat, diffuseWeight, normalize(toLight), light.Color.rgb * attenuation, sourceAlpha2);
 		}
 	}
 	uint lightingView = GetLightingView();
@@ -315,7 +321,7 @@ float3 TransmitLight(InstanceData instance, MaterialData material, float3 normal
 	float NoV = max(dot(normal, view), 1e-4);
 	float2 dfg = u_BRDFLut.SampleLevel(u_LinearClampSampler, float2(NoV, roughness), 0.0).rg;
 	// What the surface reflects, compensated as its specular light is (ShadeLitSurface): the rest passes through.
-	float3 f0 = lerp(float3(0.04), albedo, metallic);
+	float3 f0 = lerp(float3(material.Absorption.w), albedo, metallic);
 	float3 reflectance = (f0 * dfg.x + dfg.y) * GetSpecularEnergy(f0, dfg);
 	float3 absorbed = exp(-material.Absorption.rgb * thickness);
 	return behind * absorbed * albedo * (1.0 - metallic) * (1.0 - reflectance) * transmission;

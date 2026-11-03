@@ -201,6 +201,14 @@ namespace Strata
 		glm::quat GetWorldRotation() const { return Detail::FromABIQuat(GetWorld().Rotation); }
 		glm::vec3 GetWorldScale() const { return Detail::FromABIVector3(GetWorld().Scale); }
 
+		// Where the entity is drawn this frame: between its last two fixed poses while it is interpolated, else its world
+		// position (rotation). Cameras and effects that follow a moving body read these in OnLateUpdate.
+		glm::vec3 GetDrawnPosition() const { return Detail::FromABIVector3(GetDrawn().Translation); }
+		glm::quat GetDrawnRotation() const { return Detail::FromABIQuat(GetDrawn().Rotation); }
+		// Draws the entity and its descendants where they are until the next fixed step moves them: after moving it far by
+		// setting its transform in OnFixedUpdate. False only for an entity that does not exist (or an engine without it).
+		bool ResetInterpolation();
+
 		bool SetWorldPosition(const glm::vec3& position)
 		{
 			StrataScriptTransform transform = {};
@@ -226,6 +234,8 @@ namespace Strata
 	private:
 		StrataScriptTransform GetLocal() const;
 		StrataScriptTransform GetWorld() const;
+		// The drawn transform; the world transform on an engine without GetDrawnTransform.
+		StrataScriptTransform GetDrawn() const;
 		bool SetLocal(const StrataScriptTransform& transform, uint32_t parts);
 		bool SetWorld(const StrataScriptTransform& transform, uint32_t parts);
 	private:
@@ -425,6 +435,23 @@ namespace Strata
 		if (const StrataScriptHostAPI* host = Detail::GetHost(); host && m_Entity.GetID() != 0)
 			host->GetWorldTransform(Detail::GetContext(), m_Entity.GetID(), &transform);
 		return transform;
+	}
+
+	inline StrataScriptTransform TransformComponent::GetDrawn() const
+	{
+		const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(GetDrawnTransform);
+		if (!host)
+			return GetWorld();
+		StrataScriptTransform transform = { { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f, 1.0f }, { 1.0f, 1.0f, 1.0f } };
+		if (m_Entity.GetID() != 0)
+			host->GetDrawnTransform(Detail::GetContext(), m_Entity.GetID(), &transform);
+		return transform;
+	}
+
+	inline bool TransformComponent::ResetInterpolation()
+	{
+		const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(ResetInterpolation);
+		return host && m_Entity.GetID() != 0 && host->ResetInterpolation(Detail::GetContext(), m_Entity.GetID());
 	}
 
 	inline bool TransformComponent::SetLocal(const StrataScriptTransform& transform, uint32_t parts)

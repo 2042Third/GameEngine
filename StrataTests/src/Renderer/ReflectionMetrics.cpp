@@ -97,10 +97,17 @@ namespace Strata::Tests
 		for (const AssetHandle builtin : { BuiltinAssets::CubeMesh, BuiltinAssets::PlaneMesh, BuiltinAssets::SphereMesh, BuiltinAssets::DefaultMaterial })
 			REQUIRE(assets.Manager->LoadAssetSync(builtin));
 		AddNeutralPostProcess(Contents).ScreenSpaceReflections = true;
-		Contents.CreateEntity("Sky").AddComponent<SkyLightComponent>().EnvironmentMap =
+		Sky = Contents.CreateEntity("Sky");
+		Sky.AddComponent<SkyLightComponent>().EnvironmentMap =
 			assets.Add(CreateEnvironmentTexture(glm::vec3(0.30f, 0.45f, 0.80f), glm::vec3(0.08f, 0.07f, 0.06f)), "Sky");
 		// The look-dev scene's sun (Clear at 30 degrees, azimuth 75: toward the sun), at the tests' scale.
 		Sun = AddSun(Contents, SunDirection(30.0f, 75.0f), 3.0f);
+		const glm::vec3 lanternPlaces[2] = { glm::vec3(10.0f, 1.2f, 8.0f), glm::vec3(-10.0f, 2.5f, 8.0f) };
+		for (int index = 0; index < 2; index++)
+		{
+			Lanterns[index] = AddPointLight(Contents, lanternPlaces[index], glm::vec3(1.0f, 0.72f, 0.42f), 60.0f, 18.0f);
+			Lanterns[index].SetActive(false);
+		}
 
 		const auto material = [&assets](const glm::vec3& color, float metallic, float roughness)
 		{

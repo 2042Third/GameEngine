@@ -102,6 +102,55 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   `Metrics` (noise, screen-locked pattern, bands) in `metrics.csv`; tests measure flicker in motion with one meter for the
   wave (`Tests::MeasureFlicker`).
 
+**physics-timing: smooth at any frame rate**
+
+- Games and the editor's Play and Simulate draw bodies, characters and what scripts move in fixed updates between their
+  last two physics steps, so motion is smooth at any frame rate: the Third-Person robot running across the view moved by
+  up to 29.4 px (peak to peak, on a 4K screen) at 700 fps; now by 0.25 px at 731 fps and at most 0.37 px at 30, 60, 120,
+  144, 240 and 400-730 frames per second and at 30, 60, 120 and 240 steps per second. The simulation is unchanged. What
+  you see is a constant step behind the game's clock, about half a step (8 ms at 60 steps per second) more on average
+  than before and no more at worst; Project Settings > Physics > Timing > Interpolation turns it off. Its cost is that
+  moving shadow casters redraw their shadows on every frame instead of every step: with about 2,000 balls rolling in the
+  Physics Playground the editor's Game view ran at 356 instead of 501 fps (GPU 2.4 instead of 1.6 ms a frame, on an
+  RTX 5090); with interpolation off it costs nothing measurable.
+- New script API: `Time::GetStepAlpha`, `TransformComponent::GetDrawnPosition`, `GetDrawnRotation`, `ResetInterpolation`.
+- The Third-Person camera follows the robot as it is drawn and lets its arm out smoothly after something passed between
+  them.
+- `play.state` and `physics.stats` report interpolation.
+
+**Reflections (R2)**
+
+- The sun's highlight takes the light's size (Directional Light **Angular Diameter**, stored as `ShadowSoftness`):
+  Overcast's 10-degree sun gives a soft glow instead of a pin dot; on mirror-smooth surfaces the midday sun's glint is the
+  disk's size. The property now sits with the light's own settings and applies without shadows too.
+- Point and spot lights have a **Source Radius** (default 0, as before): a lantern's or a fire's highlight on metal and wet
+  ground takes the bulb's or flame's size, the same light spread wider; their diffuse light and shadows do not change.
+- A material's IOR sets its reflectance: water (1.33) reflects 2%, glass (1.5) 4% as before; imported `KHR_materials_ior`
+  values count, without re-importing.
+- The physical atmosphere's sky after sunset no longer shows bands, nor do its reflections: its tables keep the twilight's
+  faint light at full precision (daytime skies are unchanged to the bit).
+- At High and Ultra reflection probes are 256 texels per face: sharper on polished metal, 68 MiB of GPU memory per view that
+  shows probes instead of 17 (Graphics Quality's **Reflection probe resolution**). No probe needs baking again.
+- Asset thumbnails render again once (the sun's highlight and dielectrics' reflectance changed how materials look).
+
+**showcase**
+
+- A fifth sample, High Desert Outpost (`Samples/Showcase`, first in the launcher): a derelict fuel stop in a rocky
+  desert valley the day after rain, built from 22 CC0 Poly Haven scans and generated props, made to show the low sun's
+  highlights on sheet steel, a weathered oil tank and wet asphalt.
+- Two generators keep its ground and props reproducible: `Tools/GenerateShowcaseTerrain.py` (the valley, the apron with
+  its potholes and puddles, their water and mud; it checks that the golden sun clears the hills and computes where each
+  shot sees the sun reflected) and `Tools/GenerateShowcaseProps.py` (the bus, the tanks, the pipes, the hut, the bare
+  steel's maps, and the command scripts that make the sample's materials and prefabs). The CTests
+  `StrataTools.ShowcaseTerrain` and `StrataTools.ShowcaseProps` keep the committed files equal to what they write.
+- Play it and a camera tour of about 80 seconds shows six shots: dawn over the valley, the low sun sliding along the
+  bus's side and down the oil tank, its glint in the puddles, the hut's interior and dusk with the fire and lanterns lit.
+  Each time of day has its own baked reflection probes, switched on under the fade between shots.
+- Any key takes the tour over into a first-person walk; Tab flies, P opens a photo mode (time of day, exposure, field of
+  view, focus, f-number, depth of field, the quality preset and anti-aliasing, seven bookmarks), H hides the UI.
+- Samples: a showcase may hold six screenshots in 8 MB (the others three in 3 MB).
+- Manual, Lighting: "Times of day with baked probes".
+
 **Global illumination (stage 1: the voxels).**
 
 - Editor: the Scene view's debug view **Voxels** shows the scene as global illumination will see it: a voxel copy of
@@ -123,6 +172,9 @@ projects, the template and scenes or projects without the value get.
 | Contact shadow steps of the Graphics Quality presets | Low 0, Medium 0, High 12, Ultra 16 | 0 in every preset | lane Render |
 | Compiled shaders | glslang | slangc; pictures differ by rounding only | S0.10 |
 | First configure of a clone | offline after submodules | fetches Slang's archive once, or `STRATA_SLANG_ROOT` | S0.10 |
+| What games, Play and Simulate draw | each body's last fixed pose | between its last two fixed poses, a step behind the clock | physics-timing |
+| Reflection probe resolution of the High and Ultra presets | 128 | 256 | reflections R2 |
+| A directional light's highlight | a point's | its Angular Diameter's disk (0.53 degrees by default) | reflections R2 |
 
 ## Upgrading from 0.7.0
 
@@ -152,6 +204,16 @@ projects, the template and scenes or projects without the value get.
 | Reflection probes baked under the atmosphere | Their capture holds the sun's disk (clamped to 65,000 nits) | Bakes draw no disk | Bake them again (Bake Reflection Probes, or `lighting.bakeProbes`) to lose the bright patch; nothing to keep |
 | Reflection probes of lit shiny things | Their capture holds the lights' highlights as seen from the probe | Bakes keep the lights' diffuse light only | Bake them again to lose highlights in the wrong places; nothing to keep |
 | Spatial reflections' resolve | 3x3 neighbors, depth-weighted | 5x5 neighbors, plane-weighted: no screen door, about two pixels softer on mirrors at 4K | None |
+| **physics-timing** | | | |
+| Scripts that place something from a moving body's position every frame (a follow camera, an effect) | the body's last fixed pose, which is what was drawn | the body is drawn up to a step behind its last fixed pose, so it seems to jitter against them | read `GetDrawnPosition()`/`GetDrawnRotation()` in `OnLateUpdate` instead of the world position |
+| Scripts that move an entity far by setting its transform in `OnFixedUpdate` | drawn there at the step | drawn sliding there over a step if within 400 m/s | call `GetTransform().ResetInterpolation()` after the move |
+| What games, Play and Simulate draw | each body's last fixed pose | between its last two fixed poses | Project Settings > Physics > Timing > Interpolation off |
+| **Reflections (R2)** | | | |
+| A directional light's highlight | A point's (the smallest roughness's pin dot) whatever its Shadow Softness | Its disk's size: mirrors 1.8 times wider at the default 0.53 degrees, roughness 0.06 30% wider, 0.18 0.4% | Angular Diameter 0 (also hardens its shadows) |
+| Shaders reading the atmosphere's sky-view, multiple-scattering or aerial tables, or its environment cube | Light per lux of sun | Per lux times `Atmosphere::c_StorageScale` (16384) | Multiply by `EnvironmentParams.x`, which divides by it (or by `1.0 / ST_ATMOSPHERE_STORAGE_SCALE`) |
+| Reflection probes' resolution at High and Ultra | 128 texels per face (17 MiB per view with probes) | 256 (68 MiB) | Graphics Quality Custom with **Reflection probe resolution** 128 |
+| A non-metal's reflectance (F0) | 0.04 whatever its IOR | From its IOR: 1.5 (the default) exactly 0.04 as before, water 1.33 0.02, 2 0.11, 1 none | Set the IOR to 1.5 (it also bends what transmissive materials show) |
+| Directional Light **Shadow Softness** | In the Shadows section, inactive without shadows | **Angular Diameter**, with the light's own settings, active with and without shadows; stored, scripted and set by commands as `ShadowSoftness` | Nothing to do |
 
 ## Known issues
 
@@ -165,6 +227,17 @@ projects, the template and scenes or projects without the value get.
 - At Ultra, shiny balls reflected in rough metal keep a fine grain in still pictures (`lookdev.sheet`'s spheres: noise
   1.05-1.08% at 3840x2160 against the 1% aimed at, High 0.95-0.96%): whether a ray grazing a ball's outline passes just
   behind it, which is not a hit, depends on its step offset.
+
+**Reflections (R2)**
+
+- An object in front of a mirror is reflected only where the camera also sees it (often a crescent), with the probes or
+  the sky where its back would be: the screen holds only its front. Filling that silhouette with the front's colors was
+  tried and drew front-lit rims instead.
+- Where a mirror meets a ball's side at a slant, the screen-space march still misses part of it in fine stripes (in a
+  test, 42% of those pixels hit at High, 65% at Ultra), which the resolve and the probes fill.
+- With TAA, every highlight that slides over a surface as the camera moves pumps by 4.5-9.5% from frame to frame (the
+  history follows the surface, not the highlight); a Source Radius roughly halves it on lanterns. Without TAA, lanterns'
+  glints on wet ground pump by 1.4% as points and 0.3% sized, with FXAA by 4.2% and 1.3%.
 
 **Lane Render**
 
@@ -187,3 +260,16 @@ projects, the template and scenes or projects without the value get.
   argument buffers, as before), but no GPU test ran through MoltenVK. On Mesa's lavapipe (a CPU driver, tried on CI), 529
   of 553 GPU tests pass with the new shaders as with the old, and the same 24 fail with both; AMD and Intel GPUs have not
   run them.
+
+**physics-timing**
+
+- While a game runs on the clock, world-space game UI, editor gizmos, picking, reflection probes, fog and post-process
+  volumes, the sky and the sun, and attachments placed outside their animator's hierarchy use the simulated poses, up to
+  one step off what is drawn (exact while paused or stepped).
+- A character or body that rides something a script moves every frame in `OnUpdate` is drawn a step behind it (a
+  constant 5 cm at 3 m/s and 60 steps per second; it flickered between 0 and 5 cm before): move carriers in
+  `OnFixedUpdate` or as kinematic bodies.
+- A frame that runs a fixed step costs more with interpolation, bound by memory: with 100,000 moving roots 5.5 ms
+  against 2.6 ms without it on the development machine (`Perf.Scene.InterpolatedStepFrame100k.Ratio` 2.1 against the 1.5
+  aimed at), while a real scene in the editor paid about 0.05 ms. Interpolation off removes the cost.
+

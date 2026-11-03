@@ -67,8 +67,9 @@ namespace Strata
 				.AssetProperty("TransmissionMap", &MaterialProperties::TransmissionMap, AssetType::Texture,
 					{ .Tooltip = "Transmission map: red = transmission (times Transmission)" })
 				.Property("IOR", &MaterialProperties::IOR,
-					PropertyOptions { .DisplayName = "IOR", .Tooltip = "Index of refraction: how much light bends entering the surface (1 none, water "
-						"1.33, glass 1.5, diamond 2.42)", .Min = 1.0f, .Max = 3.0f, .Speed = 0.01f })
+					PropertyOptions { .DisplayName = "IOR", .Tooltip = "Index of refraction: how much light bends entering the surface, and how much "
+						"a dielectric reflects head-on: water 1.33 reflects 2%, glass 1.5 4%, diamond 2.42 17%; 1 reflects nothing", .Min = 1.0f, .Max = 3.0f,
+						.Speed = 0.01f })
 				.Property("Thickness", &MaterialProperties::Thickness,
 					PropertyOptions { .Tooltip = "Thickness of the volume behind a transmissive surface, in the mesh's units along its normal (1: "
 						"a whole built-in cube, however scaled): how far what lies behind it is displaced and how much the volume absorbs (0: a thin "

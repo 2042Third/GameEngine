@@ -658,7 +658,8 @@ namespace Strata
 		uint32_t ShadowMapSize = 0;
 		// Reflection probes (SceneRendererSpecification::MaxReflectionProbes): those the frame shaded with, the captures it
 		// converted into the renderer's cube array, and the probes kept in view still waiting for their capture to load or be
-		// converted (the sky lights their surfaces meanwhile).
+		// converted (the sky lights their surfaces meanwhile), or, after a new resolution, for its cubes to take over (every
+		// probe in view: those the old cubes still shade too).
 		uint32_t ReflectionProbes = 0;
 		uint32_t ReflectionProbeConversions = 0;
 		uint32_t ReflectionProbesPending = 0;
@@ -876,6 +877,7 @@ namespace Strata
 		// the atmosphere.
 		nvrhi::ITexture* GetAtmosphereTransmittanceTable() const { return m_Atmosphere ? m_Atmosphere->Transmittance.Get() : nullptr; }
 		nvrhi::ITexture* GetAtmosphereSkyViewTable() const { return m_Atmosphere ? m_Atmosphere->SkyView.Get() : nullptr; }
+		nvrhi::ITexture* GetAtmosphereMultipleScatteringTable() const { return m_Atmosphere ? m_Atmosphere->MultipleScattering.Get() : nullptr; }
 		// Aerial perspective's volume (RGBA16F, 32 x 32 x 64: in-scattered light per lux of sun, then transmittance), null until a
 		// frame drew it.
 		nvrhi::ITexture* GetAerialVolume() const { return m_Atmosphere ? m_Atmosphere->AerialVolume.Get() : nullptr; }
@@ -965,9 +967,10 @@ namespace Strata
 		// Frames over which a light's shadow fades in once all its views are drawn (SceneRendererSpecification::
 		// SpreadLightingUpdates).
 		static constexpr uint32_t c_LocalShadowFadeFrames = 8;
-		// The reflection probes' cube array (RGBA16_FLOAT, RenderData::c_ReflectionProbeSize texels across, one level per
+		// The reflection probes' cube array (RGBA16_FLOAT, RendererQualitySettings::ReflectionProbeResolution texels across, one level per
 		// roughness step, a cube per slot of SceneRendererSpecification::MaxReflectionProbes): null until a frame has a probe in
-		// view, and again once the render targets are released or a frame's scene has no probe.
+		// view, and again once the render targets are released or a frame's scene has no probe. The array frames shade with:
+		// after SetQuality changed the resolution, the old size's until the captures in view are converted at the new one.
 		nvrhi::ITexture* GetReflectionProbeArray() const { return m_ReflectionProbes ? m_ReflectionProbes->Array.Get() : nullptr; }
 		// Captures converted per frame with SceneRendererSpecification::SpreadLightingUpdates.
 		static constexpr uint32_t c_ReflectionProbeConversionsPerFrame = 2;
@@ -1023,7 +1026,9 @@ namespace Strata
 		// cascades (their ShadowCascades layers at the resolved size, framebuffers, occlusion pyramids and cache) when the
 		// resolved size or the count changed, the local shadows' atlas (with its tiles, views and cache) when its size
 		// changed; a changed tile cap draws every light's views again in new tiles, and a changed LODErrorPixels in
-		// theirs (as a caster's change does: LocalShadowContent); the other knobs apply from the next frame. Returns
+		// theirs (as a caster's change does: LocalShadowContent); the reflection probes' cubes are made at a new resolution
+		// beside the old ones, which shade until the captures in view are converted (nothing is released here, and the change
+		// alone returns false); the other knobs apply from the next frame. Returns
 		// whether the cascades or the atlas were released (the temporal history then starts again). Call it after
 		// SetViewportSize in a frame, so that Auto resolves for the rows the frame draws at. GetQuality() is the result.
 		bool SetQuality(const RendererQualitySettings& quality);
@@ -1402,7 +1407,7 @@ namespace Strata
 		struct ReflectionProbeState
 		{
 			nvrhi::TextureHandle Array;   // The slots' prefiltered cubes
-			nvrhi::TextureHandle Scratch; // A capture's cube with its levels (RenderData::c_ReflectionProbeSize), filtered into a slot
+			nvrhi::TextureHandle Scratch; // A capture's cube with its whole chain (the row's size), filtered into a slot
 			std::vector<ReflectionProbeSlot> Slots;
 		};
 		// A capture the frame converts (its texture, held by the frame) into a slot.
@@ -1493,17 +1498,24 @@ namespace Strata
 		nvrhi::ITexture* GetBoundReflectionProbes() const;
 		// The frame's reflection probes (SceneRendererReflectionProbes.cpp), on the CPU after the lights: the strongest in view,
 		// their captures resolved and held whole until converted, the conversions the frame records and the probes it shades
-		// with (those whose capture is converted, or is this frame).
+		// with (those whose capture is converted, or is this frame; after a new resolution, those the old cubes show until the
+		// new ones take over: m_ReflectionProbesNext).
 		// False (reported) when its resources cannot be made: the scene is then lit without probes.
 		bool GatherReflectionProbes(Scene& scene, const SceneCamera& camera);
-		// The cube array and the conversion's pipeline: false (reported) when they cannot be made.
+		// The cube array at the quality's resolution and the conversion's pipeline: false (reported) when they cannot be made.
+		// After a new resolution the array is made as m_ReflectionProbesNext beside the shown one (which keeps shading if the new
+		// one cannot be made).
 		bool EnsureReflectionProbeResources();
 		// Writes the frame's probe list into the probe buffer (when it has probes, or the previous upload had some).
 		void UploadReflectionProbes(nvrhi::ICommandList* commandList);
-		// Converts the frame's captures into their slots (GPU.Reflections): each into a cube with its levels, prefiltered into
-		// the slot's levels, and projected into the slot's irradiance coefficients.
+		// Converts the frame's captures into their slots (GPU.Reflections) of the cubes being filled (m_ReflectionProbesNext, else
+		// m_ReflectionProbes): each into a cube with its levels, prefiltered into the slot's levels, and projected into the slot's
+		// irradiance coefficients.
 		void ConvertReflectionProbes(nvrhi::ICommandList* commandList);
+		// Releases both sets of cubes, the holds and the frame's list and conversions.
 		void ReleaseReflectionProbes();
+		// Releases one set of cubes (through Renderer::ReleaseDeferred: frames in flight may sample them) and empties it.
+		static void ReleaseReflectionProbeState(std::optional<ReflectionProbeState>& state);
 		// The prepass's framebuffer of the frame: with the velocity target in a frame with motion vectors, and the surface target
 		// in one with screen-space reflections.
 		nvrhi::IFramebuffer* GetPrepassFramebuffer() const
@@ -2183,6 +2195,12 @@ namespace Strata
 		std::unordered_map<AssetHandle, ReflectionProbeHold> m_ReflectionProbeHolds;
 		std::vector<RenderData::ReflectionProbeData> m_ReflectionProbeList;
 		std::vector<ReflectionProbeConversion> m_ReflectionProbeConversions;
+		// The cubes at a new ReflectionProbeResolution while they are filled (null otherwise): made by the first gather with a
+		// probe in view after the change, with m_ReflectionProbes' slots (a capture keeps its slot, so a conversion writes the
+		// irradiance coefficients of the capture the old cubes show there), and taking over from m_ReflectionProbes, which shades
+		// meanwhile, once every capture those show in the view is converted into them (GatherReflectionProbes). Captures dropped
+		// to their tail must stream in whole again first, so releasing the old cubes at once would light the boxes with the sky.
+		std::optional<ReflectionProbeState> m_ReflectionProbesNext;
 		uint32_t m_UploadedReflectionProbes = 0;
 		nvrhi::GraphicsPipelineHandle m_LocalShadowClearPipeline;
 		nvrhi::ShaderHandle m_LocalShadowVertexShader;

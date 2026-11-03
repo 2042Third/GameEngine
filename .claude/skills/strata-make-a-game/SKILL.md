@@ -69,7 +69,9 @@ Design the code for verification before writing it:
   `UVTiling`, `UVOffset`; `Clearcoat` (0-1) with `ClearcoatRoughness` for car paint, lacquer or a wet look; `Transmission`
   (1 for clear glass, water) with `IOR` (glass 1.5) and `Thickness` (in the mesh's units across it: 1 for a whole
   built-in cube however it is scaled, 0 for a thin pane that bends nothing), tinted by `BaseColor` and `AttenuationColor`. Glass shows what is behind it, not other
-  glass or `Blend` surfaces behind it. `material.get {"material": "Builtin/DefaultMaterial"}` describes them all.
+  glass or `Blend` surfaces behind it. `IOR` also sets how much any non-metal reflects head-on: water and wet ground 1.33
+  (opaque, roughness 0.02-0.06), glass and paint 1.5 (the default). Metal sheets (a bus, a tank) are bare metal, roughness
+  0.15-0.45 for painted scans. `material.get {"material": "Builtin/DefaultMaterial"}` describes them all.
 - Sounds: write a small 16-bit PCM WAV with a script of your own (outside the project), then
   `asset.import {"file": "<absolute>", "directory": "Sounds"}` (it answers once the import is done, and fails, removing
   the copy, when the file cannot be imported). Models, textures and fonts import the same way; a `.gltf` brings the
@@ -234,12 +236,14 @@ so mouse look reads `Input::GetMouseDelta()`. The map `UI` already holds the men
   	float Smoothing = 8.0f; // Higher follows faster
   	float Yaw = 0.0f;       // Degrees around the target; the Look action turns it
 
-  	void OnUpdate(float deltaTime) override
+  	// After the frame's fixed steps, following where the target is drawn (between its physics steps while the game
+  	// interpolates): a camera that follows the world position sees a moving body judder above the step rate.
+  	void OnLateUpdate(float deltaTime) override
   	{
   		if (!Target)
   			return;
   		Yaw -= Input::GetActionValue("Gameplay/Look").x * 120.0f * deltaTime;
-  		const glm::vec3 target = Target.GetTransform().GetWorldPosition() + glm::vec3(0.0f, 1.0f, 0.0f);
+  		const glm::vec3 target = Target.GetTransform().GetDrawnPosition() + glm::vec3(0.0f, 1.0f, 0.0f);
   		const float yaw = glm::radians(Yaw);
   		const glm::vec3 wanted = target + glm::vec3(std::sin(yaw) * Distance, Height, std::cos(yaw) * Distance);
   		TransformComponent transform = GetTransform();
@@ -309,12 +313,15 @@ you can go on with `{"wait": false}` and watch `editor.status`'s `saving` (the s
   sun, 10 cd lamps) look the same as real ones (100,000 lux) at a matching exposure; real values need automatic
   exposure (`AutoExposureMaxEV` 16) or the atmosphere sky (`"Source": "Atmosphere"`, a 120,000 lux sun). Lamps and
   torches that should cast shadows set `CastShadows` on their point or spot light: each costs shadow views (six for a
-  point light) every time something in its range moves, so keep it to the few that matter (at most 16 in view).
+  point light) every time something in its range moves, so keep it to the few that matter (at most 16 in view). Give
+  lanterns and fires a `SourceRadius` of the bulb's or flame's real radius (a lantern 0.03-0.06 m, a fire pit 0.2-0.3 m):
+  their highlights on metal and wet ground take that size instead of a pin dot (highlights only; free).
 - Fog and depth: a `HeightFog` entity (`Density`, `HeightFalloff`, color from the sky) fades the distance and fills
   valleys; the sky's Inspector section has "Add Height Fog".
 - Reflection probes: a `ReflectionProbe` box (`Extents`) around a room or an area gives shiny surfaces there the
   reflections of what is around them; `lighting.bakeProbes` bakes them (again after moving lights or walls; one undo
-  step). See Docs/Manual/Lighting.md.
+  step). Keep `BoxProjection` on only where walls stand at the box's faces (a room, a courtyard); turn it off in open
+  yards, where it puts reflections in the wrong place. See Docs/Manual/Lighting.md.
 - The camera's look (`PostProcess`; Docs/Manual/Camera.md): new components use the `Filmic` curve at `Exposure` 0 with
   automatic exposure (the Basic 3D template's start scene +0.25: a bright sky over a dark ground); keep that and change
   the light, not the exposure, besides 0.25 to 0.5 for a frame that is mostly sky. ACES, which older
@@ -470,6 +477,11 @@ The samples in `Samples/` were made this way; their `README.md` says how, and `S
 is each one's regression:
 
 - **Tetris**: scripted rules on a grid, a HUD, generated sounds.
+- **Showcase** (High Desert Outpost): terrain and props written by committed generators and imported, the scene laid out
+  by a generated command script; three times of day as stations, each with its own baked reflection probe entities
+  switched by `SetActive` (the old ones held on a second, so a box never falls to the sky); a camera tour over marker
+  entities, a walk on rays per frame, free flight, and a photo mode whose Quality and anti-aliasing rows come from
+  `Graphics::Options()`.
 - **PhysicsPlayground**: ~600 bodies placed with `prefab.instantiate {instances}`; shooting through the cursor (the camera's
   field of view and the window size give the ray), grabbing (a velocity toward a point in front of the camera each fixed
   step), impact sounds by material with a voice budget shared by every body, a trigger that counts balls, a collision

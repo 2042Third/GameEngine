@@ -261,7 +261,9 @@ namespace Strata
 			"null while the edited scene's copy runs), name, path, entityCount, subScenes: [{id, scene, name, state, entities}] (a world's cells "
 			"are left out: world sums them up), world: {world, cellsWanted, cellsLoading, cellsLoaded, cellsUnloading, cellsFailed} while a world "
 			"streams, else null, physics: {bodies (body slots in use), awake, stepMs (the last physics step)} or null without a physics world "
-			"(physics.stats has more), switching: {scene, progress} while a scene the game asked for loads, else null}.",
+			"(physics.stats has more), interpolation: {enabled: drawn between fixed steps (the project's Scene.Timing Interpolation in games, Play "
+			"and Simulate outside scripted runs), stepAlpha: how far between the last two steps' poses this frame draws, entities: how many are drawn "
+			"between them}, switching: {scene, progress} while a scene the game asked for loads, else null}.",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{

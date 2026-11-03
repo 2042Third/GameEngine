@@ -60,6 +60,7 @@ stays under 40,000 characters (the test `Docs.AgentGuide` fails beyond). How the
   - [Physics instruments](#physics-instruments)
   - [Settling and the sweep](#settling-and-the-sweep)
   - [Leaving the simulation](#leaving-the-simulation)
+  - [Interpolation](#interpolation)
 - [World partition](#world-partition)
 - [Game UI](#game-ui)
   - [The UI contract](#the-ui-contract)
@@ -679,6 +680,16 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     windowed editors play the scene and read back what the Game view presented (`viewport.capture {live}`), to judge
     motion. `--work <dir>` keeps the copies and their imported assets for the next run (`--fresh-work` makes them
     again); `run.json` reports the time each project took to make and open apart from the captures.
+  - The `Showcase` project ([The showcase](#the-showcase)) holds the `showcase.*` shots: the six shots and the rock macro
+    at their times of day (their `Setup` is `GenerateShowcaseTerrain.py setup --format lookdev`), debug views, shot 3
+    without the yard's probe, shot 6 at one manual exposure with and without `Fire` (`.held`, `.nofire`: automatic
+    exposure would meter the fire's own light and hide what it adds), the measurement views of the hut's darkness, and
+    twelve live shots of shots 2, 3, 4 and 6 in TAA, FXAA and off (`showcase.live.*`: the tour started at the shot,
+    exposure adapting at once, four frames 600 steps in). `GenerateShowcaseTerrain.py checkshots --capture <output>`
+    checks a capture: shot 2's highlight on the letterboard within 40 px of the computed mirror point, shot 3's streak
+    within 30 px, the yard's probe changing the shell beside the streak by 8 codes, the fire making the fuel tank's end
+    that faces it 2 codes brighter; with `--live`, the highlights' shimmer: the second differences of 32 px block means of the
+    encoded luma over the four frames, mean at most 1% and 99th percentile at most 3% (a steady dolly cancels out).
   - Outputs (`--output`, default `<temp>/StrataLookDev/<date>-<label>`, never inside the tracked tree: build trees and
     `.worktrees` are allowed): `shots/<shot>-<W>x<H>-<aa>.png` (the first repeat), `crops/` (each shot's regions of
     interest enlarged 4 times), `stats/` (every repeat's `renderStats` with `gpuMs` and the repeats' differing pixels from
@@ -725,7 +736,16 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     in. That probe is saved inactive and unbaked and only that shot bakes it: a bake moves its probe's previous capture to the
     trash, which would leave the saved scene's yard probe naming a trashed capture for every later shot (projects in a
     `--work` directory are reused: `--fresh-work` after changing `LookDevScene.json`);
-    `Tests::SpecularLab` builds the same lab for the strafe test (`GPU.SceneRenderer.SSR`): change both.
+    `lookdev.overcast` (the Overcast preset's 10-degree sun on the ladder and the IOR spheres), `lookdev.lantern.wet` and
+    `.lantern.sheet` (at dusk, the sun 3 degrees below the horizon: the lanterns' glints on the wet plane and the sheet) and
+    their `.sized` forms (both lanterns' `SourceRadius` 0.06, the bulbs' radius, set by a `Setup` step so the scene still
+    builds with older editors) judge highlights; `Tests::SpecularLab` builds the same lab (its lanterns inactive until a test
+    turns them on) for the strafe tests (`GPU.SceneRenderer.SSR`): change both. A highlight slides over its surface as the
+    camera moves, so the flicker meter (which follows world points) counts its passing; "Sized highlights shimmer no more
+    than points..." bounds shimmer itself, the pumping of the glint's summed light from frame to frame (`GetLightPumping`).
+    `lookdev.polished` (the polished panel head on, the yard probe active) shows the probe's resolution: its `center` crop's
+    gradient energy (the mean squared luminance step between neighbors, in codes) is 4.55 at High (256) against 2.62 with
+    a Custom quality that differs from High only in `ReflectionProbeResolution` 128 (1.74 times; 4K, no AA).
   - Shots and look-dev content are appended, never changed, so that captures of every build keep comparing. GPU times
     are kept only from runs alone on the machine, under `python Tools/PerfLock.py --label lookdev-<label> --limit 90 -- ...`
     (a full run takes longer than the lock's default limit); the pictures are read and cropped on every core after the
@@ -877,6 +897,10 @@ exercised by it.
   `PerfGPU.Samples`, Release and Dist) starts the exported Open World (`STRATA_OPEN_WORLD_GAME`) once per attempt,
   windowed at 1920 x 1080 with the display's vsync, and measures its tour from the first frame with a cell loaded for
   8 s: the frames' `WorkMs` (median and 95th percentile; the frame interval is the display's and only reported) and `GPUBusyMs`.
+  It also starts the exported showcase (`STRATA_SHOWCASE_GAME`) at High and Ultra, windowed at 2560 x 1440 (a 4K window
+  does not fit a 4K display with its caption, and the runtime has no exclusive fullscreen), and measures 70 s of the tour
+  from the first frame drawn with nothing loading: `GPUBusyMs` (median and 95th percentile) and, at High, `WorkMs`
+  (`PerfGPU.Samples.ShowcaseHigh1440.*`, `.ShowcaseUltra1440.*`, provisional).
   `StrataEditor.Install` (`Editor/InstallEndToEnd.cmake`) installs the build into
   a fresh prefix, checks the layout (exactly the top-level entries a release holds), and makes a game with the installed
   editor alone: `project.create` from `basic3d`, `script.build` (whose cache must name the installation as
@@ -1027,7 +1051,8 @@ short. Their full wording:
 - **Scene caches and the transform contract:** per-frame scene cost follows what changed. `Scene` mirrors the hierarchy
   as EnTT handle links (`HierarchyComponent`, `Scene/SceneHierarchy.h`), recomputes cached world transforms
   (`WorldTransformComponent`) only below entities whose transform changed, keeps `ActiveInHierarchy` exact as activity
-  and parents change, and indexes names and tags for `FindEntityByName`/`FindEntitiesByTag`. So **code that writes
+  and parents change, and indexes names and tags for `FindEntityByName`/`FindEntitiesByTag` (while it interpolates, it
+  also keeps drawn transforms of what the fixed steps moved: [Interpolation](#interpolation)). So **code that writes
   `TransformComponent` fields directly must signal the change**: `Entity::MarkModified<TransformComponent>()` or
   `registry.patch` (`ComponentAccess`, `Scene::SetWorldTransform`, the script API and `TransformEdit` do), or
   `Scene::MarkTransformChanged` where listeners must not hear an `on_update` (physics writing simulated poses back).
@@ -1381,6 +1406,10 @@ project's deliberate choice is not an incident.
   the recovery's new scene take the rate only there), when a project opens or closes, and after every change of the project's settings, its undo and redo
   (`EditorContext::ApplyProjectLayers`: the edited scene and the running one, which steps at a new rate from its next
   update; the accumulator holds seconds, so the remainder carries over). `Scene::Copy` keeps the rate; it is never saved.
+- **Interpolation.** The section's second field, the Bool `Interpolation` (default on), lets running scenes draw what
+  their fixed steps move between its last two poses ([Interpolation](#interpolation)); `ApplyProjectTiming` takes it with
+  the rate (the value's version changes when either field does), turning it off empties the scene's interpolated set, and
+  `Scene::Copy` carries it, so a play copy keeps the project's choice. Values stored without it read as on.
 - **Readers.** Code reads the step through `Scene::GetFixedTimestep()` and the cap through `Scene::GetMaxFixedSteps()`,
   never from `SceneSettings`: the fixed loop, `GameRuntime`'s `LimitToFixedSteps` (`KeepEveryFixedStep`), scripts'
   `Time::GetFixedDeltaTime`, physics' effective contact stiffness, audio's motion and the input commands' durations in
@@ -1393,8 +1422,10 @@ project's deliberate choice is not an incident.
   Timestep and Max Steps per Frame rows inactive with the reason (probes `Inspector.Scene.FixedTimestep.Inactive`,
   `Inspector.Scene.MaxFixedStepsPerFrame.Inactive`) and links the Timing page under the collision layers'
   (`Inspector.FixedRate`, `Inspector.FixedRate.Open`). The settings window draws the section with its generic page.
-- **Not a cure for jitter.** A higher rate halves the step-to-step motion a character moving above the step rate shows,
-  but does not remove it: that is drawing fixed poses between steps, which drawing interpolated poses solves.
+- **Not a cure for jitter.** With `Interpolation` off a higher rate halves the step-to-step motion a character moving
+  above the step rate shows, but does not remove it: that is drawing fixed poses between steps, which drawing
+  interpolated poses solves ([Interpolation](#interpolation)). With it on (the default) a higher rate halves the half step
+  of latency interpolation adds.
 - **Tests.** `Scene.Timing` (precedence, reset, no provider, copies and a change while running, 60 against a default
   scene, the section's validation, every hand-over), `Runtime.Game` (240 steps/s keeps every step of long frames),
   `Editor.Commands` (`project.setSettings`, `scene.info`, the warning, the contact stiffness at 30, undo), `Editor.Input`,
@@ -1912,7 +1943,12 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
   (`CharacterMove` to `PhysicsGetLayerIndex`) are appended to ABI version 1 after the Animator functions, then wave 4's
   world streaming functions (`WorldRequestCellsAround` to `WorldIsLayerEnabled`), then wave 6's input action functions
   (`InputIsActionDown` to `InputSaveBindings`, then the capture's `InputBeginBindingCapture` to
-  `InputCancelBindingCapture`), then wave 7's graphics options (`GraphicsGetOptionCount` to `GraphicsSaveOptions`).
+  `InputCancelBindingCapture`), then wave 7's graphics options (`GraphicsGetOptionCount` to `GraphicsSaveOptions`), then
+  wave 8's interpolation functions (`GetStepAlpha` to `ResetInterpolation`).
+- Drawn poses: `Time::GetStepAlpha`, `TransformComponent::GetDrawnPosition`, `GetDrawnRotation` (between the last two
+  fixed poses while the scene interpolates, else the world pose; read them in `OnLateUpdate` to follow a moving body)
+  and `ResetInterpolation` (after moving an entity far by setting its transform in `OnFixedUpdate`)
+  ([Interpolation](#interpolation)).
 - World streaming: `World::RequestCellsAround` (a `WorldCellRequest`, released with `Release`), `IsLoadedAround`,
   `SetLayerEnabled` and `IsLayerEnabled` (`StrataScript/World.h`) go through the scene service `IWorldStreaming` the
   World system offers in every running scene; in a scene that streams no world (`IWorldStreaming::IsStreaming` false)
@@ -2420,6 +2456,105 @@ filters skips parked bodies (`SetLayerCollisionMasks`: they take the matrix when
 `PhysicsStats::ParkedBodyCount` and `physics.stats`' `bodies.parked` count them; `Physics.Lifecycle` checks what finds
 and collides with them. In the request frame of `Perf.World.CellUnloadMaxFrame` this leaves Strata's own work, about 2
 ms, instead of box3d's first disable of the cell's 25,000 static bodies (6.6 ms alone).
+
+### Interpolation
+
+Fixed steps run at the scene's step rate (60 per second unless the project's `Scene.Timing` says otherwise), whatever the
+frame rate. Above the step rate most frames run no step: what the steps move would be drawn standing still and then
+jumping a whole step, against a camera a script places every frame, which reads as judder (29.4 px peak to peak on a 4K
+screen for the Third-Person robot at 702 fps in the wave 8 audit). A running scene that interpolates
+(`Scene::SetInterpolation`, `Scene/SceneInterpolation.cpp`) draws what its steps moved between its pose before the latest
+stepping frame's steps and its pose after them, a constant step behind the scene's clock, so motion is smooth at any frame
+rate. The simulation is untouched: `TransformComponent`, `WorldTransformComponent`, the accumulator, the step count and
+physics are those of a scene that does not interpolate (`Physics.Interpolation` and `Scene.Timing.Sweep` compare twins bit
+for bit). The technique is the published one of fixed steps with state interpolation; extrapolation, which overshoots at
+every stop and collision, and stepping physics by the frame's delta, which loses repeatability and every step-counting
+tool, were rejected.
+
+- **The set.** While the scene interpolates, an `UpdateWorldTransforms` before the fixed loop settles `OnUpdate`'s writes,
+  and after a frame's steps a capture pass of `UpdateWorldTransforms` records every matrix it overwrites: so the set holds
+  exactly what the steps changed (bodies, characters, what `OnFixedUpdate` moves) and what hangs below it (children,
+  lights, cameras, attachments). Each entry has a role: **Blend** (its own transform changed in the steps: drawn between
+  its two world poses, the translation linearly, the rotation by a normalized lerp along the shorter arc), **Compose**
+  (moved only with an ancestor: its parent's drawn matrix times its current local transform, so an attachment that
+  `PlaceAttachments` writes every frame stays on its joint, and a camera under a body sees what rides with it still) and
+  **Exact** (drawn where it is). Roots blend and descendants compose because blending a descendant's world poses would
+  lag its per-frame local writes (10.8 cm at 6.5 m/s). The set is kept parents first, in parallel arrays by slot, with a
+  slot map by entity index that compares the whole handle. An entity that stopped moving is not recomputed by the next
+  stepping frame, so it leaves the set then, logged as a transform change, and costs nothing afterwards.
+- **The alpha.** `GetStepAlpha() = 1 - (1 - accumulator / step) / steps`, with `steps` those of the stepping frame that
+  built the set: the drawn time `T + a - h` (T the latest step's end, a the accumulator, h the step) lies that far between
+  the poses at `T - n h` and `T`. Frames without a step keep the set, so the alpha grows with the accumulator; hitches, time
+  dilation and dropped backlogs only move the drawn time forward; at time scale 0 it freezes, and slow motion is drawn
+  smoothly. It is final after the frame's steps (`OnLateUpdate`); paused, stepped and not interpolating it is 1.
+- **Drawn matrices are computed when something draws.** `UpdateDrawnTransforms` (which `RenderScene::Sync` calls) brings
+  the world transforms and then the drawn matrices up to date, Blend and Exact entries on the job system above 1,024
+  entries, Compose entries after them in slot order, and returns at once while nothing changed (the same alpha, no write
+  to an entry since): a run that draws nothing never blends, and a frozen alpha costs nothing. `GetDrawnTransform` is
+  exact at any time (the cache when it is current, else computed from the set as the next update will: scripts reading it
+  in `OnLateUpdate` get exactly what will be drawn).
+- **Per-frame writes** to an entry, outside the capture: a translation of a Blend entry (more than 1e-5 of its distance
+  from the origin, at least 1 m) draws it where it was put until the next step (a script's per-frame move, an edit while
+  playing, a teleport outside the steps); a turn or a scale keeps the translation blending and draws the written rotation
+  and scale on every frame (the player turning to walk, root motion's turn: blending the turn from the captured rotation
+  would draw it lagging and catching up at every step); a write to an ancestor of a Blend entry, and a reparent of a
+  Compose entry, draw it exactly; a write to a Compose entry changes only its local transform.
+- **Exact when in doubt.** A teleport, a sheared world matrix, a failed decomposition, an entity created during the steps
+  without an interpolated parent, and a step longer than box3d's maximum speed times the time it simulated
+  (`Scene::c_MaxInterpolatedSpeed`, 400 m/s; `Physics.Settings` checks it against `b3DefaultWorldDef()`: a change of
+  either changes both) draw exact poses: a wrong exact pose costs at most a step of judder, a wrong blend draws a streak.
+  An entity created during the steps under an interpolated parent composes with it. A Blend's two poses share their
+  scale's signs: a root's pose keeps its authored ones (Scale (1, 1, -1)) where a decomposed matrix folds a mirror into X,
+  so the pose before the steps is rewritten with the root's signs (the same matrix; blending across would squash it
+  through zero scale), and a mirror that flipped during the steps draws exact.
+- **Breaks.** `Scene::BreakInterpolation` draws an entity and what blends below it where they are until the next step
+  moves them: during the steps it applies to the poses they leave, outside them at once (logged as transform changes).
+  `PhysicsWorld::Teleport` and `TeleportCharacter` call it; scripts call `ResetInterpolation`.
+- **Clears.** Pausing (gizmos, picking and captures agree with what is drawn), stepped frames (`play.step`,
+  `input.sequence`, `viewport.capture {atFixedStep}` armed while paused all draw exact poses), a change of the fixed
+  timestep, the project turning `Interpolation` off, `SetInterpolation(false)`, start and stop empty the set, every
+  entity of it logged as a transform change. Resuming needs nothing: the next stepping frame starts from the paused poses.
+  A live capture armed while the game runs on the clock shows the first frame drawn after its step.
+- **The switch.** A bare `Scene` does not interpolate. `GameRuntimeOptions::Interpolation` and
+  `EditorContextSpecification::Interpolation` turn it on where time dilation is on: `StrataRuntime` outside `--frames`
+  and `--seconds` runs when it renders, and the editor's Play and Simulate outside scripted runs (automation sessions
+  interpolate). The project's `Scene.Timing` field `Interpolation` (default on; the section stays version 1) turns it
+  off for a game; `Scene::ApplyProjectTiming` takes it and `Scene::Copy` carries it. Tests, tools and command files draw
+  what they simulate. `play.state`'s `running.interpolation` and `physics.stats`' `interpolation` report it.
+- **Who reads drawn transforms.** Mesh proxies (both draw paths: the GPU-driven path uploads every proxy change of the
+  frame, and motion vectors follow the drawn instances, so a body now moves a frame's worth in every frame), skinned
+  palettes (posed against the animator's drawn transform, or an interpolated skin would be posed back to its simulated
+  place), point and spot light records and so their shadow views (moving casters are redrawn at the frame rate, never
+  more often than a step frame redrew them), the scene camera and its lens' focus, and world-space text. Still simulated,
+  up to a step off what is drawn while a game runs on the clock: the sky and the sun's direction, fog and post-process
+  volumes, reflection probes, world-space game UI, editor gizmos and picking rays, audio (which smooths step motion
+  already), world streaming (which must follow the game) and attachments placed outside their animator's hierarchy.
+- **Rule for renderer code.** Place what is drawn with `Scene::FindDrawnTransform` after `UpdateDrawnTransforms` (worker
+  threads may call it while nothing changes the scene), or with `GetDrawnTransform` (code that runs before the frame's
+  render scene sync, as `SceneCamera::FromEntity` does), falling back to the world matrix; never read the set itself.
+  Readers of `GetWorldTransformChanges` see the entities whose drawn transform jumped back to their world transform too.
+- **Rule for game code.** Follow a moving body with `GetDrawnPosition`/`GetDrawnRotation` in `OnLateUpdate` (the
+  Third-Person `FollowCamera` does); a camera that follows the world position sees the body judder against it. Teleport
+  with `Teleport`, a controller's `Teleport` or, after setting a transform far away in `OnFixedUpdate`,
+  `ResetInterpolation`. Move what others ride (a platform) in `OnFixedUpdate` or as a kinematic body, so carrier and rider
+  are drawn on the same clock: a carrier moved every frame in `OnUpdate` is drawn where it is, its rider a step behind.
+- **Latency.** Drawn time is a constant step behind the scene's clock instead of between none and one step: half a step
+  more on average (about 8 ms at 60 steps per second; `FixedRate` 120 halves it), the same at worst. Cameras placed every
+  frame are not in the set, so looking around is unaffected.
+- **Memory and cost.** About 330 bytes per interpolated entity (the set, its rebuild scratch and the drawn matrix): 33 MB
+  at 100,000 awake bodies. A scene that does not interpolate walks today's loop (the walk is instantiated per hook: no
+  branch per entity). Interpolating, a stepping frame pays the capture and a frame without a step pays one blend per
+  moving entity and the proxy and light placement a step frame paid before (`Perf.Scene.InterpolatedStepFrame100k`,
+  `Perf.Scene.InterpolatedFrame100k`, `PerfGPU.Renderer.InterpolatedFrame32k`, all `Provisional`). On the development
+  machine (wave 8, temporary memory): 100,000 moving roots cost 0.29 ms a frame without a step (the blend on the job
+  system) and 5.5 ms a step frame against 2.6 ms without interpolation (the capture rebuilds about 170 bytes per moving
+  entity a step, so it is bound by memory: its ratio, 2.1, is above the 1.5 target); 32,768 moving cubes render a frame
+  without a step at 0.94 times a step frame's CPU time. In the editor, about 2,000 balls rolling in the Physics
+  Playground's pit ran at 356 fps with interpolation and 501 without: the GPU redraws the moving casters' shadow views
+  on every frame (`GPU.Shadows` 0.94 ms against 0.13, `GPU.Cull` 0.13 ms on frames without a step) and `Render.Extract`
+  places them (0.25 ms against 0.04). With it off, `Perf.Scene` and `Perf.Physics` measured against 0.7.0 showed no
+  difference beyond the runs' spread. Debug builds check the set with the caches (`ValidateInterpolation`), and the
+  feature runs after every frame.
 
 ## World partition
 
@@ -3579,6 +3714,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 
 ### Stepping a paused game
 
+- Paused and stepped frames draw the simulated poses exactly: pausing and stepping empty the scene's interpolated set
+  ([Interpolation](#interpolation)), so what `play.step` leaves is what the viewport and its captures show.
 - `play.step {steps, wait}` runs fixed steps of a paused game, one per frame, and answers once its last step ran (a
   deferred command: `{state, paused, stepsRun, frameIndex, time, fixedSteps}`), so clients read the state right after it
   without waiting frames. It counts in the game's own time base, `Scene::GetFixedStepCount` (fixed steps since the scene
@@ -3596,6 +3733,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 
 ### Simulated input
 
+- `input.sequence` pauses and steps, so it draws exact poses; `input.key {seconds}` and other inputs on the clock run
+  while the game interpolates ([Interpolation](#interpolation)), which changes what is drawn, never what is simulated.
 - **Simulated input** (`Editor/EditorInputCommands.cpp`) lets tools play a running game (play mode only) as a person
   would: `input.key {key, action: tap|press|release, steps | seconds, wait}`, `input.mouseButton {button, action, steps |
   seconds, wait}`, `input.mouseMove {position, wait}` (pixels from the Game view's top-left corner), `input.scroll {delta,
@@ -3879,12 +4018,14 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | `EnvironmentResolution` (prefiltered sky per face) | 256 | 256 | 512 | 512 |
 | `Reflections` (screen-space reflections a scene asks for) | Off | Checkerboard (TAA only) | Spatial | SpatialHigh |
 | `MotionBlurQuality` (samples, for scenes with motion blur) | Off | 8 | 12 | 16 |
+| `ReflectionProbeResolution` (reflection probes' cubes per face) | 128 | 128 | 256 | 256 |
 | `AntiAliasing`, `MotionBlur`, `DepthOfField`, `FilmGrain`, `ChromaticAberration` (players' rows, under every preset: they only turn off what a scene uses) | Scene | Scene | Scene | Scene |
 | Cascades' memory per view (D32) | 12 MiB | 64 MiB | 64 MiB, 256 MiB from 1440 rows | 256 MiB, 1 GiB from 1440 rows |
 | Atlas memory per view | 16 MiB | 64 MiB | 64 MiB | 256 MiB |
 | Prefiltered sky per set of maps (RGBA16F, six levels; the atmosphere keeps two sets) | 4 MiB | 4 MiB | 16 MiB | 16 MiB |
 | Screen-space reflections' targets per view (scenes that ask for them; "Reflections") | none | 20 MiB, 79 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows |
 | Motion blur's targets per view (scenes with motion blur) | none | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows |
+| Reflection probes per view (16 slots, scenes with probes) | 17 MiB | 17 MiB | 68 MiB | 68 MiB |
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
   High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for rows that cost at every
@@ -3999,6 +4140,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 ### Render scene
 
+- **Drawn transforms:** `RenderScene::Sync` brings its scene's drawn matrices up to date (`Scene::UpdateDrawnTransforms`)
+  and places proxies and light records at them (`GetDrawnTransform`: the poses' render transform, then
+  `Scene::FindDrawnTransform`, then the world matrix), walking the interpolated set again whenever its version changed
+  ([Interpolation](#interpolation)).
 - **Render scene** (Docs/Architecture.md, "Render scene"): what a frame draws comes from the scene's `RenderScene`, one
   per scene (in its registry's context, shared by every renderer of it): render proxies of the mesh renderers, updated
   only where components were signaled or transforms changed, in a `SpatialIndex` (loose grid) that the view frustum, the
@@ -4185,6 +4330,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 ### Motion vectors and TAA
 
+- What the fixed steps move is drawn between its poses on every frame while the scene interpolates, so its instances
+  move a frame's worth each frame (better reprojection and motion blur above the step rate) instead of standing still
+  and jumping ([Interpolation](#interpolation)); the motion history follows the drawn instances with no change.
 - A frame with `SceneRenderOptions::MotionVectors` (or `ShowMotionVectors`, the motion debug view, or TAA, or the motion blur:
   "Post-processing") writes each opaque and
   alpha-masked surface's motion since the renderer's previous frame into an RG16F velocity target
@@ -4315,6 +4463,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 ### Skinned meshes
 
+- A skin is posed against its animator's drawn transform (`EvaluatePose`: `Scene::FindDrawnTransform`, else the world
+  matrix), as its proxy is placed at its own, and the palettes' skip compares the drawn version, so an interpolated
+  character is skinned where it is drawn ([Interpolation](#interpolation)).
 - **Skinned meshes** (Docs/Architecture.md, "Render scene"): a mesh renderer with a `SkinComponent` is posed by the
   animator it names through the scene service `ISkinningPoses` (`Scene/SceneServices.h`; the renderer never includes the
   Animation module). `RenderScene::Sync` computes posed proxies' palettes (per skin joint, 3x4) and posed bounds only when
@@ -4339,6 +4490,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   `GetLightRelevance`, `Include/Clusters.slang`), and `Forward.frag` loops only over its pixel's cluster. The GPU's light
   counts come back with its other counts (`SceneRendererGPUStats::Lights`, `CulledLights`; `Tests::GetLightCounts`).
   The directional light's shadows are cascades; point and spot lights' are views in an atlas ("Local light shadows").
+  A record (`RenderData::LightRecord`, 96 bytes; every reader sizes by `sizeof`, and `Include/Lights.slang` mirrors it)
+  ends with `Source`, whose x is the light's `SourceRadius` (highlights only, "Lighting"): both paths copy it into
+  `LightData::SpotAngles.w` (the CPU path in `CollectLights`, the GPU-driven one in `LightCompact.comp`), which stays 64
+  bytes.
 - The cascades are one D32 array (`SceneRenderer::GetShadowMap`) of a layer per cascade the quality draws
   (`RendererQualitySettings::ShadowCascades`; thumbnails draw one), made by the first frame with a shadowed sun and kept
   across resizes; a zero viewport (a capture renderer between pictures, the editor's hidden Game view) releases it,
@@ -4645,6 +4800,42 @@ lights, Post Process and the sky), and never a resolution below the output's.
   draw with the same vertex module, so they stay pixel-equal (`GPU.SceneRenderer.GPUDriven`'s "Lit materials"). A flat
   surface without a normal map has zero derivatives and keeps its roughness exactly. `GPU.SceneRenderer.Materials` checks
   that a bumpy sphere's highlight variance halves and its light stays within 15%.
+- **F0 from the IOR** (`MaterialGPU::GetDielectricF0`): a dielectric's reflectance at normal incidence is `((n - 1) / (n +
+  1))^2` with `n = clamp(IOR, 1, 3)` (water 1.33: 0.02006, 2: 0.111, 1: 0), written on the CPU into
+  `MaterialData::Absorption.w` (the layout stays 144 bytes; both paths read the same buffer). 1.5 and values that are not
+  finite give the literal 0.04: the formula's 0.040000003 would move every default material by a rounding, so materials at
+  the default shade bit for bit as before. `ShadeLitSurface` forms `f0 = lerp(Absorption.w, albedo, metallic)` once
+  (`SurfaceData::F0`, which `EvaluateLightWeighted` reads; the split sum's `IndirectInputs::SpecularColor` follows), and
+  `TransmitLight` alike; the clear coat keeps `c_ClearcoatF0` (a coat is 1.5 by definition). The glTF importer already
+  reads `KHR_materials_ior` into `IOR`, so imported values count without a re-import. "The furnace keeps a dielectric's
+  light at every IOR..." checks a white dielectric at 1, 1.33, 1.5, 2 and 3 (1.000 at center and rim) and a black one's
+  reflectance against the split sum read back (within 0.05%).
+- **Highlights of sized sources** (`PBR.slang`): a source of angular radius theta spans the half maximum of a GGX lobe of
+  `alpha_s = tan(theta) / 1.287` (`2 sqrt(sqrt(2) - 1)`: the reflected angle per alpha where GGX falls to half its peak), and
+  the lobes of the surface and the source combine about as variances add, so the distribution takes `sqrt(alpha^2 +
+  sourceAlpha2)` with `sourceAlpha2 = max(alpha_s^2 - c_MinRoughness^4, 0)` (the smallest roughness's own spread is
+  subtracted, so a mirror shows the source at its size). Only D widens (`GetLobeAlpha`): the visibility keeps the surface's
+  alpha, as masking belongs to the microsurface, and D stays normalized, so a larger source lowers the peak without adding
+  light. The term is a constant per light, no derivative (the derivative rule holds). With 0 the shading is the point
+  light's bit for bit. The sun: `RenderData::GetSunLobeAlpha2(DirectionalLightComponent::ShadowSoftness)` (shown as
+  **Angular Diameter**, 0 to 10 degrees, active with and without shadows), written by `CollectLights` into
+  `FrameConstants::ReflectionParams.w` (after `RenderFrame` assigns the vector whole, so a frame never shades with the
+  previous frame's disk) and passed by the sun's `LightSurface` call to `EvaluateLightWeighted` and `EvaluateClearcoat`.
+  0.53 degrees adds 8.81e-6 (a mirror's lobe 1.77 times as wide, roughness 0.06 30% wider, 0.18 0.4%), Overcast's 10
+  degrees 0.0046 (a soft glow instead of a pin dot). A source's size changes its highlights only, never diffuse light,
+  shadows or culling. `GPU.SceneRenderer.Lighting`'s "A sized sun..." measures a white mirror sphere orthographically (projected
+  area maps to reflected solid angle as `d omega = 4 dA / R^2`): the half-peak cone is 4.97 degrees at 10 (5 expected) and
+  0.265 at 0.53 (0.143 for a point), and the light at 5 and 10 degrees agrees within 1%.
+  Point and spot lights: `SourceRadius` (meters, 0 to `PointLightComponent::c_MaxSourceRadius` 2, default 0: a point) rides
+  in the record's `Source.x` and `LightData::SpotAngles.w` on both light paths ("Render scene"), and the light loop computes
+  `GetSourceLobeAlpha2(radius, distanceSquared)` once per light after its attenuation test: a sphere spans `sin(theta) =
+  radius / distance`, so `alpha_s^2 = sin^2 / ((1 - sin^2) 1.287^2)`, with `sin^2` at most 0.5 (a surface touching the bulb)
+  and the same `c_MinRoughness^4` subtracted. A radius of 0 returns 0 before any arithmetic (one compare per light).
+  Nothing else reads the radius: range, culling, the local shadow views' keys and the diffuse term are unchanged, so a
+  changed radius re-records the light (an upload) and redraws no shadow view. Authoring rule: the bulb's or flame's real
+  radius (a lantern 0.03 to 0.06 m, a fire pit's flames 0.2 to 0.3 m), never more: a larger value widens and dims the
+  highlight. "A point light's source radius..." checks a mirror plane's half-peak area against the bulb's mirror image,
+  the light kept on a distant bulb, a matte surface and the shadow atlas unchanged.
 - **The horizon fade** (`GetHorizonFade`): a normal map can turn the reflected vector into the surface, where image light
   would show the surface's own underside. Image light (probes, sky, screen-space reflections, through the specular
   occlusion) is multiplied by `clamp(1 + R . Ng / 0.25, 0, 1)^2` with Ng the geometric normal (facing the viewer), reaching
@@ -5340,8 +5531,19 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
     the horizon; per lux of sun), when the sun's direction or the camera's 250 m height band (`c_AtmosphereHeightBand`,
     viewed from the band's middle) changes (`AtmosphereSkyViewUpdates`). Scene shaders sample it at SRV 27 (a black
     texture without the atmosphere).
+  - **The storage scale** (`Atmosphere::c_StorageScale`, `ST_ATMOSPHERE_STORAGE_SCALE`, 16384 = 2^14): the tables of light
+    per lux (multiple scattering, sky view, aerial perspective's in-scattering, and the environment cube made from the
+    sky view) store it times the scale, and `EnvironmentParams.x` divides by it, so every reader's product is the same:
+    **readers of these tables multiply by `EnvironmentParams.x`**, and only `GetMultipleScattering` (inside the tables'
+    passes) divides itself. After sunset the sky per lux falls below the smallest normal half float (2^-14), where the
+    fixed step of 2^-24 turned a smooth twilight into bands of 8 to 17 codes; at -10 degrees 99% of the sky view's channels
+    above the horizon were subnormal, at a scale of 1024 still 26%, at 16384 none. A power of two is exact in half and full
+    floats, so every value that was normal before gives the same picture bit for bit (daytime pictures do not change). The
+    tables clamp at 65,000 (4 per lux): the brightest daytime texel, golden hour's aureole under haze 4, stores 15,072
+    ("No daytime table reaches the storage clamp"). The transmittance is not light and is not scaled (3% of its texels are
+    subnormal, along paths deep in the planet's shadow; the night sky shows no bands without scaling it).
   - Background: `Scene/SkyboxAtmosphere.frag` (`ST_ATMOSPHERE`) draws the sky-view table times `EnvironmentParams.x`
-    (the sky's `Intensity` times the sun's illuminance) and the sun's disk analytically: the light's illuminance at the
+    (the sky's `Intensity` times the sun's illuminance over the storage scale) and the sun's disk analytically: the light's illuminance at the
     ground over the disk's solid angle (about 1.3 billion nits for a real sun, which the pre-exposure keeps in range),
     its edge smoothed over a pixel; `BackgroundBlur` is inactive.
   - Light: the CPU evaluates the transmittance from the ground toward the sun with the same quadrature in double
@@ -5386,6 +5588,10 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
 
 ### Reflections
 
+- **Highlights** are the lights' reflections: a light's size (the sun's Angular Diameter, a point or spot light's
+  `SourceRadius`) widens only its highlight's lobe, never its diffuse light, shadows, range or culling ("Lighting",
+  Highlights of sized sources). How strongly a dielectric reflects head-on (its F0) comes from its IOR, 1.5 staying exactly
+  0.04 ("Lighting", F0 from the IOR).
 - **Reflection probes** (`ReflectionProbeComponent`, `SceneRendererReflectionProbes.cpp`): a `Capture` (an equirectangular
   HDR texture asset, luminance in nits, as the sky's map is) of the scene seen from the entity's position lights the
   surfaces inside its influence box (`Extents`, half sizes along the entity's axes, times its scale): their specular
@@ -5400,10 +5606,11 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   `Priority`, then the smaller box (the more specific place), then the entity. `Scene/Forward.frag` walks that list
   (`Include/ReflectionProbes.slang`: at most 16 box tests per pixel, opaque and transparent surfaces alike) and blends the
   first two whose boxes hold the pixel: the stronger takes its weight, the weaker its weight of the rest.
-- **The probe cache**: a renderer's cube array (RGBA16F, 128 texels across, six levels for roughness 0 to 1 as the sky's
-  prefiltered map, a cube per slot of `MaxReflectionProbes`: about 1 MiB a slot, 16 MiB at 16, with a 0.5 MiB scratch
-  cube; made with the first probe in view, released with the viewport, `SetViewportSize(0, 0)`, or once the scene has no
-  probe, kept across resizes) holds each capture in a slot, given to another capture only when the frame does not use it,
+- **The probe cache**: a renderer's cube array (RGBA16F, `RendererQualitySettings::ReflectionProbeResolution` texels
+  across: 128 at Low and Medium, 256 at High and Ultra; six levels for roughness 0 to 1 as the sky's prefiltered map, a cube
+  per slot of `MaxReflectionProbes`: about 1 MiB a slot at 128 and 4 MiB at 256, 17 and 68 MiB at 16 with the scratch cube
+  of the whole chain, `RenderData::GetReflectionProbeMipChain`; made with the first probe in view, released with the
+  viewport, `SetViewportSize(0, 0)`, or once the scene has no probe, kept across resizes, made again at a new resolution) holds each capture in a slot, given to another capture only when the frame does not use it,
   least recently used first. A capture is requested through the frame's `AssetResolveCache` (High) and held whole in the texture
   streamer (`TextureStreamer::Hold`: nothing draws it, so nothing else raises its levels) until it is converted, then
   released, so it drops to its tail while the slot keeps lighting; a reload of the texture converts it again. A hold
@@ -5411,10 +5618,24 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   ending with one view: the streamer raises levels between frames, and a renderer drawing several views per frame (a
   probe bake's six) would otherwise end in its last view the holds its first ones placed. A
   conversion (`GPU.Reflections`, between `GPU.AO` and `GPU.Opaque`): `IBL/EquirectToCube.comp` into a scratch cube of
-  128 with its levels, `IBL/Prefilter.comp` into the slot's six levels, `IBL/ProbeIrradiance.comp` (one work group over
-  the cube's 32-texel level) into the slot's coefficients in the probe buffer. With `SpreadLightingUpdates`
-  (`c_ReflectionProbeConversionsPerFrame`, 2) at most two captures convert per frame and a probe waiting for its capture
-  lights nothing meanwhile; without it (captures, thumbnails, the bake) every loaded one converts in the frame.
+  the row's size with its levels (the capture's level 0 for 256 faces of a 1024x512 capture, level 1 for 128: no re-bake),
+  `IBL/Prefilter.comp` into the slot's six levels (`RendererQuality::GetProbePrefilterSamples`: 256 samples, 128 for levels
+  1 and 2 at 256, so a conversion at 256 filters 2.1 times the samples of one at 128, not 4), `IBL/ProbeIrradiance.comp`
+  (one work group over the cube's 32-texel level: 2 at 128, 3 at 256) into the slot's coefficients in the probe buffer.
+  With `SpreadLightingUpdates` (`c_ReflectionProbeConversionsPerFrame`, 2) at most two captures convert per frame and a
+  probe waiting for its capture lights nothing meanwhile; without it (captures, thumbnails, the bake) every loaded one
+  converts in the frame. After `SetQuality` changed the resolution (nothing is released then, and the change alone returns
+  false), the next gather with a probe in view makes the new size's cubes beside the shown ones (both in memory meanwhile),
+  with the same slots: the shown cubes keep shading the probes they hold while those captures convert into the new cubes,
+  spread as always (a capture that dropped to its tail streams in whole first), and the new cubes take over in the frame that
+  converts the last of them, so the boxes in view never fall to the sky; every probe in view counts as pending until then,
+  and the others wait for the takeover. A probe out of view at the change converts when it comes into view, as on its first
+  appearance. Two conversions take at most 0.46 ms of `GPU.Reflections` at 128 and 0.38 ms at 256
+  on the reference machine's temporary memory (`PerfGPU.Renderer.ProbeConversion128MaxStageGPU`, `...256MaxStageGPU`,
+  target 2 ms; the stage holds only the conversions, and an unmeasured pass of each first changes neither reading). The
+  conversions leave most of the GPU idle, so their time follows each texel's chain of prefilter samples, not their
+  total: 1,280 at 128 (256 on each of levels 1 to 5) and 1,024 at 256 (128 on levels 1 and 2). With 256 on every level, 256
+  measured 0.50 ms, 10% above 128 for four times the samples. So conversions are spread by count, not split by work.
   `SceneRendererStats::ReflectionProbes` (shaded with), `ReflectionProbeConversions` and `ReflectionProbesPending`
   (kept in view, waiting for their capture to load or convert: captures and the project's picture wait for them; a
   capture that is not on its way, an unknown or failed handle or another type of asset, takes no slot and is not waited for).
@@ -5523,7 +5744,13 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   drew a ghost of the post: `GPU.SceneRenderer.SSR`'s sheet case). Strata 0.7.0 took any point behind a
   surface by less than its step's change of distance plus the tolerance for a hit, so a ray that passed far behind a thin
   post read the post (ghost columns beside its reflection), and the reflected top edge of a wall stepped into the sky
-  (`GPU.SceneRenderer.SSR`: thin posts in front of a grazing mirror, the wall's edge within 2 px). Checkerboard's march is
+  (`GPU.SceneRenderer.SSR`: thin posts in front of a grazing mirror, the wall's edge within 2 px). A hit on a surface the
+  ray meets from behind keeps no confidence in these modes either (`GetHitConfidence`'s facing term), so an object in
+  front of a mirror is reflected as a crescent, the side the camera also sees, with the probes or the sky where its back
+  belongs. Wave 8 tried keeping validated back-facing hits at half confidence ("option F"): a ray toward an object's back
+  passes behind its front by more than the tolerance and validates nothing, so no silhouette filled, and only front-lit
+  rims appeared at silhouettes and box edges (`lookdev.sheet.angle` and `lookdev.wet` at 4K High, no AA and FXAA);
+  `GPU.SceneRenderer.SSR`'s ball case holds the crescent. Checkerboard's march is
   unchanged (Medium's 0.6.0 costs; TAA averages its noise). What a ray sees is the previous frame's color before its transparent surfaces: in these modes every frame copies
   its HDR image after the sky into the scene-color copy glass reads (half resolution, blurred levels) and, beside it, into
   a full-resolution copy (`Effects/SceneColorCopy.comp` with a destination of the source's size, in `GPU.Transparent`),
@@ -6000,6 +6227,47 @@ documents over all samples (about tenfold smaller in archives), so that the stan
 at most about 60 MB. A graphical
 showcase's entry in `Samples.json` says `"Budget": "Showcase"` (any other value is refused): it may hold 80 MB of source
 assets, and the showcases' binary files count against 85 MB of their own, apart from the others' 55 MB
-(`SampleBudgetClass`, `SampleBudgets::ShowcaseSourceAssetBytes`, `ShowcaseTotalBinaryBytes`), so that with showcases
-release archives grow by at most about 145 MB (140 MB of binary files over all samples). Textures are 1K (2K only
-where 1K visibly fails; showcase scans 2K), JPEG for color and PNG where alpha or exact palettes need it.
+(`SampleBudgetClass`, `SampleBudgets::ShowcaseSourceAssetBytes`, `ShowcaseTotalBinaryBytes`), and up to six screenshots
+in 8 MB, one per shot of its tour (`ShowcaseScreenshotBytes`, `ShowcaseMaxScreenshots`), so that with showcases release
+archives grow by at most about 145 MB (140 MB of binary files over all samples). Textures are 1K (2K only where 1K
+visibly fails; showcase scans 1K, 2K only for the surfaces its key shots frame within 10 m), JPEG for color and PNG
+where alpha or exact palettes need it.
+
+#### The showcase
+
+`Samples/Showcase` (High Desert Outpost) is the presets' reference scene: wave 8's look is judged on its six shots, and
+every later change to rendering is measured on them. Two standard-library generators make everything that is not a scan
+and keep it reproducible: `Tools/GenerateShowcaseTerrain.py` (the valley, the apron, its water and mud) and
+`Tools/GenerateShowcaseProps.py` (the bus, the tanks, the pipes, the hut, the bare steel's color, metal/roughness and
+normal maps: rust, rain streaks, and the sheet's waves and dents, which break the sun's reflection on a flat panel into
+streaks instead of one even glare). Both seed their noise,
+use no transcendental functions where a vertex depends on them and quantize every attribute, so every platform writes
+the same bytes; `selftest` (CTests `StrataTools.ShowcaseTerrain` and `.ShowcaseProps`, label `tools`) writes twice, compares
+with the committed files (the maps by their pixels), checks the design's rules (the golden sun clears the hills from the
+apron, the pads are flat, the letterboard is vertical, the shots' mirror points lie on their surfaces) and that the
+scripts' `Scripts/Stations.h` rows equal the generator's table. To change the ground or a prop, change the generator,
+write in place (`terrain` or `props --output Samples/Showcase/Assets/Generated/...`): the editor reimports and keeps the
+handles. The generators' command scripts (`materials`, `prefabs`, `layout`, `controls`, `dress`, `bake`) are run once
+with `StrataEditor --quit-after-commands` (on Windows through `Start-Process -Wait`: the editor is a GUI program, and a
+second run would add `dress`'s props again); `layout` builds a fresh scene only, later edits are commands of their own.
+The materials' values live in `GenerateShowcaseProps.py`'s table: change them there and run its `tune` script, which
+sets them on the existing materials.
+
+The three times of day are stations: the sun's direction and the values that go with it (`Stations.h`, `setup --station`).
+Each has two reflection probe entities, `Probe.<Dawn, Golden or Dusk>.<Yard or Hut>`, never two probes baked three times
+(a bake trashes the capture an earlier bake made for that entity). `bake` sets each station with only its own probes
+active and bakes them twice (the second pass adds a bounce), Golden last, the saved station; rebake after any change the
+probes see, only through `bake`, and never in a session that does not save (the old captures would be trashed under the
+saved scene). The hut's box is its interior, so nothing outside takes the dark interior's light; its capture is taken in
+the back corner away from the sun's patches (from the middle the hut came out only 0.3 EV below the yard), so `bake`
+moves the probe there and back, and the probe projects no box (`BoxProjection` off: its capture is not at the box's center).
+The director switches stations with `SetActive`, holding the old probes on for a second with the new ones' priority raised,
+so a box never falls to the sky while its capture converts; `Assets::GetLoadProgress` in `OnCreate` keeps all six loaded.
+
+`StrataEditor.Showcase` plays the tour four times faster through its six shots, walks, flies, opens the photo mode and
+exports; `StrataEditor.ShowcaseRender` (label `gpu`) renders the six shots at their times of day expecting nothing pending,
+the dawn cascades at 550 m and the hut a third of the yard's light (the yard's EV is pinned: a change of the yard's light
+measures it again); `StrataRuntime.ShowcaseWindowed` checks the exported game's shot 2 in a window. The LookDev project
+`Showcase` holds the `showcase.*` shots ([Look-dev harness](#look-dev-harness)), and `PerfGPU.Samples` measures the tour at
+High and Ultra ([Perf tests](#perf-tests)). A change to the showcase's look retakes its screenshots, `Picture.png`, its
+icon and its look-dev shots.

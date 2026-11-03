@@ -477,6 +477,19 @@
 				},
 				{
 					"AssetFilter": 0,
+					"DisplayName": "Angular Diameter",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 10.0,
+					"Min": 0.0,
+					"Name": "ShadowSoftness",
+					"Section": "Light",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Angular diameter of the light's disk in degrees (the sun: about 0.53; an overcast sky's soft sun up to 10): its shadows' penumbra widens with the distance from the caster, and its highlight on smooth surfaces takes the disk's size. 0: the hardest shadow the filter allows and a point-like highlight",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
 					"DisplayName": "Cast Shadows",
 					"EnumValues": [],
 					"Flags": 0,
@@ -499,19 +512,6 @@
 					"Section": "Shadows",
 					"Speed": 1.0,
 					"Tooltip": "Meters from the camera the shadows reach; the last cascade fades out before it. Shorter spends the same shadow-map texels on less ground: sharper near shadows",
-					"Type": "Float"
-				},
-				{
-					"AssetFilter": 0,
-					"DisplayName": "Shadow Softness",
-					"EnumValues": [],
-					"Flags": 0,
-					"Max": 10.0,
-					"Min": 0.0,
-					"Name": "ShadowSoftness",
-					"Section": "Shadows",
-					"Speed": 0.009999999776482582,
-					"Tooltip": "Angular diameter of the light's disk in degrees (the sun: about 0.53): the penumbra widens with the distance from the caster. 0: the hardest shadow the filter allows",
 					"Type": "Float"
 				},
 				{
@@ -627,6 +627,18 @@
 				},
 				{
 					"AssetFilter": 0,
+					"DisplayName": "Source Radius",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 2.0,
+					"Min": 0.0,
+					"Name": "SourceRadius",
+					"Speed": 0.004999999888241291,
+					"Tooltip": "Radius in meters of the light's bulb or flame: smooth and wet surfaces show its highlight at that size, the same light spread wider (a lantern about 0.05, a fire about 0.25). Its diffuse light and shadows do not change. 0: a point",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
 					"DisplayName": "Cast Shadows",
 					"EnumValues": [],
 					"Flags": 0,
@@ -717,6 +729,18 @@
 					"Name": "Range",
 					"Speed": 0.10000000149011612,
 					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Source Radius",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 2.0,
+					"Min": 0.0,
+					"Name": "SourceRadius",
+					"Speed": 0.004999999888241291,
+					"Tooltip": "Radius in meters of the light's bulb or flame: smooth and wet surfaces show its highlight at that size, the same light spread wider (a lantern about 0.05, a fire about 0.25). Its diffuse light and shadows do not change. 0: a point",
 					"Type": "Float"
 				},
 				{

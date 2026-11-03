@@ -26,8 +26,9 @@ what each one costs:
 | Sky reflection resolution (per face) | 256 | 256 | 512 | 512 |
 | Screen-space reflections (scenes that use them) | Off | Half resolution, TAA only | Every pixel | Every pixel, longer rays |
 | Motion blur samples (scenes with motion blur) | Off | 8 | 12 | 16 |
-| Memory of one view, 1920 x 1080 (see below) | 31 MiB | 175 MiB | 226 MiB | 610 MiB |
-| Memory of one view, 3840 x 2160 | 31 MiB | 308 MiB | 664 MiB | 1.59 GiB |
+| Reflection probe resolution (per face) | 128 | 128 | 256 | 256 |
+| Memory of one view, 1920 x 1080 (see below) | 48 MiB | 192 MiB | 294 MiB | 678 MiB |
+| Memory of one view, 3840 x 2160 | 48 MiB | 325 MiB | 732 MiB | 1.65 GiB |
 
 - **Medium** keeps Strata 0.6.0's shadow map sizes and sample counts. **High**, the default, adds smoother wide sun
   penumbrae at every size, and sharper sun shadows from 1440 rows on.
@@ -43,6 +44,11 @@ what each one costs:
 - **Sky reflection resolution** is the size of the sky's reflection map: 512 keeps mirror-like reflections of the sky
   sharp at 4K, for 12 MiB more memory (4 MiB at 256, 16 MiB at 512; the physical atmosphere keeps two maps while the sun
   moves). It is filtered only when the sky changes.
+- **Reflection probe resolution** is the size of the reflection probes' pictures: 256 keeps polished metal's reflections
+  of nearby things sharp, for 51 MiB more memory in views that show a probe (17 MiB at 128, 68 MiB at 256, for up to 16
+  probes) and a little more GPU time when a probe's picture is prepared (in the `GPU.Reflections` stage). After a change
+  the old pictures stay on screen until the probes in view have their new ones, two per frame, so nothing flashes to the sky
+  (both sizes are in memory for those frames).
 - **Screen-space reflections** apply only to scenes whose Post Process turns them on. Medium keeps 0.6.0's half-resolution
   trace, which needs TAA; High and Ultra trace every pixel at full resolution with any anti-aliasing (Ultra's rays take more
   steps), for GPU time in the `GPU.Reflections` stage and memory: 20 MiB at 1920 x 1080 and 79 MiB at 3840 x 2160 at

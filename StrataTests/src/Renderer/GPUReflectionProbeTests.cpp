@@ -9,6 +9,7 @@
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/packing.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
 #include <chrono>
@@ -518,6 +519,142 @@ TEST_SUITE("GPU.SceneRenderer.ReflectionProbes")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("ReflectionProbeResolution sizes the cube array, and a new one's cubes take over once the probes in view converted")
+	{
+		// Medium's 128 texels per face, then High's 256: the cubes of 128 keep shading every probe in view while their captures
+		// convert at 256, two per frame as always (also after a change made while no probe was in view, or in a scene without
+		// probes), and the cubes of 256 take over in the frame that converts the last of them: the boxes never fall to the sky.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		for (int index = 0; index < 3; index++)
+			AddProbe(scene, AddCapture(assets, glm::vec3(0.2f * static_cast<float>(index + 1))), glm::vec3(static_cast<float>(index) * 1.5f - 1.5f, 0.0f, 0.0f),
+				glm::vec3(0.6f));
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 6.0f), glm::vec3(0.0f));
+		const SceneCamera away = LookAt(glm::vec3(0.0f, 0.0f, 6.0f), glm::vec3(0.0f, 0.0f, 12.0f));
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_Size, c_Size);
+		CHECK(renderer.GetSpecification().Quality.ReflectionProbeResolution == 128); // Medium, SceneRendererSpecification{}'s
+		for (int frame = 0; frame < 2; frame++)
+			REQUIRE(renderer.Render(scene, camera));
+		REQUIRE(renderer.GetReflectionProbeArray());
+		CHECK(renderer.GetReflectionProbeArray()->getDesc().width == 128);
+		CHECK(renderer.GetStats().ReflectionProbes == 3);
+
+		// Nothing is released (and the change alone returns false); a frame looking away converts nothing.
+		RendererQualitySettings high = renderer.GetSpecification().Quality;
+		high.ReflectionProbeResolution = 256;
+		CHECK_FALSE(renderer.SetQuality(high));
+		REQUIRE(renderer.GetReflectionProbeArray());
+		CHECK(renderer.GetReflectionProbeArray()->getDesc().width == 128);
+		REQUIRE(renderer.Render(scene, away));
+		CHECK(renderer.GetStats().ReflectionProbeConversions == 0);
+		CHECK(renderer.GetReflectionProbeArray()->getDesc().width == 128);
+
+		// Back in view: two conversions under the cubes of 128, then the last one with the takeover. Captures wait for it.
+		struct Expected
+		{
+			uint32_t Conversions, Shaded, Pending, Width;
+		};
+		for (const Expected& expected : { Expected { 2, 3, 3, 128 }, Expected { 1, 3, 0, 256 } })
+		{
+			REQUIRE(renderer.Render(scene, camera));
+			const SceneRendererStats stats = renderer.GetStats();
+			CHECK(stats.ReflectionProbeConversions == expected.Conversions);
+			CHECK(stats.ReflectionProbes == expected.Shaded);
+			CHECK(stats.ReflectionProbesPending == expected.Pending);
+			REQUIRE(renderer.GetReflectionProbeArray());
+			CHECK(renderer.GetReflectionProbeArray()->getDesc().width == expected.Width);
+		}
+		CHECK(renderer.GetReflectionProbeArray()->getDesc().mipLevels == RenderData::c_ReflectionProbeMipCount);
+		// The picture is that of a renderer made at 256, and a further frame converts nothing more.
+		SceneRendererSpecification atHighSpecification = ExactSpecification();
+		atHighSpecification.Quality.ReflectionProbeResolution = 256;
+		atHighSpecification.SpreadLightingUpdates = false;
+		SceneRenderer atHigh(atHighSpecification);
+		atHigh.SetViewportSize(c_Size, c_Size);
+		const ReadbackImage expectedImage = RenderToImage(atHigh, scene, camera);
+		const ReadbackImage image = RenderToImage(renderer, scene, camera);
+		CHECK(renderer.GetStats().ReflectionProbeConversions == 0);
+		CHECK(image.Pixels == expectedImage.Pixels);
+
+		// A change made in a scene without probes (a menu) spreads the conversions too once probes come into view.
+		Scene menu;
+		AddNeutralPostProcess(menu);
+		SceneRenderer fromMenu(ExactSpecification());
+		fromMenu.SetViewportSize(c_Size, c_Size);
+		REQUIRE(fromMenu.Render(menu, camera));
+		CHECK_FALSE(fromMenu.SetQuality(high));
+		REQUIRE(fromMenu.Render(menu, camera));
+		for (const uint32_t conversions : { 2u, 1u })
+		{
+			REQUIRE(fromMenu.Render(scene, camera));
+			CHECK(fromMenu.GetStats().ReflectionProbeConversions == conversions);
+		}
+		REQUIRE(fromMenu.GetReflectionProbeArray());
+		CHECK(fromMenu.GetReflectionProbeArray()->getDesc().width == 256);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A probe at 256 shows finer detail on a mirror ball")
+	{
+		// A checker capture reflected by a mirror ball inside the probe's box: at 256 texels per face the reflection keeps more of
+		// the checker's edges than at 128 (gradient energy over the ball, the sky's 512 case's method).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::SphereMesh));
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		const AssetHandle checker = assets.Add(CreateCapture([](const glm::vec3& direction)
+		{
+			const float u = std::atan2(direction.z, direction.x) * 24.0f / glm::two_pi<float>();
+			const float v = std::asin(std::clamp(direction.y, -1.0f, 1.0f)) * 12.0f / glm::pi<float>();
+			const bool light = (static_cast<int>(std::floor(u)) + static_cast<int>(std::floor(v))) % 2 == 0;
+			return glm::vec3(light ? 1.0f : 0.05f);
+		}, 1024), "Checker");
+		AddProbe(scene, checker, glm::vec3(0.0f), glm::vec3(5.0f));
+		Entity ball = AddMirrorBall(scene, assets, glm::vec3(0.0f));
+		ball.GetComponent<TransformComponent>().Scale = glm::vec3(2.0f);
+		constexpr uint32_t c_BallSize = 256;
+		// Half a unit around the ball's center (radius 1), where a pixel spans 0.22 degrees of reflected directions: finer than the
+		// probe's texels at either size, so the picture shows what the probe holds.
+		const SceneCamera camera = OrthographicLookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f), 0.5f);
+		const auto gradientEnergy = [&](uint32_t resolution)
+		{
+			SceneRendererSpecification specification = ExactSpecification();
+			specification.Quality.ReflectionProbeResolution = resolution;
+			specification.SpecularAntiAliasing = false;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_BallSize, c_BallSize);
+			REQUIRE(renderer.Render(scene, camera));
+			REQUIRE(renderer.GetReflectionProbeArray());
+			CHECK(renderer.GetReflectionProbeArray()->getDesc().width == resolution);
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
+			double energy = 0.0;
+			for (uint32_t y = 1; y + 1 < c_BallSize; y++)
+			{
+				for (uint32_t x = 1; x + 1 < c_BallSize; x++)
+				{
+					const float center = ReadHalfTexel(image, x, y).g;
+					const float dx = ReadHalfTexel(image, x + 1, y).g - center;
+					const float dy = ReadHalfTexel(image, x, y + 1).g - center;
+					energy += static_cast<double>(dx) * dx + static_cast<double>(dy) * dy;
+				}
+			}
+			return energy;
+		};
+		const double low = gradientEnergy(128);
+		const double high = gradientEnergy(256);
+		MESSAGE(fmt::format("Mirror ball gradient energy: 128 {:.2f}, 256 {:.2f} ({:.2f} times)", low, high, high / low));
+		CHECK(low > 0.0);
+		CHECK(high >= 1.5 * low);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A capture only the first of a frame's views waits for is still held whole until the streamer raises it")
 	{
 		// A probe bake renders six views per frame with one renderer. The view that sees the probe holds its capture whole; the
@@ -612,6 +749,85 @@ TEST_SUITE("GPU.SceneRenderer.ReflectionProbes")
 			dropped = capture->GetResidentLevel() == capture->GetTailLevel();
 		}
 		CHECK(dropped);
+
+		AssetManager::SetActive(nullptr);
+		scene.reset();
+		manager.reset();
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("After a new resolution a probe whose capture dropped to its tail keeps its old cube until converted again")
+	{
+		// An exported game's captures stream: once converted, a capture drops to its tail. When the player then picks another
+		// resolution, the capture must stream in whole again before it converts; the cubes of the old resolution light the box
+		// meanwhile, never the sky.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		constexpr AssetHandle c_CaptureHandle = AssetHandle(0xA3102);
+		const std::filesystem::path pack = WriteStreamingPack({ StreamingPackAsset { c_CaptureHandle, AssetType::Texture, "Lighting/Probe.hdr",
+			CookEnvironmentMap(512, 256) } });
+		std::string error;
+		Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(pack, &error);
+		REQUIRE_MESSAGE(manager, error);
+		TextureStreamer* streamer = TextureStreamer::Find(*manager);
+		REQUIRE(streamer);
+		Scope<Scene> scene = CreateScope<Scene>("Probe");
+		AddNeutralPostProcess(*scene);
+		AddProbe(*scene, c_CaptureHandle, glm::vec3(0.0f), glm::vec3(5.0f));
+		AddMesh(*scene, BuiltinAssets::SphereMesh, BuiltinAssets::DefaultMaterial, glm::vec3(0.0f), "Ball");
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f));
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		const auto arrayWidth = [&renderer]
+		{
+			nvrhi::ITexture* array = renderer.GetReflectionProbeArray();
+			return array ? array->getDesc().width : 0u;
+		};
+
+		// Converted at 128, then dropped to its tail: by the clock, as slow machines take many frames on I/O jobs.
+		uint32_t conversions = 0;
+		auto start = std::chrono::steady_clock::now();
+		while (conversions == 0 && std::chrono::steady_clock::now() - start < std::chrono::seconds(60))
+		{
+			RunFrame(gpu, manager, renderer, *scene, camera);
+			conversions += renderer.GetStats().ReflectionProbeConversions;
+		}
+		REQUIRE(conversions == 1);
+		const Ref<Texture> capture = std::dynamic_pointer_cast<Texture>(manager->PeekLoadedAsset(c_CaptureHandle));
+		REQUIRE(capture);
+		REQUIRE(capture->GetTailLevel() > 0);
+		streamer->SetIdleDropSeconds(0.2);
+		start = std::chrono::steady_clock::now();
+		bool dropped = false;
+		while (!dropped && std::chrono::steady_clock::now() - start < std::chrono::seconds(30))
+		{
+			RunFrame(gpu, manager, renderer, *scene, camera);
+			dropped = capture->GetResidentLevel() == capture->GetTailLevel();
+		}
+		REQUIRE(dropped);
+		CHECK(arrayWidth() == 128);
+
+		// Every frame until the cubes of 256 take over shades the box with the probe.
+		RendererQualitySettings high = renderer.GetQuality();
+		high.ReflectionProbeResolution = 256;
+		CHECK_FALSE(renderer.SetQuality(high));
+		uint32_t framesWithoutProbe = 0;
+		uint32_t framesPending = 0;
+		conversions = 0;
+		start = std::chrono::steady_clock::now();
+		while (arrayWidth() != 256 && std::chrono::steady_clock::now() - start < std::chrono::seconds(60))
+		{
+			RunFrame(gpu, manager, renderer, *scene, camera);
+			conversions += renderer.GetStats().ReflectionProbeConversions;
+			framesWithoutProbe += renderer.GetStats().ReflectionProbes == 1 ? 0u : 1u;
+			framesPending += renderer.GetStats().ReflectionProbesPending > 0 ? 1u : 0u;
+		}
+		CHECK(arrayWidth() == 256);
+		CHECK(framesWithoutProbe == 0);
+		CHECK(framesPending > 0); // Its capture had to stream in whole again first
+		CHECK(conversions == 1);
+		CHECK(renderer.GetStats().ReflectionProbesPending == 0);
 
 		AssetManager::SetActive(nullptr);
 		scene.reset();

@@ -1,0 +1,20 @@
+{
+	"Handle": "BA676A13CA5791D1",
+	"ImportSettings": {
+		"Compression": "Auto",
+		"Filter": "Linear",
+		"FlipGreen": false,
+		"FlipVertically": false,
+		"GenerateMips": true,
+		"MaxSize": 0,
+		"Quality": "High",
+		"RemoveSun": false,
+		"Usage": "HDR",
+		"Wrap": "Clamp"
+	},
+	"Strata": {
+		"Format": "AssetMeta",
+		"Version": 1
+	},
+	"Type": "Texture"
+}

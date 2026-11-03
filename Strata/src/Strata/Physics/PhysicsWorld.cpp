@@ -4153,9 +4153,10 @@ namespace Strata
 			}
 			const float displacement = glm::length(position - glm::vec3(record.LastWorldTransform[3]));
 
-			// The same products as Scene::GetWorldTransform and UpdateWorldTransforms, so that LastWorldTransform equals the
-			// matrix the scene will cache (the next step compares them).
-			const glm::mat4 currentWorld = parentWorld ? *parentWorld * item.Transform->GetTransform() : item.Transform->GetTransform();
+			// The same products, through the same function, as Scene::GetWorldTransform and UpdateWorldTransforms, so that
+			// LastWorldTransform equals the matrix the scene will cache (the next step compares them).
+			const glm::mat4 currentWorld = parentWorld ? Math::ComposeWorldTransform(*parentWorld, item.Transform->GetTransform())
+				: item.Transform->GetTransform();
 			glm::vec3 worldScale = record.WorldScale;
 			if (currentWorld != record.LastWorldTransform)
 			{
@@ -4170,7 +4171,8 @@ namespace Strata
 			const glm::mat4 pose = Math::ComposeTransform(position, glm::normalize(rotation), worldScale);
 			if (!SetLocalPose(*item.Transform, parentWorld ? glm::inverse(*parentWorld) * pose : pose))
 				return;
-			record.LastWorldTransform = parentWorld ? *parentWorld * item.Transform->GetTransform() : item.Transform->GetTransform();
+			record.LastWorldTransform = parentWorld ? Math::ComposeWorldTransform(*parentWorld, item.Transform->GetTransform())
+				: item.Transform->GetTransform();
 			record.WorldScale = worldScale;
 			item.Written = true;
 			settling.Add(displacement, inverseTimestep, sleepThreshold);
@@ -5347,6 +5349,8 @@ namespace Strata
 
 		// The entity's descendants moved with it.
 		UpdateDescendantsOfMovedBody(data, entity, false);
+		// A teleport is drawn where it lands, never blended from where the body was (with what rides on it).
+		scene.BreakInterpolation(entity);
 		return true;
 	}
 
@@ -5377,6 +5381,8 @@ namespace Strata
 			UpdatePolling(data, entity.GetHandle(), *record);
 		}
 		UpdateDescendantsOfMovedBody(data, entity, false);
+		// Drawn where it lands, never blended from where the character was.
+		data.OwnerScene->BreakInterpolation(entity);
 		return true;
 	}
 

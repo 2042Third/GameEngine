@@ -13,6 +13,8 @@
 namespace Strata
 {
 
+	class Scene;
+
 	// The point and spot lights of a scene as records the GPU culls into the light clusters (RenderScene owns one and syncs
 	// it; RenderSceneGPU mirrors the records). A record per light component (an entity with a PointLightComponent and a
 	// SpotLightComponent has two), kept from component signals and the scene's world transform changes like the mesh
@@ -38,9 +40,10 @@ namespace Strata
 
 		// A light's record from its world transform and component values (also what the CPU path draws a light with): the
 		// region it reaches (its bounding sphere) and the values shaders light with. Not drawn when it is inactive, unlit, has
-		// no range or a value that is not finite.
+		// no range or a value that is not finite. `sourceRadius` (meters, highlights only) is kept within [0,
+		// PointLightComponent::c_MaxSourceRadius], 0 when not finite.
 		static RenderData::LightRecord MakeRecord(const glm::mat4& world, bool active, const glm::vec3& color, float intensity, float range, uint32_t type,
-			float innerDegrees, float outerDegrees);
+			float innerDegrees, float outerDegrees, float sourceRadius);
 		// The smallest sphere around the region a spot light reaches (apex `position`, unit `direction`): the part of its range
 		// sphere inside the cone.
 		static glm::vec4 GetSpotBounds(const glm::vec3& position, const glm::vec3& direction, float range, float cosOuter, float sinOuter);
@@ -51,8 +54,10 @@ namespace Strata
 		void QueueAll(const entt::registry& registry);
 
 		// Reads the queued lights, then the lights of `transformChanges` (entities whose world transform or activity changed),
-		// or every light when `allTransforms`. Returns the number of records updated.
-		uint32_t Sync(const entt::registry& registry, std::span<const entt::entity> transformChanges, bool allTransforms);
+		// or every light when `allTransforms`, then, when `drawnChanged` (the scene's drawn transforms version changed), the
+		// lights of the scene's interpolated set. A light is placed where the scene draws its entity (Scene::FindDrawnTransform,
+		// after Scene::UpdateDrawnTransforms), else at its world transform. Returns the number of records updated.
+		uint32_t Sync(const Scene& scene, std::span<const entt::entity> transformChanges, bool allTransforms, bool drawnChanged);
 
 		// Records below GetCapacity (free ones are not drawn); the lights the scene has.
 		uint32_t GetCapacity() const { return static_cast<uint32_t>(m_Records.size()); }
@@ -73,9 +78,9 @@ namespace Strata
 		// appending nothing, when more than c_MaxChanges changes happened since: then any record may have changed.
 		bool GetChanges(uint64_t sinceVersion, std::vector<uint32_t>& outRecords) const;
 
-		// Compares every record with what the registry's components and transforms give. Returns false with the first
+		// Compares every record with what the scene's components and drawn transforms give. Returns false with the first
 		// difference.
-		bool Validate(const entt::registry& registry, std::string* outError) const;
+		bool Validate(const Scene& scene, std::string* outError) const;
 	private:
 		template<typename Component>
 		void OnLightChanged(entt::registry& registry, entt::entity entity);
@@ -84,8 +89,8 @@ namespace Strata
 
 		void Queue(entt::entity entity, uint32_t type);
 		// Brings an entity's record of `type` up to date with the registry: created, updated or freed.
-		bool UpdateRecord(const entt::registry& registry, entt::entity entity, uint32_t type);
-		bool ComputeRecord(const entt::registry& registry, entt::entity entity, uint32_t type, RenderData::LightRecord& outRecord,
+		bool UpdateRecord(const Scene& scene, entt::entity entity, uint32_t type);
+		bool ComputeRecord(const Scene& scene, entt::entity entity, uint32_t type, RenderData::LightRecord& outRecord,
 			LightShadowSettings& outShadow) const;
 		void Free(entt::entity entity, uint32_t type);
 		// Keeps m_Shadowed in step with a record's SpotAngles.w.
