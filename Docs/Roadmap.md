@@ -625,7 +625,7 @@ rendering streams branch from its tip:
   public domain or CC0), with its notice in `ThirdPartyNotices.md`'s "Code derived from other projects" and its source
   named in the commit message; copyleft code is read for ideas only.
 - Left open by step 0: Slang's modules are not yet measured to cost what glslang's did, nor run on a Mac's GPU (open
-  items, "Shaders in Slang"); vsync does not pace windowed mode on the reference machine (open items, "Frame pacing");
+  items, "Shaders in Slang");
   an object that stays near the camera still re-fits the sun cascades once, and one under a tenth of the view waits up
   to 0.5 s in a coarser cascade; without contact shadows the 5 cm plate's shadow edge shows the shadow map's texel
   steps at High (wave 7's `sun-shadows` line).
@@ -833,29 +833,6 @@ Open items and deferrals later waves own:
   and macOS, or run only on Windows so far: `GetProcessMemory`, `GetProcessUptime`, `FindHomeDirectory`,
   `FindFallbackFontFiles`, `PosixFileReader`, `SetCurrentThreadPriority`, the window calls of `ImGuiPlatform` (layout
   keys, cursor shapes, the clipboard) and the Retina fix-up of `StrataRuntime --resolution`.
-- Frame pacing (wave 8's S0.6): vsync does not pace windows in windowed mode on the reference machine, focused or not.
-  Third-Person played in the Release editor (focused, visible, windowed 2400 x 1350) and in its exported game (focused,
-  windowed 1280 x 720) on the 120 Hz display, 2026-11-02, instruments counting each `BeginFrame`'s waits over 600-frame
-  windows:
-
-  | Run | Frames/s | Acquire p50 / p95 | Frames-in-flight wait p50 / p95 | Mode chosen |
-  | --- | --- | --- | --- | --- |
-  | Editor, playing (`editor.perf`: 1,100/s, `Present` p50 0.05 ms) | 1,230-1,280 | 0.002 / 0.003 ms | 0.15 / 0.8 ms | FIFO |
-  | Exported game | 1,340-1,550 | 0.002 / 0.003 ms | 0.13 / 1.1 ms | FIFO |
-  | The same without `VK_LAYER_RTSS`, without `VK_LAYER_NV_present`, without both | 1,580 / 1,470 / 1,490 | 0.002 / 0.003 ms | 0.2 / 1.0 ms | FIFO |
-  | The same with vsync off | 1,900-2,100 | 0.000 / 0.001 ms | 0.000 / 0.2 ms | MAILBOX |
-
-  The surface offers FIFO, FIFO_RELAXED, MAILBOX, IMMEDIATE and FIFO_LATEST_READY; each run made its swapchain once
-  (3 images; the surface allows 2 to 8). The loader inserts the implicit layers `VK_LAYER_NV_optimus`,
-  `VK_LAYER_NV_present` and `VK_LAYER_RTSS`; disabling them changed nothing. Windows' "Optimizations for windowed games"
-  is on (`SwapEffectUpgradeEnable=1`). So the engine asks for FIFO and the presentation engine hands every image back at
-  once: not the engine's code, not focus or occlusion, not those layers, but a driver or system setting, unconfirmed.
-  What NVIDIA Control Panel's "Vertical sync" and "Vulkan/OpenGL present method" say (globally and for
-  `StrataEditor.exe`) is the one fact an agent cannot read; the owner is asked. Until then only a frame-rate cap paces
-  windows here (the editor's `ActiveFrameRate`, S0.4, unlimited by default), and the Performance panel and
-  `physics-timing` assume the frame rates seen. Not measured again: an unfocused or occluded editor (the audits saw
-  190-900 frames a second). Not measured at all: a borderless or fullscreen game (S0.6's case E), whose presents can
-  take another path (independent flip), so the finding holds for windowed mode only.
 - The reference machine, not the engine: once in about 45 perf runs, under load, the editor failed to open
   `PerfGPU.Editor`'s generated million-entity scene ("Invalid JSON"; the test now describes the files on disk when that
   happens), and while `pack-v2` was measured a Release editor saving a 200,000-entity scene in a loop crashed once and
@@ -1573,8 +1550,8 @@ integration starts without it.
   the Performance panel that holds the frame breakdown still while the profiler keeps recording.
 - Lane Platform: the project's `Scene.Timing` section with `FixedRate` (30, 60, 120 or 240 steps a second, or each
   scene's own); GLFW sealed behind `Window` by the layer table's `ExternalOwners`, with a build without it on CI; why
-  FIFO does not pace the editor: on the reference machine vsync paces no window in windowed mode, focused or not, a
-  driver or system setting not yet confirmed (open items).
+  what paces the editor: FIFO holds a windowed editor at the display's rate; its seeming failure on the reference
+  machine was NVIDIA Control Panel's "Vertical sync" forcing vsync off (with "Use the 3D application setting", 120 Hz).
 - Lane Slang landed within its box: every shader in Slang's HLSL syntax through slangc 2026.20, pinned by SHA-256 in a
   per-user cache, with pictures that differ from 0.7.0's by rounding only; CI checks every module with spirv-val and
   converts it to Metal, and Mesa's lavapipe passes 529 of 553 GPU cases with the new modules as with the old. Its

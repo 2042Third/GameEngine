@@ -59,15 +59,15 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - Tests drive the frame loop through `Tests::StubWindow`, a window without a display; `ApplicationSpecification::WindowFactory`
   lets a program or a test give the application its window.
 
-**Platform: why FIFO does not pace the editor (S0.6).**
+**Platform: what paces the editor (S0.6).**
 
 - The swapchain's log line names the present mode chosen and the modes the surface offers (`Swapchain: 2400 x 1350,
   3 images, vsync (FIFO; the surface offers FIFO, MAILBOX, ...)`).
-- Measured: on the reference machine vsync paces no window in windowed mode, focused or not: FIFO is chosen and the
-  presentation engine hands every image back at once (1,200-1,500 frames a second). Not the engine's code, nor focus,
-  nor the RTSS or NVIDIA present layers: a driver or system setting, unconfirmed (Roadmap, open items). Borderless and
-  fullscreen windows were not measured. There only a frame-rate cap paces the editor: File > Preferences > Frame Rate >
-  Active frame rate (Unlimited by default).
+- Measured: with vsync on, FIFO holds a windowed editor at the display's rate (120 frames a second on the reference
+  machine's 120 Hz display). It first seemed not to (1,200-1,500 frames a second, every image handed back at once):
+  NVIDIA Control Panel's "Vertical sync" was forcing vsync off, which overrides what an application asks for. Set to
+  "Use the 3D application setting", FIFO paces. Borderless and fullscreen windows were not measured. A lower cap is
+  File > Preferences > Frame Rate > Active frame rate (Unlimited by default).
 
 **Slang (S0.10)**
 
@@ -238,9 +238,9 @@ projects, the template and scenes or projects without the value get.
 
 **Platform (S0.6).**
 
-- On the reference machine (NVIDIA RTX 5090, driver 621.1), vsync does not pace windows in windowed mode: FIFO presents
-  without waiting, so a windowed editor or game runs as fast as it can unless a frame-rate cap is set. The cause is a
-  driver or system setting, not confirmed yet. Borderless and fullscreen windows were not measured.
+- If a windowed editor or game runs far above the display's rate with vsync on, the graphics driver is overriding vsync:
+  set NVIDIA Control Panel's "Vertical sync" (Manage 3D settings) to "Use the 3D application setting". Borderless and
+  fullscreen windows were not measured.
 
 **Slang (S0.10)**
 
