@@ -4632,6 +4632,22 @@ lights, Post Process and the sky), and never a resolution below the output's.
   draw with the same vertex module, so they stay pixel-equal (`GPU.SceneRenderer.GPUDriven`'s "Lit materials"). A flat
   surface without a normal map has zero derivatives and keeps its roughness exactly. `GPU.SceneRenderer.Materials` checks
   that a bumpy sphere's highlight variance halves and its light stays within 15%.
+- **Highlights of sized sources** (`PBR.slang`): a source of angular radius theta spans the half maximum of a GGX lobe of
+  `alpha_s = tan(theta) / 1.287` (`2 sqrt(sqrt(2) - 1)`: the reflected angle per alpha where GGX falls to half its peak), and
+  the lobes of the surface and the source combine about as variances add, so the distribution takes `sqrt(alpha^2 +
+  sourceAlpha2)` with `sourceAlpha2 = max(alpha_s^2 - c_MinRoughness^4, 0)` (the smallest roughness's own spread is
+  subtracted, so a mirror shows the source at its size). Only D widens (`GetLobeAlpha`): the visibility keeps the surface's
+  alpha, as masking belongs to the microsurface, and D stays normalized, so a larger source lowers the peak without adding
+  light. The term is a constant per light, no derivative (the derivative rule holds). With 0 the shading is the point
+  light's bit for bit. The sun: `RenderData::GetSunLobeAlpha2(DirectionalLightComponent::ShadowSoftness)` (shown as
+  **Angular Diameter**, 0 to 10 degrees, active with and without shadows), written by `CollectLights` into
+  `FrameConstants::ReflectionParams.w` (after `RenderFrame` assigns the vector whole, so a frame never shades with the
+  previous frame's disk) and passed by the sun's `LightSurface` call to `EvaluateLightWeighted` and `EvaluateClearcoat`.
+  0.53 degrees adds 8.81e-6 (a mirror's lobe 1.77 times as wide, roughness 0.06 30% wider, 0.18 0.4%), Overcast's 10
+  degrees 0.0046 (a soft glow instead of a pin dot). A source's size changes its highlights only, never diffuse light,
+  shadows or culling. `GPU.SceneRenderer.Lighting`'s "A sized sun..." measures a white mirror sphere orthographically (projected
+  area maps to reflected solid angle as `d omega = 4 dA / R^2`): the half-peak cone is 4.97 degrees at 10 (5 expected) and
+  0.265 at 0.53 (0.143 for a point), and the light at 5 and 10 degrees agrees within 1%.
 - **The horizon fade** (`GetHorizonFade`): a normal map can turn the reflected vector into the surface, where image light
   would show the surface's own underside. Image light (probes, sky, screen-space reflections, through the specular
   occlusion) is multiplied by `clamp(1 + R . Ng / 0.25, 0, 1)^2` with Ng the geometric normal (facing the viewer), reaching

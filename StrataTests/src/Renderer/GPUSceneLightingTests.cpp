@@ -4,9 +4,12 @@
 #include "Strata/Renderer/RendererQuality.h"
 
 #include <glm/gtc/constants.hpp>
+#include <spdlog/fmt/fmt.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <vector>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -82,6 +85,79 @@ namespace
 		properties.Metallic = 1.0f;
 		properties.Roughness = roughness;
 		return properties;
+	}
+
+	// A highlight read from the HDR target's green channel (pre-exposure 1: neutral post-processing), less a render without its
+	// light: the sum over every pixel, the peak and the pixels at half the peak or more.
+	struct Highlight
+	{
+		double Sum = 0.0;
+		float Peak = 0.0f;
+		uint32_t HalfPeakPixels = 0;
+	};
+
+	constexpr uint32_t c_HighlightSize = 512;
+
+	Highlight MeasureHighlight(const ReadbackImage& lit, const ReadbackImage& dark)
+	{
+		REQUIRE(lit.Width == dark.Width);
+		REQUIRE(lit.Height == dark.Height);
+		std::vector<float> values(static_cast<size_t>(lit.Width) * lit.Height);
+		Highlight highlight;
+		for (uint32_t y = 0; y < lit.Height; y++)
+		{
+			for (uint32_t x = 0; x < lit.Width; x++)
+			{
+				const float value = ReadHalfTexel(lit, x, y).g - ReadHalfTexel(dark, x, y).g;
+				values[static_cast<size_t>(y) * lit.Width + x] = value;
+				highlight.Sum += value;
+				highlight.Peak = std::max(highlight.Peak, value);
+			}
+		}
+		for (const float value : values)
+			highlight.HalfPeakPixels += value >= 0.5f * highlight.Peak ? 1u : 0u;
+		return highlight;
+	}
+
+	// A sun 30 degrees off the view axis on a sphere of the built-in mesh (radius 0.5) at the origin, seen orthographically along
+	// -Z over `view` world units around `center`, without sky light: the highlight of a sun of the angular diameter `degrees`
+	// (DirectionalLightComponent::ShadowSoftness) at 1 lux, whose mirror peak (about 20,000 for a point-like sun) stays below the
+	// HDR target's clamp. Specular anti-aliasing is off: at this size it would widen a mirror's lobe more than the sun does.
+	Highlight RenderSunHighlight(AssetHandle material, float degrees, const glm::vec2& center, float view)
+	{
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().AmbientColor = glm::vec3(0.0f);
+		AddMesh(scene, BuiltinAssets::SphereMesh, material, glm::vec3(0.0f), "Sphere");
+		const float angle = glm::radians(30.0f);
+		Entity sun = AddSun(scene, -glm::vec3(std::sin(angle), 0.0f, std::cos(angle)), 1.0f, false);
+		sun.GetComponent<DirectionalLightComponent>().ShadowSoftness = degrees;
+		SceneRendererSpecification specification = ExactSpecification();
+		specification.SpecularAntiAliasing = false;
+		SceneRenderer renderer(specification);
+		renderer.SetViewportSize(c_HighlightSize, c_HighlightSize);
+		const SceneCamera camera = OrthographicLookAt(glm::vec3(center, 3.0f), glm::vec3(center, 0.0f), view);
+		const auto renderHDR = [&]()
+		{
+			REQUIRE(renderer.Render(scene, camera));
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
+			REQUIRE(image.Format == nvrhi::Format::RGBA16_FLOAT);
+			return image;
+		};
+		const ReadbackImage lit = renderHDR();
+		sun.GetComponent<DirectionalLightComponent>().Intensity = 0.0f;
+		sun.MarkModified<DirectionalLightComponent>();
+		return MeasureHighlight(lit, renderHDR());
+	}
+
+	// The angular radius (radians) of the cone of reflected directions a mirror sphere of radius 0.5 seen orthographically shows
+	// in `pixels` of a view of `view` world units over c_HighlightSize pixels: d omega = 4 dA / R^2.
+	double GetMirrorConeRadius(uint32_t pixels, float view)
+	{
+		const double pixelSize = static_cast<double>(view) / c_HighlightSize;
+		const double solidAngle = 4.0 * static_cast<double>(pixels) * pixelSize * pixelSize / (0.5 * 0.5);
+		return std::acos(1.0 - solidAngle / (2.0 * glm::pi<double>()));
 	}
 
 	// A large matte floor (facing +Y) at the origin.
@@ -802,6 +878,68 @@ TEST_SUITE("GPU.SceneRenderer.Lighting")
 			CHECK(value.g >= 0.97f);
 			CHECK(value.g <= 1.03f);
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A sized sun widens its highlight to its disk and keeps its light")
+	{
+		// A white mirror sphere (roughness 0) shows the sun's disk at its angular size (DirectionalLightComponent::ShadowSoftness,
+		// the angular diameter), the same light spread wider. Before the disk's lobe a sun of any size was a pin dot of a
+		// half-peak radius of 0.15 degrees.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::SphereMesh));
+		const AssetHandle mirror = assets.AddMaterial(FurnaceMetal(glm::vec3(1.0f), 0.0f));
+		constexpr float c_WholeView = 1.1f;
+
+		// (a) The whole sphere in view: a 5 and a 10 degree disk reflect the same light. A disk under about 2 degrees is not
+		// resolved at this size, which is why these two are compared.
+		const Highlight five = RenderSunHighlight(mirror, 5.0f, glm::vec2(0.0f), c_WholeView);
+		const Highlight ten = RenderSunHighlight(mirror, 10.0f, glm::vec2(0.0f), c_WholeView);
+		CAPTURE(five.Sum);
+		CAPTURE(ten.Sum);
+		REQUIRE(five.Sum > 0.0);
+		CHECK(ten.Sum == doctest::Approx(five.Sum).epsilon(0.05));
+		CHECK(ten.Peak < 0.5f * five.Peak);
+
+		// (b) The 10 degree disk's half-peak cone has its radius, 5 degrees.
+		const double tenRadius = glm::degrees(GetMirrorConeRadius(ten.HalfPeakPixels, c_WholeView));
+		CAPTURE(tenRadius);
+		CHECK(tenRadius >= 0.8 * 5.0);
+		CHECK(tenRadius <= 1.25 * 5.0);
+
+		// (c) The midday sun (0.53 degrees) seen over 0.1 world units around the highlight (the normal halfway between the view and
+		// the sun, 15 degrees off the view axis), where its half-peak cone covers about 110 pixels: a radius of 0.265 degrees.
+		const glm::vec2 highlightCenter(0.5f * std::sin(glm::radians(15.0f)), 0.0f);
+		constexpr float c_NarrowView = 0.1f;
+		const Highlight sun = RenderSunHighlight(mirror, 0.53f, highlightCenter, c_NarrowView);
+		const double sunRadius = glm::degrees(GetMirrorConeRadius(sun.HalfPeakPixels, c_NarrowView));
+		CAPTURE(sun.HalfPeakPixels);
+		CAPTURE(sunRadius);
+		CHECK(sun.Peak < 60000.0f); // Below the HDR target's clamp: the half maximum is the lobe's
+		CHECK(sunRadius >= 0.8 * 0.265);
+		CHECK(sunRadius <= 1.25 * 0.265);
+		// A point-like sun keeps the smallest roughness's pin dot.
+		const Highlight point = RenderSunHighlight(mirror, 0.0f, highlightCenter, c_NarrowView);
+		const double pointRadius = glm::degrees(GetMirrorConeRadius(point.HalfPeakPixels, c_NarrowView));
+		CAPTURE(pointRadius);
+		CHECK(pointRadius < 0.7 * sunRadius);
+
+		// (d) The same on an opaque dielectric (black, so only its highlight shows): the disk sizes every surface's highlight.
+		MaterialProperties dielectric;
+		dielectric.BaseColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+		dielectric.Metallic = 0.0f;
+		dielectric.Roughness = 0.0f;
+		const AssetHandle glossy = assets.AddMaterial(dielectric);
+		const double glossyRadius = glm::degrees(GetMirrorConeRadius(RenderSunHighlight(glossy, 0.53f, highlightCenter, c_NarrowView).HalfPeakPixels,
+			c_NarrowView));
+		const double glossyPointRadius = glm::degrees(GetMirrorConeRadius(RenderSunHighlight(glossy, 0.0f, highlightCenter, c_NarrowView).HalfPeakPixels,
+			c_NarrowView));
+		MESSAGE(fmt::format("Sun highlights: sums at 5 and 10 degrees {:.1f}, {:.1f}; half-peak radius at 10 degrees {:.3f} deg, at 0.53 {:.4f} deg "
+			"(point {:.4f}), on a dielectric {:.4f} deg (point {:.4f})", five.Sum, ten.Sum, tenRadius, sunRadius, pointRadius, glossyRadius, glossyPointRadius));
+		CHECK(glossyRadius == doctest::Approx(sunRadius).epsilon(0.05));
+		CHECK(glossyPointRadius < 0.7 * glossyRadius);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

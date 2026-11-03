@@ -2521,12 +2521,16 @@ namespace Strata
 
 		frame.DirectionalLightDirection = glm::vec4(0.0f, -1.0f, 0.0f, 0.0f);
 		frame.DirectionalLightColor = glm::vec4(0.0f);
+		// Written here, after RenderFrame assigned the vector whole, so the frame shades with this frame's disk.
+		frame.ReflectionParams.w = 0.0f;
 		m_ShadowLight = {};
 		m_SunColor = glm::vec3(1.0f);
 		auto useDirectionalLight = [&](const DirectionalLightComponent& light, const glm::vec3& direction)
 		{
 			frame.DirectionalLightDirection = glm::vec4(direction, 1.0f);
 			frame.DirectionalLightColor = glm::vec4(light.Color * light.Intensity, 1.0f);
+			// Its highlight takes the disk's size, with or without shadows.
+			frame.ReflectionParams.w = RenderData::GetSunLobeAlpha2(light.ShadowSoftness);
 			m_SunColor = light.Color;
 			m_ShadowLight.Enabled = light.CastShadows && light.Intensity > 0.0f;
 			m_ShadowLight.Direction = direction;

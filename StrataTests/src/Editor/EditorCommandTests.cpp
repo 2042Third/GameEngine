@@ -1033,7 +1033,7 @@ TEST_SUITE("Editor.Commands")
 		harness.Run("component.set", { { "entity", c }, { "component", "DirectionalLight" }, { "values", { { "CastShadows", false } } } });
 		CHECK(light()["inactive"] == nlohmann::json { { "CascadeBlend", "Cast Shadows is off" }, { "CascadeDistribution", "Cast Shadows is off" },
 			{ "ContactShadowLength", "Cast Shadows is off" }, { "ShadowBias", "Cast Shadows is off" }, { "ShadowDistance", "Cast Shadows is off" },
-			{ "ShadowNormalBias", "Cast Shadows is off" }, { "ShadowSoftness", "Cast Shadows is off" } });
+			{ "ShadowNormalBias", "Cast Shadows is off" } }); // The angular diameter (ShadowSoftness) sizes the highlight too
 		harness.Run("component.remove", { { "entity", c }, { "component", "DirectionalLight" } });
 
 		// Point and spot lights' shadows: added with values, set, undone; the filter radius refused beyond 8; their settings

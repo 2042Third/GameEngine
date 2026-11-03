@@ -5,6 +5,8 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 
@@ -100,11 +102,26 @@ namespace Strata
 			glm::vec4 SunDiskDirection;
 			glm::vec4 SunDiskColor;
 			// x: 1 when the frame traced screen-space reflections (SRV 18 holds them); y: 1 when the frame's indirect light
-			// comes from the radiance cascades (SRV 35), z: their intensity (radiance-cascades); w: reflections'. y, z and w
-			// are written 0 until those streams use them.
+			// comes from the radiance cascades (SRV 35), z: their intensity (radiance-cascades); w: the alpha^2 the directional
+			// light's disk adds to its highlight's lobe (GetSunLobeAlpha2; 0 without a directional light). y and z are written 0
+			// until that stream uses them.
 			glm::vec4 ReflectionParams;
 		};
 		static_assert(sizeof(FrameConstants) == 8 * 64 + 26 * 16);
+
+		// The alpha^2 the forward pass adds to a directional light's specular lobe for its disk (ReflectionParams.w): a disk of
+		// angular diameter `degrees` spans the half maximum of a GGX lobe of alpha tan(radius) / c_LobeHalfMaximum (the reflected
+		// angle per alpha at which GGX falls to half its peak: 2 sqrt(sqrt(2) - 1)), less what the shading's smallest roughness
+		// spreads already (Include/PBR.slang's c_MinRoughness^4), so that a mirror shows the disk at its size. Clamped to the
+		// property's 0 to 10 degrees (DirectionalLightComponent::ShadowSoftness, shown as Angular Diameter).
+		inline float GetSunLobeAlpha2(float degrees)
+		{
+			constexpr float c_LobeHalfMaximum = 1.2871885f;
+			constexpr float c_MinAlpha = 0.045f * 0.045f; // PBR.slang's c_MinRoughness, squared
+			const float radius = glm::radians(std::isfinite(degrees) ? std::clamp(degrees, 0.0f, 10.0f) : 0.0f) * 0.5f;
+			const float alpha = std::tan(radius) / c_LobeHalfMaximum;
+			return std::max(alpha * alpha - c_MinAlpha * c_MinAlpha, 0.0f);
+		}
 
 		// A directional shadow cascade as shaders read it (u_Cascades, Include/Scene.slang): written on the GPU by
 		// Scene/CascadeFit.comp, which fits its depth range to the casters (CascadeFitConstants).

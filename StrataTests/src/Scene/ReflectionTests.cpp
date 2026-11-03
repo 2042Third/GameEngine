@@ -186,8 +186,16 @@ TEST_SUITE("Reflection")
 		CHECK(DirectionalLightComponent::c_MaxCascadeBlend == 0.5f);
 		DirectionalLightComponent sun;
 		CHECK(sun.CascadeBlend == doctest::Approx(0.1f));
-		// The sun's angular diameter by default (degrees).
+		// The sun's angular diameter by default (degrees), stored as ShadowSoftness and shown by what it sizes now (the penumbra and
+		// the highlight), among the light's own properties, within [0, 10].
 		CHECK(sun.ShadowSoftness == doctest::Approx(0.53f));
+		const PropertyInfo* diameter = ComponentRegistry::Find<DirectionalLightComponent>()->FindProperty("ShadowSoftness");
+		REQUIRE(diameter);
+		CHECK(diameter->DisplayName == "Angular Diameter");
+		CHECK(diameter->Section == "Light");
+		CHECK(diameter->Min == 0.0f);
+		CHECK(diameter->Max == 10.0f);
+		CHECK(diameter->Tooltip.find("highlight") != std::string::npos);
 		CHECK(blend->IsInRange(PropertyValue(0.0f)));
 		CHECK(blend->IsInRange(PropertyValue(0.5f)));
 		CHECK_FALSE(blend->IsInRange(PropertyValue(0.6f)));
@@ -488,10 +496,10 @@ TEST_SUITE("Scene.InactiveProperties")
 		CHECK(reason("DirectionalLight", "CascadeBlend").empty());
 		CHECK(reason("DirectionalLight", "ShadowBias").empty());
 		sun.CastShadows = false;
-		for (const char* property : { "ShadowDistance", "ShadowSoftness", "ShadowBias", "ShadowNormalBias", "CascadeBlend", "ContactShadowLength",
-			"CascadeDistribution" })
+		for (const char* property : { "ShadowDistance", "ShadowBias", "ShadowNormalBias", "CascadeBlend", "ContactShadowLength", "CascadeDistribution" })
 			CHECK_MESSAGE(reason("DirectionalLight", property) == "Cast Shadows is off", property);
 		CHECK(reason("DirectionalLight", "Intensity").empty()); // Always active
+		CHECK(reason("DirectionalLight", "ShadowSoftness").empty()); // The disk's size sizes its highlight too
 
 		// Point and spot lights' shadow settings while they cast none (by default).
 		PointLightComponent& lamp = entity.AddComponent<PointLightComponent>();

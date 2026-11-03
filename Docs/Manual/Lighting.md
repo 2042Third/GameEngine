@@ -11,7 +11,11 @@ Strata's lights use the units of real light, on one scale, so values taken from 
 reference work as they are. Hover a light's **Intensity** in the Inspector to see its unit.
 
 - A **Directional Light** is the sun or the moon: it lights the whole scene from one direction (the entity's forward
-  axis). Its **Intensity** is illuminance in **lux**: how much light falls on a surface facing it.
+  axis). Its **Intensity** is illuminance in **lux**: how much light falls on a surface facing it. Its **Angular
+  Diameter** is the size of its disk in degrees (the sun 0.53, the default; the Overcast preset's soft sun 10): it softens
+  its shadows (see Shadows) and sizes its highlight on smooth surfaces, so a mirror or a wet road shows the sun's disk at its
+  size and an overcast sun gives a soft glow instead of a pin dot, the same light spread wider. 0 is a point: the smallest
+  highlight. Saved scenes and scripts name it `ShadowSoftness`.
 - A **Point Light** shines in every direction from its position, a **Spot Light** in a cone. Their **Intensity** is
   luminous intensity in **candela** (cd): how bright the light looks from one direction. A lamp sold as P lumens has
   P / 12.57 cd as a point light (an 800 lumen bulb is about 64 cd). A spot light's candela is the brightness along its
@@ -119,8 +123,8 @@ follow. Something passing close to the camera, such as a thrown ball, leaves the
 them once, after half a second. **Cascade Distribution** (0 to 1, 0.9 by default) decides how the cascades share those distances: 0 evenly, 1 each
 cascade the same ratio farther than the previous one; higher puts more of the detail near the camera.
 
-**Shadow Softness** is the light's apparent size in degrees: 0.53 is the sun's (the default; scenes saved with another
-value keep it). Shadows are sharp where an object touches the ground and soften with the distance from their caster as a
+**Angular Diameter** is the light's apparent size in degrees: 0.53 is the sun's (the default; scenes saved with another
+value keep it). It sizes the sun's highlight too (see Lights and their units). Shadows are sharp where an object touches the ground and soften with the distance from their caster as a
 real sun's do: a 0.53 degree sun blurs an edge from 10% to 90% of its light over about 0.64 cm per metre between the
 caster and the ground (a pole's shadow 4 m away has a 2.5 cm soft edge), 2 degrees over about 2.4 cm per metre (a hazy
 sun), 0 is a point light's hard edge. The soft edges are the same in every frame, with or without anti-aliasing: nothing
@@ -149,7 +153,7 @@ The project's **Graphics Quality** (Project Settings, [Graphics.md](Graphics.md)
 | Shadow Filter Quality (taps of the wide soft edges) | 8 | 16 | 24 | 32 |
 | Contact Shadows (steps; off in every preset) | off | off | off | off |
 
-More filter taps only matter where soft edges are wider than a shadow texel (a large Shadow Softness, tall casters): they
+More filter taps only matter where soft edges are wider than a shadow texel (a large Angular Diameter, tall casters): they
 cost a little more there and leave less grain for the screen-space blur to remove. Contact shadows, when Custom turns them
 on, cost a march of their
 steps for each lit pixel nearer than the shadow distance (about 0.2-0.3 ms at 3840x2160 on a current GPU).

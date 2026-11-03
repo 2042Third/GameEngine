@@ -9,6 +9,13 @@
 
 static const float c_MinRoughness = 0.045; // Avoids aliasing and division issues on mirror-like surfaces
 
+// Highlights of sized sources: a source of angular radius theta spans the half maximum of a GGX lobe of alpha
+// tan(theta) / 2 sqrt(sqrt(2) - 1) (the reflected angle per alpha where GGX falls to half), and the lobes of the surface and the
+// source combine about as variances add, so a sized source adds that alpha^2 (less what c_MinRoughness spreads already, so a
+// mirror shows the source at its size) to the distribution's. The distribution stays normalized: a larger source widens the
+// highlight and lowers its peak without brightening it. The sun's disk: RenderData::GetSunLobeAlpha2
+// (FrameConstants::ReflectionParams.w).
+
 float DistributionGGX(float NoH, float alpha)
 {
 	float alpha2 = alpha * alpha;
@@ -94,10 +101,17 @@ struct SurfaceData
 	float3 SpecularEnergy; // GetSpecularEnergy at the surface's NoV and roughness: multiplies its specular light
 };
 
+// The lobe's alpha for the distribution under a source that adds `sourceAlpha2` (0: a point, the surface's own alpha bit for
+// bit). Only the distribution widens: masking and shadowing belong to the microsurface, not to the source.
+float GetLobeAlpha(float alpha, float sourceAlpha2)
+{
+	return sourceAlpha2 > 0.0 ? sqrt(alpha * alpha + sourceAlpha2) : alpha;
+}
+
 // EvaluateLight with its diffuse part weighted by `diffuseWeight` (a transmissive surface passes the rest of the light its
 // diffuse part would scatter through itself: Scene/Forward.frag's glass) and its specular part by `specularWeight` (0 in a
-// reflection probe's capture).
-float3 EvaluateLightWeighted(SurfaceData surface, float3 lightDirection, float3 radiance, float diffuseWeight, float specularWeight)
+// reflection probe's capture); `sourceAlpha2` widens the highlight for the source's size (0: a point).
+float3 EvaluateLightWeighted(SurfaceData surface, float3 lightDirection, float3 radiance, float diffuseWeight, float specularWeight, float sourceAlpha2)
 {
 	float3 H = normalize(surface.View + lightDirection);
 	float NoL = clamp(dot(surface.Normal, lightDirection), 0.0, 1.0);
@@ -112,7 +126,7 @@ float3 EvaluateLightWeighted(SurfaceData surface, float3 lightDirection, float3 
 	float3 f0 = lerp(float3(0.04), surface.Albedo, surface.Metallic);
 
 	float3 F = FresnelSchlick(f0, VoH);
-	float3 specular = DistributionGGX(NoH, alpha) * VisibilitySmithGGXCorrelated(NoV, NoL, alpha) * F * surface.SpecularEnergy;
+	float3 specular = DistributionGGX(NoH, GetLobeAlpha(alpha, sourceAlpha2)) * VisibilitySmithGGXCorrelated(NoV, NoL, alpha) * F * surface.SpecularEnergy;
 	// Diffuse keeps 1 - F: the compensated light leaves a dielectric's specular under 0.5% brighter, below what the diffuse
 	// lobe's approximation already is off by.
 	float3 diffuse = (1.0 - F) * (1.0 - surface.Metallic) * surface.Albedo * INV_PI * diffuseWeight;
@@ -120,10 +134,10 @@ float3 EvaluateLightWeighted(SurfaceData surface, float3 lightDirection, float3 
 }
 
 // Radiance reflected toward the viewer from light arriving along `lightDirection` (surface to light) with the
-// given irradiance at normal incidence.
-float3 EvaluateLight(SurfaceData surface, float3 lightDirection, float3 radiance)
+// given irradiance at normal incidence, from a source that adds `sourceAlpha2` to the highlight's lobe (0: a point).
+float3 EvaluateLight(SurfaceData surface, float3 lightDirection, float3 radiance, float sourceAlpha2)
 {
-	return EvaluateLightWeighted(surface, lightDirection, radiance, 1.0, 1.0);
+	return EvaluateLightWeighted(surface, lightDirection, radiance, 1.0, 1.0, sourceAlpha2);
 }
 
 // A clear coat over a surface (MaterialProperties::Clearcoat): a dielectric layer of index 1.5 (reflecting 4% at normal
@@ -146,8 +160,9 @@ float ClearcoatFresnel(ClearcoatData coat, float cosine)
 }
 
 // Radiance the coat reflects toward the viewer (`view`, surface to camera) from light arriving along `lightDirection`; with
-// `baseWeight` what of that light passes the coat to the base (1 - the coat's Fresnel at the half vector).
-float3 EvaluateClearcoat(ClearcoatData coat, float3 view, float3 lightDirection, float3 radiance, out float baseWeight)
+// `baseWeight` what of that light passes the coat to the base (1 - the coat's Fresnel at the half vector). `sourceAlpha2` widens
+// the coat's highlight for the source's size, as EvaluateLightWeighted's.
+float3 EvaluateClearcoat(ClearcoatData coat, float3 view, float3 lightDirection, float3 radiance, float sourceAlpha2, out float baseWeight)
 {
 	float3 H = normalize(view + lightDirection);
 	float fresnel = ClearcoatFresnel(coat, dot(view, H));
@@ -159,7 +174,7 @@ float3 EvaluateClearcoat(ClearcoatData coat, float3 view, float3 lightDirection,
 	float NoH = clamp(dot(coat.Normal, H), 0.0, 1.0);
 	float roughness = max(coat.Roughness, c_MinRoughness);
 	float alpha = roughness * roughness;
-	return DistributionGGX(NoH, alpha) * VisibilitySmithGGXCorrelated(NoV, NoL, alpha) * fresnel * coat.SpecularEnergy * radiance * NoL;
+	return DistributionGGX(NoH, GetLobeAlpha(alpha, sourceAlpha2)) * VisibilitySmithGGXCorrelated(NoV, NoL, alpha) * fresnel * coat.SpecularEnergy * radiance * NoL;
 }
 
 // Smooth distance falloff for punctual lights: inverse square, windowed to reach zero at the range.

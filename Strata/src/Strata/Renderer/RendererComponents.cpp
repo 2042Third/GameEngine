@@ -91,6 +91,13 @@ namespace Strata
 			return light.CastShadows ? std::string() : "Cast Shadows is off";
 		}
 
+		// The options shown under another name than the stored one's.
+		PropertyOptions Named(PropertyOptions options, std::string displayName)
+		{
+			options.DisplayName = std::move(displayName);
+			return options;
+		}
+
 		// The shadow settings of point and spot lights (their units: texels of the light's shadow tiles, which follow how large
 		// the light looks on screen).
 		constexpr const char* c_LocalShadowBiasTooltip = "Depth offset toward the light, in texels of the light's shadow tiles: raise it if lit "
@@ -272,14 +279,16 @@ namespace Strata
 			.Property("Intensity", &DirectionalLightComponent::Intensity,
 				WithTooltip(Range(0.0f, c_Unbounded, 0.05f), "Illuminance in lux on a surface facing the light, times Color: direct sun about 100,000, an "
 					"overcast day 1,000 to 10,000, a full moon 0.25"))
+			// Stored as ShadowSoftness (scenes, scripts, schemas): it sized only the penumbra before it sized the highlight too.
+			.Property("ShadowSoftness", &DirectionalLightComponent::ShadowSoftness, Named(WithTooltip(Range(0.0f, 10.0f, 0.01f), "Angular diameter of "
+				"the light's disk in degrees (the sun: about 0.53; an overcast sky's soft sun up to 10): its shadows' penumbra widens with the "
+				"distance from the caster, and its highlight on smooth surfaces takes the disk's size. 0: the hardest shadow the filter allows and "
+				"a point-like highlight"), "Angular Diameter"))
 			.Section("Shadows")
 			.Property("CastShadows", &DirectionalLightComponent::CastShadows, WithTooltip({}, "Whether the light casts shadows: cascaded shadow maps out "
 				"to Shadow Distance, their resolution and number set by Project Settings > Graphics Quality"))
 			.Property("ShadowDistance", &DirectionalLightComponent::ShadowDistance, WithTooltip(Range(1.0f, 10000.0f, 1.0f), "Meters from the camera the "
 				"shadows reach; the last cascade fades out before it. Shorter spends the same shadow-map texels on less ground: sharper near shadows"))
-			.Property("ShadowSoftness", &DirectionalLightComponent::ShadowSoftness, WithTooltip(Range(0.0f, 10.0f, 0.01f), "Angular diameter of the "
-				"light's disk in degrees (the sun: about 0.53): the penumbra widens with the distance from the caster. 0: the hardest shadow the "
-				"filter allows"))
 			.Property("ShadowBias", &DirectionalLightComponent::ShadowBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), "Depth offset toward the light in "
 				"shadow-map texels: raise it against shadow acne (stripes on lit surfaces), lower it when shadows detach from their casters"))
 			.Property("ShadowNormalBias", &DirectionalLightComponent::ShadowNormalBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), "Offset of the lookup "
@@ -294,7 +303,7 @@ namespace Strata
 			.Property("CascadeDistribution", &DirectionalLightComponent::CascadeDistribution,
 				WithTooltip(Slider(0.0f, 1.0f), "How the cascades share the distance from the nearest to the farthest surface the camera sees: "
 					"0 evenly, 1 each cascade the same ratio farther than the previous. Higher puts more detail near the camera"));
-		SetInactiveReasons<DirectionalLightComponent>({ "ShadowDistance", "ShadowSoftness", "ShadowBias", "ShadowNormalBias", "CascadeBlend", "ContactShadowLength",
+		SetInactiveReasons<DirectionalLightComponent>({ "ShadowDistance", "ShadowBias", "ShadowNormalBias", "CascadeBlend", "ContactShadowLength",
 			"CascadeDistribution" }, &WithShadows<DirectionalLightComponent>);
 
 		ComponentRegistry::Register<PointLightComponent>("PointLight")
