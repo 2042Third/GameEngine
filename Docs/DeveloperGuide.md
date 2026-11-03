@@ -4771,19 +4771,20 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   times the base color map's mean, the emission times the emissive map's mean, `Texture::GetLinearMean` of the map's
   smallest level), so no compute pass reads bindless textures and streaming never changes a voxel. Submeshes past the
   256th are left out (`UnvoxelizedSubmeshes`).
-- **Voxelization** (`GPU.RadianceCascades`, `Include/Voxelize.slang`; per batch: the scratch cleared, `GI/VoxelTriangles`,
-  `VoxelTiles` dispatched indirectly, `VoxelFill`, `VoxelFinalize`, with explicit UAV barriers between them): one thread
-  per triangle transforms its corners through the instance's world rows relative to the anchor (`precise`, as
-  `GlobalIllumination::GetVoxelCoordinate` on the CPU) and writes the voxels Akenine-Moller's test says it overlaps
-  (touching counts) into the scratch with buffer atomics only: the key by `InterlockedMax` (opaque over alpha-masked,
-  then the larger color code), the unit normal times 256 by `InterlockedAdd` (none for double-sided materials), the
-  emission by `InterlockedMax` and its coverage by `InterlockedAdd`. The scratch is independent of the order threads run
-  in, and of how the windows are cut into regions (a triangle's size and coverage follow its whole bounds). A triangle
-  whose bounds hold more than 64 voxels lists the 8^3 tiles of its region it overlaps for
-  `VoxelTiles` (64 threads a tile; a 220 m road triangle would keep one thread busy for milliseconds); when the list
-  (32,768 tiles) is full it walks its tiles itself and counts `GITileOverflow`. Glowing voxels add their small
-  triangles' share of the face (area over the voxels touched in one layer), so a glowing surface's voxels in a layer sum
-  to its area wherever it lies on the grid; the voxel's emission is the brightest triangle's times that share, at most 1.
+- **Voxelization** (`GPU.RadianceCascades`, `Include/Voxelize.slang`; per batch: the scratch cleared,
+  `GI/VoxelTriangles`, `VoxelTiles` dispatched indirectly, `VoxelFill`, `VoxelFinalize`, with explicit UAV barriers
+  between them): one thread per triangle transforms its corners through the instance's world rows relative to the anchor
+  (`precise`, as `GlobalIllumination::GetVoxelCoordinate` on the CPU) and writes the voxels Akenine-Moller's test says
+  it overlaps (touching counts) into the scratch with buffer atomics only: the key by `InterlockedMax` (opaque over
+  alpha-masked, then the larger color code), the unit normal times 256 by `InterlockedAdd` (none for double-sided
+  materials), the emission by `InterlockedMax` and its coverage by `InterlockedAdd`. The scratch is independent of the
+  order threads run in, and of how the windows are cut into regions (a triangle's size and coverage follow its whole
+  bounds). A triangle whose whole bounds hold more than 64 voxels (each axis tested first: a 130 m triangle's product
+  passes 2^31) lists the 8^3 tiles of its region it overlaps for `VoxelTiles` (64 threads a tile; a 220 m road triangle
+  would keep one thread busy for milliseconds); when the list (32,768 tiles) is full it walks its tiles itself and
+  counts `GITileOverflow`. Glowing voxels add their small triangles' share of the face (area over the voxels touched in
+  one layer), so a glowing surface's voxels in a layer sum to its area wherever it lies on the grid; the voxel's
+  emission is the brightest triangle's times that share, at most 1.
 - **Closed meshes and the fill** (`MeshUtils::IsClosed`, `Mesh::IsClosed`): positions welded by exact equality, every
   directed edge of the full-detail levels meets exactly one opposite edge. A closed mesh whose every submesh is opaque as
   drawn adds winding steps along +y columns (+1 entering, -1 leaving, at the first voxel whose center is above the

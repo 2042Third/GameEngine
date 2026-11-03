@@ -124,7 +124,9 @@ void main(uint3 groupID : SV_GroupID, uint localIndex : SV_GroupIndex)
 		return;
 	int3 fullCount = fullHigh - fullLow + 1;
 	uint emission = any(triangle.Emission > float3(0.0, 0.0, 0.0)) ? PackRGB9E5(triangle.Emission) : 0u;
-	if (fullCount.x * fullCount.y * fullCount.z <= ST_GI_SMALL_TRIANGLE_VOXELS)
+	// Each axis first: the product of a large triangle's counts (1,300 voxels an axis, 130 m at level 0) passes 2^31.
+	if (all(fullCount <= int3(ST_GI_SMALL_TRIANGLE_VOXELS, ST_GI_SMALL_TRIANGLE_VOXELS, ST_GI_SMALL_TRIANGLE_VOXELS))
+		&& fullCount.x * fullCount.y * fullCount.z <= ST_GI_SMALL_TRIANGLE_VOXELS)
 	{
 		uint coverage = emission != 0u ? uint(round(GetEmissionCoverage(triangle, fullLow, fullHigh) * ST_GI_COVERAGE_FIXED_POINT)) : 0u;
 		for (int z = low.z; z <= high.z; z++)

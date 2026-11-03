@@ -684,7 +684,7 @@ namespace Strata
 		constexpr uint32_t c_GIMaxTriangleGroups = 65536;          // Groups of c_GIGroupTriangles triangles a frame (VoxelBatch)
 		constexpr uint32_t c_GIGroupTriangles = 64;
 		constexpr uint32_t c_GIMaxRegions = 4096;                  // Regions a frame
-		constexpr uint32_t c_GISmallTriangleVoxels = 64; // A triangle whose bounds within its region hold more voxels goes to tiles
+		constexpr uint32_t c_GISmallTriangleVoxels = 64; // A triangle whose whole bounds hold more voxels goes to tiles
 		constexpr uint32_t c_GITileVoxels = 8;           // A tile is 8^3 voxels, a group of 64 threads with 8 voxels each
 		constexpr uint32_t c_GIMaxTiles = 32768;         // Tiles per batch; beyond them a triangle walks its tiles itself (counted)
 		constexpr uint32_t c_GIMovingFrames = 30;        // A proxy placed anew within this many frames is moving: left out of the voxels

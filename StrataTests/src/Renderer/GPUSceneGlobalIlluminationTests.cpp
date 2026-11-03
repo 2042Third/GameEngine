@@ -211,6 +211,74 @@ namespace
 
 }
 
+	// The CPU's count of the tiles the voxelizer lists for a mesh when it voxelizes every level's whole window: per level, per
+	// region of its window, the 8^3 tiles of each large triangle's bounds within the region that the triangle overlaps. A triangle is
+	// large when its whole bounds (not the region's part) hold more than 64 voxels.
+	uint64_t CountListedTiles(const Mesh& mesh, const glm::mat4& world, const VoxelClipmap& clipmap)
+	{
+		const RenderData::AffineTransform rows = RenderData::AffineTransform::FromMatrix(world);
+		const std::vector<glm::vec3>& positions = mesh.GetPositions();
+		const std::vector<uint32_t>& indices = mesh.GetIndices();
+		uint64_t tiles = 0;
+		for (uint32_t level = 0; level < clipmap.GetLayout().Levels.size(); level++)
+		{
+			const VoxelLevelLayout& layout = clipmap.GetLayout().Levels[level];
+			const glm::i64vec3 anchor = clipmap.GetLevel(level).Anchor;
+			const glm::vec3 anchorPosition = glm::vec3(glm::dvec3(anchor) * static_cast<double>(layout.VoxelSize));
+			std::vector<VoxelBox> regions;
+			GlobalIllumination::SplitRegion(GlobalIllumination::GetWindow(layout, clipmap.GetLevel(level).Window), layout.Dimensions, regions);
+			for (size_t triangle = 0; triangle + 2 < indices.size(); triangle += 3)
+			{
+				glm::vec3 corners[3];
+				for (int corner = 0; corner < 3; corner++)
+					corners[corner] = GlobalIllumination::GetVoxelCoordinate(rows, positions[indices[triangle + corner]], anchorPosition, layout.VoxelSize);
+				const glm::ivec3 first = glm::ivec3(glm::ceil(glm::min(glm::min(corners[0], corners[1]), corners[2]))) - 1;
+				const glm::ivec3 last = glm::ivec3(glm::floor(glm::max(glm::max(corners[0], corners[1]), corners[2])));
+				const glm::i64vec3 fullCount = glm::i64vec3(last - first) + int64_t(1);
+				if (fullCount.x * fullCount.y * fullCount.z <= 64)
+					continue;
+				for (const VoxelBox& region : regions)
+				{
+					const glm::ivec3 minimum = glm::ivec3(region.Minimum - anchor);
+					const glm::ivec3 maximum = glm::ivec3(region.Maximum - anchor);
+					const glm::ivec3 low = glm::max(first, minimum);
+					const glm::ivec3 high = glm::min(last, maximum - 1);
+					if (glm::any(glm::lessThan(high, low)))
+						continue;
+					const glm::ivec3 firstTile = (low - minimum) / 8;
+					const glm::ivec3 lastTile = (high - minimum) / 8;
+					for (int z = firstTile.z; z <= lastTile.z; z++)
+					{
+						for (int y = firstTile.y; y <= lastTile.y; y++)
+						{
+							for (int x = firstTile.x; x <= lastTile.x; x++)
+							{
+								const glm::vec3 center = glm::vec3(minimum + glm::ivec3(x, y, z) * 8) + 4.0f;
+								tiles += TriangleBoxOverlap(center, glm::vec3(4.0f), corners[0], corners[1], corners[2]) ? 1 : 0;
+							}
+						}
+					}
+				}
+			}
+		}
+		return tiles;
+	}
+
+	// Renders until the scene's mesh is uploaded and its proxy resident, then the frame that voxelizes it all (no budget) and
+	// reads that frame's GI counters.
+	SceneRendererGPUStats VoxelizeAllAtOnce(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera)
+	{
+		for (uint32_t frame = 0; frame < 100 && (frame < 2 || renderer.GetStats().PendingAssets > 0 || renderer.GetStats().DeferredProxies > 0); frame++)
+			REQUIRE(renderer.Render(scene, camera, nullptr, SceneRenderOptions {}));
+		REQUIRE(renderer.Render(scene, camera, nullptr, VoxelView()));
+		CHECK(renderer.GetStats().GlobalIlluminationSettled);
+		renderer.ResolveGPUStats(true);
+		const SceneRendererGPUStats& counts = renderer.GetGPUStats();
+		REQUIRE(counts.HasGICounters);
+		REQUIRE(counts.GICountersRender == renderer.GetRenderCount());
+		return counts;
+	}
+
 TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 {
 	TEST_CASE("A box voxelizes to its cells")
@@ -464,65 +532,12 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		MaterialProperties ground;
 		AddMesh(scene, assets.Add(quad, "Road"), assets.AddMaterial(ground), glm::vec3(3.0f, 0.37f, -5.0f), "Road");
 		const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.7f, 0.0f), glm::vec3(0.0f, 0.4f, 10.0f), c_Aspect);
-		// The mesh is uploaded and its proxy resident before the frame that voxelizes it all (the GI's counters of that frame).
+		// The GI's counters of the frame that voxelizes it all: the tiles the CPU counts (both triangles are large in every level).
 		Scope<SceneRenderer> renderer = CreateVoxelRenderer();
-		for (uint32_t frame = 0; frame < 100 && (frame < 2 || renderer->GetStats().PendingAssets > 0 || renderer->GetStats().DeferredProxies > 0); frame++)
-			REQUIRE(renderer->Render(scene, camera, nullptr, SceneRenderOptions {}));
-		REQUIRE(renderer->Render(scene, camera, nullptr, VoxelView()));
-		CHECK(renderer->GetStats().GlobalIlluminationSettled);
-		renderer->ResolveGPUStats(true);
-		const SceneRendererGPUStats& counts = renderer->GetGPUStats();
-		REQUIRE(counts.HasGICounters);
-		REQUIRE(counts.GICountersRender == renderer->GetRenderCount());
-		// The CPU's count of the tiles the voxelizer lists: per level, per region of its window, the 8^3 tiles of each triangle's
-		// bounds within the region that the triangle overlaps (both triangles are large in every region).
+		const SceneRendererGPUStats counts = VoxelizeAllAtOnce(*renderer, scene, camera);
 		const VoxelClipmap& clipmap = *renderer->GetVoxelClipmap();
-		const glm::mat4 world = glm::translate(glm::mat4(1.0f), glm::vec3(3.0f, 0.37f, -5.0f)) * glm::scale(glm::mat4(1.0f), glm::vec3(1.0f));
-		const RenderData::AffineTransform rows = RenderData::AffineTransform::FromMatrix(world);
-		uint64_t expected = 0;
-		for (uint32_t level = 0; level < clipmap.GetLayout().Levels.size(); level++)
-		{
-			const VoxelLevelLayout& layout = clipmap.GetLayout().Levels[level];
-			const glm::i64vec3 anchor = clipmap.GetLevel(level).Anchor;
-			const glm::vec3 anchorPosition = glm::vec3(glm::dvec3(anchor) * static_cast<double>(layout.VoxelSize));
-			std::vector<VoxelBox> regions;
-			GlobalIllumination::SplitRegion(GlobalIllumination::GetWindow(layout, clipmap.GetLevel(level).Window), layout.Dimensions, regions);
-			const std::vector<glm::vec3>& positions = quad->GetPositions();
-			const std::vector<uint32_t>& indices = quad->GetIndices();
-			for (size_t triangle = 0; triangle < indices.size(); triangle += 3)
-			{
-				glm::vec3 corners[3];
-				for (int corner = 0; corner < 3; corner++)
-					corners[corner] = GlobalIllumination::GetVoxelCoordinate(rows, positions[indices[triangle + corner]], anchorPosition, layout.VoxelSize);
-				const glm::ivec3 first = glm::ivec3(glm::ceil(glm::min(glm::min(corners[0], corners[1]), corners[2]))) - 1;
-				const glm::ivec3 last = glm::ivec3(glm::floor(glm::max(glm::max(corners[0], corners[1]), corners[2])));
-				for (const VoxelBox& region : regions)
-				{
-					const glm::ivec3 minimum = glm::ivec3(region.Minimum - anchor);
-					const glm::ivec3 maximum = glm::ivec3(region.Maximum - anchor);
-					const glm::ivec3 low = glm::max(first, minimum);
-					const glm::ivec3 high = glm::min(last, maximum - 1);
-					if (glm::any(glm::lessThan(high, low)))
-						continue;
-					const glm::ivec3 count = high - low + 1;
-					REQUIRE(count.x * count.y * count.z > 64);
-					const glm::ivec3 firstTile = (low - minimum) / 8;
-					const glm::ivec3 lastTile = (high - minimum) / 8;
-					for (int z = firstTile.z; z <= lastTile.z; z++)
-					{
-						for (int y = firstTile.y; y <= lastTile.y; y++)
-						{
-							for (int x = firstTile.x; x <= lastTile.x; x++)
-							{
-								const glm::vec3 center = glm::vec3(minimum + glm::ivec3(x, y, z) * 8) + 4.0f;
-								expected += TriangleBoxOverlap(center, glm::vec3(4.0f), corners[0], corners[1], corners[2]) ? 1 : 0;
-							}
-						}
-					}
-				}
-			}
-		}
-		CHECK(counts.GITiles == expected);
+		const glm::mat4 world = glm::translate(glm::mat4(1.0f), glm::vec3(3.0f, 0.37f, -5.0f));
+		CHECK(counts.GITiles == CountListedTiles(*quad, world, clipmap));
 		CHECK(counts.GITileOverflow == 0);
 		if (counts.HasTimes)
 		{
@@ -624,6 +639,33 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 
 	TEST_CASE("A jump rebuilds in its frame, and the budget spreads a rebuild")
 	{
+	TEST_CASE("A 145 m oblique triangle takes the tile path")
+	{
+		// A triangle 145 m across on all three axes (1,450 voxels an axis at level 0, whose product passes 2^31) through the windows:
+		// large in every level, so the voxelizer lists its tiles everywhere, as the CPU counts them.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		const std::vector<glm::vec3> positions = { { 72.5f, -72.5f, 0.0f }, { 0.0f, 72.5f, -72.5f }, { -72.5f, 0.0f, 72.5f } };
+		Submesh submesh;
+		submesh.VertexCount = 3;
+		submesh.LODs = { MeshLOD { 0, 3 } };
+		const Ref<Mesh> slope = Mesh::Create(positions, std::vector<MeshVertexAttributes>(3), { 0, 1, 2 }, { submesh });
+		REQUIRE(slope);
+		MaterialProperties ground;
+		const glm::vec3 position(1.0f, 1.0f, 5.0f);
+		AddMesh(scene, assets.Add(slope, "Slope"), assets.AddMaterial(ground), position, "Slope");
+		Scope<SceneRenderer> renderer = CreateVoxelRenderer();
+		const SceneRendererGPUStats counts = VoxelizeAllAtOnce(*renderer, scene, LookAt(glm::vec3(0.0f, 1.7f, 0.0f), position, c_Aspect));
+		const uint64_t expected = CountListedTiles(*slope, glm::translate(glm::mat4(1.0f), position), *renderer->GetVoxelClipmap());
+		CHECK(expected > 0);
+		CHECK(counts.GITiles == expected);
+		CHECK(counts.GITileOverflow == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
