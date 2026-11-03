@@ -442,6 +442,17 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   ([Readback, the game renderer and tests](#readback-the-game-renderer-and-tests)); tests of whole-asset residency call
   `AssetManagerBase::SetPartialLoads(false)` ([Mip streaming](#mip-streaming)); tests of text with many distinct glyphs render
   until no glyph is pending ([Text and fonts](#text-and-fonts)).
+- Flicker in motion has one meter (`Renderer/FlickerMetrics.h`, suite `Renderer.FlickerMetrics`): a sequence's frames
+  are read back with their prepass depth and normals (`ReadFlickerFrame` the HDR target of a renderer with `HDROutput`,
+  `ReadDisplayFlickerFrame` the 8-bit output decoded from sRGB, as the person sees it after FXAA or TAA), and
+  `MeasureFlicker` reprojects every pixel of the newest of three frames by depth into the two before it. Where all four
+  texels of both earlier frames show the same surface (depth within 1% plus 1 cm, normals within 0.98), its second
+  difference `d = (c - 2b + a) / max(mean, 1e-3)` is measured: a steady drift (the view's real change) scores zero, a value
+  that alternates its amplitude. `Mean` and `P99` are of `|d|` per pixel, `Blocks` and `BlocksP99` of `|mean d|` per 32x32
+  block that has more than half of its pixels measured, all fractions (reports multiply by 100). `FlickerSequence` keeps
+  three frames and averages the triples from `firstFrame` on. A test measures one surface by setting `ViewDepth` to 0
+  elsewhere (`MaskFlickerFrame`). Blocks catch regions that pump; a screen-locked pattern sliding under moving content
+  averages out within a block, so the per-pixel `Mean` is what shows a crawl.
 
 ### Perf tests
 
@@ -687,6 +698,21 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     `Warm.cube`).
   - A shot with `DebugView` captures that debug view of `viewport.capture` (the lighting views' statistics land in its
     `stats/`); builds without it refuse the shot.
+  - A shot's `Metrics` (`[{"Name", "Kind", "Rect"}]`, normalized rectangles) are computed on its first repeat's PNG as
+    stored (8-bit, sRGB-encoded) into its `stats/` (`metrics`) and `metrics.csv` (shot, size, aa, name, kind, values), and
+    `compare` reports both sides' values and their differences (`compare.json`'s `metrics`, the page). `Noise`: with `Y`
+    the encoded Rec. 709 luma in [0, 1] and `M` its mean over the 9x9 window, over the pixels whose window lies inside the
+    rectangle, `noise` is 100 times the RMS of `Y - M`, and `pattern3` and `pattern4` are 100 times the RMS over the k x k
+    phases `(x mod k, y mod k)` of the image of the residual's mean on each phase (content averages out over phases, a
+    pattern locked to the screen does not: `pattern4` measures a 4x4 march's screen door). `Bands`: every fourth column,
+    the largest change of a channel between adjacent rows in codes (`maxStep`) and how many exceed 3 (`stepsOver3`). The
+    same noise in C++ for GPU tests is `Tests::MeasureNoise` (`Renderer/ReflectionMetrics.h`): change both.
+  - `Scenes/Specular.stscene` is the specular lab of the reflections' audit: a rough metal sheet (roughness 0.18) beside a
+    white box, a polished panel, a smooth and a rough metal tank, a roughness ladder and four IOR spheres, a wet plane (a
+    dark dielectric of roughness 0.06), six thin posts, four crates, three colored walls, two lanterns and a box-projected
+    probe (baked, then inactive: shots activate it), under the Clear preset's sun at 30 degrees. Its shots
+    (`lookdev.sheet`, `.sheet.angle`, `.wet`, `.wet.sunward`, `.tank`) measure the reflections' noise and pattern;
+    `Tests::SpecularLab` builds the same lab for the strafe test (`GPU.SceneRenderer.SSR`): change both.
   - Shots and look-dev content are appended, never changed, so that captures of every build keep comparing. GPU times
     are kept only from runs alone on the machine, under `python Tools/PerfLock.py --label lookdev-<label> --limit 90 -- ...`
     (a full run takes longer than the lock's default limit); the pictures are read and cropped on every core after the
@@ -694,7 +720,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   - `StrataTools.LookDev` (labels `gpu` and `tools`) runs `selftest` with the build's editor: the look-dev project from its
     command script, one shot at 320x180 with FXAA twice, every output checked (sizes, crops, stats with no pending asset,
     no difference between the repeats, the page, `compare` of the set with itself), and the offline checks: the PNG
-    reader and writer round trip, the signed difference and the per-mode summary. `selftest` without `--build` runs only
+    reader and writer round trip, the signed difference, the per-mode summary and the metrics on two synthetic images (a
+    4x4 ordered pattern, a ramp with one step). `selftest` without `--build` runs only
     the offline checks, which `StrataTools.LookDevOffline` (label `tools`, no GPU, no editor) runs on every CI job that
     runs `ctest -LE "gpu|perf"` (all but the Dist build). Both need Python
     3.10 or later found at configure time; without it the tests fail saying so.

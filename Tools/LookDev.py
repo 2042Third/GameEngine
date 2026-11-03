@@ -338,6 +338,117 @@ def summarize_modes(pictures):
 
 
 # ---------------------------------------------------------------------------------------------------------------------
+# Metrics: numbers of a shot's rectangles (its "Metrics"), on the 8-bit sRGB-encoded picture as stored. The same
+# definitions as StrataTests' MeasureNoise (Renderer/ReflectionMetrics.h): change both.
+
+METRIC_KINDS = ("Noise", "Bands")
+NOISE_RADIUS = 4  # The 9x9 window
+
+
+def metric_rect(image, rect):
+    """A normalized [x0, y0, x1, y1] in the picture's pixels (exclusive end)."""
+    x0, y0, x1, y1 = rect
+    return (int(x0 * image.width), int(y0 * image.height), int(x1 * image.width), int(y1 * image.height))
+
+
+def noise_metric(image, rect):
+    """Noise: 100 x the RMS of the encoded luma minus its 9x9 mean over the pixels whose window lies inside the rectangle;
+    pattern3 and pattern4: 100 x the RMS over the k x k phases of (x mod k, y mod k) of the residual's mean (content
+    averages out over phases, a screen-locked pattern does not)."""
+    x0, y0, x1, y1 = rect
+    width, height = x1 - x0, y1 - y0
+    result = {"noise": 0.0, "pattern3": 0.0, "pattern4": 0.0, "pixels": 0}
+    if width <= 2 * NOISE_RADIUS or height <= 2 * NOISE_RADIUS:
+        return result
+    channels = image.channels
+    luma = []
+    for y in range(y0, y1):
+        row = image.row(y)
+        luma.append([(0.2126 * row[x * channels] + 0.7152 * row[x * channels + 1] + 0.0722 * row[x * channels + 2]) / 255.0
+                     for x in range(x0, x1)])
+    table = [[0.0] * (width + 1) for _ in range(height + 1)]
+    for y in range(height):
+        running = 0.0
+        above, current, row = table[y], table[y + 1], luma[y]
+        for x in range(width):
+            running += row[x]
+            current[x + 1] = above[x + 1] + running
+    squares = 0.0
+    pixels = 0
+    sums = {3: [0.0] * 9, 4: [0.0] * 16}
+    counts = {3: [0] * 9, 4: [0] * 16}
+    window = (2 * NOISE_RADIUS + 1) ** 2
+    for y in range(NOISE_RADIUS, height - NOISE_RADIUS):
+        top, bottom, row = table[y - NOISE_RADIUS], table[y + NOISE_RADIUS + 1], luma[y]
+        row3 = ((y0 + y) % 3) * 3
+        row4 = ((y0 + y) % 4) * 4
+        for x in range(NOISE_RADIUS, width - NOISE_RADIUS):
+            left, right = x - NOISE_RADIUS, x + NOISE_RADIUS + 1
+            residual = row[x] - (bottom[right] - top[right] - bottom[left] + top[left]) / window
+            squares += residual * residual
+            pixels += 1
+            phase3 = row3 + (x0 + x) % 3
+            phase4 = row4 + (x0 + x) % 4
+            sums[3][phase3] += residual
+            counts[3][phase3] += 1
+            sums[4][phase4] += residual
+            counts[4][phase4] += 1
+
+    def pattern(period):
+        means = [total / count for total, count in zip(sums[period], counts[period]) if count]
+        return 100.0 * math.sqrt(sum(mean * mean for mean in means) / len(means)) if means else 0.0
+
+    result.update({"noise": 100.0 * math.sqrt(squares / pixels), "pattern3": pattern(3), "pattern4": pattern(4), "pixels": pixels})
+    return result
+
+
+def bands_metric(image, rect):
+    """Every fourth column of the rectangle: the largest change of any channel between adjacent rows in codes (maxStep),
+    how many changes exceed 3 codes (stepsOver3), and the columns read."""
+    x0, y0, x1, y1 = rect
+    channels = image.channels
+    largest = 0
+    over = 0
+    columns = list(range(x0, x1, 4))
+    rows = [image.row(y) for y in range(y0, y1)]
+    for x in columns:
+        start = x * channels
+        for upper, lower in zip(rows, rows[1:]):
+            step = max(abs(lower[start + channel] - upper[start + channel]) for channel in range(3))
+            largest = max(largest, step)
+            over += 1 if step > 3 else 0
+    return {"maxStep": largest, "stepsOver3": over, "columns": len(columns)}
+
+
+def compute_metrics(image, metrics):
+    """A shot's metrics on its picture: {name: {"kind", values...}}."""
+    results = {}
+    for metric in metrics:
+        rect = metric_rect(image, metric["Rect"])
+        if rect[2] <= rect[0] or rect[3] <= rect[1]:
+            continue
+        values = noise_metric(image, rect) if metric["Kind"] == "Noise" else bands_metric(image, rect)
+        results[metric["Name"]] = dict({"kind": metric["Kind"]}, **values)
+    return results
+
+
+METRIC_COLUMNS = ("noise", "pattern3", "pattern4", "pixels", "maxStep", "stepsOver3", "columns")
+
+
+def write_metrics_csv(output, rows):
+    """metrics.csv: shot, size, aa, name, kind, then the values (empty where a kind has none)."""
+    lines = [",".join(("shot", "size", "aa", "name", "kind") + METRIC_COLUMNS)]
+    for shot, size, mode, metrics in rows:
+        for name, values in sorted(metrics.items()):
+            cells = [shot, size, mode, name, values["kind"]]
+            for column in METRIC_COLUMNS:
+                value = values.get(column, "")
+                cells.append(f"{value:.4f}" if isinstance(value, float) else str(value))
+            lines.append(",".join(cells))
+    (Path(output) / "metrics.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------------------------------------------------
 # Shots and projects
 
 def load_json(path):
@@ -360,6 +471,11 @@ def load_shots():
                 raise ToolError(f"shot {shot['Name']} names an unknown anti-aliasing mode {mode}")
         if "DebugView" in shot and not isinstance(shot["DebugView"], str):
             raise ToolError(f"shot {shot['Name']}: DebugView must be a viewport.capture debugView name")
+        for metric in shot.get("Metrics", []):
+            rect = metric.get("Rect")
+            if metric.get("Kind") not in METRIC_KINDS or not isinstance(metric.get("Name"), str) or not (
+                    isinstance(rect, list) and len(rect) == 4 and all(isinstance(value, (int, float)) and 0 <= value <= 1 for value in rect)):
+                raise ToolError(f"shot {shot['Name']}: a metric needs a Name, a Kind ({', '.join(METRIC_KINDS)}) and a normalized Rect")
     return shots
 
 
@@ -613,14 +729,16 @@ def capture_live(editor, shot, size, output):
 
 
 def postprocess(task):
-    """Crops of a shot's first picture and the repeats' differences with it (run in worker processes)."""
-    first, repeats, crops, crop_dir, keep_repeats = task
-    outcome = {"selfDifference": [], "crops": []}
+    """Crops of a shot's first picture, its metrics and the repeats' differences with it (run in worker processes)."""
+    first, repeats, crops, crop_dir, keep_repeats, metrics = task
+    outcome = {"selfDifference": [], "crops": [], "metrics": {}}
     for repeat in repeats:
         numbers, _, _ = compare_files(first, repeat)
         outcome["selfDifference"].append(numbers["differingPixels"])
         if not keep_repeats:
             Path(repeat).unlink(missing_ok=True)
+    if metrics:
+        outcome["metrics"] = compute_metrics(read_png(first), metrics)
     if crops:
         image = read_png(first)
         for crop in crops:
@@ -684,8 +802,19 @@ def read_stages(path):
     return table
 
 
-def write_index(output, title, sections, header, rows):
-    """A static page: every picture with its crops, and the table of stage times."""
+def metric_table(metric_rows):
+    """The page's table of metrics: (title, header, rows), or None without metrics."""
+    if not metric_rows:
+        return None
+    rows = []
+    for shot, size, mode, metrics in metric_rows:
+        for name, values in sorted(metrics.items()):
+            rows.append([shot, size, mode, name, values["kind"]] + [values.get(column, "") for column in METRIC_COLUMNS])
+    return ("Metrics", ["shot", "size", "aa", "name", "kind"] + list(METRIC_COLUMNS), rows)
+
+
+def write_index(output, title, sections, header, rows, table=None):
+    """A static page: every picture with its crops, the table of stage times and an optional (title, header, rows)."""
     parts = [f"<!DOCTYPE html><html><head><meta charset='utf-8'><title>{html.escape(title)}</title>",
              "<style>body{font-family:sans-serif;background:#1d1f21;color:#ddd}img{max-width:960px;margin:2px}"
              "td,th{padding:2px 6px;border-bottom:1px solid #444;font-size:12px}h2{margin-top:2em}</style></head><body>",
@@ -698,6 +827,12 @@ def write_index(output, title, sections, header, rows):
     if header:
         parts.append("<h2>GPU stages (median ms)</h2><table><tr>" + "".join(f"<th>{html.escape(str(cell))}</th>" for cell in header) + "</tr>")
         for row in rows:
+            parts.append("<tr>" + "".join(f"<td>{html.escape(f'{cell:.3f}' if isinstance(cell, float) else str(cell))}</td>" for cell in row) + "</tr>")
+        parts.append("</table>")
+    if table:
+        table_title, table_header, table_rows = table
+        parts.append(f"<h2>{html.escape(table_title)}</h2><table><tr>" + "".join(f"<th>{html.escape(str(cell))}</th>" for cell in table_header) + "</tr>")
+        for row in table_rows:
             parts.append("<tr>" + "".join(f"<td>{html.escape(f'{cell:.3f}' if isinstance(cell, float) else str(cell))}</td>" for cell in row) + "</tr>")
         parts.append("</table>")
     parts.append("</body></html>")
@@ -808,7 +943,8 @@ def capture_command(args):
                                     name = shot_file_name(shot, size, mode)
                                     records.append({"shot": shot["Name"], "size": f"{size[0]}x{size[1]}", "mode": mode, "results": results, "name": name})
                                     postprocess_tasks.append((name, (results[0]["file"], [result["file"] for result in results[1:]],
-                                                                    shot.get("Crops", []), str(output / "crops"), args.keep_work)))
+                                                                    shot.get("Crops", []), str(output / "crops"), args.keep_work,
+                                                                    shot.get("Metrics", []))))
                     except ToolError as error:
                         outcome.update({"ok": False, "error": str(error)})
                         failed.append(shot["Name"])
@@ -826,16 +962,21 @@ def capture_command(args):
     with multiprocessing.Pool(max(1, min(len(postprocess_tasks), (os.cpu_count() or 2) - 1))) as pool:
         outcomes = pool.map(postprocess, [task for _, task in postprocess_tasks]) if postprocess_tasks else []
     images_by_shot = {}
+    metric_rows = []
     for record, (name, task), outcome in zip(records, postprocess_tasks, outcomes):
-        stats = {"repeats": record["results"], "selfDifference": outcome["selfDifference"]}
+        stats = {"repeats": record["results"], "selfDifference": outcome["selfDifference"], "metrics": outcome["metrics"]}
         (output / "stats" / f"{name}.json").write_text(json.dumps(stats, indent=1), encoding="utf-8")
+        if outcome["metrics"]:
+            metric_rows.append((record["shot"], record["size"], record["mode"], outcome["metrics"]))
         images_by_shot.setdefault(record["shot"], []).extend([task[0]] + outcome["crops"])
         if any(outcome["selfDifference"]):
             print(f"  {name}: repeats differ from the first by {outcome['selfDifference']} pixels", flush=True)
     for live in sorted((output / "shots").glob("*-live-*.png")):
         images_by_shot.setdefault(live.name.split("-")[0], []).append(str(live))
     header, rows = write_stages(output, records)
-    write_index(output, f"Look-dev capture {args.label or ''} ({run['version']})", sorted(images_by_shot.items()), header, rows)
+    write_metrics_csv(output, metric_rows)
+    write_index(output, f"Look-dev capture {args.label or ''} ({run['version']})", sorted(images_by_shot.items()), header, rows,
+                metric_table(metric_rows))
     run["failed"] = failed
     (output / "run.json").write_text(json.dumps(run, indent=1), encoding="utf-8")
     if not args.keep_work and not args.work:
@@ -883,6 +1024,24 @@ def crop_task(task):
     before, after, target = task
     write_png(target, side_by_side(read_png(before), read_png(after)))
     return target
+
+
+def compare_metrics(before, after, names):
+    """Both sides' metrics of every picture both have them for, and their differences: {picture: {name: {before, after,
+    difference}}}."""
+    compared = {}
+    for name in names:
+        stem = Path(name).stem
+        sides = []
+        for side in (before, after):
+            path = side / "stats" / f"{stem}.json"
+            sides.append(load_json(path).get("metrics", {}) if path.is_file() else {})
+        for metric in sorted(set(sides[0]) & set(sides[1])):
+            first, second = sides[0][metric], sides[1][metric]
+            difference = {column: round(second[column] - first[column], 6) for column in METRIC_COLUMNS
+                          if isinstance(first.get(column), (int, float)) and isinstance(second.get(column), (int, float))}
+            compared.setdefault(stem, {})[metric] = {"before": first, "after": second, "difference": difference}
+    return compared
 
 
 def compare_command(args):
@@ -936,8 +1095,9 @@ def compare_command(args):
             if denominator > 0:
                 ratios[key][column] = round(numerator / denominator, 4)
     summary = summarize_modes(pictures)
+    metrics = compare_metrics(before, after, sorted(before_shots & after_shots))
     report = {"before": str(before), "after": str(after), "missing": missing, "pictures": pictures, "summary": summary,
-              "gpuRatios": ratios}
+              "gpuRatios": ratios, "metrics": metrics}
     (output / "compare.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
     sections = []
     for name, numbers in sorted(pictures.items()):
@@ -950,7 +1110,15 @@ def compare_command(args):
         sections.append(("Crops, before | after", crops))
     header = ["picture", "gpuBusy after / before"]
     rows = [[key, ratio.get("gpuBusyMs", "")] for key, ratio in sorted(ratios.items())]
-    write_index(output, f"Look-dev compare: {before.name} -> {after.name}", sections, header, rows)
+    metric_rows = []
+    for picture, named in sorted(metrics.items()):
+        for name, sides in sorted(named.items()):
+            for column in METRIC_COLUMNS:
+                if column in sides["before"] or column in sides["after"]:
+                    metric_rows.append([picture, name, column, sides["before"].get(column, ""), sides["after"].get(column, ""),
+                                        sides["difference"].get(column, "")])
+    write_index(output, f"Look-dev compare: {before.name} -> {after.name}", sections, header, rows,
+                ("Metrics, before | after", ["picture", "name", "value", "before", "after", "after - before"], metric_rows) if metric_rows else None)
     differing = sum(1 for numbers in pictures.values() if numbers["differingPixels"])
     print(f"{len(pictures)} pictures compared, {differing} differ; {len(missing)} on one side only" + (f": {', '.join(missing)}" if missing else ""))
     for mode, numbers in summary.items():
@@ -1022,6 +1190,25 @@ def selftest_command(args):
     }
     if summarize_modes(pictures) != expected_summary:
         problems.append(f"the per-mode summary is {summarize_modes(pictures)}, not {expected_summary}")
+
+    # The metrics: a 4x4 ordered pattern of 8 codes on gray 128 is all pattern4 and no pattern3; a vertical ramp of a code a
+    # row with one step of 10 codes has that step in every column read.
+    order = (0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5)
+    patterned = Image(64, 64, 3)
+    ramp = Image(64, 64, 3)
+    for y in range(64):
+        for x in range(64):
+            value = 128 + round(8 * (2 * order[(y % 4) * 4 + x % 4] / 15 - 1))
+            patterned.data[(y * 64 + x) * 3:(y * 64 + x + 1) * 3] = bytes((value, value, value))
+            level = 50 + y + (9 if y >= 32 else 0)  # A code a row, and 10 from row 31 to 32
+            ramp.data[(y * 64 + x) * 3:(y * 64 + x + 1) * 3] = bytes((level, level, level))
+    noise = compute_metrics(patterned, [{"Name": "all", "Kind": "Noise", "Rect": [0, 0, 1, 1]}])["all"]
+    if not (noise["noise"] > 1 and abs(noise["pattern4"] - noise["noise"]) <= 0.05 * noise["noise"] and noise["pattern3"] < 0.2 * noise["noise"]
+            and noise["pixels"] == 56 * 56):
+        problems.append(f"the noise metric of a 4x4 pattern is {noise}")
+    bands = compute_metrics(ramp, [{"Name": "all", "Kind": "Bands", "Rect": [0, 0, 1, 1]}])["all"]
+    if bands != {"kind": "Bands", "maxStep": 10, "stepsOver3": 16, "columns": 16}:
+        problems.append(f"the bands metric of a ramp with one step is {bands}, not maxStep 10 in all 16 columns")
 
     if not args.build:
         for problem in problems:

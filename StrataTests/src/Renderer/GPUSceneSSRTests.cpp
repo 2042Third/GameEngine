@@ -1,9 +1,13 @@
+#include "Renderer/ReflectionMetrics.h"
 #include "Renderer/TAATestUtils.h"
+
+#include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -156,6 +160,90 @@ namespace
 		}
 		red.MeanX = red.Count > 0 ? (static_cast<float>(sumX / red.Count) + 0.5f) * scale - 0.5f : 0.0f;
 		return red;
+	}
+
+	// The strafe test's view: 1280x720, a vertical field of view of `fov` degrees.
+	constexpr uint32_t c_StrafeWidth = 1280;
+	constexpr uint32_t c_StrafeHeight = 720;
+
+	SceneCamera StrafeCamera(const glm::vec3& position, const glm::vec3& target, float fov)
+	{
+		constexpr float c_Aspect = static_cast<float>(c_StrafeWidth) / static_cast<float>(c_StrafeHeight);
+		SceneCamera camera = LookAt(position, target, c_Aspect);
+		camera.Projection = Math::PerspectiveReverseZ(glm::radians(fov), c_Aspect, 0.1f, 500.0f);
+		camera.VerticalFOV = glm::radians(fov);
+		camera.Far = 500.0f;
+		return camera;
+	}
+
+	// A camera path of the strafe: its first position and target, both moving by Step a frame, the surface measured and the
+	// share of its pixels the meter reprojects at least.
+	struct StrafePath
+	{
+		std::string Name;
+		glm::vec3 Position;
+		glm::vec3 Target;
+		float Fov;
+		glm::vec3 Step;
+		MeasuredRectangle Surface;
+		double MinimumMeasured;
+	};
+
+	enum class StrafeAntiAliasing
+	{
+		Off,
+		FXAA,
+		TAA
+	};
+
+	struct StrafeMeasure
+	{
+		FlickerResult Flicker;
+		double SurfaceShare = 0.0; // The measured surface's pixels (its mask) over all pixels, over the measured frames
+	};
+
+	// A fresh renderer's strafe along a path: settled still frames (the reflections from the third see a frame that had them,
+	// the TAA's history over c_SettleFrames), then two more still frames and 24 moving ones, read as the person sees them and
+	// measured on the path's surface from the first triple in steady motion.
+	StrafeMeasure MeasureStrafe(GPUContext& gpu, SpecularLab& lab, const StrafePath& path, ReflectionsQuality reflections, StrafeAntiAliasing antiAliasing,
+		bool screenReflections)
+	{
+		constexpr uint32_t c_StillFrames = 2;
+		constexpr uint32_t c_MovingFrames = 24;
+		PostProcessComponent& post = GetPostProcess(lab.Contents);
+		post.ScreenSpaceReflections = screenReflections;
+		post.AntiAliasing = antiAliasing != StrafeAntiAliasing::Off;
+		post.AntiAliasingMethod = antiAliasing == StrafeAntiAliasing::TAA ? AntiAliasingMode::TAA : AntiAliasingMode::FXAA;
+		SceneRendererSpecification specification = ExactSpecification();
+		specification.Quality.Reflections = reflections;
+		// The cascades stay where they are: the measure is the reflections', not the sun's fit following the camera.
+		specification.FitShadowsToView = false;
+		specification.DebugName = "Strafe";
+		SceneRenderer renderer(specification);
+		renderer.SetViewportSize(c_StrafeWidth, c_StrafeHeight);
+		SceneCamera camera = StrafeCamera(path.Position, path.Target, path.Fov);
+		WarmUp(gpu, renderer, lab.Contents, camera);
+		RenderFrames(gpu, renderer, lab.Contents, camera, antiAliasing == StrafeAntiAliasing::TAA ? c_SettleFrames : 3);
+		FlickerSequence sequence(c_StillFrames + 1);
+		size_t surfacePixels = 0;
+		for (uint32_t frame = 0; frame < c_StillFrames + c_MovingFrames; frame++)
+		{
+			const float moved = static_cast<float>(frame >= c_StillFrames ? frame - c_StillFrames + 1 : 0);
+			camera = StrafeCamera(path.Position + path.Step * moved, path.Target + path.Step * moved, path.Fov);
+			REQUIRE(renderer.Render(lab.Contents, camera));
+			FlickerFrame read = ReadDisplayFlickerFrame(renderer, camera);
+			const size_t kept = MaskFlickerFrame(read, path.Surface);
+			if (frame > c_StillFrames)
+				surfacePixels += kept;
+			sequence.Add(std::move(read));
+			FinishFrame(gpu);
+		}
+		CHECK(renderer.GetStats().ScreenSpaceReflections == screenReflections);
+		CHECK(renderer.GetStats().TemporalAntiAliasing == (antiAliasing == StrafeAntiAliasing::TAA));
+		StrafeMeasure measure;
+		measure.Flicker = sequence.GetResult();
+		measure.SurfaceShare = static_cast<double>(surfacePixels) / (static_cast<double>(c_MovingFrames - 1) * c_StrafeWidth * c_StrafeHeight);
+		return measure;
 	}
 
 }
@@ -675,6 +763,61 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 			CHECK(renderer.GetStats().SceneColorCopies == 0u);
 			CHECK(renderer.GetScreenReflectionTexture() == nullptr);
 			CHECK(renderer.GetSurfaceTexture() == nullptr);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A strafe past a rough metal sheet and over a wet floor: the reflections do not flicker")
+	{
+		// The look-dev scene's specular lab (SpecularLab), strafed 1 cm a frame toward the rough sheet and across the wet plane, as
+		// the person sees it (the 8-bit output) without anti-aliasing, with FXAA and with TAA, measured on that surface by the
+		// wave's flicker meter. Blocks catches regions that pump; a screen-locked pattern sliding under moving content averages
+		// out within a 32 px block, so the per-pixel Mean is what shows a crawl the reflections add.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		SpecularLab lab(assets);
+		// The wet path's eye is a standing person's (1.6 m): the meter's depth tolerance (1% plus 1 cm) leaves out a grazing plane
+		// where adjacent rows differ by more, from 4.5 m on at 0.5 m above it, from 14.7 m on at 1.6 m.
+		const StrafePath paths[] = {
+			{ "sheet", glm::vec3(16.0f, 1.6f, -3.6f), glm::vec3(0.0f, 1.5f, -6.0f), 50.0f, glm::vec3(0.0f, 0.0f, -0.01f), SpecularLab::GetSheetFace(), 0.9 },
+			{ "wet", glm::vec3(-12.0f, 1.6f, 26.0f), glm::vec3(-13.0f, 0.5f, 8.0f), 45.0f, glm::vec3(0.01f, 0.0f, 0.0f), SpecularLab::GetWetPlane(), 0.5 },
+		};
+		const std::pair<StrafeAntiAliasing, std::string> antiAliasingModes[] = { { StrafeAntiAliasing::Off, "no AA" }, { StrafeAntiAliasing::FXAA, "FXAA" },
+			{ StrafeAntiAliasing::TAA, "TAA" } };
+		const std::pair<ReflectionsQuality, std::string> reflectionModes[] = { { ReflectionsQuality::Spatial, "Spatial" },
+			{ ReflectionsQuality::SpatialHigh, "SpatialHigh" } };
+		const auto report = [](const StrafePath& path, const std::string& antiAliasing, const std::string& reflections, const StrafeMeasure& measure)
+		{
+			const FlickerResult& flicker = measure.Flicker;
+			MESSAGE(fmt::format("Strafe {}, {}, {}: Blocks {:.4f}%, BlocksP99 {:.4f}%, Mean {:.4f}%, P99 {:.4f}% over {} triples, {:.2f}% of the view "
+				"measured ({:.2f}% its surface)", path.Name, antiAliasing, reflections, 100.0 * flicker.Blocks, 100.0 * flicker.BlocksP99, 100.0 * flicker.Mean,
+				100.0 * flicker.P99, flicker.Frames, 100.0 * flicker.MeasuredShare, 100.0 * measure.SurfaceShare));
+			CHECK(flicker.Frames == 23u);
+			CHECK(std::isfinite(flicker.Blocks));
+			CHECK(std::isfinite(flicker.BlocksP99));
+			CHECK(std::isfinite(flicker.Mean));
+			CHECK(std::isfinite(flicker.P99));
+			CHECK(measure.SurfaceShare > 0.02);
+			CHECK(flicker.MeasuredShare > path.MinimumMeasured * measure.SurfaceShare);
+		};
+		for (const StrafePath& path : paths)
+		{
+			CAPTURE(path.Name);
+			for (const auto& antiAliasing : antiAliasingModes)
+			{
+				CAPTURE(antiAliasing.second);
+				// Without screen-space reflections (the mode then traces nothing) the surface holds still: the floor every
+				// mode's flicker is read against.
+				const StrafeMeasure off = MeasureStrafe(gpu, lab, path, ReflectionsQuality::Spatial, antiAliasing.first, false);
+				report(path, antiAliasing.second, "reflections off", off);
+				CHECK(off.Flicker.Blocks <= 0.003);
+				for (const auto& reflections : reflectionModes)
+				{
+					CAPTURE(reflections.second);
+					report(path, antiAliasing.second, reflections.second, MeasureStrafe(gpu, lab, path, reflections.first, antiAliasing.first, true));
+				}
+			}
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
