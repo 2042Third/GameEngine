@@ -4797,8 +4797,10 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   counts them, since a face's triangles touch a voxel once or twice), a **two-sided** voxel holding both faces of a wall
   thinner than it: it will get no light rather than let one side's into the other; w 0.5 for double-sided materials,
   whose triangles add no normal). The scene layout binds levels 0-2's material at SRV 38-40, the field at 35 and the
-  probes' validity at 37 (the black 3D texture without them); the frame constants' `GIVoxelOrigin`, `GIVoxelTexel` and
-  `GIVoxelDimensions` place them (zero without GI).
+  probes' validity at 37 (the black 3D texture without them). `FrameConstants` gains the GI's fields only with the forward
+  pass that reads them (stage 2): 160 more bytes in it made look-dev captures of unchanged scenes differ between
+  repeats (single pixels by one code; the Specular scene's exposure) although no shader read them, so the cause is
+  found before they are added, with the look-dev repeats as the check.
 - **Sampling** (`Include/GlobalIllumination.slang`): a point reads the finest level whose valid box holds it with
   `c_GILevelGuardVoxels` to spare, blended into the next over `c_GILevelBlendVoxels` by its distance from the camera (not
   from the snapped window), so no sample switches level in a step as windows scroll.

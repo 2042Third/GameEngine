@@ -103,20 +103,8 @@ namespace Strata
 			// comes from the radiance cascades (SRV 35), z: their intensity (radiance-cascades); w: reflections'. y, z and w
 			// are written 0 until those streams use them.
 			glm::vec4 ReflectionParams;
-			// Global illumination (SceneRendererGlobalIllumination.cpp; Include/GlobalIllumination.slang): what the forward pass
-			// reads, zero without it. The field: xyz its minimum corner camera-relative (the first cascade's probe (i, j, l) at
-			// that plus (i, j, l) + 0.5 spacings), w the first cascade's spacing; xyz its probes per axis, w 1 when the frame uses
-			// it; xyz the half extents it always holds around the camera (m), w its fade (m).
-			glm::vec4 GIFieldOrigin;
-			glm::vec4 GIFieldSize;
-			glm::vec4 GIFieldFade;
-			// Voxel levels 0-2: xyz the window's minimum corner camera-relative (m), w the voxel size (m) or 0 when the level is
-			// not valid; xyz the minimum corner's texel; xyz the voxels per axis.
-			glm::vec4 GIVoxelOrigin[3];
-			glm::vec4 GIVoxelTexel[3];
-			glm::vec4 GIVoxelDimensions;
 		};
-		static_assert(sizeof(FrameConstants) == 8 * 64 + 36 * 16);
+		static_assert(sizeof(FrameConstants) == 8 * 64 + 26 * 16);
 
 		// A directional shadow cascade as shaders read it (u_Cascades, Include/Scene.slang): written on the GPU by
 		// Scene/CascadeFit.comp, which fits its depth range to the casters (CascadeFitConstants).

@@ -350,8 +350,7 @@ namespace Strata
 		m_GIFrame = false;
 	}
 
-	void SceneRenderer::PrepareGlobalIllumination(const RenderScene& renderScene, const Ref<AssetManagerBase>& assets, const SceneCamera& camera,
-		RenderData::FrameConstants& frame)
+	void SceneRenderer::PrepareGlobalIllumination(const RenderScene& renderScene, const Ref<AssetManagerBase>& assets, const SceneCamera& camera)
 	{
 		ST_PROFILE_FUNCTION();
 		GlobalIlluminationResources& gi = *m_GI;
@@ -382,13 +381,7 @@ namespace Strata
 			data.ValidMinimum = glm::ivec4(glm::ivec3(state.Valid.Minimum - state.Window), 0);
 			data.ValidMaximum = glm::ivec4(glm::ivec3(state.Valid.Maximum - state.Window), 0);
 			data.Anchor = glm::vec4(glm::vec3(glm::dvec3(state.Anchor) * voxelSize), 0.0f);
-			if (level < 3)
-			{
-				frame.GIVoxelOrigin[level] = glm::vec4(origin, valid ? gi.Layout.Levels[level].VoxelSize : 0.0f);
-				frame.GIVoxelTexel[level] = glm::vec4(glm::vec3(data.Texel), 0.0f);
-			}
 		}
-		frame.GIVoxelDimensions = glm::vec4(glm::vec3(dimensions), 0.0f);
 
 		const VoxelFrame& work = gi.Frame;
 		m_Stats.GlobalIllumination = true;

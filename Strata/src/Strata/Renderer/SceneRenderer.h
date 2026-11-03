@@ -2008,9 +2008,8 @@ namespace Strata
 		// Hands every GI resource to `released` (the scene binding sets then bind the dummies again): a frame that does not want
 		// GI, a new quality, the render targets.
 		void ReleaseGlobalIllumination(std::vector<nvrhi::ResourceHandle>& released);
-		// The frame's voxelization on the CPU (VoxelClipmap::BuildFrame, in Render.Extract) and what the GI writes into the
-		// frame's constants.
-		void PrepareGlobalIllumination(const RenderScene& renderScene, const Ref<AssetManagerBase>& assets, const SceneCamera& camera, RenderData::FrameConstants& frame);
+		// The frame's voxelization on the CPU (VoxelClipmap::BuildFrame, in Render.Extract) and the GI's constants.
+		void PrepareGlobalIllumination(const RenderScene& renderScene, const Ref<AssetManagerBase>& assets, const SceneCamera& camera);
 		// The GI's passes (GPU.RadianceCascades): the frame's voxelization batches, then the counters' copy.
 		void RecordGlobalIllumination(nvrhi::ICommandList* commandList);
 		// The voxels view over the output (GI/VoxelView.frag, in GPU.Overlays); false when GPU resources failed (reported).

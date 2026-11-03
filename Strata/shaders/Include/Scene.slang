@@ -108,16 +108,6 @@ struct FrameConstants
 	// x: 1 when the frame traced screen-space reflections (Forward.frag's u_ScreenReflections, SRV 18); y: 1 when the frame's
 	// indirect light comes from the radiance cascades (SRV 35), z: their intensity (radiance-cascades); w: reflections'.
 	float4 ReflectionParams;
-	// Global illumination (Include/GlobalIllumination.slang; SceneRendererGlobalIllumination.cpp), zero without it: the field
-	// (xyz its minimum corner camera-relative, w the first cascade's spacing; xyz its probes per axis, w 1 when it is used; xyz
-	// the half extents it always holds around the camera, w its fade), and voxel levels 0-2 (xyz the window's minimum corner
-	// camera-relative, w the voxel size or 0 when the level is not valid; xyz its texel; xyz the voxels per axis).
-	float4 GIFieldOrigin;
-	float4 GIFieldSize;
-	float4 GIFieldFade;
-	float4 GIVoxelOrigin[3];
-	float4 GIVoxelTexel[3];
-	float4 GIVoxelDimensions;
 };
 
 ConstantBuffer<FrameConstants> u_Frame : register(b0);
