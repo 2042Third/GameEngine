@@ -115,6 +115,7 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   faint light at full precision (daytime skies are unchanged to the bit).
 - At High and Ultra reflection probes are 256 texels per face: sharper on polished metal, 68 MiB of GPU memory per view that
   shows probes instead of 17 (Graphics Quality's **Reflection probe resolution**). No probe needs baking again.
+- Asset thumbnails render again once (the sun's highlight and dielectrics' reflectance changed how materials look).
 
 ## Defaults that change
 
@@ -176,6 +177,17 @@ projects, the template and scenes or projects without the value get.
 - At Ultra, shiny balls reflected in rough metal keep a fine grain in still pictures (`lookdev.sheet`'s spheres: noise
   1.05-1.08% at 3840x2160 against the 1% aimed at, High 0.95-0.96%): whether a ray grazing a ball's outline passes just
   behind it, which is not a hit, depends on its step offset.
+
+**Reflections (R2)**
+
+- An object in front of a mirror is reflected only where the camera also sees it (often a crescent), with the probes or
+  the sky where its back would be: the screen holds only its front. Filling that silhouette with the front's colors was
+  tried and drew front-lit rims instead.
+- Where a mirror meets a ball's side at a slant, the screen-space march still misses part of it in fine stripes (in a
+  test, 42% of those pixels hit at High, 65% at Ultra), which the resolve and the probes fill.
+- With TAA, every highlight that slides over a surface as the camera moves pumps by 4.5-9.5% from frame to frame (the
+  history follows the surface, not the highlight); a Source Radius roughly halves it on lanterns. Without TAA, lanterns'
+  glints on wet ground pump by 1.4% as points and 0.3% sized, with FXAA by 4.2% and 1.3%.
 
 **Lane Render**
 
