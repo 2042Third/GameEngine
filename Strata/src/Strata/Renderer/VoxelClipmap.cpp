@@ -632,9 +632,14 @@ namespace Strata
 				const uint32_t slot = overrideSlot != RenderScene::c_InvalidIndex ? overrideSlot : (submesh < submeshMaterials.size() ? submeshMaterials[submesh] : RenderScene::c_InvalidIndex);
 				return slot < m_Materials.size() ? m_Materials[slot].Flags : 0u;
 			};
-			// Closed as drawn: a closed mesh whose every submesh is opaque (a glass or cut-out part would leave holes in its
-			// winding, and columns through them would fill solid).
-			bool closed = mesh.Closed;
+			// Submeshes past c_VoxelItemMaxSubmesh (a work item holds 8 bits of submesh) or past the proxy's instances are left
+			// out (counted where the proxy is in the region).
+			const uint32_t instances = renderScene.GetInstanceCount(proxy);
+			const size_t drawn = std::min<size_t>(mesh.Submeshes.size(), instances);
+			const size_t voxelized = std::min<size_t>(drawn, static_cast<size_t>(RenderData::c_VoxelItemMaxSubmesh) + 1);
+			// Closed as drawn: a closed mesh whose every submesh is voxelized and opaque (a part left out, glass or cut out would
+			// leave holes in its winding, and columns through them would fill solid).
+			bool closed = mesh.Closed && voxelized == mesh.Submeshes.size();
 			for (size_t submesh = 0; submesh < mesh.Submeshes.size() && closed; submesh++)
 			{
 				const uint32_t flags = materialOf(submesh);
@@ -647,14 +652,10 @@ namespace Strata
 			const float scale = std::max({ glm::length(glm::vec3(world[0])), glm::length(glm::vec3(world[1])), glm::length(glm::vec3(world[2])) });
 			const uint32_t proxyFlags = renderScene.GetProxyFlags(proxy);
 			const uint32_t firstInstance = renderScene.GetFirstInstance(proxy);
-			const uint32_t instances = renderScene.GetInstanceCount(proxy);
-			for (uint32_t submesh = 0; submesh < mesh.Submeshes.size() && submesh < instances; submesh++)
+			if (inRegion)
+				outUnvoxelized += static_cast<uint32_t>(drawn - voxelized);
+			for (uint32_t submesh = 0; submesh < voxelized; submesh++)
 			{
-				if (submesh > RenderData::c_VoxelItemMaxSubmesh)
-				{
-					outUnvoxelized++;
-					continue;
-				}
 				const uint32_t materialFlags = materialOf(submesh);
 				if ((materialFlags & RenderData::c_CullMaterialAvailable) == 0 || (materialFlags & RenderData::c_CullMaterialTransparent) != 0)
 					continue;
@@ -703,6 +704,7 @@ namespace Strata
 				item.Flags = itemFlags;
 				outRegion.Items.push_back(item);
 				outRegion.ItemTriangles.push_back(itemTriangles);
+				outRegion.ItemProxies.push_back(proxy);
 				outRegion.Triangles += itemTriangles;
 			}
 		};
@@ -724,14 +726,44 @@ namespace Strata
 			if (std::max({ size.x, size.y, size.z }) > static_cast<int64_t>(RenderData::c_GIRegionBrick))
 				return false;
 			// A brick with more work than a frame holds (never in practice): its first items only, the rest counted.
+			bool cutClosed = false;
+			uint32_t cutProxy = 0;
 			while (outRegion.Items.size() > RenderData::c_GIMaxWorkItems || regionGroups > RenderData::c_GIMaxTriangleGroups)
 			{
 				const uint32_t dropped = outRegion.ItemTriangles.back();
 				regionGroups -= (dropped + RenderData::c_GIGroupTriangles - 1) / RenderData::c_GIGroupTriangles;
+				cutClosed = (outRegion.Items.back().Flags & RenderData::c_VoxelItemClosed) != 0;
+				cutProxy = outRegion.ItemProxies.back();
 				outRegion.Triangles -= dropped;
 				outRegion.Items.pop_back();
 				outRegion.ItemTriangles.pop_back();
+				outRegion.ItemProxies.pop_back();
 				outUnvoxelized++;
+			}
+			// A closed mesh cut in two would step into its columns unbalanced: what is left of it (the last items, a proxy's
+			// items being together) is voxelized open, its steps from below dropped.
+			if (cutClosed)
+			{
+				size_t kept = outRegion.Items.size();
+				while (kept > 0 && outRegion.ItemProxies[kept - 1] == cutProxy)
+					kept--;
+				for (size_t index = kept; index < outRegion.Items.size(); index++)
+				{
+					RenderData::VoxelWorkItem& item = outRegion.Items[index];
+					if ((item.Flags & RenderData::c_VoxelItemFillOnly) != 0)
+					{
+						outRegion.Triangles -= outRegion.ItemTriangles[index];
+						continue;
+					}
+					item.Flags &= ~RenderData::c_VoxelItemClosed;
+					outRegion.Items[kept] = item;
+					outRegion.ItemTriangles[kept] = outRegion.ItemTriangles[index];
+					outRegion.ItemProxies[kept] = outRegion.ItemProxies[index];
+					kept++;
+				}
+				outRegion.Items.resize(kept);
+				outRegion.ItemTriangles.resize(kept);
+				outRegion.ItemProxies.resize(kept);
 			}
 		}
 		return true;

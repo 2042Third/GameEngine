@@ -4763,14 +4763,15 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   valid box of levels 0-2 misses its window shrunk by two scroll steps (a rebuild or a jump under way), never for a slab,
   a change or a waiting proxy; it is settled (`GlobalIlluminationSettled`) once nothing is left to voxelize.
 - **What enters:** indexed, active proxies of the Static arena (meshes of the Skinned arena are left out: characters
-  neither occlude nor bounce light; they receive it), opaque and alpha-masked submeshes (transparent and transmissive ones
-  are left out); `CastShadows` does not matter. A proxy placed anew is moving for `c_GIMovingFrames` (30) frames: out of
-  the voxels until it rests (its old voxels empty at once), so movers cost no voxel work and cannot pop the light. Open
-  meshes take the coarsest level of detail whose error stays within half a voxel; closed meshes keep full detail.
-  Materials reach the voxels as the CPU's means (`RenderData::GIMaterial`: the diffuse albedo `BaseColor * (1 - Metallic)`
-  times the base color map's mean, the emission times the emissive map's mean, `Texture::GetLinearMean` of the map's
-  smallest level), so no compute pass reads bindless textures and streaming never changes a voxel. Submeshes past the
-  256th are left out (`UnvoxelizedSubmeshes`).
+  neither occlude nor bounce light; they receive it), opaque and alpha-masked submeshes (transparent and transmissive
+  ones are left out); `CastShadows` does not matter. A proxy placed anew is moving for `c_GIMovingFrames` (30) frames:
+  out of the voxels until it rests (its old voxels empty at once), so movers cost no voxel work and cannot pop the
+  light. Open meshes take the coarsest level of detail whose error stays within half a voxel; closed meshes keep full
+  detail. Materials reach the voxels as the CPU's means (`RenderData::GIMaterial`: the diffuse albedo
+  `BaseColor * (1 - Metallic)` times the base color map's mean, the emission times the emissive map's mean,
+  `Texture::GetLinearMean` of the map's smallest level), so no compute pass reads bindless textures and streaming never
+  changes a voxel. Submeshes past the 256th are left out (`GIUnvoxelizedSubmeshes`, logged once), and a closed mesh
+  missing any part (past the 256th, past its instances, or cut off by a frame's limits) is voxelized open.
 - **Voxelization** (`GPU.RadianceCascades`, `Include/Voxelize.slang`; per batch: the scratch cleared,
   `GI/VoxelTriangles`, `VoxelTiles` dispatched indirectly, `VoxelFill`, `VoxelFinalize`, with explicit UAV barriers
   between them): one thread per triangle transforms its corners through the instance's world rows relative to the anchor
@@ -4826,7 +4827,8 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   frames for it to settle (the capture renderer voxelizes without a budget); every capture's result has
   `globalIlluminationSettled`, `editor.perf`'s `renderStats` `globalIllumination: {ran, pending, settled}`.
 - **Statistics** (`SceneRendererStats`): `GlobalIllumination`, `GlobalIlluminationPending`, `GlobalIlluminationSettled`,
-  `GIVoxelizedTriangles`, `GIQueuedRegions`, `GIWaitingProxies`, `GIMovingProxies`; `SceneRendererGPUStats`' `GITiles` and
+  `GIVoxelizedTriangles`, `GIQueuedRegions`, `GIWaitingProxies`, `GIMovingProxies`,
+  `GIUnvoxelizedSubmeshes`; `SceneRendererGPUStats`' `GITiles` and
   `GITileOverflow` (frames late). Tests and tools read a level's textures with `ReadGlobalIlluminationVoxels` (blocking).
 - **Tests:** `Renderer.GlobalIlluminationLayout`, `Renderer.VoxelClipmap` (a render scene with residency and assets a test
   gives), `Renderer.Mesh` ("Closed meshes are found"), `GPU.SceneRenderer.GlobalIllumination` (voxels against the CPU's

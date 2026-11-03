@@ -391,6 +391,14 @@ namespace Strata
 		m_Stats.GIQueuedRegions = work.QueuedRegions;
 		m_Stats.GIWaitingProxies = work.WaitingProxies;
 		m_Stats.GIMovingProxies = work.MovingProxies;
+		m_Stats.GIUnvoxelizedSubmeshes = work.UnvoxelizedSubmeshes;
+		if (work.UnvoxelizedSubmeshes > 0 && !gi.UnvoxelizedLogged)
+		{
+			ST_CORE_WARN("SceneRenderer '{}': global illumination leaves out submeshes past a mesh's {}th (or past a frame's limits): {} in "
+				"this frame's regions (GIUnvoxelizedSubmeshes); a closed mesh missing some is voxelized open", m_Specification.DebugName,
+				RenderData::c_VoxelItemMaxSubmesh + 1, work.UnvoxelizedSubmeshes);
+			gi.UnvoxelizedLogged = true;
+		}
 	}
 
 	void SceneRenderer::RecordGlobalIllumination(nvrhi::ICommandList* commandList)

@@ -69,7 +69,9 @@ namespace Strata
 		uint32_t QueuedRegions = 0;        // Regions left for later frames
 		uint32_t WaitingProxies = 0;       // Left out until they are resident with a loaded mesh
 		uint32_t MovingProxies = 0;        // Left out while they move (placed anew within c_GIMovingFrames frames)
-		uint32_t UnvoxelizedSubmeshes = 0; // Submeshes beyond c_VoxelItemMaxSubmesh, or items beyond the frame's limits
+		// Per region taken: submeshes beyond c_VoxelItemMaxSubmesh, and items beyond the frame's limits (a closed mesh missing
+		// any is voxelized open)
+		uint32_t UnvoxelizedSubmeshes = 0;
 		// The clipmap's levels 0-2 do not hold their windows (shrunk by two scroll steps) yet: a rebuild or a jump not done.
 		bool Pending = false;
 		bool Rebuilt = false;              // The frame started the clipmap over (its first, another render scene)
@@ -171,6 +173,7 @@ namespace Strata
 			VoxelBox Box;
 			std::vector<RenderData::VoxelWorkItem> Items; // Region index not set yet
 			std::vector<uint32_t> ItemTriangles;
+			std::vector<uint32_t> ItemProxies;            // A proxy's items are together
 			uint32_t Triangles = 0;
 		};
 

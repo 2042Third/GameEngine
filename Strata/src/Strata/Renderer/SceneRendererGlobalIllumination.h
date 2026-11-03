@@ -25,6 +25,7 @@ namespace Strata
 		// The latest frame that built its voxelization (Prepare) recorded it: a frame that did not (it failed after its
 		// extraction) makes the next start the clipmap over.
 		bool Recorded = true;
+		bool UnvoxelizedLogged = false;              // GIUnvoxelizedSubmeshes was logged (once while the resources live)
 		RenderData::GlobalIlluminationConstants Constants = {};
 		// Per voxel level: the material (albedo and occupancy), emission and normal textures, 3D, toroidal.
 		struct Level

@@ -672,7 +672,9 @@ namespace Strata
 		// Global illumination (world-space radiance cascades over a voxel clipmap; Docs/DeveloperGuide.md, "Global
 		// illumination"): the frame ran it (a GI view showed); its voxel levels 0-2 were incomplete (a rebuild or a jump under
 		// way: what reads them falls back); settled (nothing left to voxelize, not pending; true without GI); the triangles it
-		// voxelized, the regions left for later frames, the proxies left out until resident with their mesh or while they move.
+		// voxelized, the regions left for later frames, the proxies left out until resident with their mesh or while they move,
+		// and the submeshes its regions left out (VoxelFrame::UnvoxelizedSubmeshes: past a mesh's 256th, or past a frame's
+		// limits; logged the first time while the renderer's GI lives).
 		bool GlobalIllumination = false;
 		bool GlobalIlluminationPending = false;
 		bool GlobalIlluminationSettled = true;
@@ -680,6 +682,7 @@ namespace Strata
 		uint32_t GIQueuedRegions = 0;
 		uint32_t GIWaitingProxies = 0;
 		uint32_t GIMovingProxies = 0;
+		uint32_t GIUnvoxelizedSubmeshes = 0;
 		// Copies of the scene's color the frame made for transmissive surfaces and spatial reflections (CopySceneColor: 1 when
 		// it made one, else 0).
 		uint32_t SceneColorCopies = 0;

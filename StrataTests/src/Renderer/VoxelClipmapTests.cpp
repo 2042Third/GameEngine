@@ -26,6 +26,7 @@ namespace
 	constexpr AssetHandle c_PlaneMesh = AssetHandle(uint64_t(0x91A4E));
 	constexpr AssetHandle c_GlassCubeMesh = AssetHandle(uint64_t(0x61A55));
 	constexpr AssetHandle c_SkinnedMesh = AssetHandle(uint64_t(0x5C1));
+	constexpr AssetHandle c_SplitCubeMesh = AssetHandle(uint64_t(0x5B11));
 	constexpr AssetHandle c_GlassMaterial = AssetHandle(uint64_t(0xA2));
 	constexpr AssetHandle c_RedMaterial = AssetHandle(uint64_t(0xA3));
 
@@ -78,6 +79,50 @@ namespace
 		b.LODs = { MeshLOD { 18, 18 } };
 		b.Material = second;
 		const Ref<Mesh> mesh = Mesh::Create(cube->GetPositions(), cube->GetAttributes(), cube->GetIndices(), { a, b });
+		REQUIRE(mesh);
+		REQUIRE(mesh->IsClosed());
+		return mesh;
+	}
+
+	// A closed cube `squares` units wide (centered) whose faces are split into unit squares, each of its 12 squares^2 triangles a
+	// submesh of its own. The faces' axes turn counter-clockwise seen from outside (glTF), and every coordinate is a multiple of a
+	// half, so the faces' shared vertices are equal.
+	Ref<Mesh> CreateSplitCube(int squares)
+	{
+		// Per face: its outward axis, then two axes whose cross product it is.
+		const glm::vec3 faces[6][3] = { { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } }, { { -1, 0, 0 }, { 0, 0, 1 }, { 0, 1, 0 } },
+			{ { 0, 1, 0 }, { 0, 0, 1 }, { 1, 0, 0 } }, { { 0, -1, 0 }, { 1, 0, 0 }, { 0, 0, 1 } }, { { 0, 0, 1 }, { 1, 0, 0 }, { 0, 1, 0 } },
+			{ { 0, 0, -1 }, { 0, 1, 0 }, { 1, 0, 0 } } };
+		const float half = 0.5f * static_cast<float>(squares);
+		const uint32_t row = static_cast<uint32_t>(squares) + 1;
+		std::vector<glm::vec3> positions;
+		std::vector<uint32_t> indices;
+		for (const auto& face : faces)
+		{
+			const uint32_t first = static_cast<uint32_t>(positions.size());
+			for (int v = 0; v <= squares; v++)
+			{
+				for (int u = 0; u <= squares; u++)
+					positions.push_back(face[0] * half + face[1] * (static_cast<float>(u) - half) + face[2] * (static_cast<float>(v) - half));
+			}
+			for (uint32_t v = 0; v < row - 1; v++)
+			{
+				for (uint32_t u = 0; u < row - 1; u++)
+				{
+					const uint32_t corner = first + v * row + u;
+					indices.insert(indices.end(), { corner, corner + 1, corner + row + 1, corner, corner + row + 1, corner + row });
+				}
+			}
+		}
+		Submesh triangle = MeshFactory::CreateCube()->GetSubmeshes()[0];
+		triangle.VertexCount = static_cast<uint32_t>(positions.size());
+		std::vector<Submesh> submeshes;
+		for (uint32_t index = 0; index < indices.size(); index += 3)
+		{
+			triangle.LODs = { MeshLOD { index, 3 } };
+			submeshes.push_back(triangle);
+		}
+		const Ref<Mesh> mesh = Mesh::Create(positions, std::vector<MeshVertexAttributes>(positions.size()), indices, submeshes);
 		REQUIRE(mesh);
 		REQUIRE(mesh->IsClosed());
 		return mesh;
@@ -458,6 +503,25 @@ TEST_SUITE("Renderer.VoxelClipmap")
 			CHECK(((item.MeshSubmeshLOD >> 20) & 0xFFu) == 0);
 			CHECK((item.Flags & RenderData::c_VoxelItemClosed) == 0);
 		}
+		for (const RenderData::VoxelWorkItem& item : fixture.GetItems(solid))
+			CHECK((item.Flags & RenderData::c_VoxelItemClosed) != 0);
+	}
+
+	TEST_CASE("A closed mesh past 256 submeshes is voxelized open, and counted")
+	{
+		// A work item holds 8 bits of submesh: the submeshes past the 256th are left out, so the rest would step into their
+		// columns unbalanced and fill them solid. The rest is voxelized open instead, and the frame counts what it left out.
+		Fixture fixture;
+		fixture.Source.Meshes[c_SplitCubeMesh] = CreateSplitCube(5);
+		REQUIRE(fixture.Source.Meshes[c_SplitCubeMesh]->GetSubmeshes().size() == 300);
+		Entity split = fixture.Add(glm::vec3(1.0f, 0.5f, 1.0f), c_SplitCubeMesh, UUID::Null(), glm::vec3(0.2f));
+		Entity solid = fixture.Add(glm::vec3(-3.0f, 0.5f, 1.0f));
+		fixture.Build();
+		const std::vector<RenderData::VoxelWorkItem> items = fixture.GetItems(split);
+		REQUIRE_FALSE(items.empty());
+		for (const RenderData::VoxelWorkItem& item : items)
+			CHECK((item.Flags & (RenderData::c_VoxelItemClosed | RenderData::c_VoxelItemFillOnly)) == 0);
+		CHECK(fixture.Frame.UnvoxelizedSubmeshes > 0);
 		for (const RenderData::VoxelWorkItem& item : fixture.GetItems(solid))
 			CHECK((item.Flags & RenderData::c_VoxelItemClosed) != 0);
 	}
