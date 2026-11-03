@@ -4743,8 +4743,8 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   High, 16.4 MiB at Low; stage 1 makes the voxel levels without their radiance, the scratch (8 words a voxel) and the work
   buffers (`SceneRenderer::GetGlobalIlluminationMemoryBytes`: about 58 MiB at High). A frame wants GI while a GI view shows (later: when a
   scene asks), at `SceneRendererSpecification::GlobalIllumination.Level` (High; tests and tools choose Low until the quality
-  row does); a frame that wants none releases everything (`ReleaseGlobalIllumination`), and so do the
-  render targets' release and `SetQuality`.
+  row does); a frame that wants none releases everything (`ReleaseGlobalIllumination`), and so does the
+  render targets' release (`SetQuality` does not touch GI until the quality row chooses the level).
 - **The clipmap** (`R/VoxelClipmap.h`, CPU, main thread, `Renderer.VoxelClipmap`): per level a window centered on the
   camera, snapped to steps of `c_GIScrollVoxels` (4) voxels, stored toroidally (world voxel `w` at texel `w mod
   dimensions`: a scroll rewrites only the slabs that entered), with a queue of regions and the box of valid voxels. Regions
