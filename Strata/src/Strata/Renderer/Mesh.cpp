@@ -13,6 +13,7 @@
 #include <bit>
 #include <cmath>
 #include <limits>
+#include <unordered_map>
 
 namespace Strata
 {
@@ -206,6 +207,7 @@ namespace Strata
 
 		Ref<Mesh> mesh(new Mesh());
 		mesh->m_Bounds = MeshUtils::ComputeBounds(positions);
+		mesh->m_Closed = MeshUtils::IsClosed(positions, indices, submeshes);
 		mesh->m_Positions = std::move(positions);
 		mesh->m_Attributes = std::move(attributes);
 		mesh->m_Indices = std::move(indices);
@@ -771,6 +773,68 @@ namespace Strata
 					density[static_cast<glm::length_t>(axis)] = static_cast<float>(std::sqrt(uvArea[axis] / area[axis]));
 			}
 			return density;
+		}
+
+		bool IsClosed(std::span<const glm::vec3> positions, std::span<const uint32_t> indices, std::span<const Submesh> submeshes)
+		{
+			// Weld by exact equality: -0 and +0 are equal positions, so the key takes their bits after adding 0 (which turns -0 into
+			// +0 and leaves every other value as it is).
+			struct PositionKey
+			{
+				uint32_t Bits[3];
+				bool operator==(const PositionKey& other) const = default;
+			};
+			struct PositionHash
+			{
+				size_t operator()(const PositionKey& key) const
+				{
+					uint64_t hash = 1469598103934665603ull;
+					for (uint32_t bits : key.Bits)
+						hash = (hash ^ bits) * 1099511628211ull;
+					return static_cast<size_t>(hash);
+				}
+			};
+			std::unordered_map<PositionKey, uint32_t, PositionHash> welded;
+			welded.reserve(positions.size());
+			std::vector<uint32_t> weldedIndex(positions.size());
+			for (size_t vertex = 0; vertex < positions.size(); vertex++)
+			{
+				PositionKey key;
+				for (int axis = 0; axis < 3; axis++)
+					key.Bits[axis] = std::bit_cast<uint32_t>(positions[vertex][axis] + 0.0f);
+				weldedIndex[vertex] = welded.try_emplace(key, static_cast<uint32_t>(welded.size())).first->second;
+			}
+
+			// Directed edges (from, to) as 64-bit keys, sorted: a closed surface has each once and its opposite once.
+			std::vector<uint64_t> edges;
+			for (const Submesh& submesh : submeshes)
+			{
+				if (submesh.LODs.empty())
+					continue;
+				const MeshLOD& detail = submesh.LODs.front();
+				for (uint32_t index = detail.IndexOffset; index + 2 < detail.IndexOffset + detail.IndexCount; index += 3)
+				{
+					uint32_t corners[3];
+					for (uint32_t corner = 0; corner < 3; corner++)
+						corners[corner] = weldedIndex[submesh.BaseVertex + indices[index + corner]];
+					if (corners[0] == corners[1] || corners[1] == corners[2] || corners[2] == corners[0])
+						continue;
+					for (uint32_t corner = 0; corner < 3; corner++)
+						edges.push_back((static_cast<uint64_t>(corners[corner]) << 32) | corners[(corner + 1) % 3]);
+				}
+			}
+			if (edges.empty())
+				return false;
+			std::sort(edges.begin(), edges.end());
+			if (std::adjacent_find(edges.begin(), edges.end()) != edges.end())
+				return false;
+			for (uint64_t edge : edges)
+			{
+				const uint64_t opposite = (edge << 32) | (edge >> 32);
+				if (!std::binary_search(edges.begin(), edges.end(), opposite))
+					return false;
+			}
+			return true;
 		}
 
 	}

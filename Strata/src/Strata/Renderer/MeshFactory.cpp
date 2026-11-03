@@ -63,6 +63,13 @@ namespace Strata
 			return glm::vec3(glm::sin(angle), 0.0f, glm::cos(angle));
 		}
 
+		// The direction of a ring's vertex `segment` of `segments`: the last one (the UV seam's copy of the first) takes the first's
+		// direction exactly, so the seam's positions are equal bit for bit and the surface stays closed (MeshUtils::IsClosed).
+		glm::vec3 RingDirection(uint32_t segment, uint32_t segments)
+		{
+			return RingDirection(segment == segments ? 0.0f : static_cast<float>(segment) / static_cast<float>(segments) * glm::two_pi<float>());
+		}
+
 	}
 
 	Ref<Mesh> MeshFactory::CreateCube(float size, AssetHandle material)
@@ -108,8 +115,9 @@ namespace Strata
 			for (uint32_t segment = 0; segment <= segments; segment++)
 			{
 				const float u = static_cast<float>(segment) / static_cast<float>(segments);
-				const float azimuth = u * glm::two_pi<float>();
-				const glm::vec3 normal = RingDirection(azimuth) * glm::sin(polar) + glm::vec3(0.0f, glm::cos(polar), 0.0f);
+				// The poles' rings collapse to a point exactly (sin(pi) in floats is not 0).
+				const float ringRadius = ring == 0 || ring == rings ? 0.0f : glm::sin(polar);
+				const glm::vec3 normal = RingDirection(segment, segments) * ringRadius + glm::vec3(0.0f, glm::cos(polar), 0.0f);
 				builder.AddVertex(normal * radius, normal, { u, v });
 			}
 		}
@@ -184,8 +192,7 @@ namespace Strata
 			const uint32_t first = static_cast<uint32_t>(builder.Positions.size());
 			for (uint32_t segment = 0; segment <= segments; segment++)
 			{
-				const float angle = static_cast<float>(segment) / static_cast<float>(segments) * glm::two_pi<float>();
-				const glm::vec3 direction = RingDirection(angle);
+				const glm::vec3 direction = RingDirection(segment, segments);
 				builder.AddVertex(direction * radius + glm::vec3(0.0f, y, 0.0f), normal, { 0.5f + direction.x * 0.5f, 0.5f - direction.z * 0.5f * (up ? 1.0f : -1.0f) });
 			}
 			for (uint32_t segment = 0; segment < segments; segment++)
@@ -206,7 +213,7 @@ namespace Strata
 			for (uint32_t segment = 0; segment <= segments; segment++)
 			{
 				const float u = static_cast<float>(segment) / static_cast<float>(segments);
-				const glm::vec3 direction = RingDirection(u * glm::two_pi<float>());
+				const glm::vec3 direction = RingDirection(segment, segments);
 				const glm::vec3 normal = glm::normalize(direction + glm::vec3(0.0f, slope, 0.0f));
 				builder.AddVertex(direction * bottomRadius + glm::vec3(0.0f, bottomY, 0.0f), normal, { u, 1.0f });
 				builder.AddVertex(direction * topRadius + glm::vec3(0.0f, topY, 0.0f), normal, { u, 0.0f });
@@ -266,7 +273,7 @@ namespace Strata
 			for (uint32_t segment = 0; segment <= segments; segment++)
 			{
 				const float u = static_cast<float>(segment) / static_cast<float>(segments);
-				const glm::vec3 normal = RingDirection(u * glm::two_pi<float>()) * glm::sin(row.Polar) + glm::vec3(0.0f, glm::cos(row.Polar), 0.0f);
+				const glm::vec3 normal = RingDirection(segment, segments) * glm::sin(row.Polar) + glm::vec3(0.0f, glm::cos(row.Polar), 0.0f);
 				const glm::vec3 position = normal * radius + glm::vec3(0.0f, row.Offset, 0.0f);
 				builder.AddVertex(position, normal, { u, (halfHeight + radius - position.y) / totalHeight });
 			}

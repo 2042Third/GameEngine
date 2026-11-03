@@ -82,6 +82,55 @@ namespace
 
 TEST_SUITE("Renderer.Mesh")
 {
+	TEST_CASE("Closed meshes are found")
+	{
+		// The factory's solids (the cube with split normals: its 24 vertices weld to 8) enclose a volume; the flat ones do not.
+		CHECK(MeshFactory::CreateCube()->IsClosed());
+		CHECK(MeshFactory::CreateSphere()->IsClosed());
+		CHECK(MeshFactory::CreateCylinder()->IsClosed());
+		CHECK_FALSE(MeshFactory::CreatePlane(1.0f, 4)->IsClosed());
+		CHECK_FALSE(MeshFactory::CreateQuad()->IsClosed());
+
+		// The cube's own geometry, changed: one submesh over its vertices with the given indices.
+		const Ref<Mesh> cube = MeshFactory::CreateCube();
+		const std::vector<glm::vec3>& cubePositions = cube->GetPositions();
+		const std::vector<uint32_t>& cubeIndices = cube->GetIndices();
+		REQUIRE(cubeIndices.size() == 36);
+		const auto create = [&](const std::vector<glm::vec3>& positions, std::vector<uint32_t> indices)
+		{
+			Submesh submesh;
+			submesh.VertexCount = static_cast<uint32_t>(positions.size());
+			submesh.LODs = { MeshLOD { 0, static_cast<uint32_t>(indices.size()) } };
+			const Ref<Mesh> mesh = Mesh::Create(positions, std::vector<MeshVertexAttributes>(positions.size()), std::move(indices), { submesh });
+			REQUIRE(mesh);
+			return mesh;
+		};
+		CHECK(create(cubePositions, cubeIndices)->IsClosed());
+		// A face left out opens it.
+		CHECK_FALSE(create(cubePositions, std::vector<uint32_t>(cubeIndices.begin(), cubeIndices.end() - 6))->IsClosed());
+		// A triangle doubled repeats its edges.
+		std::vector<uint32_t> doubled = cubeIndices;
+		doubled.insert(doubled.end(), cubeIndices.begin(), cubeIndices.begin() + 3);
+		CHECK_FALSE(create(cubePositions, doubled)->IsClosed());
+		// Two disjoint cubes in one mesh are closed together.
+		std::vector<glm::vec3> twoPositions = cubePositions;
+		std::vector<uint32_t> twoIndices = cubeIndices;
+		for (const glm::vec3& position : cubePositions)
+			twoPositions.push_back(position + glm::vec3(3.0f, 0.0f, 0.0f));
+		for (uint32_t index : cubeIndices)
+			twoIndices.push_back(index + static_cast<uint32_t>(cubePositions.size()));
+		CHECK(create(twoPositions, twoIndices)->IsClosed());
+		// Split into two submeshes (each open alone), the levels of full detail together are still closed.
+		Submesh first;
+		first.VertexCount = static_cast<uint32_t>(cubePositions.size());
+		first.LODs = { MeshLOD { 0, 18 } };
+		Submesh second = first;
+		second.LODs = { MeshLOD { 18, 18 } };
+		const Ref<Mesh> split = Mesh::Create(cubePositions, std::vector<MeshVertexAttributes>(cubePositions.size()), cubeIndices, { first, second });
+		REQUIRE(split);
+		CHECK(split->IsClosed());
+	}
+
 	TEST_CASE("Factory meshes have counter-clockwise front faces and consistent vertex data")
 	{
 		for (const NamedMesh& named : CreateFactoryMeshes())

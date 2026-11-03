@@ -137,6 +137,10 @@ namespace Strata
 		const AABB& GetBounds() const { return m_Bounds; }
 		uint32_t GetTriangleCount() const;
 
+		// Whether the full-detail levels of its submeshes together enclose a volume (MeshUtils::IsClosed): global illumination
+		// fills such meshes solid (Docs/DeveloperGuide.md, "Global illumination").
+		bool IsClosed() const { return m_Closed; }
+
 		bool IsSkinned() const { return m_SkinBinding != nullptr; }
 		// The skin binding of a skinned mesh (null otherwise): immutable and shared, so caches keep it after the mesh goes.
 		const Ref<const MeshSkinBinding>& GetSkinBinding() const { return m_SkinBinding; }
@@ -161,6 +165,7 @@ namespace Strata
 		std::vector<uint32_t> m_Indices;
 		std::vector<Submesh> m_Submeshes;
 		AABB m_Bounds;
+		bool m_Closed = false;
 		std::vector<MeshSkinVertex> m_SkinVertices;
 		Ref<const MeshSkinBinding> m_SkinBinding;
 
@@ -219,6 +224,11 @@ namespace Strata
 		// without area or with non-finite texture coordinates.
 		constexpr double c_MinUVDensityAreaShare = 0.01;
 		glm::vec3 ComputeUVDensity(std::span<const glm::vec3> positions, std::span<const MeshVertexAttributes> attributes, std::span<const uint32_t> indices);
+		// Whether the full-detail levels (LODs[0]) of the submeshes together are a closed surface: with positions welded by exact
+		// equality (glTF splits vertices at normal and UV seams with equal positions), every directed edge of a triangle meets
+		// exactly one opposite edge and none repeats. Triangles without area after the weld add nothing (a UV sphere's poles).
+		// Indices are relative to their submesh's BaseVertex; ranges must be valid (Mesh::Create checks them first).
+		bool IsClosed(std::span<const glm::vec3> positions, std::span<const uint32_t> indices, std::span<const Submesh> submeshes);
 	}
 
 }

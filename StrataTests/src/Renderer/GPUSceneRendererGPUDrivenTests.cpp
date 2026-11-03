@@ -187,10 +187,12 @@ namespace
 		return Renderer::GetGraphicsDevice().GetInfo().SupportsDrawIndirectFirstInstance;
 	}
 
-	// A sphere with three levels of detail, chosen by their errors or (without them) by halving the screen fraction.
+	// A sphere with three levels of detail, chosen by their errors or (without them) by halving the screen fraction. 40 segments:
+	// the simplifier's two levels then have errors more than 1.5 times apart (0.0087 and 0.0140; the 48-segment sphere's are 1.38
+	// times apart since its seam and poles weld), which the scene of levels by error spaces its spheres by.
 	Ref<Mesh> CreateLODSphere(bool withErrors = false)
 	{
-		Ref<Mesh> source = MeshFactory::CreateSphere(0.5f, 48, 24);
+		Ref<Mesh> source = MeshFactory::CreateSphere(0.5f, 40, 20);
 		REQUIRE(source);
 		std::vector<uint32_t> indices = source->GetIndices();
 		const std::vector<MeshUtils::GeneratedLOD> levels = MeshUtils::GenerateLODs(source->GetPositions(), source->GetAttributes(), indices, 2);
