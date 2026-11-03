@@ -2,6 +2,7 @@
 
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
+#include "Scene/InterpolationTestUtils.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
@@ -12,6 +13,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -132,6 +134,57 @@ TEST_SUITE("Perf.Scene")
 			});
 			CHECK(scene.GetTransformUpdateCount() == beforePlay);
 			return playFrames.MedianMs * 1000.0 / c_CallsPerBatch;
+		});
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Interpolating 100,000 moving entities costs a capture per step and a blend per frame")
+	{
+		// 100,000 roots a scene system moves every fixed step as physics writes its poses back (each its own velocity and turn),
+		// steps of 1/64 s. A frame of one step without interpolation (0.7.0's busiest frame), the same with it (the capture and
+		// the new set in every frame), and frames of 1/1024 s without a step: the update plus what a renderer's sync makes the
+		// scene do (UpdateDrawnTransforms: the blend, on the job system).
+		Perf::ScopedApplicationJobSystem jobs;
+		ScopedFixedMover moverScope;
+		Scene scene("Movers");
+		scene.GetSettings().FixedTimestep = 1.0f / 64.0f;
+		std::mt19937 random(100);
+		std::uniform_real_distribution<float> unit(-1.0f, 1.0f);
+		for (uint32_t index = 0; index < 100'000; index++)
+		{
+			Entity entity = scene.CreateEntity("Mover");
+			entity.GetTransform().Translation = glm::vec3(unit(random), unit(random), unit(random)) * 500.0f;
+			AddFixedMover(scene, entity, glm::vec3(unit(random), unit(random), unit(random)) * 3.0f, unit(random) * 2.0f);
+		}
+		scene.OnRuntimeStart();
+		Perf::CheckBudgetsConfirmed({ "Perf.Scene.StepFrame100k", "Perf.Scene.InterpolatedStepFrame100k", "Perf.Scene.InterpolatedStepFrame100k.Ratio",
+			"Perf.Scene.InterpolatedFrame100k" }, [&]
+		{
+			scene.SetInterpolation(false);
+			const Perf::Measurement plain = Perf::Measure("Perf.Scene.StepFrame100k", 3, 30, [&] { scene.OnUpdateRuntime(Timestep(1.0f / 64.0f)); });
+			scene.SetInterpolation(true);
+			const Perf::Measurement interpolated = Perf::Measure("Perf.Scene.InterpolatedStepFrame100k", 3, 30, [&]
+			{
+				scene.OnUpdateRuntime(Timestep(1.0f / 64.0f));
+				scene.UpdateDrawnTransforms();
+			});
+			// Frames between steps only: a frame that ran a step is left out.
+			std::vector<double> between;
+			for (uint32_t frame = 0; frame < 240; frame++)
+			{
+				const uint64_t steps = scene.GetFixedStepCount();
+				const auto start = std::chrono::steady_clock::now();
+				scene.OnUpdateRuntime(Timestep(1.0f / 1024.0f));
+				scene.UpdateDrawnTransforms();
+				const double milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+				if (scene.GetFixedStepCount() == steps && frame >= 16)
+					between.push_back(milliseconds);
+			}
+			CHECK(scene.GetInterpolationStats().Blended == 100'000);
+			const Perf::Measurement blend = Perf::Summarize(between);
+			MESSAGE("Perf.Scene.InterpolatedFrame100k: median ", blend.MedianMs, " ms, p95 ", blend.P95Ms, " ms over ", between.size(), " frames");
+			return Perf::MetricValues { { "Perf.Scene.StepFrame100k", plain.MedianMs }, { "Perf.Scene.InterpolatedStepFrame100k", interpolated.MedianMs },
+				{ "Perf.Scene.InterpolatedStepFrame100k.Ratio", interpolated.MedianMs / plain.MedianMs }, { "Perf.Scene.InterpolatedFrame100k", blend.MedianMs } };
 		});
 		scene.OnRuntimeStop();
 	}

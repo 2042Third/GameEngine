@@ -405,6 +405,43 @@ TEST_SUITE("Runtime.Game")
 		}
 	}
 
+	TEST_CASE("GameRuntimeOptions::Interpolation draws between fixed steps where the manifest's Scene.Timing allows it")
+	{
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeInterpolation");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 10) } }, UUID(0x1010));
+		auto start = [&](std::optional<bool> interpolation)
+		{
+			GameRuntimeOptions options;
+			if (interpolation)
+				options.Interpolation = *interpolation;
+			std::string error;
+			Scope<GameRuntime> game = GameRuntime::Create(manifest, &error, options);
+			REQUIRE_MESSAGE(game, error);
+			UpdateUntil(*game, [&]() { return game->HasStarted(); });
+			game->Update(Timestep(1.0f / 60.0f));
+			return game;
+		};
+
+		SUBCASE("Off by default: tools and tests draw what they simulate")
+		{
+			Scope<GameRuntime> game = start(std::nullopt);
+			CHECK_FALSE(game->GetScene()->IsInterpolationEnabled());
+			CHECK_FALSE(game->GetScene()->IsInterpolating());
+		}
+		SUBCASE("On where the program asks")
+		{
+			Scope<GameRuntime> game = start(true);
+			CHECK(game->GetScene()->IsInterpolating());
+		}
+		SUBCASE("Off where the manifest's Scene.Timing turns it off")
+		{
+			RewriteManifest(manifest, 5, { { ProjectSceneTiming::c_SectionId, { { "Version", 1 }, { "Value", { { "Interpolation", false } } } } } });
+			Scope<GameRuntime> game = start(true);
+			CHECK(game->GetScene()->IsInterpolationEnabled());
+			CHECK_FALSE(game->GetScene()->IsInterpolating());
+		}
+	}
+
 	TEST_CASE("A game whose start scene cannot be loaded does not start")
 	{
 		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeBrokenStart");

@@ -5347,6 +5347,8 @@ namespace Strata
 
 		// The entity's descendants moved with it.
 		UpdateDescendantsOfMovedBody(data, entity, false);
+		// A teleport is drawn where it lands, never blended from where the body was (with what rides on it).
+		scene.BreakInterpolation(entity);
 		return true;
 	}
 
@@ -5377,6 +5379,8 @@ namespace Strata
 			UpdatePolling(data, entity.GetHandle(), *record);
 		}
 		UpdateDescendantsOfMovedBody(data, entity, false);
+		// Drawn where it lands, never blended from where the character was.
+		data.OwnerScene->BreakInterpolation(entity);
 		return true;
 	}
 

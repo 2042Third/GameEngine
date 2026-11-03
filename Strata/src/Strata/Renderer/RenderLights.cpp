@@ -3,6 +3,7 @@
 
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
+#include "Strata/Scene/Scene.h"
 
 #include <entt/entt.hpp>
 
@@ -146,14 +147,18 @@ namespace Strata
 		return record != c_InvalidIndex && m_Entities[record] == entity ? record : c_InvalidIndex;
 	}
 
-	bool RenderLights::ComputeRecord(const entt::registry& registry, entt::entity entity, uint32_t type, RenderData::LightRecord& outRecord,
+	bool RenderLights::ComputeRecord(const Scene& scene, entt::entity entity, uint32_t type, RenderData::LightRecord& outRecord,
 		LightShadowSettings& outShadow) const
 	{
+		const entt::registry& registry = scene.GetRegistry();
 		if (!registry.valid(entity))
 			return false;
 		const WorldTransformComponent* world = registry.try_get<WorldTransformComponent>(entity);
 		if (!world)
 			return false;
+		// Where the scene draws the light (between fixed steps while it interpolates), as it draws what carries it.
+		const glm::mat4* drawn = scene.FindDrawnTransform(entity);
+		const glm::mat4& placed = drawn ? *drawn : world->Matrix;
 		// A drawn light that casts shadows is marked, with its settings within their registered ranges (values that are not
 		// finite take the defaults).
 		const auto setShadows = [&outRecord, &outShadow](bool castShadows, float bias, float normalBias, float filterRadius)
@@ -172,7 +177,7 @@ namespace Strata
 			const SpotLightComponent* light = registry.try_get<SpotLightComponent>(entity);
 			if (!light)
 				return false;
-			outRecord = MakeRecord(world->Matrix, world->ActiveInHierarchy, light->Color, light->Intensity, light->Range, type, light->InnerConeAngle,
+			outRecord = MakeRecord(placed, world->ActiveInHierarchy, light->Color, light->Intensity, light->Range, type, light->InnerConeAngle,
 				light->OuterConeAngle);
 			setShadows(light->CastShadows, light->ShadowBias, light->ShadowNormalBias, light->ShadowFilterRadius);
 			return true;
@@ -180,7 +185,7 @@ namespace Strata
 		const PointLightComponent* light = registry.try_get<PointLightComponent>(entity);
 		if (!light)
 			return false;
-		outRecord = MakeRecord(world->Matrix, world->ActiveInHierarchy, light->Color, light->Intensity, light->Range, type, 0.0f, 0.0f);
+		outRecord = MakeRecord(placed, world->ActiveInHierarchy, light->Color, light->Intensity, light->Range, type, 0.0f, 0.0f);
 		setShadows(light->CastShadows, light->ShadowBias, light->ShadowNormalBias, light->ShadowFilterRadius);
 		return true;
 	}
@@ -205,11 +210,11 @@ namespace Strata
 		}
 	}
 
-	bool RenderLights::UpdateRecord(const entt::registry& registry, entt::entity entity, uint32_t type)
+	bool RenderLights::UpdateRecord(const Scene& scene, entt::entity entity, uint32_t type)
 	{
 		RenderData::LightRecord record;
 		LightShadowSettings shadow;
-		if (!ComputeRecord(registry, entity, type, record, shadow))
+		if (!ComputeRecord(scene, entity, type, record, shadow))
 		{
 			const bool existed = Find(entity, type) != c_InvalidIndex;
 			Free(entity, type);
@@ -266,13 +271,13 @@ namespace Strata
 		LogChange(index);
 	}
 
-	uint32_t RenderLights::Sync(const entt::registry& registry, std::span<const entt::entity> transformChanges, bool allTransforms)
+	uint32_t RenderLights::Sync(const Scene& scene, std::span<const entt::entity> transformChanges, bool allTransforms, bool drawnChanged)
 	{
 		uint32_t updated = 0;
 		for (const QueuedLight& queued : m_Queued)
 		{
 			m_QueuedKeys[GetKey(queued.Entity, queued.Type)] = 0;
-			updated += UpdateRecord(registry, queued.Entity, queued.Type) ? 1u : 0u;
+			updated += UpdateRecord(scene, queued.Entity, queued.Type) ? 1u : 0u;
 		}
 		m_Queued.clear();
 		if (m_Count == 0)
@@ -282,17 +287,25 @@ namespace Strata
 			for (uint32_t index = 0; index < m_Entities.size(); index++)
 			{
 				if (m_Entities[index] != entt::null)
-					updated += UpdateRecord(registry, m_Entities[index], m_Types[index]) ? 1u : 0u;
+					updated += UpdateRecord(scene, m_Entities[index], m_Types[index]) ? 1u : 0u;
 			}
 			return updated;
 		}
-		for (const entt::entity entity : transformChanges)
+		const auto updateLights = [&](entt::entity entity)
 		{
 			for (uint32_t type = 0; type < c_LightTypes; type++)
 			{
 				if (Find(entity, type) != c_InvalidIndex)
-					updated += UpdateRecord(registry, entity, type) ? 1u : 0u;
+					updated += UpdateRecord(scene, entity, type) ? 1u : 0u;
 			}
+		};
+		for (const entt::entity entity : transformChanges)
+			updateLights(entity);
+		// A light riding what the fixed steps move is drawn with it on every frame, also on frames without a step.
+		if (drawnChanged)
+		{
+			for (const entt::entity entity : scene.GetInterpolatedEntities())
+				updateLights(entity);
 		}
 		return updated;
 	}
@@ -326,8 +339,9 @@ namespace Strata
 		return true;
 	}
 
-	bool RenderLights::Validate(const entt::registry& registry, std::string* outError) const
+	bool RenderLights::Validate(const Scene& scene, std::string* outError) const
 	{
+		const entt::registry& registry = scene.GetRegistry();
 		auto fail = [outError](const std::string& message)
 		{
 			if (outError)
@@ -347,7 +361,7 @@ namespace Strata
 			count++;
 			RenderData::LightRecord expected;
 			LightShadowSettings expectedShadow;
-			if (!ComputeRecord(registry, entity, m_Types[index], expected, expectedShadow))
+			if (!ComputeRecord(scene, entity, m_Types[index], expected, expectedShadow))
 				return fail("light record " + std::to_string(index) + " names an entity without its light component");
 			if (!RecordsEqual(expected, m_Records[index]) || !(expectedShadow == m_ShadowSettings[index]))
 				return fail("light record " + std::to_string(index) + " differs from its entity's light and transform");

@@ -223,6 +223,8 @@ The threading model, frame loop and pipelines these rules protect are described 
   (`Entity::MarkModified<TransformComponent>()`, `registry.patch` or `Scene::MarkTransformChanged`), and so must writes
   to names, tags, `MeshRendererComponent` and light fields. Hierarchy changes go through `Scene` (`SetParent`,
   `DestroyEntities`...), never by editing `RelationshipComponent` or `HierarchyComponent`.
+- **Drawn transforms:** fixed-step motion is drawn between its last two poses (`Scene.Timing`); renderers read
+  `Scene::FindDrawnTransform`, teleports call `BreakInterpolation` ([Interpolation](Docs/DeveloperGuide.md#interpolation)).
 - **Collision layers** are the project's (`Scene.CollisionLayers`); `Scene::GetPhysicsLayers` is a working copy applied
   on the main thread ([details](Docs/DeveloperGuide.md#collision-layers)).
 - **Physics tuning** is the project's `Physics.Simulation` section, applied by `PhysicsSystem` on the main thread;

@@ -36,7 +36,15 @@ namespace
 	// Runs editor commands like automation does and fails the test with the command's error.
 	struct FeatureEditor
 	{
-		EditorContext Context { EditorContextSpecification { false } };
+		// Play draws between fixed steps, as interactive editors do (EditorLayer turns it on with time dilation).
+		EditorContext Context { MakeSpecification() };
+
+		static EditorContextSpecification MakeSpecification()
+		{
+			EditorContextSpecification specification { false };
+			specification.Interpolation = true;
+			return specification;
+		}
 		EditorCommandRegistry Commands;
 
 		nlohmann::json Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
@@ -156,6 +164,7 @@ TEST_SUITE("Editor.FeatureTest")
 		EngineServices::ScopedProvider<IGameWindow> gameWindowProvider(gameWindow);
 		GameRuntimeOptions gameOptions;
 		gameOptions.SaveFilesDirectory = directory / "Saves";
+		gameOptions.Interpolation = true; // As a game that renders on the wall clock (StrataRuntime outside --frames runs)
 		const uint64_t cookedReads = CookedSceneReader::GetReadCount();
 		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error, gameOptions);
 		REQUIRE_MESSAGE(game, error);

@@ -248,6 +248,8 @@ TEST_SUITE("FeatureTest")
 		LogCapture log;
 		ResetScriptHostCallCounts();
 
+		// Drawn between fixed steps, as games are (the feature scripts check what they see of it).
+		scene->SetInterpolation(true);
 		scene->OnRuntimeStart();
 		const auto advanceFrame = [&]()
 		{

@@ -51,6 +51,11 @@ namespace
 		{
 		}
 
+		explicit CommandHarness(const EditorContextSpecification& specification)
+			: Context(specification)
+		{
+		}
+
 		// Runs a command to its end, as the editor's command runner does (scene.open, for one, answers frames later).
 		nlohmann::json Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
 		{
@@ -1754,6 +1759,63 @@ TEST_SUITE("Editor.Commands")
 		CHECK(settings["fixedRate"]["maxFixedSteps"] == 8);
 		CHECK(settings["fixedTimestep"].get<double>() == doctest::Approx(0.02));
 		CHECK(harness.Context.GetProject()->GetSettings().FindSection("Scene.Timing") == nullptr);
+	}
+
+	TEST_CASE("play.state and physics.stats report interpolation, which the project's Scene.Timing turns off while playing")
+	{
+		for (const bool switched : { true, false })
+		{
+			CAPTURE(switched);
+			// The editor turns interpolation on where it turns on time dilation (EditorLayer); a context without it never draws
+			// between steps.
+			EditorContextSpecification specification { false };
+			specification.Interpolation = switched;
+			CommandHarness harness(specification);
+			const std::filesystem::path directory = Tests::CreateTemporaryDirectory("EditorInterpolation") / "Game";
+			harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+			Scene& edited = *harness.Context.GetEditScene();
+			Tests::CreateGround(edited);
+			Tests::CreateDynamicBox(edited, "Box", glm::vec3(0.0f, 4.0f, 0.0f));
+			// Frames of a quarter step: the box falls in the steps and is drawn between them.
+			const auto play = [&harness]()
+			{
+				harness.Run("play.start");
+				for (int frame = 0; frame < 10; frame++)
+					harness.Context.Update(Timestep(1.0f / 240.0f));
+			};
+			play();
+			nlohmann::json interpolation = harness.Run("play.state")["running"]["interpolation"];
+			CHECK(interpolation["enabled"] == switched);
+			CHECK(interpolation["entities"].get<uint32_t>() == (switched ? 1u : 0u));
+			const float alpha = interpolation["stepAlpha"].get<float>();
+			CHECK((switched ? alpha >= 0.0f && alpha < 1.0f : alpha == 1.0f));
+			const nlohmann::json stats = harness.Run("physics.stats")["interpolation"];
+			CHECK(stats["enabled"] == switched);
+			CHECK(stats["blended"].get<uint32_t>() == (switched ? 1u : 0u));
+			CHECK(stats["composed"] == 0);
+			CHECK(stats["exact"] == 0);
+			if (!switched)
+				continue;
+
+			// Turned off while playing: drawn where it is from the next frame.
+			harness.Run("project.setSettings", { { "section", "Scene.Timing" }, { "value", { { "Interpolation", false } } } });
+			harness.Context.Update(Timestep(1.0f / 240.0f));
+			interpolation = harness.Run("play.state")["running"]["interpolation"];
+			CHECK(interpolation["enabled"] == false);
+			CHECK(interpolation["entities"] == 0);
+			CHECK(interpolation["stepAlpha"] == 1.0);
+			harness.Run("play.stop");
+			// The next play's copy of the edited scene keeps the project's choice.
+			play();
+			CHECK(harness.Run("play.state")["running"]["interpolation"]["enabled"] == false);
+			harness.Run("play.stop");
+			// Its undo after play gives the default back: the next play interpolates.
+			harness.Run("edit.undo");
+			CHECK(harness.Context.GetProject()->GetSettings().FindSection("Scene.Timing") == nullptr);
+			play();
+			CHECK(harness.Run("play.state")["running"]["interpolation"]["enabled"] == true);
+			harness.Run("play.stop");
+		}
 	}
 
 	TEST_CASE("Scenes the editor makes run the project's fixed rate and layers: scene.new, and a project opened without a start scene")

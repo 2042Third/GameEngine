@@ -377,9 +377,18 @@ namespace Strata
 			std::optional<PhysicsLibraryCounters> queried;
 			if (detail && physics && physics->GetWorld())
 				queried = physics->GetWorld()->ReadLibraryCounters();
+			// What is drawn between the last two fixed steps (Scene::SetInterpolation), by role (walks the set: per command).
+			const InterpolationStats interpolated = scene->GetInterpolationStats();
 			nlohmann::json result = {
 				{ "running", true },
 				{ "simulating", physics && physics->GetWorld() != nullptr },
+				{ "interpolation", {
+					{ "enabled", scene->IsInterpolating() },
+					{ "stepAlpha", scene->GetStepAlpha() },
+					{ "entities", interpolated.Entities },
+					{ "blended", interpolated.Blended },
+					{ "composed", interpolated.Composed },
+					{ "exact", interpolated.Exact } } },
 				{ "bodies", {
 					{ "total", stats.BodyCount },
 					{ "static", stats.StaticBodyCount },
@@ -1049,7 +1058,9 @@ namespace Strata
 			"(contactRecycleDistance in meters, sleepThreshold in m/s, contactHertz; effectiveContactHertz: what box3d uses, at most an eighth "
 			"of its substep rate, 30 at 60 fixed steps per second; contactDampingRatio, contactPushSpeed) and its source (project: the project's "
 			"Physics.Simulation section, which project.setSettings changes while the game runs, from its next fixed step; defaults); null "
-			"without a world. {running: false} while editing; simulating is false while a running scene has no physics components.",
+			"without a world. interpolation: what is drawn between the last two fixed steps (enabled, stepAlpha: how far between their poses "
+			"this frame draws; entities; blended: moved by the steps, composed: carried by what moved, exact: drawn where it is). {running: "
+			"false} while editing; simulating is false while a running scene has no physics components.",
 			ObjectSchema({ { "detail", BoolSchema("Read box3d's island and contact counters for this answer when they are not read every step "
 				"(default false)") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)

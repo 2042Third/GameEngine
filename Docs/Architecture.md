@@ -1008,6 +1008,8 @@ OnUpdateRuntime(dt)    paused without steps: only world transforms
                        8, or 2/15 s at the project's rate; backlog dropped; with time dilation catch-up steps
                        stop once the update's steps took longer than they simulated) -> OnLateUpdate, each on
                        the systems that take part in it -> flush deferred destruction -> world transforms
+                       interpolating: world transforms flushed before the steps, a capture pass after them
+                       (the set of what they moved), then the step alpha 1 - (1 - accumulator / step) / steps
 SetPaused(bool)        OnPausedChanged on every system; Step(n) runs n single fixed steps while paused
 OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reverse order, destruction flushed
 ```
@@ -1052,6 +1054,8 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   makes the next one owe even more. Tests and tools keep the default, every due step up to `Scene::GetMaxFixedSteps()`;
   exported games' `--frames` and `--seconds` runs also limit each update's timestep to what those steps simulate
   (`GameRuntimeOptions::KeepEveryFixedStep`), so they drop no step and their scenes' clocks keep up with the steps.
+  The same owners interpolate (`Scene::SetInterpolation`, as the project's `Scene.Timing` allows): what the fixed steps
+  move is drawn between its last two poses, a constant step behind the clock (Docs/DeveloperGuide.md, "Interpolation").
 - `SceneSettings` holds gravity, the fixed timestep (1/60 s), `MaxFixedStepsPerFrame`, `MaxEntitiesInstantiatedPerFrame` (see
   additive scenes below), the physics world's capacities
   (`PhysicsCapacity`: the room for bodies and contacts box3d reserves; 0, the default, sizes it automatically; each up to
@@ -1234,6 +1238,11 @@ the game (`EngineServices::ScopedProvider`, which restores the provider it repla
 
 A frame of a scene where nothing changed costs (almost) nothing, however many entities it holds (`Scene/Scene.h`,
 `Scene.cpp`):
+
+- **Drawn transforms** (`Scene/SceneInterpolation.cpp`): while a running scene interpolates, it keeps a set of what its
+  fixed steps moved (roots that blend between their two poses, descendants that compose with their parent's drawn
+  matrix), rebuilt by each stepping frame's capture, with drawn matrices computed when a renderer syncs; entities that
+  leave it, and breaks, are logged as transform changes so that every reader of the log draws them where they are.
 
 | Cache | Kept by | Read through |
 | --- | --- | --- |
@@ -2194,7 +2203,8 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
 
 The renderer's CPU cost and asset traffic follow what is visible and what changed, not the size of the scene
 (`Renderer/RenderScene.h`, `SpatialIndex.h`, `AssetResolveCache.h`, `SceneRenderer.h` and `SceneRendererExtraction.cpp`).
-A frame of `SceneRenderer::Render`:
+A frame of `SceneRenderer::Render` (its sync places proxies and light records at the scene's drawn transforms, walking
+the interpolated set whenever its version changed):
 
 ```text
 RenderScene::Get(scene).Sync()   world transforms, then the proxies of signaled mesh renderers and changed transforms,

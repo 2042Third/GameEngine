@@ -102,6 +102,22 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   `Metrics` (noise, screen-locked pattern, bands) in `metrics.csv`; tests measure flicker in motion with one meter for the
   wave (`Tests::MeasureFlicker`).
 
+**physics-timing: smooth at any frame rate**
+
+- Games and the editor's Play and Simulate draw bodies, characters and what scripts move in fixed updates between their
+  last two physics steps, so motion is smooth at any frame rate: the Third-Person robot running across the view moved by
+  up to 29.4 px (peak to peak, on a 4K screen) at 700 fps; now by 0.25 px at 731 fps and at most 0.37 px at 30, 60, 120,
+  144, 240 and 400-730 frames per second and at 30, 60, 120 and 240 steps per second. The simulation is unchanged. What
+  you see is a constant step behind the game's clock, about half a step (8 ms at 60 steps per second) more on average
+  than before and no more at worst; Project Settings > Physics > Timing > Interpolation turns it off. Its cost is that
+  moving shadow casters redraw their shadows on every frame instead of every step: with about 2,000 balls rolling in the
+  Physics Playground the editor's Game view ran at 356 instead of 501 fps (GPU 2.4 instead of 1.6 ms a frame, on an
+  RTX 5090); with interpolation off it costs nothing measurable.
+- New script API: `Time::GetStepAlpha`, `TransformComponent::GetDrawnPosition`, `GetDrawnRotation`, `ResetInterpolation`.
+- The Third-Person camera follows the robot as it is drawn and lets its arm out smoothly after something passed between
+  them.
+- `play.state` and `physics.stats` report interpolation.
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and
@@ -112,6 +128,7 @@ projects, the template and scenes or projects without the value get.
 | Contact shadow steps of the Graphics Quality presets | Low 0, Medium 0, High 12, Ultra 16 | 0 in every preset | lane Render |
 | Compiled shaders | glslang | slangc; pictures differ by rounding only | S0.10 |
 | First configure of a clone | offline after submodules | fetches Slang's archive once, or `STRATA_SLANG_ROOT` | S0.10 |
+| What games, Play and Simulate draw | each body's last fixed pose | between its last two fixed poses, a step behind the clock | physics-timing |
 
 ## Upgrading from 0.7.0
 
@@ -141,6 +158,10 @@ projects, the template and scenes or projects without the value get.
 | Reflection probes baked under the atmosphere | Their capture holds the sun's disk (clamped to 65,000 nits) | Bakes draw no disk | Bake them again (Bake Reflection Probes, or `lighting.bakeProbes`) to lose the bright patch; nothing to keep |
 | Reflection probes of lit shiny things | Their capture holds the lights' highlights as seen from the probe | Bakes keep the lights' diffuse light only | Bake them again to lose highlights in the wrong places; nothing to keep |
 | Spatial reflections' resolve | 3x3 neighbors, depth-weighted | 5x5 neighbors, plane-weighted: no screen door, about two pixels softer on mirrors at 4K | None |
+| **physics-timing** | | | |
+| Scripts that place something from a moving body's position every frame (a follow camera, an effect) | the body's last fixed pose, which is what was drawn | the body is drawn up to a step behind its last fixed pose, so it seems to jitter against them | read `GetDrawnPosition()`/`GetDrawnRotation()` in `OnLateUpdate` instead of the world position |
+| Scripts that move an entity far by setting its transform in `OnFixedUpdate` | drawn there at the step | drawn sliding there over a step if within 400 m/s | call `GetTransform().ResetInterpolation()` after the move |
+| What games, Play and Simulate draw | each body's last fixed pose | between its last two fixed poses | Project Settings > Physics > Timing > Interpolation off |
 
 ## Known issues
 
@@ -176,3 +197,12 @@ projects, the template and scenes or projects without the value get.
   argument buffers, as before), but no GPU test ran through MoltenVK. On Mesa's lavapipe (a CPU driver, tried on CI), 529
   of 553 GPU tests pass with the new shaders as with the old, and the same 24 fail with both; AMD and Intel GPUs have not
   run them.
+
+**physics-timing**
+
+- While a game runs on the clock, world-space game UI, editor gizmos, picking, reflection probes, fog and post-process
+  volumes, the sky and the sun, and attachments placed outside their animator's hierarchy use the simulated poses, up to
+  one step off what is drawn (exact while paused or stepped).
+- A character or body that rides something a script moves every frame in `OnUpdate` is drawn a step behind it (a
+  constant 5 cm at 3 m/s and 60 steps per second; it flickered between 0 and 5 cm before): move carriers in
+  `OnFixedUpdate` or as kinematic bodies.

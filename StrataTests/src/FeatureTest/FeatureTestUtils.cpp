@@ -402,6 +402,7 @@ namespace Strata::Tests
 			std::string error;
 			REQUIRE_MESSAGE(scene.ValidateWorldTransforms(&error), error);
 			REQUIRE_MESSAGE(scene.ValidateHierarchy(&error), error);
+			REQUIRE_MESSAGE(scene.ValidateInterpolation(&error), error);
 			if (GameUIScene* ui = GameUIScene::Find(scene))
 				REQUIRE_MESSAGE(ui->Validate(&error), error);
 			if (frame == c_FeatureReloadFrame)
@@ -418,6 +419,9 @@ namespace Strata::Tests
 		// One update per frame, across the hot reload (fields survive it).
 		CHECK(GetField<int32_t>(system, RequireEntity(scene, "Field Features"), "FieldFeatures", "Count") == -7 + c_FeatureFrames);
 		CHECK(GetField<int32_t>(system, RequireEntity(scene, "Lifecycle Features"), "LifecycleFeatures", "Reloads") == 1);
+		// Runs that interpolate drew frames between two steps' poses (the scripts checked them).
+		if (scene.IsInterpolationEnabled())
+			CHECK(GetField<int32_t>(system, RequireEntity(scene, "Interpolation Features"), "InterpolationFeatures", "BetweenSteps") > 0);
 
 		// The bodies rest where the physics probes saw them.
 		int32_t bodies = 0;

@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Scene/InterpolationTestUtils.h"
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/JsonUtils.h"
@@ -224,6 +225,43 @@ TEST_SUITE("Scripting.API")
 			INFO("Component ", name);
 			CHECK(probedComponents.contains(name));
 		}
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Interpolation API")
+	{
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		Scene scene;
+		scene.GetSettings().FixedTimestep = 1.0f / 64.0f;
+		Entity entity = scene.CreateEntity("Moving");
+		AddScriptEntry(entity, "InterpolationProbe");
+		scene.SetInterpolation(true);
+		scene.OnRuntimeStart();
+		ScriptSystem& system = GetScriptSystem(scene);
+
+		// What the script sees in OnLateUpdate is what the scene draws.
+		uint32_t between = 0;
+		for (int frame = 0; frame < 40; frame++)
+		{
+			scene.OnUpdateRuntime(Timestep(1.0f / 256.0f));
+			const float alpha = GetField<float>(system, entity, "InterpolationProbe", "Alpha");
+			CHECK(alpha == scene.GetStepAlpha());
+			const glm::mat4 drawn = scene.GetDrawnTransform(entity);
+			CHECK(glm::all(glm::epsilonEqual(GetField<glm::vec3>(system, entity, "InterpolationProbe", "DrawnPosition"), glm::vec3(drawn[3]), 1e-5f)));
+			const glm::quat rotation = glm::normalize(glm::quat_cast(glm::mat3(drawn)));
+			CHECK(std::abs(glm::dot(GetField<glm::quat>(system, entity, "InterpolationProbe", "DrawnRotation"), rotation)) > 0.99999f);
+			between += alpha < 1.0f && !SameMatrix(drawn, scene.GetWorldTransform(entity)) ? 1u : 0u;
+		}
+		CHECK(between > 20);
+
+		// A reset draws the world pose until the next step.
+		REQUIRE(system.SetFieldValue(entity, "InterpolationProbe", "ResetRequested", true));
+		const uint64_t steps = scene.GetFixedStepCount();
+		while (scene.GetFixedStepCount() == steps && !GetField<bool>(system, entity, "InterpolationProbe", "ResetDone"))
+			scene.OnUpdateRuntime(Timestep(1.0f / 256.0f));
+		CHECK(GetField<bool>(system, entity, "InterpolationProbe", "ResetDone"));
+		CHECK(glm::all(glm::epsilonEqual(glm::vec3(GetRenderedTransform(scene, entity)[3]), glm::vec3(scene.GetWorldTransform(entity)[3]), 1e-6f)));
+		CheckScriptChecks(system, entity, "InterpolationProbe", 9);
 		scene.OnRuntimeStop();
 	}
 
@@ -677,7 +715,7 @@ TEST_SUITE("Scripting.API")
 		const size_t firstFunction = offsetof(StrataScriptHostAPI, ABIVersion) + sizeof(host.ABIVersion);
 		REQUIRE(before.size() == (sizeof(StrataScriptHostAPI) - firstFunction) / sizeof(host.Log));
 		CHECK(before.front().Name == "Log");
-		CHECK(before.back().Name == "GraphicsSaveOptions");
+		CHECK(before.back().Name == "ResetInterpolation");
 		std::unordered_set<std::string_view> names;
 		for (const ScriptHostFunctionCalls& entry : before)
 		{

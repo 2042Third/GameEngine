@@ -3372,6 +3372,55 @@ namespace Strata
 		}
 
 		////////////////////////////////////////////////////////////////////////////////
+		// Interpolation (Scene::SetInterpolation)
+		////////////////////////////////////////////////////////////////////////////////
+
+		float HostGetStepAlpha(StrataScriptContext* context)
+		{
+			// Without a context: the latest pose, what a scene that does not interpolate draws.
+			return HostCall("GetStepAlpha", 1.0f, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "GetStepAlpha");
+				return system ? system->GetScene().GetStepAlpha() : 1.0f;
+			});
+		}
+
+		bool HostGetDrawnTransform(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptTransform* outTransform)
+		{
+			return HostCall("GetDrawnTransform", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "GetDrawnTransform");
+				const Entity target = system && outTransform ? RequireEntity(*system, entity, "GetDrawnTransform") : Entity();
+				if (!target)
+					return false;
+
+				glm::vec3 translation, scale;
+				glm::quat rotation;
+				if (!Math::DecomposeTransform(system->GetScene().GetDrawnTransform(target), translation, rotation, scale))
+				{
+					system->ReportProblem("GetDrawnTransform", fmt::format("the drawn transform of '{}' is degenerate", target.GetName()));
+					return false;
+				}
+				WriteTransform(translation, rotation, scale, *outTransform);
+				return true;
+			});
+		}
+
+		bool HostResetInterpolation(StrataScriptContext* context, StrataScriptEntityID entity)
+		{
+			return HostCall("ResetInterpolation", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "ResetInterpolation");
+				const Entity target = system ? RequireEntity(*system, entity, "ResetInterpolation") : Entity();
+				if (!target)
+					return false;
+				// Also for an entity that is not interpolated: nothing to reset is no misuse.
+				system->GetScene().BreakInterpolation(target);
+				return true;
+			});
+		}
+
+		////////////////////////////////////////////////////////////////////////////////
 		// The table
 		////////////////////////////////////////////////////////////////////////////////
 
@@ -3541,7 +3590,10 @@ namespace Strata
 	X(GraphicsSetOption) \
 	X(GraphicsGetOptionChoice) \
 	X(GraphicsResetOptions) \
-	X(GraphicsSaveOptions)
+	X(GraphicsSaveOptions) \
+	X(GetStepAlpha) \
+	X(GetDrawnTransform) \
+	X(ResetInterpolation)
 
 		struct HostFunctionEntry
 		{

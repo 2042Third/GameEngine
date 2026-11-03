@@ -137,7 +137,13 @@ ST_SCRIPT_CLASS(Turret)
   the frame's `deltaTime`) behaves the same in tests at any frame rate.
 - `Time`: `GetDeltaTime`, `GetFixedDeltaTime` (the scene's step: the project's `Scene.Timing` rate when it sets one),
   `GetElapsedTime`, `GetFrameIndex`, `Get/SetTimeScale`,
-  `GetUnscaledDeltaTime` and `GetRealTime` (they go on at time scale 0: pause menus, fades).
+  `GetUnscaledDeltaTime` and `GetRealTime` (they go on at time scale 0: pause menus, fades), `GetStepAlpha` (how far
+  between the last two fixed steps' poses the frame draws what they move; 1 while nothing interpolates).
+- Drawn poses: games, Play and Simulate draw what fixed steps move (bodies, characters, what `OnFixedUpdate` moves, what
+  rides on them) between its last two poses (the project's `Scene.Timing` Interpolation). Cameras and effects that follow
+  a moving body read `GetTransform().GetDrawnPosition()`/`GetDrawnRotation()` in `OnLateUpdate`, or the body judders against
+  them. Teleport with the body's or the controller's `Teleport` or, after setting a transform far away in
+  `OnFixedUpdate`, `GetTransform().ResetInterpolation()`; move what others ride in `OnFixedUpdate`.
 - `Input::GetTypedText()`: the UTF-8 text typed this frame (name entry, chat).
 - Input actions (the project's named controls, rebindable by players): `Input::IsActionDown/Pressed/Released("Jump")`,
   `GetActionValue`, `GetActionAxis`, `SetActionMapEnabled`/`IsActionMapEnabled`,

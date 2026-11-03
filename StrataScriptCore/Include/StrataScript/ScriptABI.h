@@ -736,6 +736,22 @@ extern "C"
 		bool (*GraphicsResetOptions)(StrataScriptContext* context, StrataScriptString option);
 		bool (*GraphicsSaveOptions)(StrataScriptContext* context);
 
+		/*
+		 * Interpolation (added after GraphicsSaveOptions, ABI version 1: check ST_SCRIPT_HAS_MEMBER before use). While the
+		 * scene interpolates (the project's Scene.Timing Interpolation, in exported games and the editor's Play and Simulate),
+		 * what the fixed steps move is drawn between its pose before the latest stepping frame's steps and its pose after them,
+		 * a constant one fixed step behind the scene's clock. GetStepAlpha is the fraction of the way this frame draws, from 0
+		 * to 1 (1 while the scene does not interpolate, is paused or is stepped), final after the frame's fixed steps
+		 * (OnLateUpdate; OnUpdate reads the previous frame's). GetDrawnTransform writes the entity's world transform as it is
+		 * drawn this frame (its world transform when nothing interpolates it): cameras and effects that follow a moving body
+		 * read it in OnLateUpdate. ResetInterpolation draws the entity and its descendants where they are until the next fixed
+		 * step moves them again: call it after moving an entity far by setting its transform in OnFixedUpdate (Teleport and
+		 * CharacterTeleport do it themselves). It fails only for an entity that does not exist.
+		 */
+		float (*GetStepAlpha)(StrataScriptContext* context);
+		bool (*GetDrawnTransform)(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptTransform* outTransform);
+		bool (*ResetInterpolation)(StrataScriptContext* context, StrataScriptEntityID entity);
+
 		/* New functions are appended here (see the compatibility rules above). */
 	} StrataScriptHostAPI;
 

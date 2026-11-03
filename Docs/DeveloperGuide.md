@@ -60,6 +60,7 @@ stays under 40,000 characters (the test `Docs.AgentGuide` fails beyond). How the
   - [Physics instruments](#physics-instruments)
   - [Settling and the sweep](#settling-and-the-sweep)
   - [Leaving the simulation](#leaving-the-simulation)
+  - [Interpolation](#interpolation)
 - [World partition](#world-partition)
 - [Game UI](#game-ui)
   - [The UI contract](#the-ui-contract)
@@ -1018,7 +1019,8 @@ short. Their full wording:
 - **Scene caches and the transform contract:** per-frame scene cost follows what changed. `Scene` mirrors the hierarchy
   as EnTT handle links (`HierarchyComponent`, `Scene/SceneHierarchy.h`), recomputes cached world transforms
   (`WorldTransformComponent`) only below entities whose transform changed, keeps `ActiveInHierarchy` exact as activity
-  and parents change, and indexes names and tags for `FindEntityByName`/`FindEntitiesByTag`. So **code that writes
+  and parents change, and indexes names and tags for `FindEntityByName`/`FindEntitiesByTag` (while it interpolates, it
+  also keeps drawn transforms of what the fixed steps moved: [Interpolation](#interpolation)). So **code that writes
   `TransformComponent` fields directly must signal the change**: `Entity::MarkModified<TransformComponent>()` or
   `registry.patch` (`ComponentAccess`, `Scene::SetWorldTransform`, the script API and `TransformEdit` do), or
   `Scene::MarkTransformChanged` where listeners must not hear an `on_update` (physics writing simulated poses back).
@@ -1372,6 +1374,10 @@ project's deliberate choice is not an incident.
   the recovery's new scene take the rate only there), when a project opens or closes, and after every change of the project's settings, its undo and redo
   (`EditorContext::ApplyProjectLayers`: the edited scene and the running one, which steps at a new rate from its next
   update; the accumulator holds seconds, so the remainder carries over). `Scene::Copy` keeps the rate; it is never saved.
+- **Interpolation.** The section's second field, the Bool `Interpolation` (default on), lets running scenes draw what
+  their fixed steps move between its last two poses ([Interpolation](#interpolation)); `ApplyProjectTiming` takes it with
+  the rate (the value's version changes when either field does), turning it off empties the scene's interpolated set, and
+  `Scene::Copy` carries it, so a play copy keeps the project's choice. Values stored without it read as on.
 - **Readers.** Code reads the step through `Scene::GetFixedTimestep()` and the cap through `Scene::GetMaxFixedSteps()`,
   never from `SceneSettings`: the fixed loop, `GameRuntime`'s `LimitToFixedSteps` (`KeepEveryFixedStep`), scripts'
   `Time::GetFixedDeltaTime`, physics' effective contact stiffness, audio's motion and the input commands' durations in
@@ -1384,8 +1390,10 @@ project's deliberate choice is not an incident.
   Timestep and Max Steps per Frame rows inactive with the reason (probes `Inspector.Scene.FixedTimestep.Inactive`,
   `Inspector.Scene.MaxFixedStepsPerFrame.Inactive`) and links the Timing page under the collision layers'
   (`Inspector.FixedRate`, `Inspector.FixedRate.Open`). The settings window draws the section with its generic page.
-- **Not a cure for jitter.** A higher rate halves the step-to-step motion a character moving above the step rate shows,
-  but does not remove it: that is drawing fixed poses between steps, which drawing interpolated poses solves.
+- **Not a cure for jitter.** With `Interpolation` off a higher rate halves the step-to-step motion a character moving
+  above the step rate shows, but does not remove it: that is drawing fixed poses between steps, which drawing
+  interpolated poses solves ([Interpolation](#interpolation)). With it on (the default) a higher rate halves the half step
+  of latency interpolation adds.
 - **Tests.** `Scene.Timing` (precedence, reset, no provider, copies and a change while running, 60 against a default
   scene, the section's validation, every hand-over), `Runtime.Game` (240 steps/s keeps every step of long frames),
   `Editor.Commands` (`project.setSettings`, `scene.info`, the warning, the contact stiffness at 30, undo), `Editor.Input`,
@@ -1903,7 +1911,12 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
   (`CharacterMove` to `PhysicsGetLayerIndex`) are appended to ABI version 1 after the Animator functions, then wave 4's
   world streaming functions (`WorldRequestCellsAround` to `WorldIsLayerEnabled`), then wave 6's input action functions
   (`InputIsActionDown` to `InputSaveBindings`, then the capture's `InputBeginBindingCapture` to
-  `InputCancelBindingCapture`), then wave 7's graphics options (`GraphicsGetOptionCount` to `GraphicsSaveOptions`).
+  `InputCancelBindingCapture`), then wave 7's graphics options (`GraphicsGetOptionCount` to `GraphicsSaveOptions`), then
+  wave 8's interpolation functions (`GetStepAlpha` to `ResetInterpolation`).
+- Drawn poses: `Time::GetStepAlpha`, `TransformComponent::GetDrawnPosition`, `GetDrawnRotation` (between the last two
+  fixed poses while the scene interpolates, else the world pose; read them in `OnLateUpdate` to follow a moving body)
+  and `ResetInterpolation` (after moving an entity far by setting its transform in `OnFixedUpdate`)
+  ([Interpolation](#interpolation)).
 - World streaming: `World::RequestCellsAround` (a `WorldCellRequest`, released with `Release`), `IsLoadedAround`,
   `SetLayerEnabled` and `IsLayerEnabled` (`StrataScript/World.h`) go through the scene service `IWorldStreaming` the
   World system offers in every running scene; in a scene that streams no world (`IWorldStreaming::IsStreaming` false)
@@ -2411,6 +2424,105 @@ filters skips parked bodies (`SetLayerCollisionMasks`: they take the matrix when
 `PhysicsStats::ParkedBodyCount` and `physics.stats`' `bodies.parked` count them; `Physics.Lifecycle` checks what finds
 and collides with them. In the request frame of `Perf.World.CellUnloadMaxFrame` this leaves Strata's own work, about 2
 ms, instead of box3d's first disable of the cell's 25,000 static bodies (6.6 ms alone).
+
+### Interpolation
+
+Fixed steps run at the scene's step rate (60 per second unless the project's `Scene.Timing` says otherwise), whatever the
+frame rate. Above the step rate most frames run no step: what the steps move would be drawn standing still and then
+jumping a whole step, against a camera a script places every frame, which reads as judder (29.4 px peak to peak on a 4K
+screen for the Third-Person robot at 702 fps in the wave 8 audit). A running scene that interpolates
+(`Scene::SetInterpolation`, `Scene/SceneInterpolation.cpp`) draws what its steps moved between its pose before the latest
+stepping frame's steps and its pose after them, a constant step behind the scene's clock, so motion is smooth at any frame
+rate. The simulation is untouched: `TransformComponent`, `WorldTransformComponent`, the accumulator, the step count and
+physics are those of a scene that does not interpolate (`Physics.Interpolation` and `Scene.Timing.Sweep` compare twins bit
+for bit). The technique is the published one of fixed steps with state interpolation; extrapolation, which overshoots at
+every stop and collision, and stepping physics by the frame's delta, which loses repeatability and every step-counting
+tool, were rejected.
+
+- **The set.** While the scene interpolates, an `UpdateWorldTransforms` before the fixed loop settles `OnUpdate`'s writes,
+  and after a frame's steps a capture pass of `UpdateWorldTransforms` records every matrix it overwrites: so the set holds
+  exactly what the steps changed (bodies, characters, what `OnFixedUpdate` moves) and what hangs below it (children,
+  lights, cameras, attachments). Each entry has a role: **Blend** (its own transform changed in the steps: drawn between
+  its two world poses, the translation linearly, the rotation by a normalized lerp along the shorter arc), **Compose**
+  (moved only with an ancestor: its parent's drawn matrix times its current local transform, so an attachment that
+  `PlaceAttachments` writes every frame stays on its joint, and a camera under a body sees what rides with it still) and
+  **Exact** (drawn where it is). Roots blend and descendants compose because blending a descendant's world poses would
+  lag its per-frame local writes (10.8 cm at 6.5 m/s). The set is kept parents first, in parallel arrays by slot, with a
+  slot map by entity index that compares the whole handle. An entity that stopped moving is not recomputed by the next
+  stepping frame, so it leaves the set then, logged as a transform change, and costs nothing afterwards.
+- **The alpha.** `GetStepAlpha() = 1 - (1 - accumulator / step) / steps`, with `steps` those of the stepping frame that
+  built the set: the drawn time `T + a - h` (T the latest step's end, a the accumulator, h the step) lies that far between
+  the poses at `T - n h` and `T`. Frames without a step keep the set, so the alpha grows with the accumulator; hitches, time
+  dilation and dropped backlogs only move the drawn time forward; at time scale 0 it freezes, and slow motion is drawn
+  smoothly. It is final after the frame's steps (`OnLateUpdate`); paused, stepped and not interpolating it is 1.
+- **Drawn matrices are computed when something draws.** `UpdateDrawnTransforms` (which `RenderScene::Sync` calls) brings
+  the world transforms and then the drawn matrices up to date, Blend and Exact entries on the job system above 1,024
+  entries, Compose entries after them in slot order, and returns at once while nothing changed (the same alpha, no write
+  to an entry since): a run that draws nothing never blends, and a frozen alpha costs nothing. `GetDrawnTransform` is
+  exact at any time (the cache when it is current, else computed from the set as the next update will: scripts reading it
+  in `OnLateUpdate` get exactly what will be drawn).
+- **Per-frame writes** to an entry, outside the capture: a translation of a Blend entry (more than 1e-5 of its distance
+  from the origin, at least 1 m) draws it where it was put until the next step (a script's per-frame move, an edit while
+  playing, a teleport outside the steps); a turn or a scale keeps the translation blending and draws the written rotation
+  and scale on every frame (the player turning to walk, root motion's turn: blending the turn from the captured rotation
+  would draw it lagging and catching up at every step); a write to an ancestor of a Blend entry, and a reparent of a
+  Compose entry, draw it exactly; a write to a Compose entry changes only its local transform.
+- **Exact when in doubt.** A teleport, a sheared world matrix, a failed decomposition, an entity created during the steps
+  without an interpolated parent, and a step longer than box3d's maximum speed times the time it simulated
+  (`Scene::c_MaxInterpolatedSpeed`, 400 m/s; `Physics.Settings` checks it against `b3DefaultWorldDef()`: a change of
+  either changes both) draw exact poses: a wrong exact pose costs at most a step of judder, a wrong blend draws a streak.
+  An entity created during the steps under an interpolated parent composes with it. A Blend's two poses share their
+  scale's signs: a root's pose keeps its authored ones (Scale (1, 1, -1)) where a decomposed matrix folds a mirror into X,
+  so the pose before the steps is rewritten with the root's signs (the same matrix; blending across would squash it
+  through zero scale), and a mirror that flipped during the steps draws exact.
+- **Breaks.** `Scene::BreakInterpolation` draws an entity and what blends below it where they are until the next step
+  moves them: during the steps it applies to the poses they leave, outside them at once (logged as transform changes).
+  `PhysicsWorld::Teleport` and `TeleportCharacter` call it; scripts call `ResetInterpolation`.
+- **Clears.** Pausing (gizmos, picking and captures agree with what is drawn), stepped frames (`play.step`,
+  `input.sequence`, `viewport.capture {atFixedStep}` armed while paused all draw exact poses), a change of the fixed
+  timestep, the project turning `Interpolation` off, `SetInterpolation(false)`, start and stop empty the set, every
+  entity of it logged as a transform change. Resuming needs nothing: the next stepping frame starts from the paused poses.
+  A live capture armed while the game runs on the clock shows the first frame drawn after its step.
+- **The switch.** A bare `Scene` does not interpolate. `GameRuntimeOptions::Interpolation` and
+  `EditorContextSpecification::Interpolation` turn it on where time dilation is on: `StrataRuntime` outside `--frames`
+  and `--seconds` runs when it renders, and the editor's Play and Simulate outside scripted runs (automation sessions
+  interpolate). The project's `Scene.Timing` field `Interpolation` (default on; the section stays version 1) turns it
+  off for a game; `Scene::ApplyProjectTiming` takes it and `Scene::Copy` carries it. Tests, tools and command files draw
+  what they simulate. `play.state`'s `running.interpolation` and `physics.stats`' `interpolation` report it.
+- **Who reads drawn transforms.** Mesh proxies (both draw paths: the GPU-driven path uploads every proxy change of the
+  frame, and motion vectors follow the drawn instances, so a body now moves a frame's worth in every frame), skinned
+  palettes (posed against the animator's drawn transform, or an interpolated skin would be posed back to its simulated
+  place), point and spot light records and so their shadow views (moving casters are redrawn at the frame rate, never
+  more often than a step frame redrew them), the scene camera and its lens' focus, and world-space text. Still simulated,
+  up to a step off what is drawn while a game runs on the clock: the sky and the sun's direction, fog and post-process
+  volumes, reflection probes, world-space game UI, editor gizmos and picking rays, audio (which smooths step motion
+  already), world streaming (which must follow the game) and attachments placed outside their animator's hierarchy.
+- **Rule for renderer code.** Place what is drawn with `Scene::FindDrawnTransform` after `UpdateDrawnTransforms` (worker
+  threads may call it while nothing changes the scene), or with `GetDrawnTransform` (code that runs before the frame's
+  render scene sync, as `SceneCamera::FromEntity` does), falling back to the world matrix; never read the set itself.
+  Readers of `GetWorldTransformChanges` see the entities whose drawn transform jumped back to their world transform too.
+- **Rule for game code.** Follow a moving body with `GetDrawnPosition`/`GetDrawnRotation` in `OnLateUpdate` (the
+  Third-Person `FollowCamera` does); a camera that follows the world position sees the body judder against it. Teleport
+  with `Teleport`, a controller's `Teleport` or, after setting a transform far away in `OnFixedUpdate`,
+  `ResetInterpolation`. Move what others ride (a platform) in `OnFixedUpdate` or as a kinematic body, so carrier and rider
+  are drawn on the same clock: a carrier moved every frame in `OnUpdate` is drawn where it is, its rider a step behind.
+- **Latency.** Drawn time is a constant step behind the scene's clock instead of between none and one step: half a step
+  more on average (about 8 ms at 60 steps per second; `FixedRate` 120 halves it), the same at worst. Cameras placed every
+  frame are not in the set, so looking around is unaffected.
+- **Memory and cost.** About 330 bytes per interpolated entity (the set, its rebuild scratch and the drawn matrix): 33 MB
+  at 100,000 awake bodies. A scene that does not interpolate walks today's loop (the walk is instantiated per hook: no
+  branch per entity). Interpolating, a stepping frame pays the capture and a frame without a step pays one blend per
+  moving entity and the proxy and light placement a step frame paid before (`Perf.Scene.InterpolatedStepFrame100k`,
+  `Perf.Scene.InterpolatedFrame100k`, `PerfGPU.Renderer.InterpolatedFrame32k`, all `Provisional`). On the development
+  machine (wave 8, temporary memory): 100,000 moving roots cost 0.29 ms a frame without a step (the blend on the job
+  system) and 5.5 ms a step frame against 2.6 ms without interpolation (the capture rebuilds about 170 bytes per moving
+  entity a step, so it is bound by memory: its ratio, 2.1, is above the 1.5 target); 32,768 moving cubes render a frame
+  without a step at 0.94 times a step frame's CPU time. In the editor, about 2,000 balls rolling in the Physics
+  Playground's pit ran at 356 fps with interpolation and 501 without: the GPU redraws the moving casters' shadow views
+  on every frame (`GPU.Shadows` 0.94 ms against 0.13, `GPU.Cull` 0.13 ms on frames without a step) and `Render.Extract`
+  places them (0.25 ms against 0.04). With it off, `Perf.Scene` and `Perf.Physics` measured against 0.7.0 showed no
+  difference beyond the runs' spread. Debug builds check the set with the caches (`ValidateInterpolation`), and the
+  feature runs after every frame.
 
 ## World partition
 
@@ -3569,6 +3681,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 
 ### Stepping a paused game
 
+- Paused and stepped frames draw the simulated poses exactly: pausing and stepping empty the scene's interpolated set
+  ([Interpolation](#interpolation)), so what `play.step` leaves is what the viewport and its captures show.
 - `play.step {steps, wait}` runs fixed steps of a paused game, one per frame, and answers once its last step ran (a
   deferred command: `{state, paused, stepsRun, frameIndex, time, fixedSteps}`), so clients read the state right after it
   without waiting frames. It counts in the game's own time base, `Scene::GetFixedStepCount` (fixed steps since the scene
@@ -3586,6 +3700,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 
 ### Simulated input
 
+- `input.sequence` pauses and steps, so it draws exact poses; `input.key {seconds}` and other inputs on the clock run
+  while the game interpolates ([Interpolation](#interpolation)), which changes what is drawn, never what is simulated.
 - **Simulated input** (`Editor/EditorInputCommands.cpp`) lets tools play a running game (play mode only) as a person
   would: `input.key {key, action: tap|press|release, steps | seconds, wait}`, `input.mouseButton {button, action, steps |
   seconds, wait}`, `input.mouseMove {position, wait}` (pixels from the Game view's top-left corner), `input.scroll {delta,
@@ -3989,6 +4105,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 ### Render scene
 
+- **Drawn transforms:** `RenderScene::Sync` brings its scene's drawn matrices up to date (`Scene::UpdateDrawnTransforms`)
+  and places proxies and light records at them (`GetDrawnTransform`: the poses' render transform, then
+  `Scene::FindDrawnTransform`, then the world matrix), walking the interpolated set again whenever its version changed
+  ([Interpolation](#interpolation)).
 - **Render scene** (Docs/Architecture.md, "Render scene"): what a frame draws comes from the scene's `RenderScene`, one
   per scene (in its registry's context, shared by every renderer of it): render proxies of the mesh renderers, updated
   only where components were signaled or transforms changed, in a `SpatialIndex` (loose grid) that the view frustum, the
@@ -4175,6 +4295,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 ### Motion vectors and TAA
 
+- What the fixed steps move is drawn between its poses on every frame while the scene interpolates, so its instances
+  move a frame's worth each frame (better reprojection and motion blur above the step rate) instead of standing still
+  and jumping ([Interpolation](#interpolation)); the motion history follows the drawn instances with no change.
 - A frame with `SceneRenderOptions::MotionVectors` (or `ShowMotionVectors`, the motion debug view, or TAA, or the motion blur:
   "Post-processing") writes each opaque and
   alpha-masked surface's motion since the renderer's previous frame into an RG16F velocity target
@@ -4305,6 +4428,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 ### Skinned meshes
 
+- A skin is posed against its animator's drawn transform (`EvaluatePose`: `Scene::FindDrawnTransform`, else the world
+  matrix), as its proxy is placed at its own, and the palettes' skip compares the drawn version, so an interpolated
+  character is skinned where it is drawn ([Interpolation](#interpolation)).
 - **Skinned meshes** (Docs/Architecture.md, "Render scene"): a mesh renderer with a `SkinComponent` is posed by the
   animator it names through the scene service `ISkinningPoses` (`Scene/SceneServices.h`; the renderer never includes the
   Animation module). `RenderScene::Sync` computes posed proxies' palettes (per skin joint, 3x4) and posed bounds only when

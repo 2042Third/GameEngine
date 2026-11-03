@@ -233,6 +233,10 @@ namespace Strata
 		const uint32_t previousRate = m_ProjectFixedRate;
 		m_ProjectFixedRate = timing->FixedRate;
 		m_ProjectTimingVersion = timing->Version;
+		m_ProjectInterpolation = timing->Interpolation;
+		// Turned off: every entity is drawn where it is from the next read.
+		if (!m_ProjectInterpolation)
+			ClearInterpolation();
 		return previousRate != m_ProjectFixedRate;
 	}
 
@@ -263,6 +267,9 @@ namespace Strata
 		destination->m_StoredLayersDiffer = source->m_StoredLayersDiffer;
 		destination->m_ProjectFixedRate = source->m_ProjectFixedRate;
 		destination->m_ProjectTimingVersion = source->m_ProjectTimingVersion;
+		// The copy carries the project's values it took the version from (ApplyProjectTiming on it returns at once). Its
+		// interpolated set starts empty and its switch off: programs set it, as they set time dilation.
+		destination->m_ProjectInterpolation = source->m_ProjectInterpolation;
 		destination->m_SourceAsset = source->m_SourceAsset;
 		destination->m_LocalLineageID = source->m_LocalLineageID;
 
@@ -1583,6 +1590,11 @@ namespace Strata
 
 	void Scene::UpdateWorldTransforms()
 	{
+		UpdateWorldTransforms(TransformPass::Update);
+	}
+
+	void Scene::UpdateWorldTransforms(TransformPass pass)
+	{
 		ST_PROFILE_FUNCTION();
 
 		if (m_DirtyTransforms.empty())
@@ -1613,16 +1625,48 @@ namespace Strata
 		if (frontier.empty())
 			return;
 
+		// The walk is instantiated per hook: a scene that does not interpolate (its set is empty) walks without one.
+		if (pass == TransformPass::Capture)
+			WalkWorldTransforms<TransformHook::Capture>(frontier);
+		else if (m_InterpolatedEntities.empty())
+			WalkWorldTransforms<TransformHook::None>(frontier);
+		else
+			WalkWorldTransforms<TransformHook::PerFrame>(frontier);
+	}
+
+	template<Scene::TransformHook Hook>
+	void Scene::WalkWorldTransforms(std::vector<entt::entity>& frontier)
+	{
 		auto& transforms = m_Registry.storage<TransformComponent>();
 		auto& worlds = m_Registry.storage<WorldTransformComponent>();
 		auto& hierarchy = m_Registry.storage<HierarchyComponent>();
-		const auto compute = [&](entt::entity handle)
+		// Per-frame rules: whether an entity of the set was recomputed, so that its drawn matrix may change (jobs store it).
+		std::atomic<bool> setRecomputed = false;
+		// `ancestorMoved`: an ancestor was recomputed in this pass. `captures`: where the capture pass records what it overwrites.
+		const auto compute = [&](entt::entity handle, [[maybe_unused]] bool ancestorMoved, [[maybe_unused]] std::vector<TransformCapture>& captures)
 		{
 			HierarchyComponent& node = hierarchy.get(handle);
+			glm::mat4& world = worlds.get(handle).Matrix;
+			if constexpr (Hook == TransformHook::Capture)
+				captures.push_back(TransformCapture { handle, world, node.TransformDirty, node.HasWorldTransform });
+			[[maybe_unused]] const bool ownChange = node.TransformDirty;
 			node.TransformDirty = false;
+			node.HasWorldTransform = true;
 			const glm::mat4 local = transforms.get(handle).GetTransform();
+			if constexpr (Hook == TransformHook::PerFrame)
+			{
+				const uint32_t slot = FindInterpolationSlot(handle);
+				if (slot != c_NoInterpolationSlot)
+				{
+					const glm::mat4 previous = world;
+					world = node.Parent == entt::null ? local : worlds.get(node.Parent).Matrix * local;
+					ApplyPerFrameRule(slot, handle, previous, ownChange, ancestorMoved);
+					setRecomputed.store(true, std::memory_order_relaxed);
+					return;
+				}
+			}
 			// The same association as GetWorldTransform, so both produce identical matrices.
-			worlds.get(handle).Matrix = node.Parent == entt::null ? local : worlds.get(node.Parent).Matrix * local;
+			world = node.Parent == entt::null ? local : worlds.get(node.Parent).Matrix * local;
 		};
 
 		std::vector<entt::entity>& changes = m_ChangeScratch;
@@ -1631,7 +1675,9 @@ namespace Strata
 		uint64_t updated = 0;
 
 		// Level by level while the set of independent subtrees is narrow (a single moved root fans out), then in parallel.
+		// The capture's records stay parents first: levels are appended in order, and each job walks whole subtrees.
 		std::vector<entt::entity> next;
+		bool firstLevel = true;
 		while (!frontier.empty())
 		{
 			if (frontier.size() >= c_ParallelTransformWidth && JobSystem::IsInitialized())
@@ -1645,15 +1691,18 @@ namespace Strata
 				{
 					std::vector<entt::entity> stack;
 					std::vector<entt::entity> localChanges;
+					std::vector<TransformCapture> localCaptures;
 					uint64_t localUpdated = 0;
 					for (uint32_t index = begin; index < end; index++)
 					{
 						stack.push_back(frontier[index]);
+						bool below = !firstLevel;
 						while (!stack.empty())
 						{
 							const entt::entity current = stack.back();
 							stack.pop_back();
-							compute(current);
+							compute(current, below, localCaptures);
+							below = true; // Everything after the frontier's entity lies below it
 							localUpdated++;
 							if (localChanges.size() <= c_MaxTransformChanges)
 								localChanges.push_back(current);
@@ -1663,11 +1712,16 @@ namespace Strata
 					}
 					parallelUpdated.fetch_add(localUpdated, std::memory_order_relaxed);
 					const size_t first = parallelChanges.fetch_add(static_cast<size_t>(localUpdated), std::memory_order_relaxed);
-					if (first < c_MaxTransformChanges)
+					if (first < c_MaxTransformChanges || Hook == TransformHook::Capture)
 					{
 						std::scoped_lock<std::mutex> lock(changesMutex);
-						const size_t take = std::min(localChanges.size(), c_MaxTransformChanges - first);
-						changes.insert(changes.end(), localChanges.begin(), localChanges.begin() + static_cast<ptrdiff_t>(take));
+						if (first < c_MaxTransformChanges)
+						{
+							const size_t take = std::min(localChanges.size(), c_MaxTransformChanges - first);
+							changes.insert(changes.end(), localChanges.begin(), localChanges.begin() + static_cast<ptrdiff_t>(take));
+						}
+						if constexpr (Hook == TransformHook::Capture)
+							m_Captures.insert(m_Captures.end(), localCaptures.begin(), localCaptures.end());
 					}
 				});
 				updated += parallelUpdated.load(std::memory_order_relaxed);
@@ -1679,7 +1733,7 @@ namespace Strata
 			next.clear();
 			for (const entt::entity handle : frontier)
 			{
-				compute(handle);
+				compute(handle, !firstLevel, m_Captures);
 				updated++;
 				if (changeCount++ < c_MaxTransformChanges)
 					changes.push_back(handle);
@@ -1687,8 +1741,11 @@ namespace Strata
 					next.push_back(child);
 			}
 			frontier.swap(next);
+			firstLevel = false;
 		}
 
+		if (setRecomputed.load(std::memory_order_relaxed))
+			m_DrawnStale = true;
 		m_TransformUpdateCount += updated;
 		RecordTransformChanges(++m_TransformsVersion, changes, changeCount > c_MaxTransformChanges);
 	}
@@ -1957,6 +2014,8 @@ namespace Strata
 		std::string error;
 		if (!ValidateWorldTransforms(&error) || !ValidateHierarchy(&error))
 			ST_CORE_ASSERT(false, "Scene '{}' has inconsistent caches: {}", m_Name, error);
+		if (!m_InterpolatedEntities.empty() && !ValidateInterpolation(&error))
+			ST_CORE_ASSERT(false, "Scene '{}' has an inconsistent interpolated set: {}", m_Name, error);
 	}
 
 #ifdef ST_DEBUG
@@ -2044,6 +2103,7 @@ namespace Strata
 		m_QuitRequest.reset();
 		m_SceneLoadRequest.reset();
 		m_SceneLoadProgress.reset();
+		ClearInterpolation();
 		UpdateWorldTransforms();
 
 		// In update order. Systems may look up the ones created before them (GetSystem) while they are constructed.
@@ -2102,6 +2162,7 @@ namespace Strata
 		}
 
 		FlushPendingDestroys();
+		ClearInterpolation();
 		m_IsRunning = false;
 		s_RunningSceneCount--;
 	}
@@ -2175,6 +2236,10 @@ namespace Strata
 
 		const float fixedTimestep = GetFixedTimestep();
 		const float deltaTime = stepping ? fixedTimestep : static_cast<float>(timestep) * m_TimeScale;
+		const bool interpolating = IsInterpolating();
+		// Stepped frames draw exactly; a new rate (the project's FixedRate, scene.setSettings) leaves poses of the old one.
+		if (stepping || (interpolating && m_InterpolationTimestep != 0.0f && fixedTimestep != m_InterpolationTimestep))
+			ClearInterpolation();
 		// Unscaled time goes on at time scale 0 (a pause menu's fades): the frame's timestep before the time scale, the fixed
 		// step while stepping.
 		m_UnscaledDeltaTime = stepping ? fixedTimestep : std::max(static_cast<float>(timestep), 0.0f);
@@ -2193,6 +2258,10 @@ namespace Strata
 		}
 		else
 		{
+			// While interpolating, the per-frame writes of OnUpdate settle first, so that the capture after the steps sees
+			// only what the steps changed. It computes matrices earlier, never other values.
+			if (interpolating)
+				UpdateWorldTransforms();
 			m_FixedTimeAccumulator += deltaTime;
 			const uint32_t maxSteps = GetMaxFixedSteps();
 			// The wall time one step stands for: the fixed timestep, stretched by slow motion.
@@ -2205,6 +2274,7 @@ namespace Strata
 				stepsStart = std::chrono::steady_clock::now();
 			uint32_t steps = 0;
 			bool dilated = false;
+			m_InFixedSteps = interpolating;
 			while (m_FixedTimeAccumulator >= fixedTimestep && steps < maxSteps)
 			{
 				if (stepsStart && steps > 0)
@@ -2236,6 +2306,17 @@ namespace Strata
 				m_DroppedFixedSteps += static_cast<uint64_t>(std::floor((m_FixedTimeAccumulator - fixedTimestep) / fixedTimestep));
 				m_FixedTimeAccumulator = fixedTimestep;
 			}
+			m_InFixedSteps = false;
+
+			if (interpolating)
+			{
+				if (steps > 0)
+					CaptureInterpolation(steps, fixedTimestep);
+				// Drawn one step behind the clock: the latest step ended at T, the set holds the poses at T - n h and T, and
+				// T + a - h lies 1 - (1 - a / h) / n of the way between them (Docs/DeveloperGuide.md, "Interpolation").
+				const float behind = 1.0f - std::min(m_FixedTimeAccumulator / fixedTimestep, 1.0f);
+				m_StepAlpha = std::clamp(1.0f - behind / static_cast<float>(m_InterpolationSteps), 0.0f, 1.0f);
+			}
 		}
 
 		ForEachSystemCall(m_LateUpdateCalls, [deltaTime](SceneSystem& system) { system.OnLateUpdate(Timestep(deltaTime)); });
@@ -2261,6 +2342,10 @@ namespace Strata
 			m_StepFrames = 0;
 		if (!m_IsRunning)
 			return;
+		// A paused game is drawn exactly, so that gizmos, picking and captures agree with what is drawn. Resuming needs nothing:
+		// the next stepping frame's set starts from the paused poses.
+		if (paused)
+			ClearInterpolation();
 		for (const Scope<SceneSystem>& system : m_Systems)
 			system->OnPausedChanged(paused);
 	}

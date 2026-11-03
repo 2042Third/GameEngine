@@ -117,6 +117,10 @@ namespace Strata
 		// (Scene::SetTimeDilation). The editor turns it on for interactive and automation sessions; off by default, so that
 		// tests and scripted runs step deterministically.
 		bool TimeDilation = false;
+		// Running scenes (Play and Simulate) draw what their fixed steps move between its last two poses (Scene::SetInterpolation,
+		// as the project's Scene.Timing allows). The editor turns it on where it turns on time dilation; off by default, so
+		// that tests and scripted runs draw what they simulate.
+		bool Interpolation = false;
 		// Opening a project imports what needs it in the background (ScanImports::InBackground): the project opens at once and
 		// frames go on while textures compress, the assets arriving as their imports finish. The editor turns it on for
 		// interactive and automation sessions; off by default, so that tests and scripted runs find every asset imported.

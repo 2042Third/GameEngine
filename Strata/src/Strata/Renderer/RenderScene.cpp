@@ -164,6 +164,8 @@ namespace Strata
 		// The copy's transform log starts afresh: changes the source had not read yet are read by comparing every proxy.
 		clone->m_RefreshTransforms = from->m_RefreshTransforms || from->m_TransformsVersion != source.GetTransformsVersion();
 		clone->m_TransformsVersion = destination.GetTransformsVersion();
+		// The copy's drawn transforms are its own scene's: the next sync places the proxies of its set.
+		clone->m_DrawnVersion = ~0ull;
 		// The copy's services are its own: the next sync asks them again (entities drawn elsewhere go back otherwise).
 		clone->m_RenderTransformsProvider = nullptr;
 		clone->m_RenderTransformsVersion = ~0ull;
@@ -314,7 +316,9 @@ namespace Strata
 	uint32_t RenderScene::Sync(const Ref<AssetManagerBase>& assets, uint32_t maxPending)
 	{
 		ST_PROFILE_FUNCTION();
-		m_Scene->UpdateWorldTransforms();
+		// The world transforms, then the drawn ones (a scene that interpolates: Scene::UpdateDrawnTransforms), which every proxy
+		// write below reads through GetDrawnTransform.
+		m_Scene->UpdateDrawnTransforms();
 		m_SyncCount++;
 		m_SyncUpdates = 0;
 		entt::registry& registry = m_Scene->GetRegistry();
@@ -355,7 +359,24 @@ namespace Strata
 			m_RefreshTransforms = false;
 		}
 		m_TransformsVersion = m_Scene->GetTransformsVersion();
-		m_Lights.Sync(registry, m_ChangeScratch, !transformsLogged);
+		// What the fixed steps moved is drawn between their poses: placed again whenever the drawn matrices changed (on every
+		// frame while something moves, also without a step). Unchanged matrices compare equal (UpdateProxyTransform).
+		const bool drawnChanged = m_Scene->GetDrawnTransformsVersion() != m_DrawnVersion;
+		if (drawnChanged)
+		{
+			for (const entt::entity entity : m_Scene->GetInterpolatedEntities())
+			{
+				if (!registry.valid(entity))
+					continue;
+				const uint32_t proxy = FindProxy(entity);
+				if (proxy == c_InvalidIndex)
+					continue;
+				const WorldTransformComponent& world = registry.get<WorldTransformComponent>(entity);
+				UpdateProxyTransform(proxy, GetDrawnTransform(entity, world), world.ActiveInHierarchy, false);
+			}
+			m_DrawnVersion = m_Scene->GetDrawnTransformsVersion();
+		}
+		m_Lights.Sync(*m_Scene, m_ChangeScratch, !transformsLogged, drawnChanged);
 		UpdateMeshLayouts(assets);
 		UpdateSkinnedPoses();
 		m_Index.Refresh();
@@ -401,6 +422,8 @@ namespace Strata
 			if (auto it = m_RenderTransforms.find(entity); it != m_RenderTransforms.end())
 				return it->second;
 		}
+		if (const glm::mat4* drawn = m_Scene->FindDrawnTransform(entity))
+			return *drawn;
 		return world.Matrix;
 	}
 
@@ -1271,13 +1294,17 @@ namespace Strata
 		const WorldTransformComponent* animatorWorld = m_Scene->GetRegistry().try_get<WorldTransformComponent>(inputs.Animator);
 		if (!animatorWorld)
 			return inputs;
+		// Where the animator is drawn (between fixed steps while the scene interpolates), as its proxy is: against its world
+		// transform an interpolated skin would be posed back to its simulated place.
+		const glm::mat4* drawnAnimator = m_Scene->FindDrawnTransform(inputs.Animator);
+		const glm::mat4& animatorMatrix = drawnAnimator ? *drawnAnimator : animatorWorld->Matrix;
 
 		// The pose is relative to the animator's entity; the proxy draws in its own space.
 		const glm::mat4 proxyWorld = m_Transforms[proxy].ToMatrix();
 		const float determinant = glm::determinant(glm::mat3(proxyWorld));
-		if (!std::isfinite(determinant) || std::abs(determinant) < c_MinDeterminant || !IsFiniteMatrix(proxyWorld) || !IsFiniteMatrix(animatorWorld->Matrix))
+		if (!std::isfinite(determinant) || std::abs(determinant) < c_MinDeterminant || !IsFiniteMatrix(proxyWorld) || !IsFiniteMatrix(animatorMatrix))
 			return inputs;
-		inputs.AnimatorToProxy = InverseAffine(proxyWorld) * animatorWorld->Matrix;
+		inputs.AnimatorToProxy = InverseAffine(proxyWorld) * animatorMatrix;
 		inputs.AnimatorToProxy[0][3] = 0.0f;
 		inputs.AnimatorToProxy[1][3] = 0.0f;
 		inputs.AnimatorToProxy[2][3] = 0.0f;
@@ -1322,8 +1349,9 @@ namespace Strata
 		const uint64_t posesVersion = poses ? poses->GetPosesVersion() : 0;
 		const uint64_t transformsVersion = m_Scene->GetTransformsVersion();
 		const uint64_t hierarchyVersion = m_Scene->GetHierarchyVersion(); // Animator entities created or destroyed
+		const uint64_t drawnVersion = m_Scene->GetDrawnTransformsVersion(); // Animators drawn between fixed steps
 		if (!m_SkinDirty && poses == m_PosesProvider && posesVersion == m_PosesVersion && transformsVersion == m_SkinTransformsVersion
-			&& hierarchyVersion == m_SkinHierarchyVersion)
+			&& hierarchyVersion == m_SkinHierarchyVersion && drawnVersion == m_SkinDrawnVersion)
 			return;
 		m_SkinDirty = false;
 		// Versions are a provider's own: another provider's (the play copy's animation system after the editor's rest poses,
@@ -1333,6 +1361,7 @@ namespace Strata
 		m_PosesVersion = posesVersion;
 		m_SkinTransformsVersion = transformsVersion;
 		m_SkinHierarchyVersion = hierarchyVersion;
+		m_SkinDrawnVersion = drawnVersion;
 
 		m_PoseWork.clear();
 		for (uint32_t index = 0; index < m_Skins.size(); index++)
@@ -1494,7 +1523,8 @@ namespace Strata
 				|| ((m_Flags[proxy] & RenderProxyFlags::CastShadows) != 0) != renderer.CastShadows)
 				return fail(fmt::format("the proxy of entity {} has another mesh, material or shadow setting than its MeshRendererComponent", static_cast<uint32_t>(entity)));
 			const auto drawnAt = renderTransforms.find(entity);
-			const glm::mat4& drawn = drawnAt != renderTransforms.end() ? drawnAt->second : world.Matrix;
+			const glm::mat4* interpolated = m_Scene->FindDrawnTransform(entity);
+			const glm::mat4& drawn = drawnAt != renderTransforms.end() ? drawnAt->second : interpolated ? *interpolated : world.Matrix;
 			if (!SameBytes(m_Transforms[proxy], RenderData::AffineTransform::FromMatrix(drawn))
 				|| ((m_Flags[proxy] & RenderProxyFlags::Active) != 0) != world.ActiveInHierarchy)
 				return fail(fmt::format("the proxy of entity {} has another world transform or activity than the entity", static_cast<uint32_t>(entity)));
@@ -1636,7 +1666,7 @@ namespace Strata
 		}
 		// The lights, once every signaled light was read (a partial sync reads them all, so after any sync).
 		std::string lightError;
-		if (!m_Lights.Validate(registry, &lightError))
+		if (!m_Lights.Validate(*m_Scene, &lightError))
 			return fail(lightError);
 		return true;
 	}

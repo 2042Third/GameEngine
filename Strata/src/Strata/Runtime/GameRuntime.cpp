@@ -85,6 +85,7 @@ namespace Strata
 		if (options.AssetBudgets)
 			runtime->m_AssetManager->SetResidencyBudgets(*options.AssetBudgets);
 		runtime->m_TimeDilation = options.TimeDilation;
+		runtime->m_Interpolation = options.Interpolation;
 		runtime->m_KeepEveryFixedStep = options.KeepEveryFixedStep;
 		if (options.PrepareRenderScenes)
 			runtime->m_LoadOptions.Prepare = &RenderScene::PrepareLoadedScene;
@@ -214,6 +215,7 @@ namespace Strata
 		m_Scene = std::move(scene);
 		m_SceneHandle = handle;
 		m_Scene->SetTimeDilation(m_TimeDilation);
+		m_Scene->SetInterpolation(m_Interpolation);
 		m_Scene->OnRuntimeStart(SceneRuntimeMode::Play);
 		// What the previous scene used, this one's load did not bring in and this one does not request in its first frames is
 		// released then.
