@@ -123,7 +123,7 @@ float4 TraceReflection(int2 pixel, int2 size)
 	float colorLevel = surface.z * float(max(u_Reflections.ColorLevels, 1u) - 1u);
 	float3 blurred = u_PreviousColorLevels.SampleLevel(u_LinearClampSampler, previousUV, colorLevel).rgb;
 	float3 color = lerp(sharp, blurred, smoothstep(c_SharpRoughness, c_BlurredRoughness, surface.z)) * u_Reflections.HistoryScale;
-	float confidence = roughnessFade * GetHitConfidence(hitUV, hitPixel, ray.Direction) * min(u_Reflections.Intensity, 1.0);
+	float confidence = roughnessFade * GetHitConfidence(hitUV, hitPixel, ray) * min(u_Reflections.Intensity, 1.0);
 	return float4(SanitizeHDR(color) * confidence, confidence);
 }
 

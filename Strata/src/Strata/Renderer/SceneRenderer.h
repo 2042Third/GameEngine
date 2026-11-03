@@ -888,6 +888,8 @@ namespace Strata
 		// confidence). Null until a frame traces them; released with the other targets.
 		nvrhi::ITexture* GetSurfaceTexture() const { return m_SurfaceTexture; }
 		nvrhi::ITexture* GetScreenReflectionTexture() const { return m_ScreenReflectionTexture; }
+		// Spatial and SpatialHigh's trace before the resolve (the same layout at full resolution); null in the other modes.
+		nvrhi::ITexture* GetTracedReflectionTexture() const { return m_TracedReflectionTexture; }
 		// The scene-color copy transmissive surfaces read (SceneRendererStats::SceneColorCopies): the HDR image before the
 		// transparent pass, at half resolution with mips, B10G11R11 or RGBA16F (SceneRendererSpecification::
 		// ExtendedStorageFormats). Null until a frame draws a transmissive surface; released with the other targets.

@@ -5322,8 +5322,12 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   `GPU.SceneRenderer.SSR`'s "whole" case), and
   fetches the history (bilinear) where that surface was, along the velocity at the hit pixel, scaled to the frame's
   pre-exposure: alpha the confidence, `ScreenSpaceReflectionsIntensity` times fades over the last quarter below
-  `ScreenSpaceReflectionsMaxRoughness`, the screen's outer 10% and hits on surfaces the ray meets from behind (the depth
-  buffer holds front faces); rgb the reflected luminance, pre-exposed and multiplied by the confidence. Rays that a normal
+  `ScreenSpaceReflectionsMaxRoughness`, hits on surfaces the ray meets from behind (the depth buffer holds front faces)
+  and, only for a ray whose end is where it leaves the screen (`ScreenRay::LeavesScreen`, not the far or the near plane),
+  a fade over the last tenth of the screen's smaller side the ray has left to its exit (`GetHitConfidence`: what it would
+  have met beyond the edge is unknown; a ray going up the screen that hits a wall beside its left edge keeps its whole
+  confidence, where Strata 0.7.0 faded every hit within 10% of every side and showed the sky in wedges at the sides of wet
+  ground); rgb the reflected luminance, pre-exposed and multiplied by the confidence. Rays that a normal
   map turns into their surface, rays that leave the screen or meet only the sky, and hits whose surface was outside the
   previous frame get none. `Scene/Forward.frag` samples the result bilinearly (scene-set SRV 18, when
   `FrameConstants::ReflectionParams.x` is 1) and mixes it over the probes' and the sky's specular radiance before the

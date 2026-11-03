@@ -110,7 +110,7 @@ float4 TraceReflection(int2 pixel, int2 size)
 	if (any((previousUV < float2(0.0))) || any((previousUV > float2(1.0))))
 		return float4(0.0);
 	float3 color = u_History.SampleLevel(u_LinearClampSampler, previousUV, 0.0).rgb * u_Reflections.HistoryScale;
-	float confidence = roughnessFade * GetHitConfidence(hitUV, hitPixel, ray.Direction) * min(u_Reflections.Intensity, 1.0);
+	float confidence = roughnessFade * GetHitConfidence(hitUV, hitPixel, ray) * min(u_Reflections.Intensity, 1.0);
 	return float4(SanitizeHDR(color) * confidence, confidence);
 }
 

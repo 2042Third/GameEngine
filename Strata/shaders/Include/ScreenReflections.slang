@@ -12,7 +12,9 @@ static const float c_FarDistance = 10000.0; // How far rays away from the camera
 // changes between the two points' pixels) in meters and as a fraction of the ray's distance.
 static const float c_MinThickness = 0.05;
 static const float c_ThicknessScale = 0.02;
-static const float c_EdgeFade = 0.1; // Hits within this fraction of the screen's size from its edges fade
+// A hit whose ray would have gone on beyond the screen's edge fades over the last this fraction of the screen's smaller side
+// the ray has left to its exit: what it would have met there is unknown.
+static const float c_EdgeFade = 0.1;
 
 // The view distance (along the camera's forward axis) of a depth: the inverse projection's z and w rows do not depend on x and
 // y (the jitter only offsets them). Only for depths in front of the far plane (above 0, reversed-Z).
@@ -23,14 +25,15 @@ float GetViewDistance(float depth)
 }
 
 // A reflected ray in screen space: UV and depth at its start and their change to its end (the screen's edge, the far plane
-// or the near plane, whichever it meets first; the depth changes linearly along it), its length in pixels, and its view-space
-// direction.
+// or the near plane, whichever it meets first; the depth changes linearly along it), its length in pixels, its view-space
+// direction, and whether its end is where it leaves the screen (not the far plane, not the near plane).
 struct ScreenRay
 {
 	float3 Start;
 	float3 Delta;
 	float Pixels;
 	float3 Direction;
+	bool LeavesScreen;
 };
 
 // The ray reflected at a pixel (its depth, above 0) about a view-space normal: false when it goes into the geometric surface
@@ -40,6 +43,7 @@ bool BeginScreenRay(int2 pixel, float depth, float3 normal, out ScreenRay ray)
 	ray.Start = float3(0.0);
 	ray.Delta = float3(0.0);
 	ray.Pixels = 0.0;
+	ray.LeavesScreen = false;
 	float2 uv = (float2(pixel) + 0.5) * u_Frame.ViewportSize.zw;
 	float4 viewPoint = mul(u_Frame.InverseProjection, float4(UVToNDC(uv), depth, 1.0));
 	float3 position = viewPoint.xyz / viewPoint.w;
@@ -62,17 +66,18 @@ bool BeginScreenRay(int2 pixel, float depth, float3 normal, out ScreenRay ray)
 	// In screen space (UV and depth) the ray is a straight line along which the depth changes linearly.
 	float3 start = float3(NDCToUV(startClip.xy / startClip.w), startClip.z / startClip.w);
 	float3 delta = float3(NDCToUV(endClip.xy / endClip.w), endClip.z / endClip.w) - start;
-	// Cut where it leaves the screen or passes the far plane (depth 0).
-	float extent = 1.0;
+	// Cut where it leaves the screen or passes the far plane (depth 0), whichever comes first.
+	float screenExtent = 1.0;
 	for (int axis = 0; axis < 2; axis++)
 	{
 		if (delta[axis] > 0.0)
-			extent = min(extent, (1.0 - start[axis]) / delta[axis]);
+			screenExtent = min(screenExtent, (1.0 - start[axis]) / delta[axis]);
 		else if (delta[axis] < 0.0)
-			extent = min(extent, -start[axis] / delta[axis]);
+			screenExtent = min(screenExtent, -start[axis] / delta[axis]);
 	}
-	if (delta.z < 0.0)
-		extent = min(extent, -start.z / delta.z);
+	float depthExtent = delta.z < 0.0 ? -start.z / delta.z : 1.0;
+	float extent = min(screenExtent, depthExtent);
+	ray.LeavesScreen = screenExtent < 1.0 && screenExtent <= depthExtent;
 	delta *= max(extent, 0.0);
 	ray.Start = start;
 	ray.Delta = delta;
@@ -80,13 +85,19 @@ bool BeginScreenRay(int2 pixel, float depth, float3 normal, out ScreenRay ray)
 	return ray.Pixels >= 1.0;
 }
 
-// How much a hit at `hitUV` (pixel `hitPixel`) of a ray along `direction` is believed: the depth buffer holds front faces
-// only, so a surface the ray meets from behind is not what it would see, and hits near the screen's edges fade.
-float GetHitConfidence(float2 hitUV, int2 hitPixel, float3 direction)
+// How much a hit at `hitUV` (pixel `hitPixel`) of a ray is believed: the depth buffer holds front faces only, so a surface the
+// ray meets from behind is not what it would see; and where the ray leaves the screen, a hit close to its exit fades (what
+// the ray would have met beyond the edge is unknown), while one whose ray ends at the far or near plane, or that is close to
+// an edge the ray does not cross, does not.
+float GetHitConfidence(float2 hitUV, int2 hitPixel, ScreenRay ray)
 {
-	float facing = clamp(-4.0 * dot(OctahedralDecode(TexelFetch(u_Normals, hitPixel, 0).rg), direction), 0.0, 1.0);
-	float2 edges = min(hitUV, 1.0 - hitUV);
-	float edgeFade = clamp(min(edges.x, edges.y) / c_EdgeFade, 0.0, 1.0);
+	float facing = clamp(-4.0 * dot(OctahedralDecode(TexelFetch(u_Normals, hitPixel, 0).rg), ray.Direction), 0.0, 1.0);
+	float edgeFade = 1.0;
+	if (ray.LeavesScreen)
+	{
+		float remaining = length((ray.Start.xy + ray.Delta.xy - hitUV) * u_Frame.ViewportSize.xy); // Pixels to the exit
+		edgeFade = clamp(remaining / (c_EdgeFade * min(u_Frame.ViewportSize.x, u_Frame.ViewportSize.y)), 0.0, 1.0);
+	}
 	return facing * edgeFade;
 }
 

@@ -162,6 +162,72 @@ namespace
 		return red;
 	}
 
+	// What the CPU predicts of a floor pixel's reflected ray (Include/ScreenReflections.slang, BeginScreenRay and
+	// GetHitConfidence) when the scene is a mirror floor (y = 0) and a wall facing +Z at z = c_FadeWallZ.
+	constexpr float c_FadeWallZ = -4.0f;
+	constexpr float c_FadeWallTop = 8.0f;
+	constexpr float c_FadeWallHalfWidth = 30.0f;
+
+	struct PredictedRay
+	{
+		bool HitsWall = false;      // The ray from the floor meets the wall's face (2 px or more inside its outline)
+		bool LeavesThroughTop = false;
+		float Remaining = 0.0f;     // Pixels from the hit to where the ray leaves the screen (0 when it does not)
+		float Confidence = 0.0f;    // The hit's confidence with the direction-aware fade
+	};
+
+	PredictedRay PredictFloorRay(const SceneCamera& camera, uint32_t size, const glm::vec2& pixel)
+	{
+		PredictedRay predicted;
+		const glm::mat4 viewProjection = camera.Projection * camera.View;
+		const glm::mat4 inverseViewProjection = glm::inverse(viewProjection);
+		const glm::vec2 ndc(2.0f * pixel.x / static_cast<float>(size) - 1.0f, 1.0f - 2.0f * pixel.y / static_cast<float>(size));
+		const glm::vec4 nearPoint = inverseViewProjection * glm::vec4(ndc, 1.0f, 1.0f);
+		const glm::vec3 direction = glm::normalize(glm::vec3(nearPoint) / nearPoint.w - camera.Position);
+		if (!(direction.y < -1e-4f))
+			return predicted;
+		const glm::vec3 floorPoint = camera.Position + direction * (-camera.Position.y / direction.y);
+		if (floorPoint.z < c_FadeWallZ)
+			return predicted;
+		const glm::vec3 reflected(direction.x, -direction.y, direction.z);
+		// The screen-space ray to a far point, cut where it leaves the screen or passes the far plane (depth 0).
+		const auto toScreen = [&viewProjection](const glm::vec3& point)
+		{
+			const glm::vec4 clip = viewProjection * glm::vec4(point, 1.0f);
+			return glm::vec3(clip.x / clip.w * 0.5f + 0.5f, 0.5f - clip.y / clip.w * 0.5f, clip.z / clip.w);
+		};
+		const glm::vec3 start = toScreen(floorPoint);
+		const glm::vec3 delta = toScreen(floorPoint + reflected * 10000.0f) - start;
+		float screenExtent = 1.0f;
+		for (int axis = 0; axis < 2; axis++)
+		{
+			if (delta[axis] > 0.0f)
+				screenExtent = std::min(screenExtent, (1.0f - start[axis]) / delta[axis]);
+			else if (delta[axis] < 0.0f)
+				screenExtent = std::min(screenExtent, -start[axis] / delta[axis]);
+		}
+		const float depthExtent = delta.z < 0.0f ? -start.z / delta.z : 1.0f;
+		const bool leavesScreen = screenExtent < 1.0f && screenExtent <= depthExtent;
+		const glm::vec2 exit = glm::vec2(start + delta * std::min(screenExtent, depthExtent));
+		if (!(reflected.z < -1e-4f))
+			return predicted;
+		const glm::vec3 wallPoint = floorPoint + reflected * ((c_FadeWallZ - floorPoint.z) / reflected.z);
+		// 2 px inside the wall's outline: hits at its silhouette depend on the march's rounding.
+		const float marginMeters = 2.0f * 2.0f * std::tan(camera.VerticalFOV * 0.5f) * (camera.Position.z - c_FadeWallZ) / static_cast<float>(size);
+		if (wallPoint.y > c_FadeWallTop - marginMeters || std::abs(wallPoint.x) > c_FadeWallHalfWidth - marginMeters)
+			return predicted;
+		const glm::vec2 hit = glm::vec2(toScreen(wallPoint));
+		if (hit.x < 0.0f || hit.x > 1.0f || hit.y < 0.0f || hit.y > 1.0f)
+			return predicted;
+		predicted.HitsWall = true;
+		predicted.LeavesThroughTop = leavesScreen && std::abs(exit.y) < 1e-3f;
+		predicted.Remaining = leavesScreen ? glm::length((exit - hit) * static_cast<float>(size)) : 0.0f;
+		const float facing = std::clamp(-4.0f * reflected.z, 0.0f, 1.0f); // The wall's normal is +Z
+		const float fade = leavesScreen ? std::clamp(predicted.Remaining / (0.1f * static_cast<float>(size)), 0.0f, 1.0f) : 1.0f;
+		predicted.Confidence = facing * fade;
+		return predicted;
+	}
+
 	// The strafe test's view: 1280x720, a vertical field of view of `fov` degrees.
 	constexpr uint32_t c_StrafeWidth = 1280;
 	constexpr uint32_t c_StrafeHeight = 720;
@@ -814,6 +880,94 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 					CHECK(measure.Pattern4 <= c_Bound);
 				}
 			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Hits fade only where their rays leave the screen")
+	{
+		// A mirror floor and an unlit wall 60 m wide spanning the view: every floor pixel's reflected ray goes up the screen to
+		// the wall. A hit is doubtful only when the ray would have gone on beyond the screen's edge, so it fades over the last
+		// 10% of the screen's smaller side the ray has left to its exit (Include/ScreenReflections.slang, GetHitConfidence):
+		// texels beside the left and right edges whose rays leave through the top far beyond their hits keep their whole
+		// confidence (Strata 0.7.0 faded every hit within 10% of every side), and every hit's confidence is the CPU's.
+		constexpr uint32_t c_FadeSize = 512;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		for (const ReflectionMode& mode : c_ReflectionModes)
+		{
+			CAPTURE(mode.Name);
+			MirrorScene scene(assets, 0.0f);
+			scene.Floor.GetComponent<TransformComponent>().Scale = glm::vec3(40.0f);
+			TransformComponent& wall = scene.Cube.GetComponent<TransformComponent>();
+			wall.Translation = glm::vec3(0.0f, 0.5f * c_FadeWallTop, c_FadeWallZ - 0.1f);
+			wall.Scale = glm::vec3(2.0f * c_FadeWallHalfWidth, c_FadeWallTop, 0.2f);
+			scene.Cube.GetComponent<MeshRendererComponent>().Material = assets.AddMaterial(UnlitColor({ 0.8f, 0.8f, 0.8f, 1.0f }));
+			// Looking down 18 degrees: rays from the nearer floor rise more steeply than the view's top and leave through it beyond the
+			// wall, which rises above the view.
+			scene.Camera = LookAt(glm::vec3(0.0f, 2.0f, 6.0f), glm::vec3(0.0f));
+			SetAntiAliasingFor(scene.Contents, mode.Quality);
+			SceneRenderer renderer = CreateReflectionRenderer("Fade", mode.Quality);
+			renderer.SetViewportSize(c_FadeSize, c_FadeSize);
+			WarmUp(gpu, renderer, scene.Contents, scene.Camera);
+			RenderFrames(gpu, renderer, scene.Contents, scene.Camera, mode.Quality == ReflectionsQuality::Checkerboard ? c_SettleFrames : 3u);
+			REQUIRE(renderer.GetStats().ScreenSpaceReflections);
+			// The trace's own output: Spatial's before its resolve, Checkerboard's half-resolution target (each texel traced
+			// from one pixel of its 2x2 block, another each frame: the CPU predicts all four).
+			nvrhi::ITexture* traced = mode.Quality == ReflectionsQuality::Checkerboard ? renderer.GetScreenReflectionTexture() : renderer.GetTracedReflectionTexture();
+			REQUIRE(traced);
+			const ReadbackImage image = ReadHalfImage(traced);
+			const uint32_t scale = c_FadeSize / image.Width;
+			uint32_t sideTexels = 0;
+			uint32_t sideWhole = 0;
+			uint32_t compared = 0;
+			uint32_t agreeing = 0;
+			for (uint32_t y = 0; y < image.Height; y++)
+			{
+				for (uint32_t x = 0; x < image.Width; x++)
+				{
+					float lowest = 2.0f;
+					float highest = -1.0f;
+					bool allHit = true;
+					bool allLeaveFarThroughTop = true;
+					for (uint32_t pixel = 0; pixel < scale * scale; pixel++)
+					{
+						const glm::vec2 center(static_cast<float>(x * scale + pixel % scale) + 0.5f, static_cast<float>(y * scale + pixel / scale) + 0.5f);
+						const PredictedRay predicted = PredictFloorRay(scene.Camera, c_FadeSize, center);
+						allHit = allHit && predicted.HitsWall;
+						allLeaveFarThroughTop = allLeaveFarThroughTop && predicted.LeavesThroughTop && predicted.Remaining > 0.1f * c_FadeSize + 1.0f;
+						lowest = std::min(lowest, predicted.Confidence);
+						highest = std::max(highest, predicted.Confidence);
+					}
+					if (!allHit)
+						continue;
+					const float confidence = ReadHalfTexel(image, x, y).a;
+					const float side = static_cast<float>(x * scale);
+					if (allLeaveFarThroughTop && (side < 0.1f * c_FadeSize || side >= 0.9f * c_FadeSize - static_cast<float>(scale)))
+					{
+						sideTexels++;
+						sideWhole += confidence >= 0.99f ? 1u : 0u;
+					}
+					// Every seventh hit texel against the CPU's confidence.
+					if ((x + y * image.Width) % 7 == 0)
+					{
+						compared++;
+						agreeing += confidence >= lowest - 0.1f && confidence <= highest + 0.1f ? 1u : 0u;
+					}
+				}
+			}
+			CAPTURE(sideTexels);
+			CAPTURE(sideWhole);
+			CAPTURE(compared);
+			CAPTURE(agreeing);
+			CHECK(sideTexels >= 200u / (scale * scale));
+			CHECK(sideWhole >= sideTexels - sideTexels / 100);
+			CHECK(compared >= 64u);
+			// Within 0.1, at 90% of them: near its exit the march places a hit up to 5 px past the exact crossing (the fade then
+			// reads 0.1 lower), and Checkerboard's half-resolution march misses some hits there.
+			CHECK(agreeing >= compared - compared / 10);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
