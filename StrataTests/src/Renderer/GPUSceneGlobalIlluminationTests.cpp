@@ -3,6 +3,8 @@
 #include "Renderer/GIScenes.h"
 #include "Renderer/GPUTestUtils.h"
 #include "Renderer/SceneRendererTestUtils.h"
+#include "Strata/Core/Log.h"
+#include "Strata/Renderer/GeometryPool.h"
 #include "Strata/Renderer/GlobalIlluminationLayout.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
@@ -986,6 +988,47 @@ TEST_SUITE("GPU.SceneRenderer.GPUDriven")
 			levels[path] = ReadLevels(*renderer);
 		}
 		CHECK(CountDifferences(levels[0], levels[1]) == 0);
+	TEST_CASE("Frames whose voxels cannot be recorded are not settled, and report once")
+	{
+		// The geometry pool's tables cannot be brought up to date (the CPU path, so only the voxelizer reads them): the frames that
+		// voxelize the yard record nothing, so none of them is settled, and the error is logged when it appears, not every frame.
+		// Once the tables can be uploaded, the voxels are those of a renderer made for the camera alone.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		BuildYard(scene, assets);
+		const SceneCamera camera = YardCamera(glm::vec3(0.0f));
+		SceneRendererSpecification specification = ExactSpecification();
+		specification.GPUDriven = GPUDrivenMode::Off;
+		Scope<SceneRenderer> renderer = CreateVoxelRenderer(specification, 64, 64);
+		// Resident first, so the GI's frames have work.
+		for (uint32_t frame = 0; frame < 100 && (frame < 2 || renderer->GetStats().PendingAssets > 0 || renderer->GetStats().DeferredProxies > 0); frame++)
+			REQUIRE(renderer->Render(scene, camera, nullptr, SceneRenderOptions {}));
+		GeometryPool& pool = *Renderer::GetGeometryPool();
+		size_t reports = 0;
+		{
+			const LogCapture log;
+			pool.SetTablesUnavailable(true);
+			for (uint32_t frame = 0; frame < 4; frame++)
+			{
+				REQUIRE(renderer->Render(scene, camera, nullptr, VoxelView()));
+				CHECK(renderer->GetStats().GlobalIllumination);
+				CHECK_FALSE(renderer->GetStats().GlobalIlluminationSettled);
+			}
+			pool.SetTablesUnavailable(false);
+			for (const LogEntry& entry : log.GetEntries())
+			{
+				if (entry.Message.find("global illumination's voxels wait") != std::string::npos)
+					reports++;
+			}
+		}
+		CHECK(reports == 1);
+		RenderUntilSettled(*renderer, scene, camera);
+		CHECK(CountDifferences(ReadLevels(*renderer), ReadFreshVoxels(scene, camera, camera)) == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

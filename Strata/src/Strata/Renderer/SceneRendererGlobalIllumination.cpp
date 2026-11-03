@@ -401,7 +401,7 @@ namespace Strata
 		}
 	}
 
-	void SceneRenderer::RecordGlobalIllumination(nvrhi::ICommandList* commandList)
+	bool SceneRenderer::RecordGlobalIllumination(nvrhi::ICommandList* commandList)
 	{
 		ST_PROFILE_FUNCTION();
 		GlobalIlluminationResources& gi = *m_GI;
@@ -437,7 +437,7 @@ namespace Strata
 			if (!buffer)
 			{
 				m_Errors.Report("failed to create global illumination's material table; its voxels wait");
-				return;
+				return false;
 			}
 			if (gi.Materials)
 				Renderer::ReleaseDeferred({ nvrhi::ResourceHandle(gi.Materials.Get()) });
@@ -454,7 +454,7 @@ namespace Strata
 		if (frame.Batches.empty())
 		{
 			gi.Recorded = true;
-			return;
+			return true;
 		}
 
 		// The geometry pool's tables, as the voxelizer reads them (the GPU-driven culling may not have run this frame).
@@ -462,7 +462,7 @@ namespace Strata
 		if (!pool.RecordTableUploads(commandList))
 		{
 			m_Errors.Report("the geometry pool's tables could not be uploaded (see the previous error); global illumination's voxels wait");
-			return;
+			return false;
 		}
 		if (gi.BoundScene != m_SceneGPU || gi.BoundSceneBuffers != m_SceneGPU->GetBufferVersion() || gi.BoundPoolBuffers != pool.GetBufferVersion()
 			|| gi.BoundPoolTables != pool.GetTableVersion() || gi.BoundMaterials != gi.Materials.Get() || !gi.VoxelSets[0])
@@ -499,7 +499,7 @@ namespace Strata
 				{
 					gi.VoxelSets[0] = nullptr; // Made again next frame
 					m_Errors.Report("failed to create global illumination's voxelizer bindings; its voxels wait");
-					return;
+					return false;
 				}
 			}
 			gi.BoundScene = m_SceneGPU;
@@ -587,6 +587,7 @@ namespace Strata
 			readback.Render = m_RenderCount + 1;
 			gi.ReadbackRecorded = true;
 		}
+		return true;
 	}
 
 	void SceneRenderer::SubmitGlobalIlluminationReadback()

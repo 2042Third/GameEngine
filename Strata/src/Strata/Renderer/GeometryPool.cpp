@@ -392,6 +392,13 @@ namespace Strata
 
 	bool GeometryPool::RecordTableUploads(nvrhi::ICommandList* commandList, uint64_t* outBytes)
 	{
+		if (m_TablesUnavailable)
+		{
+			if (outBytes)
+				*outBytes = 0;
+			ST_CORE_ERROR("GeometryPool: its tables are unavailable (SetTablesUnavailable)");
+			return false;
+		}
 		uint64_t bytes = 0;
 		const bool uploaded = UploadTable(commandList, m_EntryTable, "GeometryPool.Entries", bytes) && UploadTable(commandList, m_SubmeshTable, "GeometryPool.Submeshes", bytes)
 			&& UploadTable(commandList, m_LODTable, "GeometryPool.LODs", bytes);

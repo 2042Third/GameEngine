@@ -3421,7 +3421,14 @@ namespace Strata
 		{
 			gpuTimer.Next(gpuStages.RadianceCascades);
 			commandList->beginMarker("GlobalIllumination");
-			RecordGlobalIllumination(commandList);
+			if (!RecordGlobalIllumination(commandList))
+			{
+				// Reported once while it lasts (a degraded frame keeps the error); the voxels did not get the frame's work, so
+				// it is neither settled nor done (the next frame starts the clipmap over).
+				degraded = true;
+				m_Stats.GlobalIlluminationPending = true;
+				m_Stats.GlobalIlluminationSettled = false;
+			}
 			commandList->endMarker();
 		}
 		if (!m_ReflectionProbeConversions.empty() || m_ReflectionFrame)

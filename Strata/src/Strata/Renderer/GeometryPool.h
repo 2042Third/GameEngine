@@ -144,6 +144,9 @@ namespace Strata
 		// Writes the table entries that changed (and replaced buffers whole) into the command list, and the bytes written into
 		// `outBytes` when given. Run before work that reads the tables; false when a buffer could not be created (logged).
 		bool RecordTableUploads(nvrhi::ICommandList* commandList, uint64_t* outBytes = nullptr);
+		// While set, RecordTableUploads fails (logged) as when the device cannot create a table: tests of what work that reads
+		// the tables does when they cannot be brought up to date. ShaderLibrary::SetUnavailable does the same for shaders.
+		void SetTablesUnavailable(bool unavailable) { m_TablesUnavailable = unavailable; }
 
 		nvrhi::IBuffer* GetPositionBuffer(GeometryArena arena) const { return m_Arenas[static_cast<size_t>(arena)].Positions; }
 		nvrhi::IBuffer* GetAttributeBuffer(GeometryArena arena) const { return m_Arenas[static_cast<size_t>(arena)].Attributes; }
@@ -277,6 +280,7 @@ namespace Strata
 		RangeAllocator m_LODAllocator;
 		uint64_t m_TableVersion = 1;
 		uint64_t m_ContentVersion = 1;
+		bool m_TablesUnavailable = false;
 		uint32_t m_Growths = 0;
 		uint64_t m_MovedBytes = 0;
 		uint32_t m_Moves = 0;

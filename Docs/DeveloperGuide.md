@@ -4828,7 +4828,8 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   `globalIlluminationSettled`, `editor.perf`'s `renderStats` `globalIllumination: {ran, pending, settled}`.
 - **Statistics** (`SceneRendererStats`): `GlobalIllumination`, `GlobalIlluminationPending`, `GlobalIlluminationSettled`,
   `GIVoxelizedTriangles`, `GIQueuedRegions`, `GIWaitingProxies`, `GIMovingProxies`,
-  `GIUnvoxelizedSubmeshes`; `SceneRendererGPUStats`' `GITiles` and
+  `GIUnvoxelizedSubmeshes`; a frame whose voxelization could not be recorded is degraded, pending and not settled;
+  `SceneRendererGPUStats`' `GITiles` and
   `GITileOverflow` (frames late). Tests and tools read a level's textures with `ReadGlobalIlluminationVoxels` (blocking).
 - **Tests:** `Renderer.GlobalIlluminationLayout`, `Renderer.VoxelClipmap` (a render scene with residency and assets a test
   gives), `Renderer.Mesh` ("Closed meshes are found"), `GPU.SceneRenderer.GlobalIllumination` (voxels against the CPU's
