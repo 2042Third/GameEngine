@@ -808,12 +808,12 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		std::vector<VoxelLevel> levels[2];
 		std::vector<glm::i64vec3> windows[2];
 		const glm::i64vec3 dimensions(128, 64, 128);
-		for (int far = 0; far < 2; far++)
+		for (int which = 0; which < 2; which++)
 		{
 			SceneTestAssets assets;
 			Scene scene;
 			BuildYard(scene, assets);
-			if (far)
+			if (which == 1)
 			{
 				auto view = scene.GetRegistry().view<TransformComponent>();
 				for (entt::entity entity : view)
@@ -824,10 +824,10 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 				}
 			}
 			Scope<SceneRenderer> renderer = CreateVoxelRenderer(ExactSpecification(), 64, 64);
-			RenderUntilSettled(*renderer, scene, YardCamera(far ? offset : glm::vec3(0.0f)));
-			levels[far] = ReadLevels(*renderer);
+			RenderUntilSettled(*renderer, scene, YardCamera(which == 1 ? offset : glm::vec3(0.0f)));
+			levels[which] = ReadLevels(*renderer);
 			for (uint32_t level = 0; level < 4; level++)
-				windows[far].push_back(renderer->GetVoxelClipmap()->GetLevel(level).Window);
+				windows[which].push_back(renderer->GetVoxelClipmap()->GetLevel(level).Window);
 		}
 		for (uint32_t level = 0; level < 4; level++)
 		{
@@ -848,10 +848,10 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 					for (int64_t x = low.x; x < high.x; x++)
 					{
 						const glm::i64vec3 voxel(x, y, z);
-						const bool near = occupiedAt(0, voxel);
-						const bool far = occupiedAt(1, voxel);
-						occupied += near ? 1 : 0;
-						if (near == far)
+						const bool atOrigin = occupiedAt(0, voxel);
+						const bool atOffset = occupiedAt(1, voxel);
+						occupied += atOrigin ? 1 : 0;
+						if (atOrigin == atOffset)
 							continue;
 						differing++;
 						// Next to an occupied voxel of the other.
@@ -861,7 +861,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 							for (int64_t dy = -1; dy <= 1; dy++)
 							{
 								for (int64_t dx = -1; dx <= 1; dx++)
-									neighbor = neighbor || occupiedAt(near ? 1 : 0, voxel + glm::i64vec3(dx, dy, dz));
+									neighbor = neighbor || occupiedAt(atOrigin ? 1 : 0, voxel + glm::i64vec3(dx, dy, dz));
 							}
 						}
 						isolated += neighbor ? 0 : 1;
