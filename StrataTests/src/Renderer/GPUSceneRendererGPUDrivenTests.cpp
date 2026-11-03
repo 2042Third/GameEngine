@@ -534,6 +534,35 @@ namespace
 		return View(glm::vec3(0.0f, 1.2f, 3.0f), glm::vec3(0.0f, 0.3f, -0.5f));
 	}
 
+	// Dielectrics of other IORs than glass's (their F0 in MaterialData::Absorption.w) over a mirror floor in a reflection probe's
+	// box, under a 10-degree sun.
+	SceneCamera BuildReflectionsAndDielectrics(Scene& scene, SceneTestAssets& assets, TestSkinningPoses&)
+	{
+		AddNeutralPostProcess(scene);
+		AddSun(scene, glm::normalize(glm::vec3(0.4f, -0.6f, -0.7f)), 3.0f).GetComponent<DirectionalLightComponent>().ShadowSoftness = 10.0f;
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().Source = SkyLightSource::Procedural;
+		Entity probe = scene.CreateEntity("Probe");
+		probe.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 1.0f, 0.0f);
+		ReflectionProbeComponent& box = probe.AddComponent<ReflectionProbeComponent>();
+		box.Capture = assets.Add(CreateEnvironmentTexture(glm::vec3(0.9f, 0.6f, 0.3f), glm::vec3(0.1f, 0.2f, 0.4f)), "Capture");
+		box.Extents = glm::vec3(4.0f, 2.0f, 4.0f);
+		MaterialProperties polished;
+		polished.BaseColor = glm::vec4(0.9f, 0.9f, 0.92f, 1.0f);
+		polished.Metallic = 1.0f;
+		polished.Roughness = 0.02f;
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(polished), glm::vec3(0.0f), "Mirror").GetComponent<TransformComponent>().Scale = glm::vec3(8.0f);
+		const float iors[] = { 1.33f, 2.0f };
+		for (uint32_t index = 0; index < std::size(iors); index++)
+		{
+			MaterialProperties dielectric;
+			dielectric.BaseColor = glm::vec4(0.05f, 0.1f, 0.2f, 1.0f);
+			dielectric.Roughness = 0.1f + 0.2f * static_cast<float>(index);
+			dielectric.IOR = iors[index];
+			AddMesh(scene, BuiltinAssets::SphereMesh, assets.AddMaterial(dielectric), glm::vec3(static_cast<float>(index) * 1.4f - 0.7f, 0.5f, 0.0f), "Dielectric");
+		}
+		return View(glm::vec3(0.0f, 1.2f, 3.0f), glm::vec3(0.0f, 0.3f, -0.5f));
+	}
+
 	// The atmosphere with aerial perspective (scale 8): shapes from near to 300 m, opaque and alpha-blended, hazed by distance.
 	SceneCamera BuildAerialPerspective(Scene& scene, SceneTestAssets& assets, TestSkinningPoses&)
 	{
@@ -572,6 +601,7 @@ namespace
 		{ "Lit materials", BuildLitMaterials },
 		{ "Atmosphere and aerial perspective", BuildAerialPerspective },
 		{ "Sized highlights", BuildSizedHighlights },
+		{ "Reflections and dielectrics", BuildReflectionsAndDielectrics },
 	};
 
 	void CompareScenes(GPUContext& gpu, IndirectDrawMode indirect, uint32_t maxDrawsPerCall = 0)

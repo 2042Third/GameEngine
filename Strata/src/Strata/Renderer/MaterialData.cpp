@@ -48,6 +48,16 @@ namespace Strata::MaterialGPU
 		return std::isfinite(absorption.x) && std::isfinite(absorption.y) && std::isfinite(absorption.z) ? absorption : glm::vec3(0.0f);
 	}
 
+	float GetDielectricF0(const MaterialProperties& properties)
+	{
+		constexpr float c_DefaultF0 = 0.04f; // Glass (1.5): written out, as the formula rounds it to 0.040000003
+		if (properties.IOR == 1.5f || !std::isfinite(properties.IOR))
+			return c_DefaultF0;
+		const float index = std::clamp(properties.IOR, 1.0f, 3.0f);
+		const float ratio = (index - 1.0f) / (index + 1.0f);
+		return ratio * ratio;
+	}
+
 	RenderData::MaterialData Build(const Material& material, const TextureIndexResolver& textureIndex)
 	{
 		const MaterialProperties& properties = material.GetProperties();
@@ -80,7 +90,7 @@ namespace Strata::MaterialGPU
 		data.ClearcoatRoughnessMap = textureIndex(properties.ClearcoatRoughnessMap, TextureTable::c_White, TextureTable::c_White);
 		data.ClearcoatNormalMap = textureIndex(properties.ClearcoatNormalMap, TextureTable::c_FlatNormal, TextureTable::c_FlatNormal);
 		data.TransmissionMap = textureIndex(properties.TransmissionMap, TextureTable::c_White, TextureTable::c_White);
-		data.Absorption = glm::vec4(GetAbsorption(properties), 0.0f);
+		data.Absorption = glm::vec4(GetAbsorption(properties), GetDielectricF0(properties));
 		return data;
 	}
 

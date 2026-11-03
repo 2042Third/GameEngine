@@ -188,7 +188,9 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 	// The split sum's BRDF table at the surface: its specular reflectance of image light and the compensation of its lobe for
 	// multiple scattering, which direct light takes too.
 	float NoV = max(dot(surface.Normal, surface.View), 1e-4);
-	float3 f0 = lerp(float3(0.04), surface.Albedo, surface.Metallic);
+	// A dielectric reflects head-on what its IOR gives (MaterialGPU::GetDielectricF0: 0.04 at 1.5), a metal its albedo.
+	float3 f0 = lerp(float3(material.Absorption.w), surface.Albedo, surface.Metallic);
+	surface.F0 = f0;
 	float2 dfg = u_BRDFLut.SampleLevel(u_LinearClampSampler, float2(NoV, surface.Roughness), 0.0).rg;
 	surface.SpecularEnergy = GetSpecularEnergy(f0, dfg);
 	float coatNoV = 1.0;
@@ -319,7 +321,7 @@ float3 TransmitLight(InstanceData instance, MaterialData material, float3 normal
 	float NoV = max(dot(normal, view), 1e-4);
 	float2 dfg = u_BRDFLut.SampleLevel(u_LinearClampSampler, float2(NoV, roughness), 0.0).rg;
 	// What the surface reflects, compensated as its specular light is (ShadeLitSurface): the rest passes through.
-	float3 f0 = lerp(float3(0.04), albedo, metallic);
+	float3 f0 = lerp(float3(material.Absorption.w), albedo, metallic);
 	float3 reflectance = (f0 * dfg.x + dfg.y) * GetSpecularEnergy(f0, dfg);
 	float3 absorbed = exp(-material.Absorption.rgb * thickness);
 	return behind * absorbed * albedo * (1.0 - metallic) * (1.0 - reflectance) * transmission;

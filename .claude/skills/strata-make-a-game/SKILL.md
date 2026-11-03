@@ -69,7 +69,9 @@ Design the code for verification before writing it:
   `UVTiling`, `UVOffset`; `Clearcoat` (0-1) with `ClearcoatRoughness` for car paint, lacquer or a wet look; `Transmission`
   (1 for clear glass, water) with `IOR` (glass 1.5) and `Thickness` (in the mesh's units across it: 1 for a whole
   built-in cube however it is scaled, 0 for a thin pane that bends nothing), tinted by `BaseColor` and `AttenuationColor`. Glass shows what is behind it, not other
-  glass or `Blend` surfaces behind it. `material.get {"material": "Builtin/DefaultMaterial"}` describes them all.
+  glass or `Blend` surfaces behind it. `IOR` also sets how much any non-metal reflects head-on: water and wet ground 1.33
+  (opaque, roughness 0.02-0.06), glass and paint 1.5 (the default). Metal sheets (a bus, a tank) are bare metal, roughness
+  0.15-0.45 for painted scans. `material.get {"material": "Builtin/DefaultMaterial"}` describes them all.
 - Sounds: write a small 16-bit PCM WAV with a script of your own (outside the project), then
   `asset.import {"file": "<absolute>", "directory": "Sounds"}` (it answers once the import is done, and fails, removing
   the copy, when the file cannot be imported). Models, textures and fonts import the same way; a `.gltf` brings the

@@ -113,6 +113,7 @@ struct SurfaceData
 	float Occlusion;
 	float3 Emissive;
 	float3 SpecularEnergy; // GetSpecularEnergy at the surface's NoV and roughness: multiplies its specular light
+	float3 F0;             // Reflectance at normal incidence: the dielectric's from its IOR (MaterialData.Absorption.w) toward the albedo by metalness
 };
 
 // The lobe's alpha for the distribution under a source that adds `sourceAlpha2` (0: a point, the surface's own alpha bit for
@@ -137,9 +138,8 @@ float3 EvaluateLightWeighted(SurfaceData surface, float3 lightDirection, float3 
 
 	float roughness = max(surface.Roughness, c_MinRoughness);
 	float alpha = roughness * roughness;
-	float3 f0 = lerp(float3(0.04), surface.Albedo, surface.Metallic);
 
-	float3 F = FresnelSchlick(f0, VoH);
+	float3 F = FresnelSchlick(surface.F0, VoH);
 	float3 specular = DistributionGGX(NoH, GetLobeAlpha(alpha, sourceAlpha2)) * VisibilitySmithGGXCorrelated(NoV, NoL, alpha) * F * surface.SpecularEnergy;
 	// Diffuse keeps 1 - F: the compensated light leaves a dielectric's specular under 0.5% brighter, below what the diffuse
 	// lobe's approximation already is off by.

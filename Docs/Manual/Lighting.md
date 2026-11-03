@@ -244,6 +244,11 @@ color says (since 0.7.0; before, a metal of roughness 1 lost about two thirds of
 metals such as copper or gold keep less at high roughness, as real ones do: each bounce between the facets takes some of
 the light. Materials made darker to look right before may now be set to their measured colors.
 
+A non-metal's **IOR** sets how much it reflects head-on: water (1.33) reflects 2%, glass and most plastics and paints (1.5,
+the default) 4%, diamond (2.42) 17%, and 1 nothing (every surface still reflects more toward grazing angles). Give water
+and wet ground 1.33: their reflections then have water's strength. Imported glTF materials keep the IOR their file gives
+(`KHR_materials_ior`).
+
 Highlights hold at 4K without sparkling: where a surface's normal map or curvature changes faster than the pixels can
 show, its highlight spreads over the pixels it covers instead of flickering between single bright pixels (specular
 anti-aliasing, since 0.7.0). Distant normal-mapped and curved surfaces therefore look slightly rougher than their

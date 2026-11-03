@@ -237,7 +237,7 @@ namespace Strata
 			uint32_t ClearcoatNormalMap;
 			uint32_t TransmissionMap;
 			// rgb: what the volume absorbs per world unit (Beer's law: -ln(AttenuationColor) / AttenuationDistance; 0 absorbs
-			// nothing), w: unused.
+			// nothing), w: the dielectric's F0 from the IOR (MaterialGPU::GetDielectricF0).
 			glm::vec4 Absorption;
 		};
 		static_assert(sizeof(MaterialData) == 144);

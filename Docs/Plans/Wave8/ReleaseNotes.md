@@ -108,6 +108,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   disk's size. The property now sits with the light's own settings and applies without shadows too.
 - Point and spot lights have a **Source Radius** (default 0, as before): a lantern's or a fire's highlight on metal and wet
   ground takes the bulb's or flame's size, the same light spread wider; their diffuse light and shadows do not change.
+- A material's IOR sets its reflectance: water (1.33) reflects 2%, glass (1.5) 4% as before; imported `KHR_materials_ior`
+  values count, without re-importing.
 
 ## Defaults that change
 
@@ -150,6 +152,7 @@ projects, the template and scenes or projects without the value get.
 | Spatial reflections' resolve | 3x3 neighbors, depth-weighted | 5x5 neighbors, plane-weighted: no screen door, about two pixels softer on mirrors at 4K | None |
 | **Reflections (R2)** | | | |
 | A directional light's highlight | A point's (the smallest roughness's pin dot) whatever its Shadow Softness | Its disk's size: mirrors 1.8 times wider at the default 0.53 degrees, roughness 0.06 30% wider, 0.18 0.4% | Angular Diameter 0 (also hardens its shadows) |
+| A non-metal's reflectance (F0) | 0.04 whatever its IOR | From its IOR: 1.5 (the default) exactly 0.04 as before, water 1.33 0.02, 2 0.11, 1 none | Set the IOR to 1.5 (it also bends what transmissive materials show) |
 | Directional Light **Shadow Softness** | In the Shadows section, inactive without shadows | **Angular Diameter**, with the light's own settings, active with and without shadows; stored, scripted and set by commands as `ShadowSoftness` | Nothing to do |
 
 ## Known issues

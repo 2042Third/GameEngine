@@ -278,7 +278,7 @@ struct MaterialData
 	uint ClearcoatRoughnessMap;
 	uint ClearcoatNormalMap;
 	uint TransmissionMap;
-	float4 Absorption;         // rgb: absorbed per world unit inside a transmissive volume (Beer's law), w: unused
+	float4 Absorption;         // rgb: absorbed per world unit inside a transmissive volume (Beer's law), w: the dielectric's F0 from its IOR
 };
 
 StructuredBuffer<MaterialData> u_Materials : register(t1);

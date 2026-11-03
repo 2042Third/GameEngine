@@ -4642,6 +4642,16 @@ lights, Post Process and the sky), and never a resolution below the output's.
   draw with the same vertex module, so they stay pixel-equal (`GPU.SceneRenderer.GPUDriven`'s "Lit materials"). A flat
   surface without a normal map has zero derivatives and keeps its roughness exactly. `GPU.SceneRenderer.Materials` checks
   that a bumpy sphere's highlight variance halves and its light stays within 15%.
+- **F0 from the IOR** (`MaterialGPU::GetDielectricF0`): a dielectric's reflectance at normal incidence is `((n - 1) / (n +
+  1))^2` with `n = clamp(IOR, 1, 3)` (water 1.33: 0.02006, 2: 0.111, 1: 0), written on the CPU into
+  `MaterialData::Absorption.w` (the layout stays 144 bytes; both paths read the same buffer). 1.5 and values that are not
+  finite give the literal 0.04: the formula's 0.040000003 would move every default material by a rounding, so materials at
+  the default shade bit for bit as before. `ShadeLitSurface` forms `f0 = lerp(Absorption.w, albedo, metallic)` once
+  (`SurfaceData::F0`, which `EvaluateLightWeighted` reads; the split sum's `IndirectInputs::SpecularColor` follows), and
+  `TransmitLight` alike; the clear coat keeps `c_ClearcoatF0` (a coat is 1.5 by definition). The glTF importer already
+  reads `KHR_materials_ior` into `IOR`, so imported values count without a re-import. "The furnace keeps a dielectric's
+  light at every IOR..." checks a white dielectric at 1, 1.33, 1.5, 2 and 3 (1.000 at center and rim) and a black one's
+  reflectance against the split sum read back (within 0.05%).
 - **Highlights of sized sources** (`PBR.slang`): a source of angular radius theta spans the half maximum of a GGX lobe of
   `alpha_s = tan(theta) / 1.287` (`2 sqrt(sqrt(2) - 1)`: the reflected angle per alpha where GGX falls to half its peak), and
   the lobes of the surface and the source combine about as variances add, so the distribution takes `sqrt(alpha^2 +
@@ -5287,7 +5297,8 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
 
 - **Highlights** are the lights' reflections: a light's size (the sun's Angular Diameter, a point or spot light's
   `SourceRadius`) widens only its highlight's lobe, never its diffuse light, shadows, range or culling ("Lighting",
-  Highlights of sized sources).
+  Highlights of sized sources). How strongly a dielectric reflects head-on (its F0) comes from its IOR, 1.5 staying exactly
+  0.04 ("Lighting", F0 from the IOR).
 - **Reflection probes** (`ReflectionProbeComponent`, `SceneRendererReflectionProbes.cpp`): a `Capture` (an equirectangular
   HDR texture asset, luminance in nits, as the sky's map is) of the scene seen from the entity's position lights the
   surfaces inside its influence box (`Extents`, half sizes along the entity's axes, times its scale): their specular

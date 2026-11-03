@@ -1,4 +1,5 @@
 #include "Renderer/SceneRendererTestUtils.h"
+#include "Strata/Renderer/MaterialData.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/RendererQuality.h"
@@ -909,6 +910,47 @@ TEST_SUITE("GPU.SceneRenderer.Lighting")
 		{
 			CHECK(value.g >= 0.97f);
 			CHECK(value.g <= 1.03f);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The furnace keeps a dielectric's light at every IOR, and its reflectance is the IOR's")
+	{
+		// A dielectric reflects head-on what its IOR gives (MaterialGPU::GetDielectricF0: water 0.02, glass 0.04, 3 0.25): a black
+		// one shows that reflectance alone (the split sum compensated for multiple scattering, at the pixel's NoV 1 and roughness
+		// 1), and a white one still reflects the whole furnace, diffuse taking what specular leaves. 0.7.0 reflected 0.04 at every
+		// IOR.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		const AssetHandle sky = assets.Add(CreateEnvironmentTexture(glm::vec3(1.0f), glm::vec3(1.0f)), "Furnace");
+		SceneRendererSpecification specification;
+		specification.TextureStreaming = false;
+		SceneRenderer renderer(specification);
+		for (const float ior : { 1.0f, 1.33f, 1.5f, 2.0f, 3.0f })
+		{
+			CAPTURE(ior);
+			MaterialProperties white;
+			white.BaseColor = glm::vec4(1.0f);
+			white.Roughness = 1.0f;
+			white.IOR = ior;
+			const FurnaceReading lit = RenderFurnace(assets, sky, white, &renderer);
+			for (const glm::vec3& value : { lit.Center, lit.Rim })
+			{
+				CHECK(value.g >= 0.97f);
+				CHECK(value.g <= 1.03f);
+			}
+			MaterialProperties black = white;
+			black.BaseColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+			const FurnaceReading reflected = RenderFurnace(assets, sky, black, &renderer);
+			const glm::vec2 dfg = ReadRoughBRDF(renderer);
+			const float f0 = MaterialGPU::GetDielectricF0(black);
+			const float expected = (f0 * dfg.x + dfg.y) * (1.0f + f0 * (1.0f / (dfg.x + dfg.y) - 1.0f));
+			CAPTURE(f0);
+			CAPTURE(dfg);
+			CHECK(reflected.Center.g == doctest::Approx(expected).epsilon(0.03).scale(0.0)); // Relative: the values are small
+			MESSAGE(fmt::format("Furnace at IOR {}: F0 {:.5f}, white {:.4f} (rim {:.4f}), black {:.5f} (expected {:.5f})", ior, f0, lit.Center.g, lit.Rim.g,
+				reflected.Center.g, expected));
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
