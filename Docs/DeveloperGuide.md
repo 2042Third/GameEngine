@@ -5460,7 +5460,13 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   drew a ghost of the post: `GPU.SceneRenderer.SSR`'s sheet case). Strata 0.7.0 took any point behind a
   surface by less than its step's change of distance plus the tolerance for a hit, so a ray that passed far behind a thin
   post read the post (ghost columns beside its reflection), and the reflected top edge of a wall stepped into the sky
-  (`GPU.SceneRenderer.SSR`: thin posts in front of a grazing mirror, the wall's edge within 2 px). Checkerboard's march is
+  (`GPU.SceneRenderer.SSR`: thin posts in front of a grazing mirror, the wall's edge within 2 px). A hit on a surface the
+  ray meets from behind keeps no confidence in these modes either (`GetHitConfidence`'s facing term), so an object in
+  front of a mirror is reflected as a crescent, the side the camera also sees, with the probes or the sky where its back
+  belongs. Wave 8 tried keeping validated back-facing hits at half confidence ("option F"): a ray toward an object's back
+  passes behind its front by more than the tolerance and validates nothing, so no silhouette filled, and only front-lit
+  rims appeared at silhouettes and box edges (`lookdev.sheet.angle` and `lookdev.wet` at 4K High, no AA and FXAA);
+  `GPU.SceneRenderer.SSR`'s ball case holds the crescent. Checkerboard's march is
   unchanged (Medium's 0.6.0 costs; TAA averages its noise). What a ray sees is the previous frame's color before its transparent surfaces: in these modes every frame copies
   its HDR image after the sky into the scene-color copy glass reads (half resolution, blurred levels) and, beside it, into
   a full-resolution copy (`Effects/SceneColorCopy.comp` with a destination of the source's size, in `GPU.Transparent`),

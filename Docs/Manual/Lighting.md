@@ -225,6 +225,9 @@ and need TAA to smooth them; at **Low** there are none.
 - Only what is on screen can be reflected. Things behind the camera, beside the view or hidden behind others are not:
   there the probes and the sky reflect as before. A reflection fades only where its ray would have gone on beyond the
   screen's edge (over the last tenth of the screen before it leaves): a wall beside the edge that the ray reaches stays.
+- An object in front of a mirror shows its back there, which the screen does not hold: the mirror shows only the part of
+  it the camera also sees (often a crescent), and the probes or the sky where its back would be, never its front's colors
+  in the back's place.
 - Ambient occlusion does not darken what these reflections found (they already see what blocks them); a material's own
   occlusion map still does.
 - **Screen Space Reflections Max Roughness** (0.5): rougher surfaces get none, and they fade out over the last quarter

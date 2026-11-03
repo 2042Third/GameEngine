@@ -1346,6 +1346,123 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A ball's back is not reflected")
+	{
+		// A ball in front of a vertical mirror seen at 45 degrees: the mirror shows the side of the ball the camera does not see,
+		// which the depth buffer does not hold. A ray toward that side passes behind the ball's front, so it validates no crossing
+		// there, and a hit on a surface met from behind keeps no confidence: the front's color and lighting are never painted where
+		// the back belongs, and the probes or the sky show instead (the ball's reflection is a crescent; look-dev compared this
+		// with keeping such hits at half confidence, which only drew front-lit rims at silhouettes). On the CPU each mirror texel's
+		// reflected ray is followed to the ball and sorted by where it meets it: on its back (expected nothing) or on the side the
+		// camera sees too (expected confident; the march still misses part of this curved surface met obliquely, in vertical
+		// stripes: 42% of those texels hit at Spatial, 65% at SpatialHigh, so a quarter is asked). Both Spatial modes, with and
+		// without FXAA.
+		constexpr uint32_t c_BallSize = 512;
+		const glm::vec3 c_BallCenter(0.0f, 1.5f, 1.2f);
+		constexpr float c_BallRadius = 0.75f;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		// Where a ray from `origin` meets the ball within `reach`, -1 if nowhere.
+		const auto meetsBall = [&](const glm::vec3& origin, const glm::vec3& direction, float reach)
+		{
+			const glm::vec3 toCenter = c_BallCenter - origin;
+			const float along = glm::dot(toCenter, direction);
+			const float missSquared = glm::dot(toCenter, toCenter) - along * along;
+			if (missSquared > c_BallRadius * c_BallRadius)
+				return -1.0f;
+			const float enter = along - std::sqrt(c_BallRadius * c_BallRadius - missSquared);
+			return enter > 0.0f && enter < reach ? enter : -1.0f;
+		};
+		for (const ReflectionsQuality reflections : { ReflectionsQuality::Spatial, ReflectionsQuality::SpatialHigh })
+		{
+			for (const bool fxaa : { true, false })
+			{
+				CAPTURE(static_cast<int>(reflections));
+				CAPTURE(fxaa);
+				Scene scene;
+				PostProcessComponent& post = AddNeutralPostProcess(scene);
+				post.ScreenSpaceReflections = true;
+				post.AntiAliasingMethod = AntiAliasingMode::FXAA;
+				post.AntiAliasing = fxaa;
+				scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().EnvironmentMap =
+					assets.Add(CreateEnvironmentTexture(glm::vec3(0.1f, 0.2f, 0.5f), glm::vec3(0.05f)), "Sky");
+				MaterialProperties mirror;
+				mirror.Metallic = 1.0f;
+				mirror.Roughness = 0.0f;
+				AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(mirror), glm::vec3(0.0f, 1.5f, -0.05f), "Mirror")
+					.GetComponent<TransformComponent>().Scale = glm::vec3(20.0f, 3.0f, 0.1f);
+				AddMesh(scene, BuiltinAssets::SphereMesh, assets.AddMaterial(UnlitColor({ 1.0f, 1.0f, 1.0f, 1.0f })), c_BallCenter, "Ball")
+					.GetComponent<TransformComponent>().Scale = glm::vec3(2.0f * c_BallRadius);
+				const SceneCamera camera = LookAt(glm::vec3(-5.0f, 1.5f, 5.0f), glm::vec3(-0.5f, 1.5f, 0.3f));
+				SceneRendererSpecification specification = ExactSpecification();
+				specification.Quality.Reflections = reflections;
+				specification.DebugName = "Ball";
+				SceneRenderer renderer(specification);
+				renderer.SetViewportSize(c_BallSize, c_BallSize);
+				WarmUp(gpu, renderer, scene, camera);
+				RenderFrames(gpu, renderer, scene, camera, 3);
+				REQUIRE(renderer.GetStats().ScreenSpaceReflections);
+				REQUIRE(renderer.GetTracedReflectionTexture());
+				const ReadbackImage image = ReadHalfImage(renderer.GetTracedReflectionTexture());
+
+				const glm::mat4 inverseViewProjection = glm::inverse(camera.Projection * camera.View);
+				uint32_t seenTexels = 0;
+				uint32_t seenHit = 0;
+				uint32_t backTexels = 0;
+				float backLargest = 0.0f;
+				for (uint32_t y = 0; y < c_BallSize; y++)
+				{
+					for (uint32_t x = 0; x < c_BallSize; x++)
+					{
+						const glm::vec2 ndc(2.0f * (static_cast<float>(x) + 0.5f) / c_BallSize - 1.0f, 1.0f - 2.0f * (static_cast<float>(y) + 0.5f) / c_BallSize);
+						const glm::vec4 nearPoint = inverseViewProjection * glm::vec4(ndc, 1.0f, 1.0f);
+						const glm::vec3 view = glm::normalize(glm::vec3(nearPoint) / nearPoint.w - camera.Position);
+						// The mirror's face (z = 0), not behind the ball as the camera sees it.
+						if (!(view.z < -1e-4f))
+							continue;
+						const float mirrorReach = -camera.Position.z / view.z;
+						const glm::vec3 mirrorPoint = camera.Position + view * mirrorReach;
+						if (std::abs(mirrorPoint.x) > 9.5f || mirrorPoint.y < 0.1f || mirrorPoint.y > 2.9f || meetsBall(camera.Position, view, mirrorReach) >= 0.0f)
+							continue;
+						const glm::vec3 ray(view.x, view.y, -view.z);
+						const float ballReach = meetsBall(mirrorPoint, ray, 100.0f);
+						if (ballReach < 0.0f)
+							continue;
+						const glm::vec3 atBall = mirrorPoint + ray * ballReach;
+						const glm::vec3 normal = (atBall - c_BallCenter) / c_BallRadius;
+						// How squarely the camera sees that point of the ball (below 0: its back), and how squarely the ray meets it.
+						const float seen = glm::dot(normal, glm::normalize(camera.Position - atBall));
+						const float met = -glm::dot(normal, ray);
+						const float confidence = ReadHalfTexel(image, x, y).a;
+						if (seen > 0.3f && met > 0.4f)
+						{
+							seenTexels++;
+							seenHit += confidence >= 0.9f ? 1u : 0u;
+						}
+						else if (seen < 0.0f)
+						{
+							backTexels++;
+							backLargest = std::max(backLargest, confidence);
+						}
+					}
+				}
+				CAPTURE(seenTexels);
+				CAPTURE(seenHit);
+				CAPTURE(backTexels);
+				CAPTURE(backLargest);
+				MESSAGE("Ball: " << seenHit << " of " << seenTexels << " texels of the side the camera sees confident, " << backTexels
+					<< " of its back at most " << backLargest);
+				CHECK(seenTexels >= 500u);
+				CHECK(backTexels >= 1000u);
+				CHECK(seenHit >= seenTexels / 4);
+				CHECK(backLargest <= 0.01f);
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Rays from the rough sheet that pass behind thin posts go on to the wall beyond them")
 	{
 		// lookdev.sheet's view of the specular lab at the editor's clip planes: the sheet's reflected rays cross the screen sideways
