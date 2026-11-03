@@ -767,6 +767,57 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A rough metal sheet's reflection shows no screen door")
+	{
+		// The specular lab's sheet (roughness 0.18) seen as lookdev.sheet sees it, across its reflection of the far wall and the
+		// posts and of the ladder's spheres (the shot's crops). Whether a ray reaches what it reflects, and what it meets on the
+		// way, depends on where along its steps the pixel's fixed offset put it; a resolve whose weights do not hold each offset
+		// equally leaves the offsets' pattern locked to the screen. Pattern3 and Pattern4 measure that part alone (the posts'
+		// edges are content, which averages out over the phases). Strata 0.7.0: Pattern4 0.66% (Spatial) and 0.11% (SpatialHigh)
+		// over the wall, 0.27-0.30% over the spheres.
+		constexpr float c_Bound = 0.2f; // Percent of full scale
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		SpecularLab lab(assets);
+		const SceneCamera camera = StrafeCamera(glm::vec3(16.0f, 1.6f, -3.6f), glm::vec3(0.0f, 1.5f, -6.0f), 50.0f);
+		for (const ReflectionsQuality reflections : { ReflectionsQuality::Spatial, ReflectionsQuality::SpatialHigh })
+		{
+			for (const bool fxaa : { true, false })
+			{
+				CAPTURE(static_cast<int>(reflections));
+				CAPTURE(fxaa);
+				PostProcessComponent& post = GetPostProcess(lab.Contents);
+				post.AntiAliasingMethod = AntiAliasingMode::FXAA;
+				post.AntiAliasing = fxaa;
+				SceneRendererSpecification specification = ExactSpecification();
+				specification.Quality.Reflections = reflections;
+				specification.DebugName = "ScreenDoor";
+				SceneRenderer renderer(specification);
+				renderer.SetViewportSize(c_StrafeWidth, c_StrafeHeight);
+				WarmUp(gpu, renderer, lab.Contents, camera);
+				RenderFrames(gpu, renderer, lab.Contents, camera, 3);
+				const ReadbackImage image = RenderToImage(renderer, lab.Contents, camera);
+				REQUIRE(renderer.GetStats().ScreenSpaceReflections);
+				// lookdev.sheet's crops (Tools/LookDev/Shots.json), normalized: the wall and posts, the spheres.
+				const std::pair<const char*, glm::vec4> crops[] = { { "post-wall", glm::vec4(0.61f, 0.28f, 0.73f, 0.52f) },
+					{ "spheres", glm::vec4(0.56f, 0.52f, 0.73f, 0.65f) } };
+				for (const auto& crop : crops)
+				{
+					const glm::vec4 rect = crop.second * glm::vec4(c_StrafeWidth, c_StrafeHeight, c_StrafeWidth, c_StrafeHeight);
+					const NoiseMeasure measure = MeasureNoise(image, glm::uvec4(rect));
+					MESSAGE(fmt::format("Screen door, {}, {}, {}: Noise {:.3f}%, Pattern3 {:.3f}%, Pattern4 {:.3f}% over {} pixels",
+						reflections == ReflectionsQuality::Spatial ? "Spatial" : "SpatialHigh", fxaa ? "FXAA" : "no AA", crop.first, measure.Noise,
+						measure.Pattern3, measure.Pattern4, measure.Pixels));
+					CHECK(measure.Pixels > 15000u);
+					CHECK(measure.Pattern3 <= c_Bound);
+					CHECK(measure.Pattern4 <= c_Bound);
+				}
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A strafe past a rough metal sheet and over a wet floor: the reflections do not flicker")
 	{
 		// The look-dev scene's specular lab (SpecularLab), strafed 1 cm a frame toward the rough sheet and across the wet plane, as

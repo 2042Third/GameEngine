@@ -5353,18 +5353,28 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   to its own pre-exposure: the full-resolution copy up to roughness 0.05, the blurred levels at roughness x (levels - 1)
   from 0.15, blended between. That is last frame's light moved to where it is now, not an accumulation: each frame's
   reflections are complete in themselves, and a still view gives the same image frame after frame once the reflections
-  of reflections settled (a bounce a frame). `Effects/ReflectionResolve.comp` then resolves each pixel from its 3x3
-  neighborhood as a ratio estimator: a neighbor's result weighs the center's GGX lobe toward the neighbor's mirror
-  direction over the density the neighbor's ray stands for (its own lobe's peak, 1 / (pi alpha^2)), at most the center's
-  own weight, times ambient occlusion's depth and normal weights; smooth surfaces keep their own sharp reflections, rough
-  ones borrow their neighbors' rays, which hides the march's fixed offsets. It writes the full-resolution target the
+  of reflections settled (a bounce a frame). `Effects/ReflectionResolve.comp` then resolves each pixel from its 5x5
+  neighborhood as a ratio estimator under the separable kernel (0.5, 1, 1, 1, 0.5): a neighbor's result weighs the
+  kernel's weight times the center's GGX lobe toward the neighbor's mirror direction over the density the neighbor's ray
+  stands for (its own lobe's peak, 1 / (pi alpha^2)), at most the center's own weight, times a plane weight (the
+  neighbor's distance from the center's tangent plane, by the prepass's geometric normals at SRV 26, over the center's
+  depth: `exp(-50 d / z)`) and the geometric normals' agreement (`pow(dot, 8)`). Those weights are uniform over a plane
+  at any angle, and over five pixels the kernel gives each of the march's four offsets of an axis the same weight, so the
+  offsets' pattern cancels exactly (a 3x3 window kept a third of it: the screen door of a rough metal sheet, with depth
+  weights that fell off along a grazing sheet). Rough surfaces borrow their neighbors' rays; a mirror's neighbors weigh
+  less the more their mirror directions differ (at 3840x2160 still 0.97: about two pixels of softening). The kernel was
+  chosen over a 3x3 order of the march with a 3x3 window by noise (`lookdev.sheet`'s crops at 4K, High and Ultra, every
+  anti-aliasing mode: 0.31-0.37% and 0.95-1.01% against 0.38-0.43% and 1.15-1.24%), at 0.43 ms on
+  `PerfGPU.Renderer.SSRSpatial4KStageGPU`. It writes the full-resolution target the
   forward pass reads at SRV 18 (the same premultiplied lookup). Memory at 3840x2160: the surface target 63 MiB (as
   Checkerboard's), the trace and the resolve 63 MiB each (RGBA16F), the full-resolution copy 32 MiB (B10G11R11; 63 MiB in
   the RGBA16F fallback), beside the scene-color copy (11 MiB): about 150 MiB more than Checkerboard,
   made by the first frame that asks, released with the targets and when the row's mode changes. `GPU.SceneRenderer.SSR`
   runs the mirror floor's edge, rough-floor, off-screen and moving-cube cases in both modes (Spatial with FXAA), checks
   that Spatial traces without TAA where the CPU predicts, alike on both paths, with the same image in every later frame,
-  and that a changed mode releases one mode's targets for the other's (Off makes none).
+  that a changed mode releases one mode's targets for the other's (Off makes none), that the specular lab's rough sheet
+  shows no screen door (`Pattern3` and `Pattern4` at most 0.2%) and, in a strafe past the sheet and over the wet plane,
+  what the reflections add to the flicker meter's `Blocks` and `Mean` ("GPU tests").
   `PerfGPU.Renderer.SSRSpatial4K` (+ `GPU`, `StageGPU`: `GPU.Reflections`, target 1.2 ms; provisional) measures Spatial
   on the 100,000-cube grid at 3840x2160 with FXAA.
 - Bindings: scene-set SRV 9 is the cube array (a one-slot black cube array, `Renderer::GetBlackCubeArrayTexture`, without

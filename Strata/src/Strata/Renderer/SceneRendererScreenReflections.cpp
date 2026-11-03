@@ -181,6 +181,7 @@ namespace Strata
 				nvrhi::BindingLayoutItem::Texture_SRV(22),
 				nvrhi::BindingLayoutItem::Texture_SRV(23),
 				nvrhi::BindingLayoutItem::Texture_SRV(25),
+				nvrhi::BindingLayoutItem::Texture_SRV(26),
 				nvrhi::BindingLayoutItem::Texture_UAV(0)
 			};
 			m_ReflectionResolveLayout = m_Device->createBindingLayout(resolveLayout);
@@ -267,6 +268,7 @@ namespace Strata
 				nvrhi::BindingSetItem::Texture_SRV(22, m_DepthTexture),
 				nvrhi::BindingSetItem::Texture_SRV(23, surface),
 				nvrhi::BindingSetItem::Texture_SRV(25, traced),
+				nvrhi::BindingSetItem::Texture_SRV(26, m_NormalTexture),
 				nvrhi::BindingSetItem::Texture_UAV(0, resolved)
 			};
 			resolveSet = m_Device->createBindingSet(resolveDesc, m_ReflectionResolveLayout);
