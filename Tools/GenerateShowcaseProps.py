@@ -93,14 +93,18 @@ STEEL_TILE_METERS = 4.0
 # The bare steel's look (linear values): its color, darkened by shade = a - b * f along the rain streaks; its roughness
 # a + b * f on steel; rust's color and roughness. Weathered steel is darker than clean iron (0.56), and its clean patches
 # are smooth while the streaks are dull: that spread, not one roughness, is what keeps an 8 m tank from reading as foil.
-STEEL_COLOR = (0.42, 0.42, 0.43)
+# At 0.42 the letterboard's bare sections, which mirror the bright sky beside the low sun in shot 2, clipped as flat
+# white panels (a quarter of their pixels at 4K); at 0.34, with the stronger waves below, an eighth.
+STEEL_COLOR = (0.34, 0.34, 0.35)
 STEEL_SHADE = (1.10, 0.30)
 STEEL_ROUGHNESS = (0.16, 0.38)
 RUST_COLOR = (0.20, 0.09, 0.04)
 RUST_ROUGHNESS = 0.85
 # The steel's relief (meters of height, lattice cells over the 4 m tile): oil-canning waves of 0.36-0.8 m, dents of
-# 6.6 cm, and pits of 1.7 cm on rust only.
-STEEL_WAVES = ((0.012, 5), (0.008, 7), (0.004, 11))
+# 6.6 cm, and pits of 1.7 cm on rust only. The waves tilt the sheet by up to about 4 degrees: at half that, the glare
+# of the sky beside the low sun lay on a panel as one even sheet. Only the waves are that strong: they are low
+# frequencies, so they cannot shimmer, while the dents stay shallow.
+STEEL_WAVES = ((0.024, 5), (0.016, 7), (0.008, 11))
 STEEL_DENTS = (0.0015, 61)
 STEEL_PITS = (0.0008, 229)
 
