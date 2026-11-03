@@ -7,6 +7,7 @@ editors, and the comparison of two sets of them.
          [--debug-view none|streaming|lod|mip|motion|shadows|lighting|ao|indirect|luminance|albedo] [--keep-work]
          [--work <dir> [--fresh-work]]
   python -I Tools/LookDev.py compare <before dir> <after dir> --output <dir>
+  python -I Tools/LookDev.py ratio <capture dir> --numerator <GPU stage> --denominator <GPU stage>
   python -I Tools/LookDev.py selftest --build <bin dir> --output <dir>
 
 capture copies the samples (never opening them in place), builds the Basic3D and look-dev projects with editor command
@@ -29,6 +30,7 @@ import json
 import math
 import multiprocessing
 import os
+import random
 import shutil
 import statistics
 import struct
@@ -249,6 +251,64 @@ def make_leaf_texture():
             offset = (y * size + x) * 4
             image.data[offset:offset + 4] = bytes((60, 110, 40, 255 if inside else 0))
     return image
+
+
+def make_grass_texture():
+    """64 x 128 RGBA: nine vertical blades, white and opaque inside, transparent outside, 3 texels wide at the base and
+    tapering to a point at 65% to 100% of the height. StrataTests' GIScenes.cpp makes the same texture: change both."""
+    width, height, blades = 64, 128, 9
+    image = Image(width, height, 4)
+    for blade in range(blades):
+        center = (blade + 0.5) * width / blades
+        top = height * (0.65 + 0.35 * ((blade * 5) % blades) / (blades - 1))
+        for row in range(height):
+            above = height - 1 - row + 0.5
+            if above >= top:
+                continue
+            half_width = max(1.5 * (1.0 - above / top), 0.5)
+            for x in range(width):
+                if abs(x + 0.5 - center) < half_width:
+                    offset = (row * width + x) * 4
+                    image.data[offset:offset + 4] = bytes((255, 255, 255, 255))
+    return image
+
+
+def expand_grass_cards(step):
+    """The look-dev script's macro step "lookdev.grassCards" as the entity.create steps it stands for: `count` cards of the
+    grass material, 0.30 m wide and 0.25-0.60 m tall, standing on the ground at random places between `min` and `max` (x, z)
+    with a random turn. Drawn from Python's random.Random(seed) in GIScenes.cpp's order (x, z, height, color, turn): the same
+    distribution as the tests' grass, not the same numbers, and one material (the tests tint each card)."""
+    parameters = step.get("parameters", {})
+    count = int(parameters.get("count", 0))
+    low = parameters.get("min", [0, 0])
+    high = parameters.get("max", [0, 0])
+    material = parameters.get("material")
+    if count <= 0 or not material or len(low) != 2 or len(high) != 2:
+        raise ToolError(f"lookdev.grassCards needs a count, a material and min and max as [x, z]: {parameters}")
+    generator = random.Random(int(parameters.get("seed", 0)))
+    steps = []
+    for index in range(count):
+        x = low[0] + (high[0] - low[0]) * generator.random()
+        z = low[1] + (high[1] - low[1]) * generator.random()
+        card_height = 0.25 + 0.35 * generator.random()
+        generator.random()  # The tests' tint of the card
+        turn = 360.0 * generator.random()
+        steps.append({"command": "entity.create", "parameters": {"name": f"Grass {index + 1}", "components": {
+            "Transform": {"Translation": [round(x, 4), round(0.5 * card_height, 4), round(z, 4)], "Rotation": [0, round(turn, 3), 0],
+                          "Scale": [0.3, round(card_height, 4), 1]},
+            "MeshRenderer": {"Mesh": "0000000000000004", "Material": material}}}})
+    return steps
+
+
+def expand_macros(steps):
+    """The script's steps with the harness's macro steps (lookdev.*) replaced by the editor commands they stand for."""
+    expanded = []
+    for step in steps:
+        if step.get("command") == "lookdev.grassCards":
+            expanded.extend(expand_grass_cards(step))
+        else:
+            expanded.append(step)
+    return expanded
 
 
 def difference(before, after):
@@ -626,10 +686,13 @@ def prepare_project(key, project, children, work, fresh):
     elif project.get("Script"):
         leaf = Path(work) / "LeafTexture.png"
         write_png(leaf, make_leaf_texture())
+        grass = Path(work) / "GrassTexture.png"
+        write_png(grass, make_grass_texture())
         text = (LOOKDEV_DIR / project["Script"]).read_text(encoding="utf-8")
         text = text.replace("@LOOKDEV_DIRECTORY@", json_escape(str(directory))).replace("@LEAF_TEXTURE@", json_escape(str(leaf)))
+        text = text.replace("@GRASS_TEXTURE@", json_escape(str(grass)))
         script = Path(work) / f"{key}.json"
-        script.write_text(text, encoding="utf-8")
+        script.write_text(json.dumps(expand_macros(json.loads(text)), indent=1), encoding="utf-8")
         children.run_script(script, key)
     else:
         raise ToolError(f"project {key} has no Sample, Template or Script")
@@ -785,6 +848,47 @@ def write_stages(output, records):
         lines.append(",".join(f"{value:.4f}" if isinstance(value, float) else str(value) for value in row))
     (output / "stages.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return header, rows
+
+
+def stage_ratios(stats_directory, numerator, denominator):
+    """Per stats file (<shot>-<size>-<mode>.json) of a capture set, the ratio of two GPU stages in each repeat's frame
+    (renderStats.gpuMs): {name: {"ratios": [...], "missing": repeats lacking either stage}}."""
+    ratios = {}
+    for path in sorted(Path(stats_directory).glob("*.json")):
+        data = load_json(path)
+        values = []
+        missing = 0
+        for repeat in data.get("repeats", []) if isinstance(data, dict) else []:
+            stages = (repeat.get("renderStats", {}) or {}).get("gpuMs", {}) or {}
+            top = stages.get(numerator)
+            bottom = stages.get(denominator)
+            if isinstance(top, (int, float)) and isinstance(bottom, (int, float)) and bottom > 0:
+                values.append(top / bottom)
+            else:
+                missing += 1
+        ratios[path.stem] = {"ratios": values, "missing": missing}
+    return ratios
+
+
+def ratio_command(args):
+    directory = Path(args.capture)
+    if not (directory / "stats").is_dir():
+        raise ToolError(f"{directory} has no stats directory")
+    ratios = stage_ratios(directory / "stats", args.numerator, args.denominator)
+    lines = ["picture,median,minimum,maximum,repeats,missing"]
+    print(f"{args.numerator} / {args.denominator}")
+    for name, entry in ratios.items():
+        values = entry["ratios"]
+        if entry["missing"]:
+            print(f"  {name}: {entry['missing']} repeats lack a stage, left out")
+        if not values:
+            lines.append(f"{name},,,,0,{entry['missing']}")
+            continue
+        median = statistics.median(values)
+        print(f"  {name}: median {median:.3f} (min {min(values):.3f}, max {max(values):.3f}, {len(values)} repeats)")
+        lines.append(f"{name},{median:.4f},{min(values):.4f},{max(values):.4f},{len(values)},{entry['missing']}")
+    (directory / "ratio.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return 0
 
 
 def read_stages(path):
@@ -1210,6 +1314,16 @@ def selftest_command(args):
     if bands != {"kind": "Bands", "maxStep": 10, "stepsOver3": 16, "columns": 16}:
         problems.append(f"the bands metric of a ramp with one step is {bands}, not maxStep 10 in all 16 columns")
 
+    # The stages' ratio of a synthetic stats directory: per repeat in its own frame, repeats lacking a stage left out.
+    ratio_stats = output / "ratio" / "stats"
+    ratio_stats.mkdir(parents=True, exist_ok=True)
+    repeats = [{"renderStats": {"gpuMs": {"GPU.A": 2.0, "GPU.B": 1.0}}}, {"renderStats": {"gpuMs": {"GPU.A": 3.0, "GPU.B": 1.0}}},
+               {"renderStats": {"gpuMs": {"GPU.A": 1.0}}}]
+    (ratio_stats / "a.scene-320x180-taa.json").write_text(json.dumps({"repeats": repeats}), encoding="utf-8")
+    ratios = stage_ratios(ratio_stats, "GPU.A", "GPU.B")
+    if ratios != {"a.scene-320x180-taa": {"ratios": [2.0, 3.0], "missing": 1}}:
+        problems.append(f"the stages' ratios are {ratios}, not 2 and 3 with one repeat left out")
+
     if not args.build:
         for problem in problems:
             print(f"selftest: {problem}")
@@ -1288,6 +1402,10 @@ def main():
     compare.add_argument("--output", required=True)
     compare.add_argument("--signed-gain", type=float, default=32.0,
                          help="the gain of the signed difference images (red brighter after, blue darker); 0 writes none")
+    ratio = commands.add_parser("ratio", help="the ratio of two GPU stages in the same frames, per picture of a capture set")
+    ratio.add_argument("capture", help="a capture set (its stats directory)")
+    ratio.add_argument("--numerator", required=True, help="a GPU stage, e.g. GPU.RadianceCascades")
+    ratio.add_argument("--denominator", required=True, help="a GPU stage, e.g. GPU.AO")
     selftest = commands.add_parser("selftest", help="the CTests: the offline checks, and with --build the look-dev project "
                                                     "built and one shot captured small")
     selftest.add_argument("--build", help="the folder with StrataEditor and StrataCLI; without it only the offline checks run")
@@ -1298,6 +1416,8 @@ def main():
             return capture_command(args)
         if args.command == "compare":
             return compare_command(args)
+        if args.command == "ratio":
+            return ratio_command(args)
         return selftest_command(args)
     except ToolError as error:
         print(f"LookDev: {error}", file=sys.stderr)
