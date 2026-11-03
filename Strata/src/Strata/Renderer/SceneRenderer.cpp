@@ -2611,7 +2611,7 @@ namespace Strata
 			candidate.Data.PositionRange = record.PositionRange;
 			candidate.Data.Color = record.Color;
 			candidate.Data.DirectionType = record.DirectionType;
-			candidate.Data.SpotAngles = glm::vec4(record.SpotAngles.x, record.SpotAngles.y, 0.0f, 0.0f);
+			candidate.Data.SpotAngles = glm::vec4(record.SpotAngles.x, record.SpotAngles.y, 0.0f, record.Source.x);
 			const float distance = glm::length(glm::vec3(candidate.Bounds) - camera.Position);
 			if (camera.Orthographic)
 				candidate.Relevance = candidate.Bounds.w; // The projected size does not depend on the distance

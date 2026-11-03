@@ -257,7 +257,18 @@ TEST_SUITE("Reflection")
 				CHECK(found->Max == maximum);
 				CHECK_FALSE(found->Tooltip.empty());
 			}
+			// The bulb's or flame's radius (highlights only): 0 (a point) by default, within [0, 2] meters, active without
+			// shadows.
+			const PropertyInfo* source = lightInfo->FindProperty("SourceRadius");
+			REQUIRE(source);
+			CHECK(source->Type == PropertyType::Float);
+			CHECK(source->Min == 0.0f);
+			CHECK(source->Max == PointLightComponent::c_MaxSourceRadius);
+			CHECK(source->Tooltip.find("highlight") != std::string::npos);
 		}
+		CHECK(PointLightComponent().SourceRadius == 0.0f);
+		CHECK(SpotLightComponent().SourceRadius == 0.0f);
+		CHECK(PointLightComponent::c_MaxSourceRadius == 2.0f);
 		PointLightComponent lamp;
 		CHECK_FALSE(lamp.CastShadows);
 		CHECK(lamp.ShadowBias == 1.0f);
@@ -509,6 +520,7 @@ TEST_SUITE("Scene.InactiveProperties")
 			for (const char* property : { "ShadowBias", "ShadowNormalBias", "ShadowFilterRadius" })
 				CHECK_MESSAGE(reason(component, property) == "Cast Shadows is off", component, ".", property);
 			CHECK(reason(component, "Range").empty());
+			CHECK(reason(component, "SourceRadius").empty());
 			CHECK(reason(component, "CastShadows").empty());
 		}
 		lamp.CastShadows = true;

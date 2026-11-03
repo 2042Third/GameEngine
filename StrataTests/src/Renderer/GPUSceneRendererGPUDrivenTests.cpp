@@ -504,6 +504,36 @@ namespace
 		return View(glm::vec3(0.0f, 2.0f, 4.5f), glm::vec3(0.0f, 0.4f, 0.0f));
 	}
 
+	// Highlights of sized sources: a 10-degree sun, a point light of source radius 0.1 and a spot light of 0.05 over a mirror floor
+	// and a coated sphere (both light paths carry the radius in LightData::SpotAngles.w).
+	SceneCamera BuildSizedHighlights(Scene& scene, SceneTestAssets& assets, TestSkinningPoses&)
+	{
+		AddNeutralPostProcess(scene);
+		AddSun(scene, glm::normalize(glm::vec3(-0.3f, -0.5f, 1.0f)), 3.0f).GetComponent<DirectionalLightComponent>().ShadowSoftness = 10.0f;
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().Source = SkyLightSource::Procedural;
+		MaterialProperties polished;
+		polished.BaseColor = glm::vec4(0.9f, 0.9f, 0.92f, 1.0f);
+		polished.Metallic = 1.0f;
+		polished.Roughness = 0.02f;
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(polished), glm::vec3(0.0f), "Mirror").GetComponent<TransformComponent>().Scale = glm::vec3(8.0f);
+		MaterialProperties coated;
+		coated.BaseColor = glm::vec4(0.6f, 0.1f, 0.1f, 1.0f);
+		coated.Roughness = 0.6f;
+		coated.Clearcoat = 1.0f;
+		coated.ClearcoatRoughness = 0.03f;
+		AddMesh(scene, BuiltinAssets::SphereMesh, assets.AddMaterial(coated), glm::vec3(0.0f, 0.5f, 0.0f), "Coated");
+		AddPointLight(scene, glm::vec3(-1.2f, 1.0f, -1.0f), glm::vec3(1.0f, 0.72f, 0.42f), 4.0f, 6.0f).GetComponent<PointLightComponent>().SourceRadius = 0.1f;
+		Entity spot = scene.CreateEntity("Spot");
+		spot.GetComponent<TransformComponent>().Translation = glm::vec3(1.2f, 1.5f, -1.0f);
+		spot.GetComponent<TransformComponent>().Rotation = glm::vec3(glm::radians(-146.0f), 0.0f, 0.0f); // Down toward the camera's reflection of it
+		SpotLightComponent& light = spot.AddComponent<SpotLightComponent>();
+		light.Intensity = 8.0f;
+		light.Range = 6.0f;
+		light.OuterConeAngle = 50.0f;
+		light.SourceRadius = 0.05f;
+		return View(glm::vec3(0.0f, 1.2f, 3.0f), glm::vec3(0.0f, 0.3f, -0.5f));
+	}
+
 	// The atmosphere with aerial perspective (scale 8): shapes from near to 300 m, opaque and alpha-blended, hazed by distance.
 	SceneCamera BuildAerialPerspective(Scene& scene, SceneTestAssets& assets, TestSkinningPoses&)
 	{
@@ -541,6 +571,7 @@ namespace
 		{ "Local shadows", BuildLocalShadowed },
 		{ "Lit materials", BuildLitMaterials },
 		{ "Atmosphere and aerial perspective", BuildAerialPerspective },
+		{ "Sized highlights", BuildSizedHighlights },
 	};
 
 	void CompareScenes(GPUContext& gpu, IndirectDrawMode indirect, uint32_t maxDrawsPerCall = 0)

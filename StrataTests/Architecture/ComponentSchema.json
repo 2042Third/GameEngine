@@ -627,6 +627,18 @@
 				},
 				{
 					"AssetFilter": 0,
+					"DisplayName": "Source Radius",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 2.0,
+					"Min": 0.0,
+					"Name": "SourceRadius",
+					"Speed": 0.004999999888241291,
+					"Tooltip": "Radius in meters of the light's bulb or flame: smooth and wet surfaces show its highlight at that size, the same light spread wider (a lantern about 0.05, a fire about 0.25). Its diffuse light and shadows do not change. 0: a point",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
 					"DisplayName": "Cast Shadows",
 					"EnumValues": [],
 					"Flags": 0,
@@ -717,6 +729,18 @@
 					"Name": "Range",
 					"Speed": 0.10000000149011612,
 					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Source Radius",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 2.0,
+					"Min": 0.0,
+					"Name": "SourceRadius",
+					"Speed": 0.004999999888241291,
+					"Tooltip": "Radius in meters of the light's bulb or flame: smooth and wet surfaces show its highlight at that size, the same light spread wider (a lantern about 0.05, a fire about 0.25). Its diffuse light and shadows do not change. 0: a point",
 					"Type": "Float"
 				},
 				{

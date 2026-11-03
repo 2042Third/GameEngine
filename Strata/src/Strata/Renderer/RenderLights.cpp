@@ -53,7 +53,7 @@ namespace Strata
 	}
 
 	RenderData::LightRecord RenderLights::MakeRecord(const glm::mat4& world, bool active, const glm::vec3& color, float intensity, float range, uint32_t type,
-		float innerDegrees, float outerDegrees)
+		float innerDegrees, float outerDegrees, float sourceRadius)
 	{
 		RenderData::LightRecord record;
 		if (!active || !(intensity > 0.0f) || !(range > 0.0f) || !std::isfinite(intensity) || !std::isfinite(range) || !IsFiniteMatrix(world)
@@ -78,6 +78,7 @@ namespace Strata
 		record.SpotAngles = glm::vec4(cosInner, cosOuter, RenderData::c_LightRecordDrawn, 0.0f);
 		record.Bounds = type == RenderData::c_LightSpot ? GetSpotBounds(position, direction, range, cosOuter, std::sin(glm::radians(outer)))
 			: glm::vec4(position, range);
+		record.Source = glm::vec4(std::isfinite(sourceRadius) ? std::clamp(sourceRadius, 0.0f, PointLightComponent::c_MaxSourceRadius) : 0.0f, 0.0f, 0.0f, 0.0f);
 		return record;
 	}
 
@@ -173,14 +174,15 @@ namespace Strata
 			if (!light)
 				return false;
 			outRecord = MakeRecord(world->Matrix, world->ActiveInHierarchy, light->Color, light->Intensity, light->Range, type, light->InnerConeAngle,
-				light->OuterConeAngle);
+				light->OuterConeAngle, light->SourceRadius);
 			setShadows(light->CastShadows, light->ShadowBias, light->ShadowNormalBias, light->ShadowFilterRadius);
 			return true;
 		}
 		const PointLightComponent* light = registry.try_get<PointLightComponent>(entity);
 		if (!light)
 			return false;
-		outRecord = MakeRecord(world->Matrix, world->ActiveInHierarchy, light->Color, light->Intensity, light->Range, type, 0.0f, 0.0f);
+		outRecord = MakeRecord(world->Matrix, world->ActiveInHierarchy, light->Color, light->Intensity, light->Range, type, 0.0f, 0.0f,
+			light->SourceRadius);
 		setShadows(light->CastShadows, light->ShadowBias, light->ShadowNormalBias, light->ShadowFilterRadius);
 		return true;
 	}

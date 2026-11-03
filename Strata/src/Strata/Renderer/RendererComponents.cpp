@@ -107,6 +107,9 @@ namespace Strata
 		constexpr const char* c_LocalShadowFilterTooltip = "Radius of the shadow's soft edge, in texels of the light's shadow tiles (0 to 8)";
 		constexpr const char* c_LocalShadowCastTooltip = "Casts shadows: the renderer gives the most relevant shadowed lights in view (16) tiles "
 			"of its shadow atlas, six for a point light, one for a spot light; each costs drawing its casters again when they move";
+		// Point and spot lights' size (highlights only).
+		constexpr const char* c_SourceRadiusTooltip = "Radius in meters of the light's bulb or flame: smooth and wet surfaces show its highlight at "
+			"that size, the same light spread wider (a lantern about 0.05, a fire about 0.25). Its diffuse light and shadows do not change. 0: a point";
 
 		std::string WithAutoExposure(const PostProcessComponent& post)
 		{
@@ -316,6 +319,8 @@ namespace Strata
 				WithTooltip(Range(0.0f, c_Unbounded, 0.1f), "Luminous intensity in candela, times Color, falling off with the square of the distance: a "
 					"bulb of P lumens has P / 12.57 cd (800 lm, about 64 cd), a candle about 1"))
 			.Property("Range", &PointLightComponent::Range, WithTooltip(Range(0.01f, c_Unbounded, 0.1f), "Light fades to zero at this distance"))
+			.Property("SourceRadius", &PointLightComponent::SourceRadius,
+				WithTooltip(Range(0.0f, PointLightComponent::c_MaxSourceRadius, 0.005f), c_SourceRadiusTooltip))
 			.Property("CastShadows", &PointLightComponent::CastShadows, WithTooltip({}, c_LocalShadowCastTooltip))
 			.Property("ShadowBias", &PointLightComponent::ShadowBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), c_LocalShadowBiasTooltip))
 			.Property("ShadowNormalBias", &PointLightComponent::ShadowNormalBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), c_LocalShadowNormalBiasTooltip))
@@ -333,6 +338,8 @@ namespace Strata
 				WithTooltip(Range(0.0f, c_Unbounded, 0.1f), "Luminous intensity in candela along the axis, times Color, falling off with the square of "
 					"the distance; a narrower cone does not make it brighter"))
 			.Property("Range", &SpotLightComponent::Range, Range(0.01f, c_Unbounded, 0.1f))
+			.Property("SourceRadius", &SpotLightComponent::SourceRadius,
+				WithTooltip(Range(0.0f, PointLightComponent::c_MaxSourceRadius, 0.005f), c_SourceRadiusTooltip))
 			.Property("InnerConeAngle", &SpotLightComponent::InnerConeAngle, WithTooltip(Range(0.0f, 89.0f, 0.1f), "Half angle in degrees"))
 			.Property("OuterConeAngle", &SpotLightComponent::OuterConeAngle, WithTooltip(Range(0.1f, 89.9f, 0.1f), "Half angle in degrees"))
 			.Property("CastShadows", &SpotLightComponent::CastShadows, WithTooltip({}, c_LocalShadowCastTooltip))

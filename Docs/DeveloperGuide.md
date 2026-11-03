@@ -4326,6 +4326,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   `GetLightRelevance`, `Include/Clusters.slang`), and `Forward.frag` loops only over its pixel's cluster. The GPU's light
   counts come back with its other counts (`SceneRendererGPUStats::Lights`, `CulledLights`; `Tests::GetLightCounts`).
   The directional light's shadows are cascades; point and spot lights' are views in an atlas ("Local light shadows").
+  A record (`RenderData::LightRecord`, 96 bytes; every reader sizes by `sizeof`, and `Include/Lights.slang` mirrors it)
+  ends with `Source`, whose x is the light's `SourceRadius` (highlights only, "Lighting"): both paths copy it into
+  `LightData::SpotAngles.w` (the CPU path in `CollectLights`, the GPU-driven one in `LightCompact.comp`), which stays 64
+  bytes.
 - The cascades are one D32 array (`SceneRenderer::GetShadowMap`) of a layer per cascade the quality draws
   (`RendererQualitySettings::ShadowCascades`; thumbnails draw one), made by the first frame with a shadowed sun and kept
   across resizes; a zero viewport (a capture renderer between pictures, the editor's hidden Game view) releases it,
@@ -4648,6 +4652,16 @@ lights, Post Process and the sky), and never a resolution below the output's.
   shadows or culling. `GPU.SceneRenderer.Lighting`'s "A sized sun..." measures a white mirror sphere orthographically (projected
   area maps to reflected solid angle as `d omega = 4 dA / R^2`): the half-peak cone is 4.97 degrees at 10 (5 expected) and
   0.265 at 0.53 (0.143 for a point), and the light at 5 and 10 degrees agrees within 1%.
+  Point and spot lights: `SourceRadius` (meters, 0 to `PointLightComponent::c_MaxSourceRadius` 2, default 0: a point) rides
+  in the record's `Source.x` and `LightData::SpotAngles.w` on both light paths ("Render scene"), and the light loop computes
+  `GetSourceLobeAlpha2(radius, distanceSquared)` once per light after its attenuation test: a sphere spans `sin(theta) =
+  radius / distance`, so `alpha_s^2 = sin^2 / ((1 - sin^2) 1.287^2)`, with `sin^2` at most 0.5 (a surface touching the bulb)
+  and the same `c_MinRoughness^4` subtracted. A radius of 0 returns 0 before any arithmetic (one compare per light).
+  Nothing else reads the radius: range, culling, the local shadow views' keys and the diffuse term are unchanged, so a
+  changed radius re-records the light (an upload) and redraws no shadow view. Authoring rule: the bulb's or flame's real
+  radius (a lantern 0.03 to 0.06 m, a fire pit's flames 0.2 to 0.3 m), never more: a larger value widens and dims the
+  highlight. "A point light's source radius..." checks a mirror plane's half-peak area against the bulb's mirror image,
+  the light kept on a distant bulb, a matte surface and the shadow atlas unchanged.
 - **The horizon fade** (`GetHorizonFade`): a normal map can turn the reflected vector into the surface, where image light
   would show the surface's own underside. Image light (probes, sky, screen-space reflections, through the specular
   occlusion) is multiplied by `clamp(1 + R . Ng / 0.25, 0, 1)^2` with Ng the geometric normal (facing the viewer), reaching
@@ -5265,6 +5279,9 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
 
 ### Reflections
 
+- **Highlights** are the lights' reflections: a light's size (the sun's Angular Diameter, a point or spot light's
+  `SourceRadius`) widens only its highlight's lobe, never its diffuse light, shadows, range or culling ("Lighting",
+  Highlights of sized sources).
 - **Reflection probes** (`ReflectionProbeComponent`, `SceneRendererReflectionProbes.cpp`): a `Capture` (an equirectangular
   HDR texture asset, luminance in nits, as the sky's map is) of the scene seen from the entity's position lights the
   surfaces inside its influence box (`Extents`, half sizes along the entity's axes, times its scale): their specular

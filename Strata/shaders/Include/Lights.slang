@@ -18,6 +18,7 @@ struct LightRecord
 	float4 DirectionType; // xyz: direction, w: type
 	float4 SpotAngles;    // x: cos(inner), y: cos(outer), z: 1 when drawn
 	float4 Bounds;        // xyz: world center, w: radius
+	float4 Source;        // x: the source radius in meters (highlights only)
 };
 
 struct LightCullParameters

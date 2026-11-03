@@ -113,7 +113,8 @@ namespace Strata
 		// angular diameter `degrees` spans the half maximum of a GGX lobe of alpha tan(radius) / c_LobeHalfMaximum (the reflected
 		// angle per alpha at which GGX falls to half its peak: 2 sqrt(sqrt(2) - 1)), less what the shading's smallest roughness
 		// spreads already (Include/PBR.slang's c_MinRoughness^4), so that a mirror shows the disk at its size. Clamped to the
-		// property's 0 to 10 degrees (DirectionalLightComponent::ShadowSoftness, shown as Angular Diameter).
+		// property's 0 to 10 degrees (DirectionalLightComponent::ShadowSoftness, shown as Angular Diameter). Point and spot
+		// lights' spheres take the same lobe in the forward pass (PBR.slang's GetSourceLobeAlpha2, per pixel).
 		inline float GetSunLobeAlpha2(float degrees)
 		{
 			constexpr float c_LobeHalfMaximum = 1.2871885f;
@@ -246,7 +247,9 @@ namespace Strata
 			glm::vec4 PositionRange; // xyz: camera-relative world position (as uploaded), w: range
 			glm::vec4 Color;         // rgb: color * intensity, w: 1 / range^2
 			glm::vec4 DirectionType; // xyz: direction the light travels, w: type
-			glm::vec4 SpotAngles;    // x: cos(inner), y: cos(outer), z: its shadow slot plus one (0: no shadow; LocalShadowData)
+			// x: cos(inner), y: cos(outer), z: its shadow slot plus one (0: no shadow; LocalShadowData), w: the source radius in
+			// meters (highlights only: LightRecord::Source.x)
+			glm::vec4 SpotAngles;
 		};
 		static_assert(sizeof(LightData) == 64);
 
@@ -261,8 +264,10 @@ namespace Strata
 			// x: cos(inner), y: cos(outer), z: c_LightRecordDrawn or 0, w: c_LightRecordShadowed or 0
 			glm::vec4 SpotAngles = glm::vec4(0.0f);
 			glm::vec4 Bounds = glm::vec4(0.0f);        // xyz: world center, w: radius of the region it reaches
+			// x: the source radius in meters (highlights only; the component's SourceRadius within [0, c_MaxSourceRadius]), yzw: 0
+			glm::vec4 Source = glm::vec4(0.0f);
 		};
-		static_assert(sizeof(LightRecord) == 80);
+		static_assert(sizeof(LightRecord) == 96);
 		// LightRecord::SpotAngles.z of a light that is drawn (active, lit, with a range).
 		constexpr float c_LightRecordDrawn = 1.0f;
 		// LightRecord::SpotAngles.w of a drawn light that casts shadows (its component's CastShadows).

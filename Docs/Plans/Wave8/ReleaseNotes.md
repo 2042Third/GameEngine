@@ -106,6 +106,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - The sun's highlight takes the light's size (Directional Light **Angular Diameter**, stored as `ShadowSoftness`):
   Overcast's 10-degree sun gives a soft glow instead of a pin dot; on mirror-smooth surfaces the midday sun's glint is the
   disk's size. The property now sits with the light's own settings and applies without shadows too.
+- Point and spot lights have a **Source Radius** (default 0, as before): a lantern's or a fire's highlight on metal and wet
+  ground takes the bulb's or flame's size, the same light spread wider; their diffuse light and shadows do not change.
 
 ## Defaults that change
 

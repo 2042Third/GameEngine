@@ -20,7 +20,10 @@ reference work as they are. Hover a light's **Intensity** in the Inspector to se
   luminous intensity in **candela** (cd): how bright the light looks from one direction. A lamp sold as P lumens has
   P / 12.57 cd as a point light (an 800 lumen bulb is about 64 cd). A spot light's candela is the brightness along its
   axis: making its cone narrower does not make it brighter. Both fade with the square of the distance and reach zero at
-  **Range**.
+  **Range**. Their **Source Radius** is the radius in meters of the bulb or the flame (0, a point, by default): metal and
+  wet ground show the light's highlight at that size, the same light spread wider, instead of a pin dot. Give it the real
+  size, never more: a lantern's bulb about 0.03 to 0.06, a fire pit's flames about 0.2 to 0.3. Only the highlights change:
+  the light's brightness on matte surfaces and its shadows stay as they are.
 - The **Sky Light** lights the scene from every direction and draws the background. What it shows is luminance in
   **nits** (candela per square meter): an environment map's pixel values, or the procedural sky's colors, times
   **Intensity**. A uniform sky of L nits puts about 3.14 x L lux on the ground.

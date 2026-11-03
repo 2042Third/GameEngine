@@ -14,7 +14,21 @@ static const float c_MinRoughness = 0.045; // Avoids aliasing and division issue
 // source combine about as variances add, so a sized source adds that alpha^2 (less what c_MinRoughness spreads already, so a
 // mirror shows the source at its size) to the distribution's. The distribution stays normalized: a larger source widens the
 // highlight and lowers its peak without brightening it. The sun's disk: RenderData::GetSunLobeAlpha2
-// (FrameConstants::ReflectionParams.w).
+// (FrameConstants::ReflectionParams.w); a point or spot light's sphere: GetSourceLobeAlpha2.
+static const float c_LobeHalfMaximum = 1.2871885; // 2 sqrt(sqrt(2) - 1)
+static const float c_MaxSourceSine2 = 0.5;        // At most 45 degrees of angular radius (a surface touching the bulb)
+
+// The alpha^2 a sphere of `radius` at `distanceSquared` adds to a highlight's lobe: it spans an angular radius theta with
+// sin(theta) = radius / distance, so it widens the lobe by (tan(theta) / c_LobeHalfMaximum)^2, less what the smallest roughness
+// spreads already (c_MinRoughness^4), as GetSunLobeAlpha2 does for the sun's disk. 0 for a point.
+float GetSourceLobeAlpha2(float radius, float distanceSquared)
+{
+	if (radius <= 0.0)
+		return 0.0;
+	float sine2 = min(radius * radius / max(distanceSquared, 1e-8), c_MaxSourceSine2);
+	float minAlpha2 = c_MinRoughness * c_MinRoughness * c_MinRoughness * c_MinRoughness;
+	return max(sine2 / ((1.0 - sine2) * c_LobeHalfMaximum * c_LobeHalfMaximum) - minAlpha2, 0.0);
+}
 
 float DistributionGGX(float NoH, float alpha)
 {

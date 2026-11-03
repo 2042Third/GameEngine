@@ -197,7 +197,8 @@
 						"Range": 7,
 						"ShadowBias": 1.25,
 						"ShadowFilterRadius": 2,
-						"ShadowNormalBias": 1.25
+						"ShadowNormalBias": 1.25,
+						"SourceRadius": 0.05
 					},
 					"Transform": {
 						"Rotation": [
@@ -238,7 +239,8 @@
 						"Range": 14,
 						"ShadowBias": 0.75,
 						"ShadowFilterRadius": 3,
-						"ShadowNormalBias": 2
+						"ShadowNormalBias": 2,
+						"SourceRadius": 0.03
 					},
 					"Transform": {
 						"Rotation": [

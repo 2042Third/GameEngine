@@ -247,7 +247,9 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 				float3 geometricNormal = normalize(v_Normal) * (st_FrontFacing ? 1.0 : -1.0);
 				attenuation *= SampleLocalShadow(shadowSlot - 1u, surface.Position, geometricNormal, st_FragCoord.xy);
 			}
-			color += LightSurface(surface, coat, diffuseWeight, normalize(toLight), light.Color.rgb * attenuation, 0.0);
+			// The highlight takes the bulb's or flame's angular size (SpotAngles.w: its radius; 0, a point, skips it).
+			float sourceAlpha2 = GetSourceLobeAlpha2(light.SpotAngles.w, distanceSquared);
+			color += LightSurface(surface, coat, diffuseWeight, normalize(toLight), light.Color.rgb * attenuation, sourceAlpha2);
 		}
 	}
 	uint lightingView = GetLightingView();

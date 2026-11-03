@@ -52,12 +52,14 @@ namespace Strata
 		glm::vec3 Color = { 1.0f, 1.0f, 1.0f };
 		float Intensity = 10.0f; // Luminous intensity in candela, times Color (P lumens in every direction: P / 4pi cd)
 		float Range = 10.0f; // Light fades to zero at this distance
+		float SourceRadius = 0.0f; // Meters: the radius of the bulb or flame, which widens the light's highlights only (0: a point)
 		bool CastShadows = false;
 		float ShadowBias = 1.0f;         // Depth offset toward the light, in texels of the light's shadow tiles
 		float ShadowNormalBias = 1.5f;   // Offset along the surface normal, in texels of the light's shadow tiles
 		float ShadowFilterRadius = 1.5f; // Radius of the shadow edge's filter, in texels of the light's shadow tiles (at most 8)
 
 		static constexpr float c_MaxShadowFilterRadius = 8.0f;
+		static constexpr float c_MaxSourceRadius = 2.0f;
 	};
 
 	// Shines along the entity's forward (-Z) direction.
@@ -66,6 +68,7 @@ namespace Strata
 		glm::vec3 Color = { 1.0f, 1.0f, 1.0f };
 		float Intensity = 20.0f; // Luminous intensity in candela along the axis, times Color (not spread over the cone)
 		float Range = 15.0f;
+		float SourceRadius = 0.0f; // As PointLightComponent's: at most PointLightComponent::c_MaxSourceRadius
 		float InnerConeAngle = 20.0f; // Degrees, half angle: full intensity inside
 		float OuterConeAngle = 30.0f; // Degrees, half angle: no light outside
 		bool CastShadows = false;

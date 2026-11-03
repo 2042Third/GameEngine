@@ -38,9 +38,10 @@ namespace Strata
 
 		// A light's record from its world transform and component values (also what the CPU path draws a light with): the
 		// region it reaches (its bounding sphere) and the values shaders light with. Not drawn when it is inactive, unlit, has
-		// no range or a value that is not finite.
+		// no range or a value that is not finite. `sourceRadius` (meters, highlights only) is kept within [0,
+		// PointLightComponent::c_MaxSourceRadius], 0 when not finite.
 		static RenderData::LightRecord MakeRecord(const glm::mat4& world, bool active, const glm::vec3& color, float intensity, float range, uint32_t type,
-			float innerDegrees, float outerDegrees);
+			float innerDegrees, float outerDegrees, float sourceRadius);
 		// The smallest sphere around the region a spot light reaches (apex `position`, unit `direction`): the part of its range
 		// sphere inside the cone.
 		static glm::vec4 GetSpotBounds(const glm::vec3& position, const glm::vec3& direction, float range, float cosOuter, float sinOuter);

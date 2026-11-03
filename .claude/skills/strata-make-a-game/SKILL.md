@@ -309,7 +309,9 @@ you can go on with `{"wait": false}` and watch `editor.status`'s `saving` (the s
   sun, 10 cd lamps) look the same as real ones (100,000 lux) at a matching exposure; real values need automatic
   exposure (`AutoExposureMaxEV` 16) or the atmosphere sky (`"Source": "Atmosphere"`, a 120,000 lux sun). Lamps and
   torches that should cast shadows set `CastShadows` on their point or spot light: each costs shadow views (six for a
-  point light) every time something in its range moves, so keep it to the few that matter (at most 16 in view).
+  point light) every time something in its range moves, so keep it to the few that matter (at most 16 in view). Give
+  lanterns and fires a `SourceRadius` of the bulb's or flame's real radius (a lantern 0.03-0.06 m, a fire pit 0.2-0.3 m):
+  their highlights on metal and wet ground take that size instead of a pin dot (highlights only; free).
 - Fog and depth: a `HeightFog` entity (`Density`, `HeightFalloff`, color from the sky) fades the distance and fills
   valleys; the sky's Inspector section has "Add Height Fog".
 - Reflection probes: a `ReflectionProbe` box (`Extents`) around a room or an area gives shiny surfaces there the

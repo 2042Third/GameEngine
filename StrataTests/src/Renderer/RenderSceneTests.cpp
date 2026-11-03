@@ -19,6 +19,8 @@
 #endif
 
 #include <algorithm>
+#include <cstring>
+#include <limits>
 #include <random>
 #include <span>
 #include <string>
@@ -1208,6 +1210,51 @@ TEST_SUITE("Renderer.RenderScene")
 		clone->Sync(nullptr);
 		CHECK(clone->GetLights().GetRecords()[0].PositionRange.w == 2.0f);
 		CHECK(RenderScene::Get(*source).GetLights().GetRecords()[0].PositionRange.w == PointLightComponent().Range);
+	}
+
+	TEST_CASE("A light's source radius reaches its record")
+	{
+		// The bulb's or flame's radius (highlights only) rides in the record's Source.x, within [0, c_MaxSourceRadius], 0 when not
+		// finite; an inactive light's record stays the empty one; a signaled change follows at the next sync.
+		Scene scene("Sized lights");
+		Entity point = scene.CreateEntity("Point");
+		point.AddComponent<PointLightComponent>().SourceRadius = 0.05f;
+		Entity spot = scene.CreateEntity("Spot");
+		spot.AddComponent<SpotLightComponent>().SourceRadius = 0.25f;
+		RenderScene& renderScene = RenderScene::Get(scene);
+		renderScene.Sync(nullptr);
+		const RenderLights& lights = renderScene.GetLights();
+		const uint32_t pointRecord = lights.Find(point.GetHandle(), RenderData::c_LightPoint);
+		const uint32_t spotRecord = lights.Find(spot.GetHandle(), RenderData::c_LightSpot);
+		REQUIRE(pointRecord != RenderLights::c_InvalidIndex);
+		REQUIRE(spotRecord != RenderLights::c_InvalidIndex);
+		CHECK(lights.GetRecords()[pointRecord].Source == glm::vec4(0.05f, 0.0f, 0.0f, 0.0f));
+		CHECK(lights.GetRecords()[spotRecord].Source == glm::vec4(0.25f, 0.0f, 0.0f, 0.0f));
+		CHECK(PointLightComponent().SourceRadius == 0.0f); // A point by default: stored lights render as before
+
+		const auto setRadius = [&](float radius)
+		{
+			scene.GetRegistry().patch<PointLightComponent>(point.GetHandle(), [radius](PointLightComponent& light) { light.SourceRadius = radius; });
+			renderScene.Sync(nullptr);
+			return lights.GetRecords()[pointRecord].Source.x;
+		};
+		const uint64_t version = lights.GetVersion();
+		CHECK(setRadius(0.1f) == 0.1f);
+		std::vector<uint32_t> changes;
+		REQUIRE(lights.GetChanges(version, changes));
+		CHECK(std::find(changes.begin(), changes.end(), pointRecord) != changes.end());
+		CHECK(setRadius(std::numeric_limits<float>::quiet_NaN()) == 0.0f);
+		CHECK(setRadius(std::numeric_limits<float>::infinity()) == 0.0f);
+		CHECK(setRadius(-1.0f) == 0.0f);
+		CHECK(setRadius(5.0f) == PointLightComponent::c_MaxSourceRadius);
+		std::string error;
+		CHECK_MESSAGE(renderScene.Validate(&error), error);
+
+		// Not drawn: the empty record, whatever the radius.
+		point.SetActive(false);
+		renderScene.Sync(nullptr);
+		const RenderData::LightRecord empty;
+		CHECK(std::memcmp(&lights.GetRecords()[pointRecord], &empty, sizeof(RenderData::LightRecord)) == 0);
 	}
 
 	TEST_CASE("Renderers that fall behind the bounded change log upload everything")

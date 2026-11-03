@@ -288,7 +288,9 @@ struct LightData
 	float4 PositionRange;  // xyz: camera-relative world position, w: range
 	float4 Color;          // rgb: color * intensity, w: 1 / range^2
 	float4 DirectionType;  // xyz: direction the light travels, w: type (ST_LIGHT_*)
-	float4 SpotAngles;     // x: cos(inner cone), y: cos(outer cone), z: its shadow slot plus one (0: no shadow; Include/LocalShadows.slang)
+	// x: cos(inner cone), y: cos(outer cone), z: its shadow slot plus one (0: no shadow; Include/LocalShadows.slang), w: the source
+	// radius in meters (highlights only: Include/PBR.slang's GetSourceLobeAlpha2)
+	float4 SpotAngles;
 };
 
 StructuredBuffer<LightData> u_Lights : register(t2);
