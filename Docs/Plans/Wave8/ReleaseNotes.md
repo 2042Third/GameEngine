@@ -133,6 +133,24 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   shows probes instead of 17 (Graphics Quality's **Reflection probe resolution**). No probe needs baking again.
 - Asset thumbnails render again once (the sun's highlight and dielectrics' reflectance changed how materials look).
 
+**showcase**
+
+- A fifth sample, High Desert Outpost (`Samples/Showcase`, first in the launcher): a derelict fuel stop in a rocky
+  desert valley the day after rain, built from 22 CC0 Poly Haven scans and generated props, made to show the low sun's
+  highlights on sheet steel, a weathered oil tank and wet asphalt.
+- Two generators keep its ground and props reproducible: `Tools/GenerateShowcaseTerrain.py` (the valley, the apron with
+  its potholes and puddles, their water and mud; it checks that the golden sun clears the hills and computes where each
+  shot sees the sun reflected) and `Tools/GenerateShowcaseProps.py` (the bus, the tanks, the pipes, the hut, the bare
+  steel's maps, and the command scripts that make the sample's materials and prefabs). The CTests
+  `StrataTools.ShowcaseTerrain` and `StrataTools.ShowcaseProps` keep the committed files equal to what they write.
+- Play it and a camera tour of about 80 seconds shows six shots: dawn over the valley, the low sun sliding along the
+  bus's side and down the oil tank, its glint in the puddles, the hut's interior and dusk with the fire and lanterns lit.
+  Each time of day has its own baked reflection probes, switched on under the fade between shots.
+- Any key takes the tour over into a first-person walk; Tab flies, P opens a photo mode (time of day, exposure, field of
+  view, focus, f-number, depth of field, the quality preset and anti-aliasing, seven bookmarks), H hides the UI.
+- Samples: a showcase may hold six screenshots in 8 MB (the others three in 3 MB).
+- Manual, Lighting: "Times of day with baked probes".
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and

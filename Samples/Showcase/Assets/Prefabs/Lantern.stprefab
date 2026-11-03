@@ -1,0 +1,8 @@
+{"Strata":{"Format":"Prefab","Version":1},"Prefab":{"EntityCount":6,"Entities":[
+{"Components":{"Name":{"Name":"Lantern_01_1k"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0,0]}},"ID":"D6F4B00F69470E09"},
+{"Components":{"MeshRenderer":{"CastShadows":true,"Material":"0000000000000000","Mesh":"133984CC9AABC2FA"},"Name":{"Name":"Lantern_01"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0,0]}},"ID":"2AC8E455D2D3F826","Parent":"D6F4B00F69470E09"},
+{"Components":{"MeshRenderer":{"CastShadows":true,"Material":"0000000000000000","Mesh":"133A458C9AA87B9D"},"Name":{"Name":"Lantern_01_glass"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0,0]}},"ID":"495462C855CF1760","Parent":"D6F4B00F69470E09"},
+{"Components":{"Name":{"Name":"Wick"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0.1,0]}},"ID":"5357E2EEE708A226","Parent":"D6F4B00F69470E09"},
+{"Components":{"MeshRenderer":{"CastShadows":true,"Material":"2E4324975A88639D","Mesh":"28DB1ED25C568484"},"Name":{"Name":"Wick.Wick"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0,0]}},"ID":"DDFB02C7FD16A646","Parent":"5357E2EEE708A226"},
+{"Components":{"Name":{"Name":"Light"},"PointLight":{"CastShadows":true,"Color":[1,0.62,0.32],"Intensity":0,"Range":8,"ShadowBias":1,"ShadowFilterRadius":1.5,"ShadowNormalBias":1.5},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0.14,0]}},"ID":"DCF2292DA62D6DAA","Parent":"D6F4B00F69470E09"}
+]}}

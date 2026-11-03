@@ -536,6 +536,33 @@ if(TARGET StrataEditor AND TARGET StrataCLI)
 			COMMAND "${CMAKE_COMMAND}" "-DTEST_NAME=StrataTools.LookDev" -P "${CMAKE_CURRENT_SOURCE_DIR}/Tools/PythonMissing.cmake")
 	endif()
 	set_tests_properties(StrataTools.LookDev PROPERTIES LABELS "gpu;tools" TIMEOUT 900)
+
+	# The showcase sample's ground is what its generator writes: the design's checks pass, two runs write the same bytes,
+	# the committed models equal them, shots 2-4 see the sun where the layout says and the scripts' times of day
+	# (Samples/Showcase/Scripts/Stations.h) are the generator's (Tools/GenerateShowcaseTerrain.py).
+	if(Python3_Interpreter_FOUND)
+		add_test(NAME StrataTools.ShowcaseTerrain
+			COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/Tools/GenerateShowcaseTerrain.py" selftest
+				--committed "${PROJECT_SOURCE_DIR}/Samples/Showcase/Assets/Generated/Terrain"
+				--stations "${PROJECT_SOURCE_DIR}/Samples/Showcase/Scripts/Stations.h"
+				--work "${CMAKE_CURRENT_BINARY_DIR}/ShowcaseTerrain/$<CONFIG>")
+	else()
+		add_test(NAME StrataTools.ShowcaseTerrain
+			COMMAND "${CMAKE_COMMAND}" "-DTEST_NAME=StrataTools.ShowcaseTerrain" -P "${CMAKE_CURRENT_SOURCE_DIR}/Tools/PythonMissing.cmake")
+	endif()
+	set_tests_properties(StrataTools.ShowcaseTerrain PROPERTIES LABELS "tools" TIMEOUT 300)
+	# And its props: two runs write the same models and maps, the committed ones equal them (the maps by their pixels), the
+	# bus's letterboard is vertical, every node has its triangles and every collision hull is convex (GenerateShowcaseProps.py).
+	if(Python3_Interpreter_FOUND)
+		add_test(NAME StrataTools.ShowcaseProps
+			COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/Tools/GenerateShowcaseProps.py" selftest
+				--committed "${PROJECT_SOURCE_DIR}/Samples/Showcase/Assets/Generated/Props"
+				--work "${CMAKE_CURRENT_BINARY_DIR}/ShowcaseProps/$<CONFIG>")
+	else()
+		add_test(NAME StrataTools.ShowcaseProps
+			COMMAND "${CMAKE_COMMAND}" "-DTEST_NAME=StrataTools.ShowcaseProps" -P "${CMAKE_CURRENT_SOURCE_DIR}/Tools/PythonMissing.cmake")
+	endif()
+	set_tests_properties(StrataTools.ShowcaseProps PROPERTIES LABELS "tools" TIMEOUT 300)
 endif()
 
 # The runtime's command line, before any game is looked for: --help prints the usage and exits 0, an argument it does not
@@ -944,15 +971,77 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DARGUMENTS=--headless|--no-automation|--quit-after-commands|--frames|36000|--project|${STRATA_OPEN_WORLD_DIR}/Project|--commands|${CMAKE_CURRENT_SOURCE_DIR}/Editor/OpenWorldRenderCommands.json"
 			"-DEXPECT=Command script finished (" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
 	set_tests_properties(StrataEditor.OpenWorldRender PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataOpenWorldExport)
-	# The tour's frames at 1920 x 1080 (Release and Dist, PerfGPU.Samples): the exported game started once per attempt, its
-	# metrics provisional while the reference machine is away (StrataTests/Perf/Budgets.json).
+	# High Desert Outpost: its six probe stations are found, and the tour (four times faster, started with T once every
+	# collider is built) shows shot 1 at dawn with the dawn probes on, switches to the golden ones for shot 2 (the dawn ones
+	# off a second later) and reaches its sixth shot at dusk with the fire lit; W takes over, the walk covers 2.5 m at eye
+	# height over the ground, Tab flies up, the photo mode's time slider snaps the stations to Golden, its Quality row sets
+	# Medium (then reset) and bookmark 3 flies to the oil tank; the exported games start the tour from the cooked pack, the
+	# pruned one with every capture the inactive stations name.
+	add_test(NAME StrataEditor.Showcase
+		COMMAND "${CMAKE_COMMAND}"
+			"-DEDITOR=$<TARGET_FILE:StrataEditor>"
+			"-DSAMPLE_DIR=${PROJECT_SOURCE_DIR}/Samples/Showcase"
+			"-DPROJECT_FILE=Showcase.stproj"
+			"-DGAME=Showcase"
+			# Debug runs only the pruned game: the full one runs the same scripts (Release, Dist and the other platforms run both).
+			"-DGAME_RUNS=$<IF:$<CONFIG:Debug>,pruned,full|pruned>"
+			"-DCOMMANDS=${CMAKE_CURRENT_SOURCE_DIR}/Editor/ShowcaseCommands.json.in"
+			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/Samples/Showcase/$<CONFIG>"
+			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+			"-DEDITOR_EXPECT=Showcase: stations ready (found 6|Showcase: tour started|Showcase: shot 1 (dawn vista)|Showcase: shot 6 (dusk)|Showcase: tour taken over|Showcase: walking|Showcase: flying|Showcase: photo mode on|Showcase: graphics preset Medium|Showcase: bookmark 3"
+			"-DGAME_EXPECT=Loaded script module 'ShowcaseScripts'|Showcase: stations ready (found 6|Showcase: tour started|Showcase: shot 2"
+			# The tour's shot 2 starts about 15 s into the game (the loading scene, the stations' wait, shot 1's 14 s): 1800
+			# frames are 30 s of the headless game's steps.
+			"-DGAME_FRAMES=1800"
+			# A fresh copy has never built its scripts: opening its scene says so, and play.start builds them. Poly Haven's
+			# covered_car uses KHR_materials_specular, which the importer leaves out (GltfImporter.cpp's supported extensions):
+			# its import says so, and the car's paint keeps the base material's specular.
+			"-DALLOWED_MESSAGES=\\[warning\\] App: The scripts of 'Showcase' are not built yet|\\[warning\\] Strata: Import 'Scans/covered_car_1k/covered_car_1k.gltf': Not imported: extension KHR_materials_specular"
+			# On CI's runners the editor's play copy cooks the 36 terrain tiles', the apron's and the props' mesh colliders while
+			# the paused game's waits step it, so its simulation may start after physics' 10 s (of simulation time) without some
+			# of them. Nothing falls meanwhile (the scene has no dynamic body; the walk stands on rays), and the regression waits
+			# for every body to be built (physics.stats' pendingOther 0) before it plays the tour.
+			"-DEDITOR_ALLOWED_MESSAGES=\\[warning\\] Strata: Physics: scene 'Outpost' starts simulating after waiting 10 s for meshes"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/SampleProject.cmake")
+	set_tests_properties(StrataEditor.Showcase PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain FIXTURES_SETUP StrataShowcaseExport)
+	set(STRATA_SHOWCASE_DIR "${CMAKE_CURRENT_BINARY_DIR}/Samples/Showcase/$<CONFIG>")
+	# In a window at 1280 x 720 for 22 s of game time: shot 2, the bus's side in the golden light, 7 s into its 14 (its start
+	# came 15 s after the game's first log line in three Release runs here, the loading scene and the stations' wait
+	# included); the bus's paint and rust make at least 14% of the pixels red by more than 30 codes (29.6% measured), and
+	# the perf log shows the GPU at work in the passes the shots rest on.
+	add_test(NAME StrataRuntime.ShowcaseWindowed
+		COMMAND "${STRATA_SHOWCASE_DIR}/Build/Showcase${CMAKE_EXECUTABLE_SUFFIX}" --resolution 1280x720 --seconds 22
+			--screenshot "${STRATA_SHOWCASE_DIR}/Windowed.png" --perf-log "${STRATA_SHOWCASE_DIR}/Windowed.csv"
+			--save-directory "${STRATA_SHOWCASE_DIR}/WindowedSaves")
+	set_tests_properties(StrataRuntime.ShowcaseWindowed PROPERTIES LABELS "gpu" TIMEOUT 300 FIXTURES_REQUIRED StrataShowcaseExport
+		FIXTURES_SETUP StrataShowcaseWindowed)
+	add_test(NAME StrataRuntime.ShowcaseWindowedImage
+		COMMAND StrataTests --strata-test-helper=check-image "${STRATA_SHOWCASE_DIR}/Windowed.png" --size 1280x720 --dominant red 14 --margin 30)
+	set_tests_properties(StrataRuntime.ShowcaseWindowedImage PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataShowcaseWindowed)
+	add_test(NAME StrataRuntime.ShowcaseWindowedPerf
+		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_SHOWCASE_DIR}/Windowed.csv" any --nonzero GPUBusyMs
+			--nonzero GPU.TAA --nonzero GPU.Reflections --nonzero GPU.Shadows --nonzero GPU.Aerial)
+	set_tests_properties(StrataRuntime.ShowcaseWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataShowcaseWindowed)
+	# The six shots rendered by a headless editor on the exported project at their times of day: nothing pending, the dawn
+	# cascades reach 550 m, the lean-to in the hut's dawn shadow lit by the yard's probe, not the dark hut's (12.5 EV against
+	# 10.1 when the hut's box reached over it), the hut's interior a third or less of the yard's light
+	# (StrataTests/Editor/ShowcaseRenderCommands.json; the yard's 14.0 EV is the graybox's measurement, measured again by every
+	# change of the yard's light).
+	add_test(NAME StrataEditor.ShowcaseRender
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:StrataEditor>"
+			"-DARGUMENTS=--headless|--no-automation|--quit-after-commands|--frames|36000|--project|${STRATA_SHOWCASE_DIR}/Project|--commands|${CMAKE_CURRENT_SOURCE_DIR}/Editor/ShowcaseRenderCommands.json"
+			"-DEXPECT=Command script finished (" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+	set_tests_properties(StrataEditor.ShowcaseRender PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataShowcaseExport)
+	# The tours' frames (Release and Dist, PerfGPU.Samples): the Open World at 1920 x 1080 and the showcase at 2560 x 1440,
+	# High and Ultra, each exported game started once per attempt, their metrics provisional while the reference machine is
+	# away (StrataTests/Perf/Budgets.json).
 	add_test(NAME StrataTests.PerfGPU.Samples
 		COMMAND StrataTests --test-suite=PerfGPU.Samples* --no-intro=true
 		CONFIGURATIONS Release Dist
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
 	set_tests_properties(StrataTests.PerfGPU.Samples PROPERTIES LABELS "perf;gpu" RUN_SERIAL TRUE
-		FIXTURES_REQUIRED "StrataOpenWorldExport;StrataPerfResults"
-		ENVIRONMENT "STRATA_OPEN_WORLD_GAME=${STRATA_OPEN_WORLD_DIR}/Build/OpenWorld${CMAKE_EXECUTABLE_SUFFIX}")
+		FIXTURES_REQUIRED "StrataOpenWorldExport;StrataShowcaseExport;StrataPerfResults"
+		ENVIRONMENT "STRATA_OPEN_WORLD_GAME=${STRATA_OPEN_WORLD_DIR}/Build/OpenWorld${CMAKE_EXECUTABLE_SUFFIX};STRATA_SHOWCASE_GAME=${CMAKE_CURRENT_BINARY_DIR}/Samples/Showcase/$<CONFIG>/Build/Showcase${CMAKE_EXECUTABLE_SUFFIX}")
 	# The Third-Person Adventure: the main menu's Play loads the course (Game::LoadScene); the robot walks where the camera looks
 	# (its animator in Walk or Run while it moves, Idle after), with W and, back at its start, with the left stick pushed
 	# forward (its input actions; neither walk reaches the first coin, so the coin it collects later is its first), the right

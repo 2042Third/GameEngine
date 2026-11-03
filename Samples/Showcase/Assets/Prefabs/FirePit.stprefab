@@ -1,0 +1,8 @@
+{"Strata":{"Format":"Prefab","Version":1},"Prefab":{"EntityCount":6,"Entities":[
+{"Components":{"Name":{"Name":"FirePit"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0,0]}},"ID":"C49EC064E9E852A6"},
+{"Components":{"Name":{"Name":"stone_fire_pit_1k"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0.19,0]}},"ID":"F39ECC1B3663F08C","Parent":"C49EC064E9E852A6"},
+{"Components":{"MeshRenderer":{"CastShadows":true,"Material":"0000000000000000","Mesh":"5B0FA6DF942F2AAA"},"Name":{"Name":"stone_fire_pit"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0,0]}},"ID":"87FA639846F67BD7","Parent":"F39ECC1B3663F08C"},
+{"Components":{"Name":{"Name":"Embers"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0.05,0]}},"ID":"153F14DC3CDB4AFE","Parent":"C49EC064E9E852A6"},
+{"Components":{"MeshRenderer":{"CastShadows":true,"Material":"2E4324975A88639D","Mesh":"BAD4794324A4DD32"},"Name":{"Name":"Embers.Embers"},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0,0]}},"ID":"A1CB79E41BB63C02","Parent":"153F14DC3CDB4AFE"},
+{"Components":{"Name":{"Name":"Fire"},"PointLight":{"CastShadows":true,"Color":[1,0.55,0.25],"Intensity":0,"Range":12,"ShadowBias":1,"ShadowFilterRadius":1.5,"ShadowNormalBias":1.5},"Transform":{"Rotation":[0,0,0,1],"Scale":[1,1,1],"Translation":[0,0.35,0]}},"ID":"B89C0BC10B615543","Parent":"C49EC064E9E852A6"}
+]}}

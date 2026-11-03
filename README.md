@@ -76,7 +76,9 @@ message with what to install and where its log is); [Docs/Releases/](Docs/Releas
   touching the editor. Agents play-test deterministically (fixed steps, scripted input sequences) and look through
   viewport captures, and the Activity panel lists every command with who ran it and exports a session as a command
   script that repeats it.
-- **Samples:** four games an AI agent made through the editor, each played by a test that also exports it: the
+- **Samples:** five games an AI agent made through the editor, each played by a test that also exports it: the
+  graphical showcase "High Desert Outpost" (a derelict fuel stop in a desert valley at three times of day, from 22 Poly
+  Haven scans and generated terrain and props: a camera tour, a walk, free flight and a photo mode), the
   Third-Person Adventure "Sky Islands" (an animated robot on a platformer course, with menus, save files and an attract
   mode), the Open World (a 768 m island streamed in cells, 20,000 props drawn on the GPU, foxes, day and night), the
   Physics Playground (six stations and about 600 bodies to shoot, grab and pour) and Tetris, with assets from CC0 and
@@ -130,7 +132,7 @@ Binaries land in `build/<preset>/bin/<Config>/`:
 
 Games can be play-tested without a person: while a game runs in the editor, the `input.key`, `input.mouseButton`,
 `input.mouseMove` and `input.scroll` commands press keys and buttons the way a player would, and `viewport.capture`
-returns the frame as a PNG. The four samples, [`Samples/ThirdPerson`](Samples/ThirdPerson),
+returns the frame as a PNG. The five samples, [`Samples/Showcase`](Samples/Showcase), [`Samples/ThirdPerson`](Samples/ThirdPerson),
 [`Samples/OpenWorld`](Samples/OpenWorld), [`Samples/PhysicsPlayground`](Samples/PhysicsPlayground) and
 [`Samples/Tetris`](Samples/Tetris), are complete games an AI agent made this way, entirely through editor commands: open
 a copy of one from the launcher (**Open Sample**) and press Play, which builds its scripts first.
@@ -161,7 +163,7 @@ assets, scripts, scene, play-testing, export); `.claude/skills/strata-editor-aut
 | `StrataCLI/` | The automation client and MCP server. |
 | `StrataScriptCore/` | The script SDK and ABI that game code is written against. |
 | `StrataTests/` | Tests, test script modules, and the feature test project, which uses every component and the whole script API. |
-| `Samples/` | Example games, made through the editor by an AI agent: `ThirdPerson` (an animated robot on a platformer course, with menus), `OpenWorld` (a streamed island of 20,000 props), `PhysicsPlayground` (600 bodies to play with), `Tetris`. |
+| `Samples/` | Example games, made through the editor by an AI agent: `Showcase` (High Desert Outpost, the graphical showcase: a tour, a walk and a photo mode at three times of day), `ThirdPerson` (an animated robot on a platformer course, with menus), `OpenWorld` (a streamed island of 20,000 props), `PhysicsPlayground` (600 bodies to play with), `Tetris`. |
 | `.claude/skills/` | Task guides for AI agents working on the engine or making games with it. |
 
 ## Contributing

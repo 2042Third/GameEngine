@@ -477,6 +477,11 @@ The samples in `Samples/` were made this way; their `README.md` says how, and `S
 is each one's regression:
 
 - **Tetris**: scripted rules on a grid, a HUD, generated sounds.
+- **Showcase** (High Desert Outpost): terrain and props written by committed generators and imported, the scene laid out
+  by a generated command script; three times of day as stations, each with its own baked reflection probe entities
+  switched by `SetActive` (the old ones held on a second, so a box never falls to the sky); a camera tour over marker
+  entities, a walk on rays per frame, free flight, and a photo mode whose Quality and anti-aliasing rows come from
+  `Graphics::Options()`.
 - **PhysicsPlayground**: ~600 bodies placed with `prefab.instantiate {instances}`; shooting through the cursor (the camera's
   field of view and the window size give the ray), grabbing (a velocity toward a point in front of the camera each fixed
   step), impact sounds by material with a voice budget shared by every body, a trigger that counts balls, a collision

@@ -152,6 +152,30 @@ TEST_SUITE("Samples.Content")
 			"the showcase samples' binary files take 85.0 MB (at most 85.0 MB)"));
 	}
 
+	TEST_CASE("A showcase sample may hold six screenshots in 8 MB and others three in 3 MB")
+	{
+		const std::filesystem::path root = Tests::CreateTemporaryDirectory("SampleShowcaseScreenshots");
+		// Six pictures of 1.2 MB, one per shot of a showcase's tour: within a showcase's allowance, over a standard sample's.
+		const std::filesystem::path sample = MakeValidSample(root / "Showcase");
+		for (int32_t shot = 1; shot <= 6; shot++)
+			WriteSizedFile(sample / "Screenshots" / ("Shot" + std::to_string(shot) + ".png"), 1'200'000);
+		const std::vector<std::string> showcase = Tests::CheckSampleContent(sample, c_Notices, {}, Tests::SampleBudgetClass::Showcase);
+		CHECK_FALSE(HasError(showcase, "Screenshots/"));
+		const std::vector<std::string> standard = Tests::CheckSampleContent(sample, c_Notices);
+		CHECK(HasError(standard, "Screenshots/ holds 6 files (at most 3)"));
+		CHECK(HasError(standard, "Screenshots/ takes 7.2 MB (at most 3.0 MB)"));
+
+		// A seventh picture, or 8.1 MB in six, is over a showcase's allowance too.
+		WriteSizedFile(sample / "Screenshots" / "Shot7.png", 100'000);
+		CHECK(HasError(Tests::CheckSampleContent(sample, c_Notices, {}, Tests::SampleBudgetClass::Showcase), "Screenshots/ holds 7 files (at most 6)"));
+		std::error_code removed;
+		std::filesystem::remove(sample / "Screenshots" / "Shot7.png", removed);
+		REQUIRE_FALSE(removed);
+		WriteSizedFile(sample / "Screenshots" / "Shot6.png", 2'100'000);
+		CHECK(HasError(Tests::CheckSampleContent(sample, c_Notices, {}, Tests::SampleBudgetClass::Showcase),
+			"Screenshots/ takes 8.1 MB (at most 8.0 MB)"));
+	}
+
 	TEST_CASE("A sample that follows every rule passes")
 	{
 		const std::filesystem::path sample = MakeValidSample(Tests::CreateTemporaryDirectory("SampleContentValid") / "Crafted");

@@ -212,6 +212,16 @@ a probe shows the scene as it was baked (a day-night cycle or a moving door is n
   probe first comes into view (its reflections appear a few frames later), and keeps it (about 1 MB of video memory
   each); afterwards a probe costs only a little shading where its box is on screen.
 
+### Times of day with baked probes
+
+A probe's picture is fixed, but a game that shows a few times of day can bake one probe per time: give each time its own
+probe entities with the same boxes (a yard and a hut at dawn, golden hour and dusk: six probes, never one probe baked
+three times, since a bake trashes that probe's earlier picture), bake each with the sun, fog and lights of its time and
+only its own probes active, and switch them with `SetActive` from a script. Keep the old probes on for a second with the
+new ones' **Priority** raised: a probe whose picture is still being prepared is left out, and its box would show the sky
+meanwhile. A script that asks `Assets::GetLoadProgress` of every probe's **Capture** when the game starts keeps them
+loaded, so a switch never waits. The showcase sample (`Samples/Showcase`) works this way.
+
 ## Screen-space reflections
 
 Probes and the sky reflect a fixed picture. **Screen Space Reflections** (in the **Post Process**) adds what the screen

@@ -420,6 +420,8 @@ TEST_SUITE("Editor.Launcher")
 		const WelcomePanel* welcome = editor.Layer->GetPanels().Get<WelcomePanel>(EditorPanels::c_Welcome);
 		REQUIRE(welcome);
 		CHECK(welcome->GetError().find("Could not open the project") != std::string::npos);
+		// The page settles first: once the starters' cards are measured a scrollbar may appear and move the banner's button.
+		editor.Frames(2);
 		REQUIRE(editor.Click("Welcome.DismissError"));
 		CHECK(welcome->GetError().empty());
 	}
