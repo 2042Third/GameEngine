@@ -935,6 +935,7 @@ The renderer's stages, registered by `RegisterRendererModule` (`RendererGPUStage
 | `GPU.Cull` | culling dispatches and depth pyramids |
 | `GPU.Shadows`, `GPU.Prepass`, `GPU.AO`, `GPU.Opaque` (with the sky), `GPU.Transparent` | the scene passes |
 | `GPU.ScreenShadows` | the sun's screen-space shadow mask, its blur, contact shadows when a Custom quality draws them and the reduction that fits the cascades to the view, between `GPU.Prepass` and `GPU.AO` (frames with a shadowed sun) |
+| `GPU.RadianceCascades` | global illumination: the voxel clipmap's voxelization of what changed (frames that want GI), between `GPU.AO` and `GPU.Reflections` |
 | `GPU.Reflections` | reflection probes' conversions and the screen-space reflections' trace (at Spatial and SpatialHigh with their resolve; their color copy for the next frame is in `GPU.Transparent`), between `GPU.AO` and `GPU.Opaque` |
 | `GPU.TAA` | the motion history's copy (`Scene/MotionCopy.comp`) and the temporal anti-aliasing resolve |
 | `GPU.MotionBlur` | the motion blur's tile maxima, their neighborhoods and its gather (`PostProcess/MotionBlur*.comp`) |
@@ -943,6 +944,11 @@ The renderer's stages, registered by `RegisterRendererModule` (`RendererGPUStage
 | `GPU.Overlays` | grid, tints, outline, debug lines, text and the copy into a target |
 | `GPU.UI` | the game UI pass's draws, world-space and screen-space (`GameUIRenderer`, registered by `RegisterGameUIModule`), inside `GPU.Overlays`: the pass times them with the frame's timer (`SceneOverlayFrame::GPUTimer`) and hands it back |
 | `GPU.ImGui` | the editor's UI (registered by `ImGuiLayer` on first use, so games have no such column) |
+
+Global illumination's data flow (Docs/DeveloperGuide.md, "Global illumination"): the render scene and its GPU copy, the
+geometry pool and the loaded meshes and materials feed a renderer's voxel clipmap (`VoxelClipmap`, on the main thread in
+`Render.Extract`), which lists what changed; `GPU.RadianceCascades` voxelizes it into the clipmap's levels, which the voxels
+view reads in `GPU.Overlays` (and, in the GI's later stages, the probes, their field and the forward pass).
 
 Drivers of tile-based GPUs may write a timestamp recorded inside a render pass instance when the pass ends: MoltenVK samples
 Metal's GPU counters at encoder boundaries, so on macOS a stage that begins inside a pass that continues (`GPU.Transparent`

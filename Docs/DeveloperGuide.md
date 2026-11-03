@@ -442,6 +442,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   ([Readback, the game renderer and tests](#readback-the-game-renderer-and-tests)); tests of whole-asset residency call
   `AssetManagerBase::SetPartialLoads(false)` ([Mip streaming](#mip-streaming)); tests of text with many distinct glyphs render
   until no glyph is pending ([Text and fonts](#text-and-fonts)).
+- Global illumination's scenes (`Renderer/GIScenes.h`: the yard, its grass cards, the look-dev room and their strafes) and
+  its voxel reference (`ReferenceVoxels`, `TriangleBoxOverlap`: the voxelizer's test on the CPU);
+  `GPU.SceneRenderer.IndirectFlicker` measures today's indirect light on them with the flicker meter below.
 - Flicker in motion has one meter (`Renderer/FlickerMetrics.h`, suite `Renderer.FlickerMetrics`): a sequence's frames
   are read back with their prepass depth and normals (`ReadFlickerFrame` the HDR target of a renderer with `HDROutput`,
   `ReadDisplayFlickerFrame` the 8-bit output decoded from sRGB, as the person sees it after FXAA or TAA), and
@@ -698,6 +701,12 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     `Warm.cube`).
   - A shot with `DebugView` captures that debug view of `viewport.capture` (the lighting views' statistics land in its
     `stats/`); builds without it refuse the shot.
+  - The look-dev project's `Scenes/Yard.stscene` and `Scenes/Grass.stscene` mirror the GI scenes of the tests
+    (`StrataTests/src/Renderer/GIScenes.cpp`: a yard with a hut, a fence, boulders and lanterns, the grass cards in front of
+    the fence; change both). The script's macro step `lookdev.grassCards {count, seed, min, max, material}` stands for the
+    `entity.create` steps of that many cards (the tool draws their texture, as `GIScenes.cpp` does). `ratio <capture>
+    --numerator <stage> --denominator <stage>` gives per picture the ratio of two GPU stages in the same frames (medians over
+    the repeats, `ratio.csv`): costs read beside other agents' work are ratios.
   - A shot's `Metrics` (`[{"Name", "Kind", "Rect"}]`, normalized rectangles) are computed on its first repeat's PNG as
     stored (8-bit, sRGB-encoded) into its `stats/` (`metrics`) and `metrics.csv` (shot, size, aa, name, kind, values), and
     `compare` reports both sides' values and their differences (`compare.json`'s `metrics`, the page). `Noise`: with `Y`
@@ -3478,7 +3487,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   distance, fov, near, far, flySpeed}` (position + target looks from one at the other) and `camera.focus {entities?}`
   (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?,
   fov?, overlays?, debugView?: "none" | "streaming" | "lod" | "mip" | "motion" | "shadows" | "lighting" | "ao" | "indirect" |
-  "luminance" | "albedo", quality?: "project" | "low" | "medium" |
+  "luminance" | "albedo" | "voxels" (global illumination's voxels, with `debugView.globalIllumination` and a wait for them to
+  settle: [Global illumination](#global-illumination)), quality?: "project" | "low" | "medium" |
   "high" | "ultra", waitForAssets?, path?, overwrite?}` renders on the
   next frame (again on the following frames, up to `c_MaxCaptureTextFrames`, while glyphs of the scene's text are still
   being rasterized, so text is never half drawn, up to `c_MaxCaptureExposureFrames` until its pre-exposure settled (the
@@ -4715,6 +4725,104 @@ lights, Post Process and the sky), and never a resolution below the output's.
   samples the script writes (`StrataTests/src/Renderer/AmbientOcclusionFitReference.h`). Change the fit only by running
   the script with `--write`.
 
+### Global illumination
+
+Global illumination is world-space radiance cascades over a voxel clipmap of the geometry pool: probes in the world trace
+rays through a voxel copy of the scene around the camera, lit by the sun, the sky and glowing surfaces every frame, whatever
+the screen shows. No light comes from the screen (no depth-buffer tracing, no previous frame's image) and nothing is
+blended over frames: the light is a function of world data, so camera motion cannot flicker it. Built in stages from
+`Docs/Plans/Wave8/specs/radiance-cascades-world.md` (its review corrections win over its body); the sources are the
+radiance-cascades lab (Daniel Quevedo, MIT: the triangle-box test, the winding steps and the column fill, the emission's
+coverage), Akenine-Moller's triangle-box test and, as ideas, Split RC, EggyStudio and creikey's voxel cascades. What
+stage 1 holds: the voxels and their view; the probes, the light and the join to shading follow.
+
+- **Layout** (`R/GlobalIlluminationLayout.h`, `Renderer.GlobalIlluminationLayout`): per quality level the voxel levels
+  (High four of 128 x 64 x 128 voxels from 10 cm, Low three of 64 x 32 x 64 from 20 cm, each level twice the voxel size of
+  the one before) and the probe cascades (High four from 0.5 m, 16 to 1,024 directions; Low three from 1 m). Memory per view
+  that runs GI (`GetMemory`, the same at every output size, with the probes' resources of the later stages): 116.3 MiB at
+  High, 16.4 MiB at Low; stage 1 makes the voxel levels without their radiance, the scratch (8 words a voxel) and the work
+  buffers (`SceneRenderer::GetGlobalIlluminationMemoryBytes`: about 58 MiB at High). A frame wants GI while a GI view shows (later: when a
+  scene asks), at `SceneRendererSpecification::GlobalIllumination.Level` (High; tests and tools choose Low until the quality
+  row does); a frame that wants none releases everything (`ReleaseGlobalIllumination`), and so do the
+  render targets' release and `SetQuality`.
+- **The clipmap** (`R/VoxelClipmap.h`, CPU, main thread, `Renderer.VoxelClipmap`): per level a window centered on the
+  camera, snapped to steps of `c_GIScrollVoxels` (4) voxels, stored toroidally (world voxel `w` at texel `w mod
+  dimensions`: a scroll rewrites only the slabs that entered), with a queue of regions and the box of valid voxels. Regions
+  and voxel coordinates are relative to an **anchor** (a multiple of 1,024 voxels, kept until the camera leaves its cell by
+  1 km on an axis): the same scene voxelizes to the same bits whatever the camera. A scroll queues its slabs (the level is
+  valid where the window kept its voxels); a move of a window or more queues the whole window under the cut's budget;
+  the renderer's first frame or another render scene (not a clone) starts over. Camera cuts and `ResetHistory` leave the
+  voxels alone. The scene's changes come from the render scene's proxy log and the GPU copy's tables: a changed proxy
+  queues the bounds its voxels were made with and its new ones; meshes and materials loaded, changed or dropped requeue
+  their users; proxies not resident or without their mesh wait (`GIWaitingProxies`) and are queued as they arrive. Each
+  frame takes regions in order (changes, slabs, whole windows; level 0 first) while their triangles fit
+  `SceneRendererSpecification::GlobalIllumination` (`VoxelizeTrianglesPerFrame` 500,000, `VoxelizeTrianglesOnCut`
+  4,000,000 on a rebuild's or a jump's frame; 0: no limit, the renderers of single images), at least one region a frame,
+  and lists the GPU's work: regions, work items (instance, mesh slot, submesh, level of detail, flags) and groups of 64
+  triangles, in batches of one level that fit the scratch. A frame is pending (`GlobalIlluminationPending`) only while a
+  valid box of levels 0-2 misses its window shrunk by two scroll steps (a rebuild or a jump under way), never for a slab,
+  a change or a waiting proxy; it is settled (`GlobalIlluminationSettled`) once nothing is left to voxelize.
+- **What enters:** indexed, active proxies of the Static arena (meshes of the Skinned arena are left out: characters
+  neither occlude nor bounce light; they receive it), opaque and alpha-masked submeshes (transparent and transmissive ones
+  are left out); `CastShadows` does not matter. A proxy placed anew is moving for `c_GIMovingFrames` (30) frames: out of
+  the voxels until it rests (its old voxels empty at once), so movers cost no voxel work and cannot pop the light. Open
+  meshes take the coarsest level of detail whose error stays within half a voxel; closed meshes keep full detail.
+  Materials reach the voxels as the CPU's means (`RenderData::GIMaterial`: the diffuse albedo `BaseColor * (1 - Metallic)`
+  times the base color map's mean, the emission times the emissive map's mean, `Texture::GetLinearMean` of the map's
+  smallest level), so no compute pass reads bindless textures and streaming never changes a voxel. Submeshes past the
+  256th are left out (`UnvoxelizedSubmeshes`).
+- **Voxelization** (`GPU.RadianceCascades`, `Include/Voxelize.slang`; per batch: the scratch cleared, `GI/VoxelTriangles`,
+  `VoxelTiles` dispatched indirectly, `VoxelFill`, `VoxelFinalize`, with explicit UAV barriers between them): one thread
+  per triangle transforms its corners through the instance's world rows relative to the anchor (`precise`, as
+  `GlobalIllumination::GetVoxelCoordinate` on the CPU) and writes the voxels Akenine-Moller's test says it overlaps
+  (touching counts) into the scratch with buffer atomics only: the key by `InterlockedMax` (opaque over alpha-masked,
+  then the larger color code), the unit normal times 256 by `InterlockedAdd` (none for double-sided materials), the
+  emission by `InterlockedMax` and its coverage by `InterlockedAdd`. The scratch is independent of the order threads run
+  in, and of how the windows are cut into regions (a triangle's size and coverage follow its whole bounds). A triangle
+  whose bounds hold more than 64 voxels lists the 8^3 tiles of its region it overlaps for
+  `VoxelTiles` (64 threads a tile; a 220 m road triangle would keep one thread busy for milliseconds); when the list
+  (32,768 tiles) is full it walks its tiles itself and counts `GITileOverflow`. Glowing voxels add their small
+  triangles' share of the face (area over the voxels touched in one layer), so a glowing surface's voxels in a layer sum
+  to its area wherever it lies on the grid; the voxel's emission is the brightest triangle's times that share, at most 1.
+- **Closed meshes and the fill** (`MeshUtils::IsClosed`, `Mesh::IsClosed`): positions welded by exact equality, every
+  directed edge of the full-detail levels meets exactly one opposite edge. A closed mesh whose every submesh is opaque as
+  drawn adds winding steps along +y columns (+1 entering, -1 leaving, at the first voxel whose center is above the
+  crossing; crossings below a region add at its first layer, so closed meshes below a region join its batch as fill-only
+  items), and `VoxelFill` marks every voxel whose sum is not 0 and that no triangle marked as interior (occupancy 1, no
+  albedo, no normal): probes inside walls die, sealed rooms stay dark. A closed mesh with a glass or cut-out part is
+  voxelized open.
+- **Finalize** writes each level's textures (`<renderer>.GI.Material<l>` RGBA8: linear albedo and occupancy 1, 0.15 for
+  alpha-masked voxels; `Emission<l>` R32_UINT: RGB9E5 nits; `Normal<l>` RGBA8_SNORM: the summed normal, w 1; w -1 where
+  the sum is shorter than `c_GITwoSidedSum` times the triangles that added (they face against each other: the scratch
+  counts them, since a face's triangles touch a voxel once or twice), a **two-sided** voxel holding both faces of a wall
+  thinner than it: it will get no light rather than let one side's into the other; w 0.5 for double-sided materials). The scene layout binds levels 0-2's material at SRV
+  38-40, the field at 35 and the probes' validity at 37 (the black 3D texture without them); the frame constants'
+  `GIVoxelOrigin`, `GIVoxelTexel` and `GIVoxelDimensions` place them (zero without GI).
+- **Sampling** (`Include/GlobalIllumination.slang`): a point reads the finest level whose valid box holds it with
+  `c_GILevelGuardVoxels` to spare, blended into the next over `c_GILevelBlendVoxels` by its distance from the camera (not
+  from the snapped window), so no sample switches level in a step as windows scroll.
+- **The voxels view** (`SceneLightingView::Voxels`, debug view `voxels`, `GI/VoxelView.frag` in `GPU.Overlays`): from the
+  camera, a march through the levels (steps of 0.75 voxel of the level read) to the first sample of occupancy 0.5; the
+  surface is read where the run of occupied samples began, blended over the levels as the occupancy is, shaded `0.25 +
+  0.75 max(0, n . -view)`; two-sided voxels in the theme's error color, nothing hit in the background color. The legend
+  names the two-sided color and the note the levels ("levels 4, 10-80 cm, valid 4 of 4"); `viewport.capture` adds
+  `debugView.globalIllumination: {ran, pending, settled, voxelizedTriangles, queuedRegions, waitingProxies,
+  movingProxies, memoryMiB, voxelLevels: [{voxelSize, dimensions, valid}]}` and waits up to `c_MaxCaptureGIFrames` (16)
+  frames for it to settle (the capture renderer voxelizes without a budget); every capture's result has
+  `globalIlluminationSettled`, `editor.perf`'s `renderStats` `globalIllumination: {ran, pending, settled}`.
+- **Statistics** (`SceneRendererStats`): `GlobalIllumination`, `GlobalIlluminationPending`, `GlobalIlluminationSettled`,
+  `GIVoxelizedTriangles`, `GIQueuedRegions`, `GIWaitingProxies`, `GIMovingProxies`; `SceneRendererGPUStats`' `GITiles` and
+  `GITileOverflow` (frames late). Tests and tools read a level's textures with `ReadGlobalIlluminationVoxels` (blocking).
+- **Tests:** `Renderer.GlobalIlluminationLayout`, `Renderer.VoxelClipmap` (a render scene with residency and assets a test
+  gives), `Renderer.Mesh` ("Closed meshes are found"), `GPU.SceneRenderer.GlobalIllumination` (voxels against the CPU's
+  reference of the same test, `Tests::ReferenceVoxels` in `GIScenes`; scrolls, moves, jumps and budgets against a renderer
+  made for the camera alone, bit for bit; 20 km out; nothing made without GI) and `GPU.SceneRenderer.GPUDriven`'s "The
+  GI's voxels" (both paths give the same voxels).
+- **What it cannot do** (so far): walls thinner than two voxels go two-sided (dark from both sides), thin props blur into
+  blobs of whole voxels, characters and moving objects are not in the voxels until they rest, textured albedo and emission
+  count by their maps' means, glowing values above 65,408 nits clamp, and an editor top view far above a scene shows its
+  coarse levels only.
+
 ### Light units and exposure
 
 - **Balanced light by default:** the `basic3d` template lights its scene with the Clear sky preset (`R/SkyPresets.h`): the
@@ -5622,9 +5730,9 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   columns, so inserting one moves the later ones; nothing depends on that, since ids are compared only within a build
   and perf-log readers find columns by name. A new resource of the scene layout takes the next free slot that
   `Include/Scene.slang`'s comment lists (assigned slots included), and a pass that does not run binds a dummy there.
-  Wave 8's assignments are in `Include/Scene.slang` (SRV 30-31, 34-36; `ReflectionParams.y` and `.z`) and its plan
-  (`GPU.Volumetric` after `GPU.Shadows`, `GPU.RadianceCascades` after `GPU.AO`; debug views `gi` and `open` after
-  `albedo`).
+  Wave 8's assignments are in `Include/Scene.slang` (SRV 30-31, 34-40; `ReflectionParams.y` and `.z`) and its plan
+  (`GPU.Volumetric` after `GPU.Shadows`; `GPU.RadianceCascades` after `GPU.AO` is global illumination's, registered; debug
+  views after `albedo`: `voxels`, then `gi`, `open` and `probes` with the GI's later stages).
 - Register a module's GPU stages when the module registers (`RegisterRendererModule` registers `RendererGPUStages`), so they
   exist before a perf log writes its header (`GPU.UI` by `RegisterGameUIModule`), and so are the CPU stages its passes
   time (`Render.UI`): a stage `ST_PROFILE_STAGE` first registers in a frame after the header gets no column; a stage of a

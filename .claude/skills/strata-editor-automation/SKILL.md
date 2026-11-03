@@ -202,6 +202,10 @@ editor started with `--no-gpu` (use `--headless`):
   measures nothing):
   check `sunToSkyRatio` (lux from the sun over lux from the sky on flat ground: a clear day 6 to 10, hazy 3 to 5, overcast
   under 0.3) and `aboveRangeShare` (albedos too bright) instead of reading colors.
+- **Global illumination's voxels:** `"voxels"` shows the scene as the GI sees it (each surface its voxels' albedo, two-sided
+  voxels in the error color: walls thinner than two voxels, which will get no bounce). `viewport.capture` waits for the
+  voxels to settle and adds `debugView.globalIllumination: {ran, pending, settled, voxelLevels: [{voxelSize, dimensions,
+  valid}], memoryMiB, ...}`; `globalIlluminationSettled` is in every capture's result.
 - **Sun and sky presets:** `lighting.applySkyPreset {"preset": "Clear" | "Hazy" | "Overcast" | "GoldenHour", sky?, light?,
   sunElevation?, sunAzimuth?}` lights the scene with a real sky and sun in one undo step (creating "Sky" and "Sun" when
   missing, keeping the sun's azimuth unless given, turning a manual exposure automatic: `autoExposureTurnedOn`) and
@@ -521,7 +525,7 @@ time: presenting, and the wait for the display's image at the back buffer's firs
 **Render statistics and GPU time**: `editor.perf` also has `gpu` (`frames` with GPU times, `latencyFrames`: they arrive
 2-3 frames late, `busy`, `stages` per GPU stage: `GPU.Uploads`, `GPU.Setup`, `GPU.Aerial` (the atmosphere's aerial
 perspective), `GPU.Cull`, `GPU.Shadows`, `GPU.Prepass`, `GPU.ScreenShadows` (the sun's shadow mask, its blur, contact
-shadows when a Custom quality draws them and the cascades' fit to the view), `GPU.AO`, `GPU.Reflections` (reflection probes' conversions, screen-space
+shadows when a Custom quality draws them and the cascades' fit to the view), `GPU.AO`, `GPU.RadianceCascades` (global illumination's voxels), `GPU.Reflections` (reflection probes' conversions, screen-space
 reflections), `GPU.Opaque` (with the sky), `GPU.Transparent`, `GPU.TAA` (motion vectors' history, temporal
 anti-aliasing), `GPU.MotionBlur`, `GPU.DepthOfField`, `GPU.Post`, `GPU.Overlays`, `GPU.UI` (the game UI), `GPU.ImGui`)
 and `boundBy`: `"gpu"`

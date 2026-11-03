@@ -102,6 +102,16 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   `Metrics` (noise, screen-locked pattern, bands) in `metrics.csv`; tests measure flicker in motion with one meter for the
   wave (`Tests::MeasureFlicker`).
 
+**Global illumination (stage 1: the voxels).**
+
+- Editor: the Scene view's debug view **Voxels** shows the scene as global illumination will see it: a voxel copy of
+  everything around the camera (10 cm voxels near it, coarser further out), kept up to date as the camera moves and the
+  scene changes, each surface in its albedo; walls thinner than two voxels show in the error color (they will get no bounce).
+  It costs nothing unless the view is on (about 58 MB of GPU memory while it is).
+- AI agents: `viewport.capture {debugView: "voxels"}` reports `debugView.globalIllumination` (levels, voxel sizes, whether
+  each holds the scene, memory) and waits for the voxels to settle; every capture reports `globalIlluminationSettled`;
+  `editor.perf` names the GPU stage `GPU.RadianceCascades`.
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and
