@@ -145,8 +145,9 @@ projects, the template and scenes or projects without the value get.
 
 **Reflections (R1)**
 
-- In motion, screen-space reflections still add a fine crawl to rough metal and wet ground at High and Ultra: a third to
-  a half less than 0.7.0's without TAA, not yet the half less the wave aims at.
+- In motion, screen-space reflections at High and Ultra still add a fine crawl to rough metal and wet ground, in the
+  reflections of thin posts, shiny balls and edges: a third to a half less than 0.7.0's without TAA, up to a third less
+  on metal with TAA and none less on wet ground with TAA, not yet the half less the wave aims at.
 
 **Lane Render**
 

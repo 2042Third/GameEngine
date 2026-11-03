@@ -934,6 +934,16 @@ Open items and deferrals later waves own:
 - Medium's Checkerboard screen-space reflections are the one effect that needs TAA to look right (they leave their noise
   to its history, as Strata 0.6.0's did): the named exception to the owner's direction in "Later", kept for Medium's
   costs.
+- Spatial screen-space reflections (High and Ultra) still add a crawl in motion. Wave 8's R1 halved what they add to the
+  per-pixel flicker of a strafe past the specular lab's rough sheet at Spatial without TAA (1.36% to 0.57%), not
+  elsewhere: at SpatialHigh 0.92% to 0.57%, on wet ground 0.49% to 0.28%, with TAA 0.94% to 0.60% on the sheet and
+  0.36% to 0.40% on wet ground (`GPU.SceneRenderer.SSR`'s strafe case holds guard bounds). Maps of the per-pixel
+  flicker put it in the reflections of the ladder's shiny balls (their limbs and glints), of thin posts and of edges;
+  with TAA at every reflected edge, because the history follows the surface's motion, not the reflected image's. Tried:
+  rough surfaces' color level from the lobe's footprint at the hit (3-9% less without TAA, 18% less with it); the
+  previous frame's TAA output as the color source (15% less on wet ground with TAA, nothing on the sheet); the march
+  without its 4x4 offsets (15% more). Leads: reprojecting reflections along their reflected image's motion, and
+  coverage for hits at thin and curved edges.
 - Spatial screen-space reflections (wave 7's `light-and-materials`, High and Ultra) are not always repeatable on the
   integration machine (RTX 5090, driver 617.42). `Tools/LookDev.py`'s `lookdev.mirror` at 3840x2160, captured again
   and again in one editor after the look-dev scene's debug views, comes out as one of two images (12-60% of the
