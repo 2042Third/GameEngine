@@ -5356,10 +5356,12 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   spread as always (a capture that dropped to its tail streams in whole first), and the new cubes take over in the frame that
   converts the last of them, so the boxes in view never fall to the sky; every probe in view counts as pending until then,
   and the others wait for the takeover. A probe out of view at the change converts when it comes into view, as on its first
-  appearance. Two conversions take at most 0.45 ms of `GPU.Reflections` at 128 and 0.39 ms at 256
+  appearance. Two conversions take at most 0.46 ms of `GPU.Reflections` at 128 and 0.38 ms at 256
   on the reference machine's temporary memory (`PerfGPU.Renderer.ProbeConversion128MaxStageGPU`, `...256MaxStageGPU`,
-  target 2 ms; the 128 case runs first, which may explain its higher reading), so conversions are spread by count, not split
-  by work.
+  target 2 ms; the stage holds only the conversions, and an unmeasured pass of each first changes neither reading). The
+  conversions leave most of the GPU idle, so their time follows each texel's chain of prefilter samples, not their
+  total: 1,280 at 128 (256 on each of levels 1 to 5) and 1,024 at 256 (128 on levels 1 and 2). With 256 on every level, 256
+  measured 0.50 ms, 10% above 128 for four times the samples. So conversions are spread by count, not split by work.
   `SceneRendererStats::ReflectionProbes` (shaded with), `ReflectionProbeConversions` and `ReflectionProbesPending`
   (kept in view, waiting for their capture to load or convert: captures and the project's picture wait for them; a
   capture that is not on its way, an unknown or failed handle or another type of asset, takes no slot and is not waited for).
