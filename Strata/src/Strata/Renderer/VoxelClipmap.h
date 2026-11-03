@@ -96,6 +96,9 @@ namespace Strata
 
 		void BuildFrame(const RenderScene& renderScene, const IVoxelSceneSource& source, const glm::dvec3& cameraPosition, const VoxelClipmapSettings& settings,
 			VoxelFrame& outFrame);
+		// The next BuildFrame starts over (its windows queued whole): a frame whose work never reached the GPU (its recording
+		// failed) left the voxels without it.
+		void Reset() { m_Started = false; }
 
 		// A level as the frame left it, in world voxel indices.
 		struct LevelState

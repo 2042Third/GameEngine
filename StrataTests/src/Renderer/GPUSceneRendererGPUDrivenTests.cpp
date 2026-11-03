@@ -187,12 +187,11 @@ namespace
 		return Renderer::GetGraphicsDevice().GetInfo().SupportsDrawIndirectFirstInstance;
 	}
 
-	// A sphere with three levels of detail, chosen by their errors or (without them) by halving the screen fraction. 40 segments:
-	// the simplifier's two levels then have errors more than 1.5 times apart (0.0087 and 0.0140; the 48-segment sphere's are 1.38
-	// times apart since its seam and poles weld), which the scene of levels by error spaces its spheres by.
-	Ref<Mesh> CreateLODSphere(bool withErrors = false)
+	// A sphere of `segments` segments with three levels of detail, chosen by their errors or (without them) by halving the screen
+	// fraction.
+	Ref<Mesh> CreateLODSphere(bool withErrors = false, uint32_t segments = 48)
 	{
-		Ref<Mesh> source = MeshFactory::CreateSphere(0.5f, 40, 20);
+		Ref<Mesh> source = MeshFactory::CreateSphere(0.5f, segments, segments / 2);
 		REQUIRE(source);
 		std::vector<uint32_t> indices = source->GetIndices();
 		const std::vector<MeshUtils::GeneratedLOD> levels = MeshUtils::GenerateLODs(source->GetPositions(), source->GetAttributes(), indices, 2);
@@ -437,7 +436,9 @@ namespace
 	{
 		AddNeutralPostProcess(scene);
 		AddSun(scene, glm::normalize(glm::vec3(-0.4f, -1.0f, -0.5f)), 3.0f);
-		const Ref<Mesh> mesh = CreateLODSphere(true);
+		// 40 segments: the simplifier's two levels then have errors more than 1.5 times apart (0.0087 and 0.0140; the 48-segment
+		// sphere's are 1.38 times apart since its seam and poles weld), which the spheres are spaced by.
+		const Ref<Mesh> mesh = CreateLODSphere(true, 40);
 		const std::vector<MeshLOD>& lods = mesh->GetSubmeshes()[0].LODs;
 		const AssetHandle sphere = assets.Add(mesh, "LODSphereByError");
 		const AssetHandle material = LitMaterial(assets, glm::vec4(0.9f, 0.9f, 0.9f, 1.0f));

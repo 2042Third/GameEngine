@@ -2020,9 +2020,27 @@ TEST_SUITE("GPU.Editor.Viewport")
 			CHECK(result["debugView"]["view"] == view);
 			CHECK(result["debugView"]["lighting"].is_object());
 		}
-		// The tint views carry no lighting statistics.
+		// The voxels view reports global illumination instead of statistics: High's four levels, valid, settled.
+		harness.Capture(withView("voxels"), &result);
+		CHECK(result["debugView"]["view"] == "voxels");
+		CHECK_FALSE(result["debugView"].contains("lighting"));
+		CHECK(result["globalIlluminationSettled"] == true);
+		const nlohmann::json& gi = result["debugView"]["globalIllumination"];
+		REQUIRE(gi.is_object());
+		CHECK(gi["ran"] == true);
+		CHECK(gi["pending"] == false);
+		CHECK(gi["settled"] == true);
+		CHECK(gi["memoryMiB"].get<double>() > 0.0);
+		REQUIRE(gi["voxelLevels"].size() == 4);
+		CHECK(gi["voxelLevels"][0]["voxelSize"].get<float>() == doctest::Approx(0.1f));
+		CHECK(gi["voxelLevels"][3]["voxelSize"].get<float>() == doctest::Approx(0.8f));
+		CHECK(gi["voxelLevels"][0]["dimensions"] == nlohmann::json::array({ 128, 64, 128 }));
+		for (const nlohmann::json& level : gi["voxelLevels"])
+			CHECK(level["valid"] == true);
+		// The tint views carry no lighting statistics, nor global illumination.
 		harness.Capture(withView("lod"), &result);
 		CHECK_FALSE(result["debugView"].contains("lighting"));
+		CHECK_FALSE(result["debugView"].contains("globalIllumination"));
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

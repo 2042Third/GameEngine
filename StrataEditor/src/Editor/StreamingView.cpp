@@ -8,6 +8,7 @@
 #include <Strata/Renderer/Material.h>
 #include <Strata/Renderer/Mesh.h>
 #include <Strata/Renderer/RenderScene.h>
+#include <Strata/Renderer/VoxelClipmap.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
 
@@ -45,6 +46,7 @@ namespace Strata
 			case ViewportDebugView::Indirect:  return "indirect";
 			case ViewportDebugView::Luminance: return "luminance";
 			case ViewportDebugView::Albedo:    return "albedo";
+			case ViewportDebugView::Voxels:    return "voxels";
 			case ViewportDebugView::None:      break;
 		}
 		return "none";
@@ -54,7 +56,7 @@ namespace Strata
 	{
 		for (ViewportDebugView view : { ViewportDebugView::None, ViewportDebugView::Streaming, ViewportDebugView::LOD, ViewportDebugView::Mip,
 			ViewportDebugView::Motion, ViewportDebugView::Shadows, ViewportDebugView::Lighting, ViewportDebugView::AmbientOcclusion,
-			ViewportDebugView::Indirect, ViewportDebugView::Luminance, ViewportDebugView::Albedo })
+			ViewportDebugView::Indirect, ViewportDebugView::Luminance, ViewportDebugView::Albedo, ViewportDebugView::Voxels })
 		{
 			if (name == ViewportDebugViewToString(view))
 				return view;
@@ -71,6 +73,7 @@ namespace Strata
 			case ViewportDebugView::Indirect:         return SceneLightingView::Indirect;
 			case ViewportDebugView::Luminance:        return SceneLightingView::Luminance;
 			case ViewportDebugView::Albedo:           return SceneLightingView::Albedo;
+			case ViewportDebugView::Voxels:           return SceneLightingView::Voxels;
 			case ViewportDebugView::None:
 			case ViewportDebugView::Streaming:
 			case ViewportDebugView::LOD:
@@ -96,6 +99,18 @@ namespace Strata
 		if (band == 0)
 			return fmt::format("EV <{}", first + 1);
 		return fmt::format("EV {}", first);
+	}
+
+	std::string GetVoxelLegendNote(const VoxelClipmap* clipmap)
+	{
+		if (!clipmap)
+			return "No GI";
+		const GlobalIlluminationLayout& layout = clipmap->GetLayout();
+		uint32_t valid = 0;
+		for (uint32_t level = 0; level < layout.Levels.size(); level++)
+			valid += clipmap->GetLevel(level).Valid.IsEmpty() ? 0u : 1u;
+		return fmt::format("levels {}, {}-{} cm, valid {} of {}", layout.Levels.size(), std::lround(layout.Levels.front().VoxelSize * 100.0f),
+			std::lround(layout.Levels.back().VoxelSize * 100.0f), valid, layout.Levels.size());
 	}
 
 	std::string GetLightingLegendNote(ViewportDebugView view, const std::optional<LightingViewStats>& stats)

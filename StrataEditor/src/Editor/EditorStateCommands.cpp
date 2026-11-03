@@ -290,6 +290,9 @@ namespace Strata
 				{ "colorLookup", stats.ColorLookup },
 				// Whether lens flares ran, and whether the directional light's disk was in front of the camera for their starburst.
 				{ "lensFlare", stats.LensFlare ? nlohmann::json { { "sunInFront", stats.LensFlareSun } } : nlohmann::json(nullptr) },
+				// Global illumination: the frame ran it (a GI view), its voxels were incomplete, nothing was left to voxelize.
+				{ "globalIllumination", stats.GlobalIllumination ? nlohmann::json { { "ran", true }, { "pending", stats.GlobalIlluminationPending },
+					{ "settled", stats.GlobalIlluminationSettled } } : nlohmann::json(nullptr) },
 				{ "gpuMs", std::move(gpuMs) },
 				{ "gpuStatsFrame", gpu.HasTimes ? nlohmann::json(gpu.Frame) : nlohmann::json(nullptr) } };
 		}
@@ -923,7 +926,7 @@ namespace Strata
 			"I/O and background threads (imports, exports), how busy they were in percent, running and queued jobs now). gpu is the GPU's side of "
 			"the same frames, known 2-3 frames late: frames (with GPU times), latencyFrames, busy (the GPU stages added up per frame), stages (per GPU "
 			"stage: GPU.Uploads, GPU.Setup, GPU.Aerial (the atmosphere's aerial perspective), GPU.Cull, GPU.Shadows, GPU.Prepass, GPU.ScreenShadows (the sun's shadow mask), "
-			"GPU.AO, GPU.Reflections (reflection probes' conversions, screen-space reflections), "
+			"GPU.AO, GPU.RadianceCascades (global illumination: voxels), GPU.Reflections (reflection probes' conversions, screen-space reflections), "
 			"GPU.Opaque (with the sky), GPU.Transparent, GPU.TAA (motion vectors' history and temporal anti-aliasing), GPU.MotionBlur, GPU.DepthOfField, GPU.Post, "
 			"GPU.Overlays, GPU.UI (the game UI), GPU.ImGui) and boundBy: gpu when the GPU's median busy time takes at least 90% of the median frame interval and exceeds "
 			"the CPU's frame time, cpu when the CPU's does, capped when neither does (vsync or a frame-rate cap sets the pace), unknown without GPU "
@@ -956,7 +959,7 @@ namespace Strata
 			"frames that did not blur), depthOfField (focusDistance in meters, focalLength in millimeters, fNumber, infinityBlurPixels: the blur's "
 			"diameter of a point infinitely far; null without a lens), colorLookup (whether the Post Process's color lookup was applied; false "
 			"while it loads), lensFlare (sunInFront: whether the directional light's disk was in front of the camera for the starburst; null when "
-			"lens flares did not run), gpuMs "
+			"lens flares did not run), globalIllumination (ran, pending: its voxels incomplete, settled: nothing left to voxelize; null without GI), gpuMs "
 			"(per GPU stage of the frame gpuStatsFrame names). gameRenderStats is the same for the Game view's latest frame (null while it is "
 			"hidden or closed); both views' GPU work adds up in gpu's stages. Times are milliseconds as avgMs, p50Ms and p95Ms (nearest rank) and maxMs.",
 			ObjectSchema({ { "frames", IntegerSchema("How many of the latest frames to summarize (default 120)", 1, FrameProfiler::c_DefaultCapacity) } }),

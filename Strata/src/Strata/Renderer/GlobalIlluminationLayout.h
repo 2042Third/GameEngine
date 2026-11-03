@@ -25,6 +25,17 @@ namespace Strata
 		High = 2
 	};
 
+	// Global illumination's tuning (SceneRendererSpecification::GlobalIllumination): the layout the GI runs at (High; Off runs High
+	// too: the GI's views show what High gives), and the triangles the voxel clipmap voxelizes per frame (at least one region a
+	// frame) and on a frame that rebuilds or jumps a window; 0 for no limit (renderers of single images, whose first frame is then
+	// complete).
+	struct GlobalIlluminationSettings
+	{
+		GlobalIlluminationLevel Level = GlobalIlluminationLevel::High;
+		uint32_t VoxelizeTrianglesPerFrame = RenderData::c_GIVoxelizeTrianglesPerFrame;
+		uint32_t VoxelizeTrianglesOnCut = RenderData::c_GIVoxelizeTrianglesOnCut;
+	};
+
 	// A level of the voxel clipmap: every level has the same dimensions, each twice the voxel size of the one before.
 	struct VoxelLevelLayout
 	{
@@ -51,7 +62,7 @@ namespace Strata
 	struct GlobalIlluminationMemory
 	{
 		uint64_t VoxelLevels = 0; // Material, emission, normal and radiance per voxel (20 bytes)
-		uint64_t Scratch = 0;     // A voxelization batch's scratch (24 bytes per voxel)
+		uint64_t Scratch = 0;     // A voxelization batch's scratch (32 bytes per voxel)
 		uint64_t Atlases = 0;     // The cascades' rays (RGBA16F)
 		uint64_t Weights = 0;     // Each probe's eight parents' weights (two RGBA8), of every cascade but the top
 		uint64_t Validity = 0;    // RGBA8 per probe of every cascade
@@ -135,6 +146,13 @@ namespace Strata
 		// axis, falling to 0 over c_GILevelBlendVoxels voxels. By the distance from the camera, not from the snapped window, so
 		// it changes continuously as the camera moves (Include/GlobalIllumination.slang's GetLevelWeight).
 		float GetLevelWeight(const VoxelLevelLayout& level, const glm::vec3& relative);
+
+		// A material's voxel colors (RenderData::GIMaterial): linear RGB in [0, 1] as 8 bits per channel (red in the low byte),
+		// and a color in nits as shared-exponent RGB9E5 (EXT_texture_shared_exponent; values clamped to [0, 65408], what
+		// Include/Voxelize.slang unpacks).
+		uint32_t PackAlbedo(const glm::vec3& albedo);
+		uint32_t PackRGB9E5(const glm::vec3& color);
+		glm::vec3 UnpackRGB9E5(uint32_t value);
 	}
 
 }

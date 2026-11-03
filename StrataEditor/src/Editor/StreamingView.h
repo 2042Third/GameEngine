@@ -33,12 +33,14 @@ namespace Strata
 		Motion,    // Every pixel's motion since the view's previous frame (SceneRenderOptions::ShowMotionVectors), not a tint
 		Shadows,   // Every receiver pixel by screen pixels per shadow texel, with the cascades (SceneRenderOptions::ShowShadowView)
 		// The lighting views (SceneLightingView), not tints either: lit surfaces shaded white, the ambient occlusion, the indirect
-		// light alone, the luminance as EV100 bands and the albedo with values outside 0.03-0.85 marked.
+		// light alone, the luminance as EV100 bands, the albedo with values outside 0.03-0.85 marked, and global illumination's
+		// voxels (the scene as the GI sees it).
 		Lighting,
 		AmbientOcclusion,
 		Indirect,
 		Luminance,
-		Albedo
+		Albedo,
+		Voxels
 	};
 
 	// The lighting view a debug view shows (SceneLightingView::None for the others).
@@ -110,6 +112,10 @@ namespace Strata
 	// The note under a lighting view's legend: the sun to sky ratio on flat ground and, for the occlusion view, the occlusion's
 	// median or, for the light views (not the albedo), the surfaces' EV100 median; "Measuring..." until statistics arrived.
 	std::string GetLightingLegendNote(ViewportDebugView view, const std::optional<LightingViewStats>& stats);
+
+	// The note under the voxels view's legend: the clipmap's levels, their voxel sizes and how many hold valid voxels, as
+	// "levels 4, 10-80 cm, valid 4 of 4"; "No GI" without a clipmap.
+	std::string GetVoxelLegendNote(const VoxelClipmap* clipmap);
 
 	// Builds what a debug view draws over the viewport image for one frame: SceneRenderOptions::EntityTints (the drawn
 	// entities' colors) and, in the streaming view, placeholder boxes for entities whose mesh is not there to draw. Works on

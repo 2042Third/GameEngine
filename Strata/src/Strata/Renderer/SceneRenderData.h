@@ -103,8 +103,20 @@ namespace Strata
 			// comes from the radiance cascades (SRV 35), z: their intensity (radiance-cascades); w: reflections'. y, z and w
 			// are written 0 until those streams use them.
 			glm::vec4 ReflectionParams;
+			// Global illumination (SceneRendererGlobalIllumination.cpp; Include/GlobalIllumination.slang): what the forward pass
+			// reads, zero without it. The field: xyz its minimum corner camera-relative (the first cascade's probe (i, j, l) at
+			// that plus (i, j, l) + 0.5 spacings), w the first cascade's spacing; xyz its probes per axis, w 1 when the frame uses
+			// it; xyz the half extents it always holds around the camera (m), w its fade (m).
+			glm::vec4 GIFieldOrigin;
+			glm::vec4 GIFieldSize;
+			glm::vec4 GIFieldFade;
+			// Voxel levels 0-2: xyz the window's minimum corner camera-relative (m), w the voxel size (m) or 0 when the level is
+			// not valid; xyz the minimum corner's texel; xyz the voxels per axis.
+			glm::vec4 GIVoxelOrigin[3];
+			glm::vec4 GIVoxelTexel[3];
+			glm::vec4 GIVoxelDimensions;
 		};
-		static_assert(sizeof(FrameConstants) == 8 * 64 + 26 * 16);
+		static_assert(sizeof(FrameConstants) == 8 * 64 + 36 * 16);
 
 		// A directional shadow cascade as shaders read it (u_Cascades, Include/Scene.slang): written on the GPU by
 		// Scene/CascadeFit.comp, which fits its depth range to the casters (CascadeFitConstants).
@@ -689,7 +701,7 @@ namespace Strata
 		constexpr uint32_t c_GIMaxTiles = 32768;         // Tiles per batch; beyond them a triangle walks its tiles itself (counted)
 		constexpr uint32_t c_GIMovingFrames = 30;        // A proxy placed anew within this many frames is moving: left out of the voxels
 		constexpr float c_GIMaskedOccupancy = 0.15f;     // Guess: alpha-masked surfaces' occupancy
-		constexpr float c_GITwoSidedSum = 0.5f;          // A voxel whose triangles' unit normals sum to less is two-sided
+		constexpr float c_GITwoSidedSum = 0.5f;          // A voxel whose triangles' unit normals sum to less than this times their count is two-sided
 		constexpr float c_GINormalFixedPoint = 256.0f;   // Normals add as integers times this
 		constexpr float c_GIStepVoxels = 0.75f;          // Marches step this many voxels of the level they sample
 
@@ -739,6 +751,50 @@ namespace Strata
 			uint32_t Padding;
 		};
 		static_assert(sizeof(GIMaterial) == 16);
+
+		// A voxel level as the GI's shaders read it (GlobalIlluminationConstants).
+		struct GIVoxelLevelData
+		{
+			glm::vec4 Origin;        // xyz: the window's minimum corner, camera-relative (m); w: the voxel size (m)
+			glm::ivec4 Texel;        // xyz: the minimum corner's texel; w: 1 when the level holds valid voxels
+			glm::ivec4 ValidMinimum; // xyz: the valid box's first voxel, relative to the window's minimum corner
+			glm::ivec4 ValidMaximum; // xyz: one past its last voxel
+			glm::vec4 Anchor;        // xyz: the anchor voxel's world position as a float (regions and voxel coordinates start there)
+		};
+		static_assert(sizeof(GIVoxelLevelData) == 80);
+
+		// The GI's constant buffer (b1 of its compute and overlay layouts; Include/GlobalIllumination.slang).
+		struct GlobalIlluminationConstants
+		{
+			GIVoxelLevelData Levels[c_GIMaxVoxelLevels];
+			glm::uvec4 Dimensions; // xyz: voxels per axis of every level; w: the level count
+			glm::uvec4 Batch;      // x: the voxels a batch's scratch holds (GlobalIlluminationLayout::BatchVoxels)
+		};
+		static_assert(sizeof(GlobalIlluminationConstants) == c_GIMaxVoxelLevels * 80 + 32);
+
+		// The voxelizer's push constants (b2; Include/Voxelize.slang): a batch of VoxelFrame.
+		struct VoxelPassParameters
+		{
+			uint32_t Level;
+			uint32_t FirstRegion;
+			uint32_t RegionCount;
+			uint32_t FirstGroup;
+			uint32_t Voxels;
+			uint32_t Columns;
+			uint32_t GroupCount;
+			uint32_t Padding;
+		};
+		static_assert(sizeof(VoxelPassParameters) == 32);
+
+		// The voxels view's push constants (b2; GI/VoxelView.frag): display colors, RGBA8 sRGB packed (red in the low byte).
+		struct VoxelViewParameters
+		{
+			uint32_t TwoSided;   // Two-sided voxels
+			uint32_t Background; // Where the march hits nothing
+			uint32_t Padding0;
+			uint32_t Padding1;
+		};
+		static_assert(sizeof(VoxelViewParameters) == 16);
 
 	}
 

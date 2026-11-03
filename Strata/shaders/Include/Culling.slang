@@ -5,6 +5,7 @@
 // SceneRenderData.h; keep them in sync.
 
 #include "Include/Common.slang"
+#include "Include/GeometryTables.slang"
 #include "Include/OrderedFloat.slang"
 
 // RenderProxyFlags
@@ -80,35 +81,6 @@ struct GPUProxy
 	uint MeshSlot;
 	float3 WorldMax;
 	uint Flags;
-};
-
-struct GeometryEntry
-{
-	uint FirstVertex;
-	uint FirstIndex;
-	uint FirstSubmesh;
-	uint SubmeshCount;
-};
-
-struct GeometrySubmesh
-{
-	uint BaseVertex;
-	uint FirstLOD;
-	uint LODCount;
-	uint Flags;     // ST_GEOMETRY_SUBMESH_* bits
-	float4 UVDensity; // xyz: Submesh::UVDensity
-};
-
-struct GeometryLOD
-{
-	uint IndexOffset;
-	uint IndexCount;
-	uint BaseVertex;
-	uint Mesh;
-	float RelativeError; // MeshUtils::GetRelativeLODError of the level's error
-	uint Reserved0;
-	uint Reserved1;
-	uint Reserved2;
 };
 
 struct CullInstance

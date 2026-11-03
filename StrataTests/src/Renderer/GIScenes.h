@@ -2,7 +2,10 @@
 
 #include "Renderer/SceneRendererTestUtils.h"
 
+#include <glm/ext/vector_int3_sized.hpp>
+
 #include <cstdint>
+#include <vector>
 
 // The scenes indirect light is measured on (DeveloperGuide "Global illumination"): a yard with a hut, a fence and a field of
 // grass cards, and the look-dev room, with the camera paths that strafe them. The look-dev project mirrors them
@@ -33,5 +36,12 @@ namespace Strata::Tests
 
 	// Inside the room: from (-9, 1.5, -4.5) toward (-10, 1.2, 1.1), moving +x by 0.01 m a frame, 70 degrees.
 	SceneCamera RoomStrafe(uint32_t frame, float aspectRatio);
+
+	// The voxels a mesh's full-detail triangles mark in a level of global illumination's clipmap, as the voxelizer finds them
+	// (Include/Voxelize.slang: the voxel coordinates relative to the anchor, GlobalIllumination::GetVoxelCoordinate, and
+	// Akenine-Moller's triangle-box test, touching included): world voxel indices, sorted, each once.
+	std::vector<glm::i64vec3> ReferenceVoxels(const Mesh& mesh, const glm::mat4& world, const glm::i64vec3& anchorVoxel, float voxelSize);
+	// Include/Voxelize.slang's triangle-box test (Akenine-Moller's, touching included), on the CPU.
+	bool TriangleBoxOverlap(const glm::vec3& center, const glm::vec3& halfSize, const glm::vec3& a, const glm::vec3& b, const glm::vec3& c);
 
 }

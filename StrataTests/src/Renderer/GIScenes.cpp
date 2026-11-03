@@ -2,6 +2,8 @@
 
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Math/Math.h"
+#include "Strata/Renderer/GlobalIlluminationLayout.h"
+#include "Strata/Renderer/Mesh.h"
 
 #include <glm/gtc/constants.hpp>
 
@@ -263,6 +265,82 @@ namespace Strata::Tests
 	{
 		const glm::vec3 offset(0.02f * speed * static_cast<float>(frame), 0.0f, 0.0f);
 		return StrafeCamera(glm::vec3(-3.5f, 1.7f, -9.5f) + offset, glm::vec3(2.5f, 1.0f, -0.5f) + offset, 55.0f, aspectRatio);
+	}
+
+	namespace
+	{
+
+		bool AxisSeparates(const glm::vec3& axis, const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2, const glm::vec3& halfSize)
+		{
+			const float p0 = glm::dot(v0, axis);
+			const float p1 = glm::dot(v1, axis);
+			const float p2 = glm::dot(v2, axis);
+			const float radius = halfSize.x * std::abs(axis.x) + halfSize.y * std::abs(axis.y) + halfSize.z * std::abs(axis.z);
+			return std::max({ p0, p1, p2 }) < -radius || std::min({ p0, p1, p2 }) > radius;
+		}
+
+	}
+
+	bool TriangleBoxOverlap(const glm::vec3& center, const glm::vec3& halfSize, const glm::vec3& a, const glm::vec3& b, const glm::vec3& c)
+	{
+		const glm::vec3 v0 = a - center;
+		const glm::vec3 v1 = b - center;
+		const glm::vec3 v2 = c - center;
+		const glm::vec3 edges[3] = { v1 - v0, v2 - v1, v0 - v2 };
+		const glm::vec3 axes[3] = { glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f) };
+		for (const glm::vec3& axis : axes)
+		{
+			for (const glm::vec3& edge : edges)
+			{
+				if (AxisSeparates(glm::cross(axis, edge), v0, v1, v2, halfSize))
+					return false;
+			}
+		}
+		for (int axis = 0; axis < 3; axis++)
+		{
+			if (std::max({ v0[axis], v1[axis], v2[axis] }) < -halfSize[axis] || std::min({ v0[axis], v1[axis], v2[axis] }) > halfSize[axis])
+				return false;
+		}
+		const glm::vec3 normal = glm::cross(edges[0], edges[1]);
+		return std::abs(glm::dot(normal, v0)) <= halfSize.x * std::abs(normal.x) + halfSize.y * std::abs(normal.y) + halfSize.z * std::abs(normal.z);
+	}
+
+	std::vector<glm::i64vec3> ReferenceVoxels(const Mesh& mesh, const glm::mat4& world, const glm::i64vec3& anchorVoxel, float voxelSize)
+	{
+		const RenderData::AffineTransform rows = RenderData::AffineTransform::FromMatrix(world);
+		const glm::vec3 anchor = glm::vec3(glm::dvec3(anchorVoxel) * static_cast<double>(voxelSize));
+		const std::vector<glm::vec3>& positions = mesh.GetPositions();
+		const std::vector<uint32_t>& indices = mesh.GetIndices();
+		std::vector<glm::i64vec3> voxels;
+		for (const Submesh& submesh : mesh.GetSubmeshes())
+		{
+			const MeshLOD& detail = submesh.LODs.front();
+			for (uint32_t index = detail.IndexOffset; index + 2 < detail.IndexOffset + detail.IndexCount; index += 3)
+			{
+				glm::vec3 corners[3];
+				for (uint32_t corner = 0; corner < 3; corner++)
+					corners[corner] = GlobalIllumination::GetVoxelCoordinate(rows, positions[submesh.BaseVertex + indices[index + corner]], anchor, voxelSize);
+				const glm::vec3 low = glm::min(glm::min(corners[0], corners[1]), corners[2]);
+				const glm::vec3 high = glm::max(glm::max(corners[0], corners[1]), corners[2]);
+				const glm::ivec3 first = glm::ivec3(glm::ceil(low)) - 1;
+				const glm::ivec3 last = glm::ivec3(glm::floor(high));
+				for (int z = first.z; z <= last.z; z++)
+				{
+					for (int y = first.y; y <= last.y; y++)
+					{
+						for (int x = first.x; x <= last.x; x++)
+						{
+							if (TriangleBoxOverlap(glm::vec3(x, y, z) + 0.5f, glm::vec3(0.5f), corners[0], corners[1], corners[2]))
+								voxels.push_back(anchorVoxel + glm::i64vec3(x, y, z));
+						}
+					}
+				}
+			}
+		}
+		const auto less = [](const glm::i64vec3& a, const glm::i64vec3& b) { return std::tie(a.x, a.y, a.z) < std::tie(b.x, b.y, b.z); };
+		std::sort(voxels.begin(), voxels.end(), less);
+		voxels.erase(std::unique(voxels.begin(), voxels.end()), voxels.end());
+		return voxels;
 	}
 
 	SceneCamera RoomStrafe(uint32_t frame, float aspectRatio)

@@ -4,6 +4,7 @@
 #include <glm/gtc/constants.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <limits>
 
@@ -69,10 +70,10 @@ namespace Strata
 
 	GlobalIlluminationMemory GlobalIlluminationLayout::GetMemory() const
 	{
-		// Material (RGBA8), emission (R32_UINT), normal (RGBA8_SNORM) and radiance (RGBA16F) per voxel; the scratch's six words
-		// per voxel (key, winding, emission, three normal sums).
+		// Material (RGBA8), emission (R32_UINT), normal (RGBA8_SNORM) and radiance (RGBA16F) per voxel; the scratch's eight words
+		// per voxel (key, winding, emission, three normal sums and their count, the emission's coverage).
 		constexpr uint64_t c_VoxelBytes = 4 + 4 + 4 + 8;
-		constexpr uint64_t c_ScratchBytes = 6 * 4;
+		constexpr uint64_t c_ScratchBytes = 8 * 4;
 		constexpr uint64_t c_RayBytes = 8;
 		constexpr uint64_t c_WeightBytes = 2 * 4;
 		constexpr uint64_t c_ValidityBytes = 4;
@@ -302,6 +303,46 @@ namespace Strata
 				- static_cast<float>(RenderData::c_GIScrollVoxels + RenderData::c_GILevelGuardVoxels) * voxel - glm::abs(relative);
 			const float nearest = std::min({ margin.x, margin.y, margin.z });
 			return std::clamp(nearest / (static_cast<float>(RenderData::c_GILevelBlendVoxels) * voxel), 0.0f, 1.0f);
+		}
+
+		uint32_t PackAlbedo(const glm::vec3& albedo)
+		{
+			uint32_t packed = 0;
+			for (int channel = 0; channel < 3; channel++)
+			{
+				const float value = std::isfinite(albedo[channel]) ? std::clamp(albedo[channel], 0.0f, 1.0f) : 0.0f;
+				packed |= static_cast<uint32_t>(std::lround(value * 255.0f)) << (8 * channel);
+			}
+			return packed;
+		}
+
+		uint32_t PackRGB9E5(const glm::vec3& color)
+		{
+			constexpr float c_Largest = 65408.0f;
+			glm::vec3 clamped;
+			for (int channel = 0; channel < 3; channel++)
+				clamped[channel] = std::isfinite(color[channel]) ? std::clamp(color[channel], 0.0f, c_Largest) : (color[channel] > 0.0f ? c_Largest : 0.0f);
+			const float largest = std::max({ clamped.x, clamped.y, clamped.z });
+			if (largest < 1.52587891e-5f)
+				return 0;
+			// floor(log2(largest)) from the float's exponent bits, as the shader takes it, plus 1 and the bias 15.
+			int exponent = std::max(-16, static_cast<int>((std::bit_cast<uint32_t>(largest) >> 23) & 255u) - 127) + 16;
+			float denominator = std::exp2(static_cast<float>(exponent - 24));
+			if (std::floor(largest / denominator + 0.5f) >= 512.0f)
+			{
+				exponent++;
+				denominator *= 2.0f;
+			}
+			uint32_t packed = static_cast<uint32_t>(exponent) << 27;
+			for (int channel = 0; channel < 3; channel++)
+				packed |= static_cast<uint32_t>(std::min(std::floor(clamped[channel] / denominator + 0.5f), 511.0f)) << (9 * channel);
+			return packed;
+		}
+
+		glm::vec3 UnpackRGB9E5(uint32_t value)
+		{
+			const float scale = std::exp2(static_cast<float>(static_cast<int>(value >> 27)) - 24.0f);
+			return glm::vec3(static_cast<float>(value & 511u), static_cast<float>((value >> 9) & 511u), static_cast<float>((value >> 18) & 511u)) * scale;
 		}
 
 	}

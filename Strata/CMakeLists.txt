@@ -121,6 +121,11 @@ strata_add_shaders(Strata_Renderer
 		Effects/ContactShadows.frag
 		Effects/ScreenShadowsBlur.frag
 		Effects/LightingViewStats.comp
+		GI/VoxelTriangles.comp
+		GI/VoxelTiles.comp
+		GI/VoxelFill.comp
+		GI/VoxelFinalize.comp
+		GI/VoxelView.frag
 		PostProcess/Fullscreen.vert
 		PostProcess/Tonemap.frag
 		PostProcess/MotionBlurTiles.comp

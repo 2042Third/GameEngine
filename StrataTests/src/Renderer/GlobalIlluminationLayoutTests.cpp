@@ -137,26 +137,26 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 	{
 		const GlobalIlluminationMemory high = GetLayout(GlobalIlluminationLevel::High).GetMemory();
 		CHECK(high.VoxelLevels == 83886080);
-		CHECK(high.Scratch == 6291456);
+		CHECK(high.Scratch == 8388608);
 		CHECK(high.Atlases == 22118400);
 		CHECK(high.Weights == 840960);
 		CHECK(high.Validity == 421200);
 		CHECK(high.Field == 4423680);
 		CHECK(high.Tiles == 262144);
 		CHECK(high.WorkItems == 1572864);
-		CHECK(high.GetTotal() == 119816784);
-		CHECK(GetLayout(GlobalIlluminationLevel::High).GetMemoryBytes() == 119816784);
+		CHECK(high.GetTotal() == 121913936);
+		CHECK(GetLayout(GlobalIlluminationLevel::High).GetMemoryBytes() == 121913936);
 
 		const GlobalIlluminationMemory low = GetLayout(GlobalIlluminationLevel::Low).GetMemory();
 		CHECK(low.VoxelLevels == 7864320);
-		CHECK(low.Scratch == 3145728);
+		CHECK(low.Scratch == 4194304);
 		CHECK(low.Atlases == 2580480);
 		CHECK(low.Weights == 103680);
 		CHECK(low.Validity == 52560);
 		CHECK(low.Field == 552960);
 		CHECK(low.Tiles == 262144);
 		CHECK(low.WorkItems == 1572864);
-		CHECK(low.GetTotal() == 16134736);
+		CHECK(low.GetTotal() == 17183312);
 	}
 
 	TEST_CASE("Directions and solid angles")
@@ -335,6 +335,28 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 				CHECK(glm::all(glm::lessThanEqual(glm::abs(voxel - expected), glm::i64vec3(1))));
 			}
 		}
+	}
+
+	TEST_CASE("Voxel colors pack as the voxelizer reads them")
+	{
+		// Linear albedo as RGB8, red in the low byte, clamped.
+		CHECK(GlobalIllumination::PackAlbedo(glm::vec3(1.0f, 0.5f, 0.0f)) == (255u | (128u << 8)));
+		CHECK(GlobalIllumination::PackAlbedo(glm::vec3(-1.0f, 2.0f, std::numeric_limits<float>::quiet_NaN())) == (255u << 8));
+		// RGB9E5: nine bits of mantissa a channel under a shared exponent, the brightest channel within half a step.
+		CHECK(GlobalIllumination::PackRGB9E5(glm::vec3(0.0f)) == 0u);
+		for (const glm::vec3& color : { glm::vec3(100.0f, 50.0f, 1.0f), glm::vec3(0.01f, 0.002f, 0.0f), glm::vec3(3000.0f, 2250.0f, 1350.0f),
+				 glm::vec3(1.0f), glm::vec3(65408.0f, 0.0f, 0.0f) })
+		{
+			CAPTURE(color.x);
+			const glm::vec3 unpacked = GlobalIllumination::UnpackRGB9E5(GlobalIllumination::PackRGB9E5(color));
+			const float largest = std::max({ color.x, color.y, color.z });
+			for (int channel = 0; channel < 3; channel++)
+				CHECK(std::abs(unpacked[channel] - color[channel]) <= largest / 511.0f);
+		}
+		// Beyond the format's largest value: clamped, never infinite.
+		const glm::vec3 clamped = GlobalIllumination::UnpackRGB9E5(GlobalIllumination::PackRGB9E5(glm::vec3(1e9f, std::numeric_limits<float>::infinity(), 5.0f)));
+		CHECK(clamped.x == 65408.0f);
+		CHECK(clamped.y == 65408.0f);
 	}
 
 	TEST_CASE("Level weights are continuous")

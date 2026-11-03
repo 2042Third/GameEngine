@@ -13,6 +13,7 @@
 #include "Strata/Renderer/RenderSceneGPU.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/RendererComponents.h"
+#include "Strata/Renderer/SceneRendererGlobalIllumination.h"
 #include "Strata/Renderer/SceneVertexLayouts.h"
 #include "Strata/Renderer/TextRenderer.h"
 #include "Strata/Renderer/Texture.h"
@@ -384,6 +385,13 @@ namespace Strata
 			nvrhi::BindingLayoutItem::Texture_SRV(29),          // Aerial perspective's volume (Include/AerialPerspective.slang)
 			nvrhi::BindingLayoutItem::Texture_SRV(32),          // The sun shadow cascades' depth ranges (Include/Shadows.slang)
 			nvrhi::BindingLayoutItem::Texture_SRV(33),          // The blue-noise tile (Include/Shadows.slang)
+			// Global illumination (Include/GlobalIllumination.slang): its field, its probes' validity and voxel levels 0-2; the
+			// black 3D texture in frames without GI.
+			nvrhi::BindingLayoutItem::Texture_SRV(35),
+			nvrhi::BindingLayoutItem::Texture_SRV(37),
+			nvrhi::BindingLayoutItem::Texture_SRV(38),
+			nvrhi::BindingLayoutItem::Texture_SRV(39),
+			nvrhi::BindingLayoutItem::Texture_SRV(40),
 			nvrhi::BindingLayoutItem::Sampler(0).setSize(RenderData::c_SamplerCount),
 			nvrhi::BindingLayoutItem::Sampler(8),
 			nvrhi::BindingLayoutItem::Sampler(9),
@@ -1045,6 +1053,7 @@ namespace Strata
 		nvrhi::ITexture* probeArray = GetBoundReflectionProbes();
 		nvrhi::ITexture* screenReflections = GetBoundScreenReflections();
 		nvrhi::ITexture* sceneColor = GetBoundSceneColor();
+		const std::array<nvrhi::ITexture*, 3> giVoxels = { GetBoundGIVoxels(0), GetBoundGIVoxels(1), GetBoundGIVoxels(2) };
 
 		// The shadow pass reads the same resources except for its own draw list (and never the shadow maps it draws into).
 		nvrhi::ITexture* screenShadows = GetBoundScreenShadows();
@@ -1068,6 +1077,11 @@ namespace Strata
 				nvrhi::BindingSetItem::Texture_SRV(29, aerialVolume, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
 				nvrhi::BindingSetItem::Texture_SRV(32, boundRanges),
 				nvrhi::BindingSetItem::Texture_SRV(33, Renderer::GetBlueNoiseTexture()),
+				nvrhi::BindingSetItem::Texture_SRV(35, Renderer::GetBlack3DTexture(), nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
+				nvrhi::BindingSetItem::Texture_SRV(37, Renderer::GetBlack3DTexture(), nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
+				nvrhi::BindingSetItem::Texture_SRV(38, giVoxels[0], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
+				nvrhi::BindingSetItem::Texture_SRV(39, giVoxels[1], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
+				nvrhi::BindingSetItem::Texture_SRV(40, giVoxels[2], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SceneGPU->GetMaterialBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment->Irradiance.Get() : blackCube),
@@ -1122,6 +1136,7 @@ namespace Strata
 		m_BoundReflectionProbes = probeArray;
 		m_BoundScreenReflections = screenReflections;
 		m_BoundSceneColor = sceneColor;
+		m_BoundGIVoxels = giVoxels;
 		if (!m_SceneBindingSet || !m_ShadowBindingSet || !m_ClusterBindingSet || (gpuSets && (!m_GPUSceneBindingSet || !m_GPUShadowBindingSet)))
 		{
 			m_SceneBindingSet = nullptr; // Recreated next frame
@@ -2218,6 +2233,7 @@ namespace Strata
 		release(m_DepthTexture);
 		release(m_NormalTexture);
 		release(m_EntityIDTexture);
+		ReleaseGlobalIllumination(released);
 		release(m_HDRTexture);
 		release(m_OutputTexture);
 		ReleaseAmbientOcclusionTargets(released);
@@ -2826,6 +2842,7 @@ namespace Strata
 			return;
 		ResolveCullCounters(wait);
 		ResolveLightingViewStats(wait);
+		ResolveGlobalIlluminationCounters(wait);
 		GPUProfiler& profiler = Renderer::GetGPUProfiler();
 		if (!profiler.IsEnabled())
 			return;
@@ -2922,7 +2939,7 @@ namespace Strata
 		ChoosePreExposure(postProcess, options, IsLightingValueView(options.LightingView));
 		m_Stats.PreExposure = m_PreExposure;
 		m_Stats.PreExposureSettled = m_PreExposureSettled;
-		m_Stats.LightingViewPending = options.LightingView != SceneLightingView::None && !m_LightingViewStats;
+		m_Stats.LightingViewPending = options.LightingView != SceneLightingView::None && !IsGlobalIlluminationView(options.LightingView) && !m_LightingViewStats;
 		// What the automatic exposure metered (frames late) and the gray card its key compared with (this frame's light).
 		if (postProcess.AutoExposure && m_PreExposureAutomatic && m_MeteredLog2Luminance)
 		{
@@ -3021,6 +3038,26 @@ namespace Strata
 		m_Stats.ScreenSpaceReflections = m_ReflectionFrame;
 		m_Stats.ScreenSpaceReflectionsPending = m_ReflectionCopyFrame && !m_ReflectionFrame;
 
+		// Global illumination runs for its views (at the specification's layout, High by default); a frame that wants none
+		// releases it, so nothing is kept.
+		const bool giWanted = IsGlobalIlluminationView(options.LightingView);
+		bool giFailed = false;
+		m_GIFrame = false;
+		if (giWanted)
+		{
+			const GlobalIlluminationLevel giLevel = m_Specification.GlobalIllumination.Level;
+			const std::optional<GlobalIlluminationLayout> giLayout = GlobalIllumination::ComputeLayout(giLevel != GlobalIlluminationLevel::Off ? giLevel
+				: GlobalIlluminationLevel::High);
+			m_GIFrame = giLayout && EnsureGlobalIlluminationResources(*giLayout);
+			giFailed = !m_GIFrame;
+		}
+		else if (m_GI)
+		{
+			std::vector<nvrhi::ResourceHandle> released;
+			ReleaseGlobalIllumination(released);
+			Renderer::ReleaseDeferred(std::move(released));
+		}
+
 		// Scene shaders work camera-relative (Include/Scene.slang): the view's translation is left out of its matrices. The jitter
 		// is only in the frame's copy of the projection: what the CPU culls, chooses levels of detail and fits the cascades with
 		// is the camera's own, and so are the motion vectors' matrices.
@@ -3110,7 +3147,7 @@ namespace Strata
 		// The local shadow views' casters: the CPU's on frames that walk the view (both paths), else bounds for the GPU's culling.
 		FindLocalShadowCasters(renderScene, camera, frustum, !m_FeedbackFrame, !m_FeedbackFrame);
 		// Rendered with a reported limitation: keep the error so it is not logged every frame.
-		bool degraded = motionFailed || temporalFailed || (reflectionsWanted && !m_ReflectionFrame && !m_ReflectionCopyFrame);
+		bool degraded = motionFailed || temporalFailed || giFailed || (reflectionsWanted && !m_ReflectionFrame && !m_ReflectionCopyFrame);
 		if (!m_LocalShadowLights.empty() && !EnsureLocalShadowAtlas())
 		{
 			ResetLocalShadows(); // Reported; no light casts a local shadow this frame
@@ -3133,6 +3170,8 @@ namespace Strata
 			}
 		}
 		ResolveAssets(renderScene);
+		if (m_GIFrame)
+			PrepareGlobalIllumination(renderScene, assets, camera, frame);
 		// After the materials' lookups (which a still frame replays): the probes' captures, and the conversions of the frame.
 		if (!GatherReflectionProbes(scene, camera))
 			degraded = true;
@@ -3169,7 +3208,8 @@ namespace Strata
 		ReportVisibleAnimators(scene);
 		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
 		frame.AOParams = glm::vec4(postProcess.AmbientOcclusion ? 1.0f : 0.0f, postProcess.AmbientOcclusionMultiBounce ? 1.0f : 0.0f, 0.0f, 0.0f);
-		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, static_cast<float>(options.LightingView),
+		const SceneLightingView forwardView = IsGlobalIlluminationView(options.LightingView) ? SceneLightingView::None : options.LightingView;
+		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, static_cast<float>(forwardView),
 			m_Specification.SpecularAntiAliasing ? 1.0f : 0.0f, options.ProbeCapture ? 1.0f : 0.0f);
 
 		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get())
@@ -3232,6 +3272,7 @@ namespace Strata
 		const bool rebind = buffersRecreated || m_BoundEnvironmentCube != GetEnvironmentCube() || m_BoundIrradiance != GetIrradianceMap()
 			|| m_BoundPrefiltered != GetPrefilteredMap() || m_BoundSkyView != GetBoundSkyView() || m_BoundAerialVolume != GetBoundAerialVolume()
 			|| m_BoundReflectionProbes != GetBoundReflectionProbes() || m_BoundScreenReflections != GetBoundScreenReflections() || m_BoundSceneColor != GetBoundSceneColor()
+			|| m_BoundGIVoxels[0] != GetBoundGIVoxels(0) || m_BoundGIVoxels[1] != GetBoundGIVoxels(1) || m_BoundGIVoxels[2] != GetBoundGIVoxels(2)
 			|| m_BoundTextureTableVersion != textureTable.GetBufferVersion();
 		if (!tableUploaded || (rebind && !CreateSceneBindingSets()))
 		{
@@ -3374,6 +3415,13 @@ namespace Strata
 			gpuTimer.Next(gpuStages.AO);
 			commandList->beginMarker("AmbientOcclusion");
 			RenderAmbientOcclusion(commandList, postProcess);
+			commandList->endMarker();
+		}
+		if (m_GIFrame)
+		{
+			gpuTimer.Next(gpuStages.RadianceCascades);
+			commandList->beginMarker("GlobalIllumination");
+			RecordGlobalIllumination(commandList);
 			commandList->endMarker();
 		}
 		if (!m_ReflectionProbeConversions.empty() || m_ReflectionFrame)
@@ -3596,7 +3644,15 @@ namespace Strata
 				overlayFrame.InverseViewProjection = glm::inverse(overlayFrame.ViewProjection);
 				WriteFrameConstants(commandList, overlayFrame);
 			}
-			if (options.LightingView != SceneLightingView::None)
+			if (IsGlobalIlluminationView(options.LightingView))
+			{
+				// First among the overlays: the GI's views replace the image the others are drawn over.
+				commandList->beginMarker("VoxelView");
+				if (!m_GIFrame || !DrawVoxelView(commandList, options, nvrhi::Viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y))))
+					degraded = true; // Reported; the image is the lit one
+				commandList->endMarker();
+			}
+			else if (options.LightingView != SceneLightingView::None)
 			{
 				// First among the overlays: the views of values replace the image the others are drawn over.
 				commandList->beginMarker("LightingView");
@@ -3628,6 +3684,7 @@ namespace Strata
 		SubmitShadowViewReadback();
 		SubmitShadowFitReadback();
 		SubmitLightingViewReadback();
+		SubmitGlobalIlluminationReadback();
 		CommitShadowCache();
 		CommitLocalShadows();
 

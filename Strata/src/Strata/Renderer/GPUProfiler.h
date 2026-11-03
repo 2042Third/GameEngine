@@ -27,6 +27,9 @@ namespace Strata
 		FrameStageID Prepass = c_InvalidFrameStage;
 		FrameStageID ScreenShadows = c_InvalidFrameStage; // The sun's screen-space shadow mask (SceneRenderer::RenderScreenShadows)
 		FrameStageID AO = c_InvalidFrameStage;
+		// Global illumination: voxelization of what changed (SceneRendererGlobalIllumination.cpp; the stage keeps the name the
+		// radiance cascades took)
+		FrameStageID RadianceCascades = c_InvalidFrameStage;
 		FrameStageID Reflections = c_InvalidFrameStage; // Reflection probes' conversions, the screen-space reflections' trace
 		FrameStageID Opaque = c_InvalidFrameStage;      // With the sky
 		FrameStageID Transparent = c_InvalidFrameStage;

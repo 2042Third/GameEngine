@@ -632,11 +632,13 @@ namespace Strata
 			label = "Luminance";
 		else if (settings.DebugView == ViewportDebugView::Albedo)
 			label = "Albedo";
+		else if (settings.DebugView == ViewportDebugView::Voxels)
+			label = "Voxels";
 		if (UI::ToggleChip("Viewport.DebugView", Icons::Layers, label, &clicked,
 			"Debug views: color the scene by streaming state (meshes, materials and textures still loading or failed), by the level of detail "
 			"meshes are drawn at, by the mip levels textures lack against what the view needs, by how each pixel moved since the previous frame, "
 			"or by how many screen pixels a texel of the sun's shadow cascades spans; or show its light: surfaces shaded white, ambient "
-			"occlusion, indirect light alone, luminance in EV100 bands, or albedo"))
+			"occlusion, indirect light alone, luminance in EV100 bands, or albedo; or the GI's voxels"))
 		{
 			ImGui::OpenPopup("DebugView");
 		}
@@ -653,7 +655,8 @@ namespace Strata
 			{ ViewportDebugView::AmbientOcclusion, "AO: the occlusion that darkens indirect light" },
 			{ ViewportDebugView::Indirect, "Indirect: sky, probe and reflected light only" },
 			{ ViewportDebugView::Luminance, "Luminance: EV100 bands of the scene's light" },
-			{ ViewportDebugView::Albedo, "Albedo: base colors, out of 0.03-0.85 marked" }
+			{ ViewportDebugView::Albedo, "Albedo: base colors, out of 0.03-0.85 marked" },
+			{ ViewportDebugView::Voxels, "Voxels: the scene as the GI sees it" }
 		};
 		for (const auto& [view, name] : views)
 		{
@@ -772,6 +775,10 @@ namespace Strata
 			lines.push_back({ toColor(lightingColors.AlbedoHigh), "Above 0.85", lighting ? formatShare(lighting->AboveRangeShare) : std::string("-") });
 			lines.push_back({ toColor(lightingColors.AlbedoLow), "Below 0.03", lighting ? formatShare(lighting->BelowRangeShare) : std::string("-") });
 		}
+		else if (settings.DebugView == ViewportDebugView::Voxels)
+		{
+			lines.push_back({ toColor(lightingColors.TwoSided), "Two-sided: no bounce", std::string() });
+		}
 		std::string note;
 		if (settings.DebugView == ViewportDebugView::Streaming && stats.PlaceholderBoxes > 0)
 			note = fmt::format("{} boxes: meshes not there yet", stats.PlaceholderBoxes);
@@ -779,6 +786,8 @@ namespace Strata
 			note = "Hue: direction, strength: speed (full at 16 px)";
 		else if (settings.DebugView == ViewportDebugView::Shadows)
 			note = renderer->GetShadowViewStats().CascadeCount > 0 ? "White: cascade edges. Hatched: blend bands." : "No shadowed directional light";
+		else if (settings.DebugView == ViewportDebugView::Voxels)
+			note = GetVoxelLegendNote(renderer->GetSceneRenderer().GetVoxelClipmap());
 		else if (GetLightingView(settings.DebugView) != SceneLightingView::None)
 			note = GetLightingLegendNote(settings.DebugView, lighting); // The sun to sky ratio on flat ground (a clear day's is 6 to 10)
 

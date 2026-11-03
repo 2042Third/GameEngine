@@ -4,14 +4,14 @@
 // Resources shared by the scene passes. Layouts mirror the structs in Strata/Renderer/SceneRenderData.h; keep them
 // in sync (std140 for the constant buffer, std430 for storage buffers, 16-byte aligned members).
 
-// The scene layout's slots (SceneRenderer::CreateResources): SRV 0-21, 27, 28, 29 (the aerial perspective volume), 32 and 33,
-// samplers 0-5 (materials), 8, 9 and 10, CBV 0.
+// The scene layout's slots (SceneRenderer::CreateResources): SRV 0-21, 27, 28, 29 (the aerial perspective volume), 32, 33, 35
+// and 37-40, samplers 0-5 (materials), 8, 9 and 10, CBV 0.
 // SRV 22-26 belong to the compute layouts of temporal anti-aliasing and screen-space reflections, never to this one.
 // Assigned in wave 7: SRV 28 the sun's screen-space shadow mask, 32 the cascades' depth ranges and 33 the shadows'
 // blue-noise tile; 29 the aerial perspective volume. Assigned for wave 8: 30 and 31 the irradiance volume (radiance-cascades,
-// below its cut), 34 volumetric fog (volumetric), 35 the radiance cascades' indirect light (radiance-cascades), 36 fog
-// volumes (volumetric, below its cut). A new scene resource takes the next free slot (37), and a pass that does not run
-// binds a dummy.
+// below its cut), 34 volumetric fog (volumetric), 35 the GI field (global illumination's irradiance per probe), 36 fog
+// volumes (volumetric, below its cut), 37 the GI probes' validity, 38-40 its voxel levels 0-2 (Include/GlobalIllumination.slang).
+// A new scene resource takes the next free slot (41), and a pass that does not run binds a dummy.
 
 #include "Include/Common.slang"
 
@@ -108,6 +108,16 @@ struct FrameConstants
 	// x: 1 when the frame traced screen-space reflections (Forward.frag's u_ScreenReflections, SRV 18); y: 1 when the frame's
 	// indirect light comes from the radiance cascades (SRV 35), z: their intensity (radiance-cascades); w: reflections'.
 	float4 ReflectionParams;
+	// Global illumination (Include/GlobalIllumination.slang; SceneRendererGlobalIllumination.cpp), zero without it: the field
+	// (xyz its minimum corner camera-relative, w the first cascade's spacing; xyz its probes per axis, w 1 when it is used; xyz
+	// the half extents it always holds around the camera, w its fade), and voxel levels 0-2 (xyz the window's minimum corner
+	// camera-relative, w the voxel size or 0 when the level is not valid; xyz its texel; xyz the voxels per axis).
+	float4 GIFieldOrigin;
+	float4 GIFieldSize;
+	float4 GIFieldFade;
+	float4 GIVoxelOrigin[3];
+	float4 GIVoxelTexel[3];
+	float4 GIVoxelDimensions;
 };
 
 ConstantBuffer<FrameConstants> u_Frame : register(b0);

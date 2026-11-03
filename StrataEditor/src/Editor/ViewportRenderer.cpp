@@ -152,6 +152,12 @@ namespace Strata
 		specification.SpreadLightingUpdates = fades;
 		// Single pictures: the cascades' fit follows Strata 0.7.0's rules (no holds), so a capture is the same on any machine.
 		specification.ShadowFitHolds = fades;
+		// Single pictures: global illumination voxelizes everything in its first frame (no budget spreads it).
+		if (!fades)
+		{
+			specification.GlobalIllumination.VoxelizeTrianglesPerFrame = 0;
+			specification.GlobalIllumination.VoxelizeTrianglesOnCut = 0;
+		}
 		m_Renderer = CreateScope<SceneRenderer>(specification);
 	}
 

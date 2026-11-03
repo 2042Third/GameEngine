@@ -13,6 +13,7 @@
 #include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Renderer/TextureReadback.h>
+#include <Strata/Renderer/VoxelClipmap.h>
 #include <Strata/Scene/Scene.h>
 
 #include <algorithm>
@@ -70,6 +71,9 @@ namespace Strata
 		// Frames a capture may render again while the sun's cascades' fit to the view settles (SceneRendererStats::ShadowFitSettled):
 		// a readback 2-3 frames late sets the layout from the receivers, and a second one confirms it.
 		constexpr uint32_t c_MaxCaptureShadowFitFrames = 12;
+		// Frames a capture may render again while global illumination settles (SceneRendererStats::GlobalIlluminationSettled):
+		// the capture renderer voxelizes everything in its first frame, but meshes still uploading join the voxels as they arrive.
+		constexpr uint32_t c_MaxCaptureGIFrames = 16;
 		// Polls a finished capture waits for its frame's GPU times (they are resolved 1-3 frames after the GPU finished it).
 		constexpr uint32_t c_MaxCaptureGPUStatsPolls = 8;
 		// The most frames one live capture records (viewport.capture {live, frames}).
@@ -144,7 +148,7 @@ namespace Strata
 		nlohmann::json DebugViewSchema(std::string description)
 		{
 			return { { "type", "string" }, { "enum", { "none", "streaming", "lod", "mip", "motion", "shadows", "lighting", "ao", "indirect", "luminance",
-				"albedo" } }, { "description", std::move(description) } };
+				"albedo", "voxels" } }, { "description", std::move(description) } };
 		}
 
 		// What the shadows debug view counted (SceneRenderer::GetShadowViewStats): shares of the image's pixels, and screen pixels
@@ -211,8 +215,31 @@ namespace Strata
 		// What the debug view of a render found; `shadows` (the shadows view's counts, null for the other views) and whether they
 		// are the rendered frame's; for a lighting view also its statistics (null, with lightingPending, when they did not arrive in
 		// time).
+		// What global illumination ran with in a GI view's frame (debugView.globalIllumination).
+		nlohmann::json DescribeGlobalIllumination(const SceneRenderer& renderer)
+		{
+			const SceneRendererStats& stats = renderer.GetStats();
+			nlohmann::json result = { { "ran", stats.GlobalIllumination }, { "pending", stats.GlobalIlluminationPending },
+				{ "settled", stats.GlobalIlluminationSettled }, { "voxelizedTriangles", stats.GIVoxelizedTriangles }, { "queuedRegions", stats.GIQueuedRegions },
+				{ "waitingProxies", stats.GIWaitingProxies }, { "movingProxies", stats.GIMovingProxies },
+				{ "memoryMiB", static_cast<double>(renderer.GetGlobalIlluminationMemoryBytes()) / (1024.0 * 1024.0) } };
+			nlohmann::json levels = nlohmann::json::array();
+			if (const VoxelClipmap* clipmap = renderer.GetVoxelClipmap())
+			{
+				const GlobalIlluminationLayout& layout = clipmap->GetLayout();
+				for (uint32_t level = 0; level < layout.Levels.size(); level++)
+				{
+					const glm::uvec3 dimensions = layout.Levels[level].Dimensions;
+					levels.push_back({ { "voxelSize", layout.Levels[level].VoxelSize }, { "dimensions", { dimensions.x, dimensions.y, dimensions.z } },
+						{ "valid", !clipmap->GetLevel(level).Valid.IsEmpty() } });
+				}
+			}
+			result["voxelLevels"] = std::move(levels);
+			return result;
+		}
+
 		nlohmann::json DescribeDebugView(ViewportDebugView view, const StreamingViewStats& stats, uint32_t tintedEntities, const ShadowViewStats* shadows,
-			bool shadowsComplete, const std::optional<LightingViewStats>& lighting)
+			bool shadowsComplete, const std::optional<LightingViewStats>& lighting, const nlohmann::json& globalIllumination)
 		{
 			nlohmann::json result = {
 				{ "view", ViewportDebugViewToString(view) },
@@ -225,7 +252,11 @@ namespace Strata
 				{ "entitiesPerMipShortfall", stats.EntitiesPerMipShortfall } };
 			if (shadows)
 				result["shadows"] = DescribeShadowView(*shadows, shadowsComplete);
-			if (GetLightingView(view) != SceneLightingView::None)
+			if (SceneRenderer::IsGlobalIlluminationView(GetLightingView(view)))
+			{
+				result["globalIllumination"] = globalIllumination;
+			}
+			else if (GetLightingView(view) != SceneLightingView::None)
 			{
 				result["lighting"] = lighting ? DescribeLightingViewStats(view, *lighting) : nlohmann::json(nullptr);
 				result["lightingPending"] = !lighting;
@@ -358,6 +389,9 @@ namespace Strata
 			std::optional<LightingViewStats> LightingStats;
 			uint32_t ExposureFrames = 0; // Renders repeated while the pre-exposure settled
 			uint32_t ShadowFitFrames = 0; // Renders repeated while the sun's cascades' fit settled
+			uint32_t GIFrames = 0;        // Renders repeated while global illumination settled
+			// A GI view's debugView.globalIllumination, described with the captured frame (the renderer lets the GI go with its targets).
+			nlohmann::json GlobalIllumination;
 			bool Rendered = false;       // A first frame was rendered (it started the exposure again)
 			uint32_t TexturesBelowWanted = 0;
 			uint32_t StalePoses = 0;
@@ -759,8 +793,10 @@ namespace Strata
 			const bool exposurePending = !stats.PreExposureSettled && progress.ExposureFrames < c_MaxCaptureExposureFrames;
 			// Until the cascades' fit settled, a readback may still change them (finer texels where the receivers are).
 			const bool shadowFitPending = !stats.ShadowFitSettled && progress.ShadowFitFrames < c_MaxCaptureShadowFitFrames;
+			// Global illumination's voxels: until nothing is left to voxelize.
+			const bool giPending = !stats.GlobalIlluminationSettled && progress.GIFrames < c_MaxCaptureGIFrames;
 			const bool contentPending = textPending || assetsPending || mipsPending || posesPending || instancesPending || motionPending || lightingPending
-				|| exposurePending || shadowFitPending;
+				|| exposurePending || shadowFitPending || giPending;
 			// Temporal anti-aliasing: the mean of the jitter's phases of the complete view, as the viewport shows a still view once it
 			// settled. A frame still incomplete starts the history again (the capture's targets are released after each picture,
 			// so each one starts it anyway), so the picture blends complete frames only.
@@ -776,6 +812,7 @@ namespace Strata
 				progress.LightingFrames += lightingPending ? 1 : 0;
 				progress.ExposureFrames += exposurePending ? 1 : 0;
 				progress.ShadowFitFrames += shadowFitPending ? 1 : 0;
+				progress.GIFrames += giPending ? 1 : 0;
 				progress.TemporalFrames += temporalPending ? 1 : 0;
 				progress.ReflectionFrames += reflectionsPending ? 1 : 0;
 				progress.TextFrames += textPending ? 1 : 0;
@@ -786,10 +823,13 @@ namespace Strata
 				return std::nullopt;
 			}
 			progress.Readback = TextureReadback::Create(renderer->GetOutputTexture(), {}, &error);
+			if (SceneRenderer::IsGlobalIlluminationView(GetLightingView(progress.DebugView)))
+				progress.GlobalIllumination = DescribeGlobalIllumination(renderer->GetSceneRenderer());
 			// Captures are occasional and may be large: their render targets are not kept between them. A lighting view's
 			// statistics of this frame come back with its image, read back with the targets' readbacks: they are released once
 			// those arrived (ContinueCapture), so the statistics describe the captured image, never an earlier frame.
-			progress.LightingStatsPending = progress.Readback && GetLightingView(progress.DebugView) != SceneLightingView::None;
+			progress.LightingStatsPending = progress.Readback && GetLightingView(progress.DebugView) != SceneLightingView::None
+				&& !SceneRenderer::IsGlobalIlluminationView(GetLightingView(progress.DebugView));
 			if (!progress.LightingStatsPending)
 				renderer->ReleaseTargets();
 			if (!progress.Readback)
@@ -909,13 +949,15 @@ namespace Strata
 				{ "reflectionProbesPending", progress.ReflectionProbesPending },
 				{ "preExposureSettled", progress.Stats.PreExposureSettled },
 				{ "shadowFitSettled", progress.Stats.ShadowFitSettled },
+				{ "globalIlluminationSettled", progress.Stats.GlobalIlluminationSettled },
 				{ "previewLighting", progress.PreviewLighting },
 				{ "screenSpaceTexts", progress.ScreenSpaceTexts },
 				{ "hiddenScreenSpaceTexts", progress.HiddenScreenSpaceTexts },
 				{ "ui", { { "canvases", progress.UI.Canvases }, { "hiddenCanvases", progress.UI.HiddenCanvases }, { "elements", progress.UI.Elements },
 					{ "drawCalls", progress.UI.DrawCalls }, { "pendingGlyphs", progress.UI.PendingGlyphs } } },
 				{ "debugView", DescribeDebugView(progress.DebugView, progress.DebugViewStats, progress.TintedEntities,
-					progress.DebugView == ViewportDebugView::Shadows ? &progress.ShadowView : nullptr, progress.ShadowViewComplete, progress.LightingStats) },
+					progress.DebugView == ViewportDebugView::Shadows ? &progress.ShadowView : nullptr, progress.ShadowViewComplete, progress.LightingStats,
+					progress.GlobalIllumination) },
 				{ "renderStats", std::move(progress.RenderStats) }
 			};
 			if (!progress.View.Notice.empty())
@@ -1032,7 +1074,8 @@ namespace Strata
 			"game's screen-space UI, its HUD text and UI canvases, and a click selects a UI element), canvasMode (the 2D canvas mode for placing game "
 			"UI), the gizmo mode and space, whether gizmo drags snap, the snap steps, debugView (\"none\", or \"streaming\" / \"lod\" / \"mip\" / "
 			"\"motion\" / \"shadows\": the image colored by streaming state, level of detail, the mip levels textures lack, motion or shadow texels "
-			"per pixel; or a lighting view: \"lighting\", \"ao\", \"indirect\", \"luminance\", \"albedo\"), gameView (the Game view's image: {mode, width, "
+			"per pixel; or a lighting view: \"lighting\", \"ao\", \"indirect\", \"luminance\", \"albedo\", \"voxels\" (global illumination's "
+			"voxels)), gameView (the Game view's image: {mode, width, "
 			"height}, width and height for mode \"custom\"), pilotGameCamera (the Scene view looks through the scene's primary camera) and editPose "
 			"(\"rest\" or \"clipStart\": what skinned characters of the edited scene show while it does not play).",
 			ObjectSchema({}),
@@ -1072,7 +1115,8 @@ namespace Strata
 					"red 4 and more), outlines the sun's cascades and hatches their blend bands, \"lighting\" shades every lit surface white (the light "
 					"alone), \"ao\" shows the occlusion that darkens indirect light (white: none), \"indirect\" only the sky's, probes' and reflected light, "
 					"\"luminance\" the scene's luminance in EV100 bands (log2 nits + 3; the legend names them), \"albedo\" the base colors with values "
-					"below 0.03 marked Azurite and above 0.85 striped Cinnabar, \"none\" shows the image as rendered") },
+					"below 0.03 marked Azurite and above 0.85 striped Cinnabar, \"voxels\" global illumination's voxels: the scene as the GI sees it, "
+					"each surface its voxels' albedo, two-sided voxels (no bounce) Cinnabar, \"none\" shows the image as rendered") },
 				{ "gameView", ObjectSchema({
 					{ "mode", { { "type", "string" }, { "enum", { "free", "16:9", "16:10", "4:3", "21:9", "1920x1080", "1280x720", "custom", "game" } },
 						{ "description", "The Game view's image: free fills the panel, an aspect ratio is the largest image of it inside the panel "
@@ -1199,7 +1243,8 @@ namespace Strata
 					"outlines the cascades; \"lighting\" white surfaces, \"ao\" ambient occlusion, \"indirect\" indirect light only, \"luminance\" EV100 "
 					"bands, \"albedo\" base colors (outside 0.03-0.85 marked), each with debugView.lighting: {view, surfaceShare, surfaceEv100 {p05, p50, "
 					"p95}, backgroundEv100, value {median, p05} (ao, albedo), belowRangeShare, aboveRangeShare (albedo), sunIlluminance, skyIlluminance "
-					"(lux on flat ground), sunToSkyRatio}; \"none\" not at all (default: the viewport's debug view)") },
+					"(lux on flat ground), sunToSkyRatio}; \"voxels\" the GI's voxels, with debugView.globalIllumination {ran, settled, voxelLevels, memoryMiB}; "
+					"\"none\" not at all (default: the viewport's debug view)") },
 				{ "quality", QualitySchema("The quality the picture is drawn at (default: the quality of the view it shows: the Scene view's for the "
 					"editor camera and cameras of the capture's own, the game's for the scene's camera: the project's, with the players' options "
 					"while playing)") },
@@ -1248,7 +1293,7 @@ namespace Strata
 					request.DebugView = ViewportDebugViewFromString(arguments.GetString("debugView"));
 					if (!request.DebugView && arguments.IsValid())
 						arguments.SetError("Parameter 'debugView' must be \"none\", \"streaming\", \"lod\", \"mip\", \"motion\", \"shadows\", \"lighting\", "
-							"\"ao\", \"indirect\", \"luminance\" or \"albedo\"");
+							"\"ao\", \"indirect\", \"luminance\", \"albedo\" or \"voxels\"");
 				}
 				if (arguments.Has("quality"))
 				{

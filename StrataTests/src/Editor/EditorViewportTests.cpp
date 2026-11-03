@@ -19,6 +19,7 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/RenderScene.h>
 #include <Strata/Renderer/RendererComponents.h>
+#include <Strata/Renderer/VoxelClipmap.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/SceneSerializer.h>
 
@@ -698,7 +699,7 @@ TEST_SUITE("Editor.Viewport")
 			// The lighting views, saved under their names.
 			const std::pair<const char*, ViewportDebugView> lightingViews[] = { { "lighting", ViewportDebugView::Lighting },
 				{ "ao", ViewportDebugView::AmbientOcclusion }, { "indirect", ViewportDebugView::Indirect }, { "luminance", ViewportDebugView::Luminance },
-				{ "albedo", ViewportDebugView::Albedo } };
+				{ "albedo", ViewportDebugView::Albedo }, { "voxels", ViewportDebugView::Voxels } };
 			for (const auto& [name, view] : lightingViews)
 			{
 				CAPTURE(name);
@@ -794,6 +795,11 @@ TEST_SUITE("Editor.Viewport")
 		stats.SunToSkyRatio = 0.0f;
 		stats.SurfaceEV100 = glm::vec3(std::numeric_limits<float>::quiet_NaN());
 		CHECK(GetLightingLegendNote(ViewportDebugView::Indirect, stats) == "Sun : sky -");
+
+		// The voxels view's note: the clipmap's levels, their voxel sizes and how many hold valid voxels.
+		CHECK(GetVoxelLegendNote(nullptr) == "No GI");
+		const VoxelClipmap clipmap(*GlobalIllumination::ComputeLayout(GlobalIlluminationLevel::High));
+		CHECK(GetVoxelLegendNote(&clipmap) == "levels 4, 10-80 cm, valid 0 of 4");
 	}
 
 	TEST_CASE("The Game view's image: the panel, the largest rectangle of an aspect ratio, or a fixed size scaled to fit")

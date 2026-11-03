@@ -1435,7 +1435,7 @@ TEST_SUITE("Editor.UI")
 		// The lighting views, named as in the menu; their marks are a note (Azurite: too dark) and an error (Cinnabar: too
 		// bright), the luminance bands ramp from the chrome's dark to the text's light, and empty pixels are the disabled text's.
 		const std::pair<const char*, const char*> lightingViews[] = { { "lighting", "Lighting" }, { "ao", "AO" }, { "indirect", "Indirect" },
-			{ "luminance", "Luminance" }, { "albedo", "Albedo" } };
+			{ "luminance", "Luminance" }, { "albedo", "Albedo" }, { "voxels", "Voxels" } };
 		for (const auto& [view, label] : lightingViews)
 		{
 			CAPTURE(view);
@@ -1450,6 +1450,7 @@ TEST_SUITE("Editor.UI")
 		CHECK(opaque(lighting.AlbedoLow) == token(colors.Info));
 		CHECK(opaque(lighting.AlbedoHigh) == token(colors.Error));
 		CHECK(opaque(lighting.Background) == token(colors.TextDisabled));
+		CHECK(opaque(lighting.TwoSided) == token(colors.Error));
 		CHECK(opaque(lighting.Luminance.front()) == token(colors.Chrome));
 		CHECK(opaque(lighting.Luminance.back()) == token(colors.Text));
 		CHECK(ImGuiHarness::CountFallbackGlyphs(editor.FindPanelWindow(EditorPanels::c_Viewport)) == 0);

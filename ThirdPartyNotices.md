@@ -46,7 +46,37 @@ every game.
 
 Code that Strata copied, ported or adapted from open-source projects that are not submodules, each under its permissive
 license (Docs/DeveloperGuide.md, "Working with third-party code"). Each project gets a row of a table here (project,
-version, license, Strata's files, what was derived) and its license's full text below the table. There are no entries yet.
+version, license, Strata's files, what was derived) and its license's full text below the table.
+
+| Project | Version | License | Strata's files | What was derived |
+| --- | --- | --- | --- | --- |
+| [radiance-cascades-lab](https://github.com/dequevedo/radiance-cascades-lab) | as of 2026-11-03 | MIT | `Strata/shaders/Include/Voxelize.slang`, `Strata/shaders/GI/VoxelTriangles.comp.slang`, `VoxelFill.comp.slang`, `VoxelFinalize.comp.slang` | Akenine-Moller's triangle-box test in its form, the winding steps along columns and their fill, the emission's coverage (from `src/rc/shaders/voxelize_mesh.comp`, `fill_solid.comp`) |
+
+radiance-cascades-lab:
+
+```
+MIT License
+
+Copyright (c) 2026 Daniel Quevedo
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 ## Sample assets
 

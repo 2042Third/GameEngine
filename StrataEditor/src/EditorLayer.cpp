@@ -455,6 +455,7 @@ namespace Strata
 		lightingColors.AlbedoLow = ToVec4(themeColors.Info);
 		lightingColors.AlbedoHigh = ToVec4(themeColors.Error);
 		lightingColors.Background = ToVec4(themeColors.TextDisabled);
+		lightingColors.TwoSided = ToVec4(themeColors.Error);
 		// Startup counts as activity: the layout settles at the full rate.
 		m_LastInputTime = m_Host->GetTime();
 
