@@ -846,6 +846,7 @@ namespace Strata
 		// the atmosphere.
 		nvrhi::ITexture* GetAtmosphereTransmittanceTable() const { return m_Atmosphere ? m_Atmosphere->Transmittance.Get() : nullptr; }
 		nvrhi::ITexture* GetAtmosphereSkyViewTable() const { return m_Atmosphere ? m_Atmosphere->SkyView.Get() : nullptr; }
+		nvrhi::ITexture* GetAtmosphereMultipleScatteringTable() const { return m_Atmosphere ? m_Atmosphere->MultipleScattering.Get() : nullptr; }
 		// Aerial perspective's volume (RGBA16F, 32 x 32 x 64: in-scattered light per lux of sun, then transmittance), null until a
 		// frame drew it.
 		nvrhi::ITexture* GetAerialVolume() const { return m_Atmosphere ? m_Atmosphere->AerialVolume.Get() : nullptr; }

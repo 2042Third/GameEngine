@@ -5,6 +5,7 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Math/Frustum.h"
 #include "Strata/Math/Math.h"
+#include "Strata/Renderer/Atmosphere.h"
 #include "Strata/Renderer/FontAtlasCache.h"
 #include "Strata/Renderer/LODSelection.h"
 #include "Strata/Renderer/Material.h"
@@ -943,8 +944,9 @@ namespace Strata
 			// non-finite values as 0, as SetHeightFog sanitizes its inputs.
 			const float scale = skyLight->AerialPerspectiveScale;
 			m_AerialScale = skyLight->AerialPerspective && std::isfinite(scale) ? std::clamp(scale, 0.0f, SkyLightComponent::c_MaxAerialPerspectiveScale) : 0.0f;
-			// The tables and the environment hold the sky per lux of sun: times the light's illuminance above the atmosphere.
-			intensity *= m_AtmosphereSunIlluminance;
+			// The tables and the environment hold the sky per lux of sun, scaled for storage (Atmosphere::c_StorageScale): times the
+			// light's illuminance above the atmosphere, over the scale.
+			intensity *= m_AtmosphereSunIlluminance / Atmosphere::c_StorageScale;
 		}
 		else if (procedural)
 		{

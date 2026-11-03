@@ -57,8 +57,9 @@ void st_Main()
 		AccumulateAtmosphereSegment(medium, radius, mu, direction, toSun, rayleighPhase, miePhase, previous + 0.5 * step, step, transmittance, light);
 		AccumulateAtmosphereSegment(medium, radius, mu, direction, toSun, rayleighPhase, miePhase, previous + 1.5 * step, step, transmittance, light);
 		previous = target;
-		// Finite and within half floats, like every sky.
-		o_Volume[int3(column, slice)] = float4(clamp(light * u_Atmosphere.SunColor.rgb, float3(0.0), float3(65000.0)), 1.0);
+		// Finite and within half floats, like every sky; the in-scattering stored scaled (ST_ATMOSPHERE_STORAGE_SCALE), the
+		// transmittance as it is.
+		o_Volume[int3(column, slice)] = float4(clamp(light * u_Atmosphere.SunColor.rgb * ST_ATMOSPHERE_STORAGE_SCALE, float3(0.0), float3(65000.0)), 1.0);
 		o_Volume[int3(column, slice + c_AerialSlices)] = float4(transmittance, 1.0);
 	}
 }

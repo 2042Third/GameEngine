@@ -76,7 +76,8 @@ void st_Main()
 		}
 	}
 	float3 multiple = secondOrder / max(1.0 - transfer, float3(1.0e-3));
-	o_Table[texel] = float4(multiple, 1.0);
+	// Stored scaled (ST_ATMOSPHERE_STORAGE_SCALE; GetMultipleScattering divides).
+	o_Table[texel] = float4(multiple * ST_ATMOSPHERE_STORAGE_SCALE, 1.0);
 }
 
 // --- Entry point ---

@@ -5249,8 +5249,19 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
     the horizon; per lux of sun), when the sun's direction or the camera's 250 m height band (`c_AtmosphereHeightBand`,
     viewed from the band's middle) changes (`AtmosphereSkyViewUpdates`). Scene shaders sample it at SRV 27 (a black
     texture without the atmosphere).
+  - **The storage scale** (`Atmosphere::c_StorageScale`, `ST_ATMOSPHERE_STORAGE_SCALE`, 16384 = 2^14): the tables of light
+    per lux (multiple scattering, sky view, aerial perspective's in-scattering, and the environment cube made from the
+    sky view) store it times the scale, and `EnvironmentParams.x` divides by it, so every reader's product is the same:
+    **readers of these tables multiply by `EnvironmentParams.x`**, and only `GetMultipleScattering` (inside the tables'
+    passes) divides itself. After sunset the sky per lux falls below the smallest normal half float (2^-14), where the
+    fixed step of 2^-24 turned a smooth twilight into bands of 8 to 17 codes; at -10 degrees 99% of the sky view's channels
+    above the horizon were subnormal, at a scale of 1024 still 26%, at 16384 none. A power of two is exact in half and full
+    floats, so every value that was normal before gives the same picture bit for bit (daytime pictures do not change). The
+    tables clamp at 65,000 (4 per lux): the brightest daytime texel, golden hour's aureole under haze 4, stores 15,072
+    ("No daytime table reaches the storage clamp"). The transmittance is not light and is not scaled (3% of its texels are
+    subnormal, along paths deep in the planet's shadow; the night sky shows no bands without scaling it).
   - Background: `Scene/SkyboxAtmosphere.frag` (`ST_ATMOSPHERE`) draws the sky-view table times `EnvironmentParams.x`
-    (the sky's `Intensity` times the sun's illuminance) and the sun's disk analytically: the light's illuminance at the
+    (the sky's `Intensity` times the sun's illuminance over the storage scale) and the sun's disk analytically: the light's illuminance at the
     ground over the disk's solid angle (about 1.3 billion nits for a real sun, which the pre-exposure keeps in range),
     its edge smoothed over a pixel; `BackgroundBlur` is inactive.
   - Light: the CPU evaluates the transmittance from the ground toward the sun with the same quadrature in double

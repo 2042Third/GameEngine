@@ -57,10 +57,11 @@ float3 GetSunTransmittance(float radius, float sunMu)
 	return u_TransmittanceTable.SampleLevel(u_TableSampler, float2(clamp(uv.x, 0.0, 1.0), uv.y), 0.0).rgb;
 }
 
-// The light of the second and higher scattering orders at a point, per lux of sun (IBL/AtmosphereMultipleScattering.comp).
+// The light of the second and higher scattering orders at a point, per lux of sun (IBL/AtmosphereMultipleScattering.comp, which
+// stores it scaled by ST_ATMOSPHERE_STORAGE_SCALE).
 float3 GetMultipleScattering(float radius, float sunMu)
 {
-	return u_MultipleScatteringTable.SampleLevel(u_TableSampler, RadiusMuToMultipleScatteringUV(radius, sunMu), 0.0).rgb;
+	return u_MultipleScatteringTable.SampleLevel(u_TableSampler, RadiusMuToMultipleScatteringUV(radius, sunMu), 0.0).rgb * (1.0 / ST_ATMOSPHERE_STORAGE_SCALE);
 }
 
 // One segment of a view ray through the air, from a viewer at `viewerRadius` (km from the center) along `direction` (unit, the

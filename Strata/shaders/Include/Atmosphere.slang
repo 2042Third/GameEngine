@@ -21,6 +21,12 @@ static const uint c_TransmittanceSteps = 40u;
 #define ST_MULTIPLE_SCATTERING_SIZE   float2(32.0, 32.0)
 #define ST_SKY_VIEW_SIZE              float2(192.0, 108.0)
 
+// The tables that hold light per lux of sun (multiple scattering, sky view, aerial perspective's in-scattering, the environment
+// made from the sky view) store it times this (Atmosphere::c_StorageScale): after sunset the sky per lux falls below the
+// smallest normal half float, where a smooth gradient turns into a few levels (bands). A power of two is exact in half floats,
+// so values that were normal before are the same; readers multiply by EnvironmentParams.x, which divides by it.
+#define ST_ATMOSPHERE_STORAGE_SCALE   16384.0
+
 // The medium's coefficients (RenderData::AtmosphereConstants, scaled by the sky light's density and haze).
 struct AtmosphereMedium
 {
