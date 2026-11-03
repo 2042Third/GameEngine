@@ -1504,15 +1504,29 @@ DRESS_STONE_CLUSTERS = 14  # The dressing's stones on the apron's edge
 DRESS_RIM_ROCKS = ((0.04, 0.90, "namaqualand_boulder_02", 2.4), (0.11, 0.98, "namaqualand_boulder_03", 1.6),
                    (0.31, 0.93, "namaqualand_boulder_02", 1.1), (0.02, 0.78, "namaqualand_boulder_03", 1.3))
 
-# The probes (the showcase spec's D10): (part, position, yaw, half extents, blend distance, priority). The hut's captures
-# its interior from beside the door's and the window's sun beams (hut-local (1.9, 0.7, -1.3)): from the hut's middle the
-# capture sees the low sun through the door, whose disk floods the box's irradiance. Its box is centered on the capture,
-# so it reaches from the hut's door wall and left wall over the lean-to and 2.4 m behind the hut.
-HUT_PROBE_LOCAL = (1.9, 0.7, -1.3)
+def hut_point(local):
+    """A point of the hut's frame (x right, y up from its pad at height 0, z toward the door) in the world."""
+    x, z = local_to_world(HUT["center"], HUT["yaw"], local[0], local[2])
+    return (x, local[1], z)
+
+
+# The probes (the showcase spec's D10): (part, position, yaw, half extents, blend distance, priority, box projection,
+# bake), where bake is None (baked where it stands) or the position and half extents it is baked with.
+# The hut's box is its interior: the walls' outer faces (their inner faces lie a blend distance inside, at full weight),
+# from under the floor to just under the roof's top where it is lowest (2.48 m at the back wall), so nothing outside (the
+# lean-to, the ground around the hut, the roof's top) takes the dark interior's light instead of the yard's. Its capture is taken in the back corner
+# away from the door's and the window's sun beams (hut-local (1.9, 0.7, -1.3)): taken in the middle, it faces the low
+# sun's patch on the back wall, and the dark corner D15 measures came out only 0.3 EV below the yard. So the bake puts the
+# probe there, with a box about it that still holds the interior (the second pass sees the interior lit by the first),
+# then back. A probe whose capture was taken off its box's center projects no box: the capture is looked up as a distant
+# environment, which the rough plaster and planks inside cannot tell apart.
+HUT_PROBE_BOX = ((0.0, 1.15, 0.0), (2.6, 1.3, 2.2))
+HUT_PROBE_CAPTURE = (1.9, 0.7, -1.3)
+HUT_PROBE_BAKE_EXTENTS = tuple(HUT_PROBE_BOX[1][k] + abs(HUT_PROBE_CAPTURE[k] - HUT_PROBE_BOX[0][k]) for k in range(3))
 PROBES = (
-    ("Yard", (2.0, 1.6, 4.0), 0, (34.0, 14.0, 34.0), 8.0, 0),
-    ("Hut", (local_to_world(HUT["center"], HUT["yaw"], HUT_PROBE_LOCAL[0], HUT_PROBE_LOCAL[2])[0], HUT_PROBE_LOCAL[1],
-             local_to_world(HUT["center"], HUT["yaw"], HUT_PROBE_LOCAL[0], HUT_PROBE_LOCAL[2])[1]), HUT["yaw"], (4.35, 1.35, 3.35), 0.3, 2),
+    ("Yard", (2.0, 1.6, 4.0), 0, (34.0, 14.0, 34.0), 8.0, 0, True, None),
+    ("Hut", hut_point(HUT_PROBE_BOX[0]), HUT["yaw"], HUT_PROBE_BOX[1], 0.2, 2, False,
+     (hut_point(HUT_PROBE_CAPTURE), HUT_PROBE_BAKE_EXTENTS)),
 )
 # The local lights at dusk (candela) and the glowing embers and wicks, which only burn at dusk.
 LOCAL_LIGHTS = (("Fire", 400.0), ("LanternA.Light", 40.0), ("LanternB.Light", 25.0))
@@ -1846,11 +1860,11 @@ def layout_script(world):
     # The six probes: Golden's on (the saved station), the others off.
     stations_parent = s.create("Stations")
     for name, *_ in STATIONS:
-        for part, position, yaw_degrees, extents, blend, priority in PROBES:
+        for part, position, yaw_degrees, extents, blend, priority, box_projection, _ in PROBES:
             probe = "Probe.%s.%s" % (name, part)
             s.create(probe, stations_parent, {"Transform": transform(position, yaw_degrees),
-                                              "ReflectionProbe": {"Extents": list(extents), "BlendDistance": blend, "BoxProjection": True,
-                                                                  "Priority": priority, "Intensity": 1.0}})
+                                              "ReflectionProbe": {"Extents": list(extents), "BlendDistance": blend,
+                                                                  "BoxProjection": box_projection, "Priority": priority, "Intensity": 1.0}})
             if name != "Golden":
                 s.add("entity.setActive", {"entity": {"$ref": probe}, "active": False})
 
@@ -2016,13 +2030,29 @@ def controls_script():
 
 def bake_script():
     """The probes' bake (D10): each station's edit-mode steps with only its own probes on, then lighting.bakeProbes of its
-    two twice (the second pass adds the bounce the first gives), Golden last so the saved scene is Golden's."""
+    two twice (the second pass adds the bounce the first gives), Golden last so the saved scene is Golden's. A probe baked
+    elsewhere (the hut's) is moved to its bake position and box first and back to its own after; its box and blend are set
+    with them, so the script also brings a scene laid out with other values to the table's."""
     steps = [{"command": "scene.open", "parameters": {"scene": SCENE}}]
     for name in ("Dawn", "Dusk", "Golden"):
         steps += station_steps(name, True)
         probes = [{"$ref": "station_Probe.%s.%s" % (name, part[0])} for part in PROBES]
+        moved = [part for part in PROBES if part[7] is not None]
+        for part, position, yaw_degrees, extents, blend, priority, box_projection, bake in moved:
+            entity = {"$ref": "station_Probe.%s.%s" % (name, part)}
+            steps.append({"command": "component.set", "parameters": {"entity": entity, "component": "Transform",
+                                                                     "values": {"Translation": rounded(bake[0])}}})
+            steps.append({"command": "component.set", "parameters": {"entity": entity, "component": "ReflectionProbe",
+                                                                     "values": {"Extents": rounded(bake[1])}}})
         for _ in range(2):
             steps.append({"command": "lighting.bakeProbes", "parameters": {"entities": probes}})
+        for part, position, yaw_degrees, extents, blend, priority, box_projection, bake in moved:
+            entity = {"$ref": "station_Probe.%s.%s" % (name, part)}
+            steps.append({"command": "component.set", "parameters": {"entity": entity, "component": "Transform",
+                                                                     "values": {"Translation": rounded(position)}}})
+            steps.append({"command": "component.set", "parameters": {"entity": entity, "component": "ReflectionProbe",
+                                                                     "values": {"Extents": rounded(extents), "BlendDistance": blend,
+                                                                                "BoxProjection": box_projection}}})
     steps.append({"command": "scene.save"})
     return steps
 

@@ -33,6 +33,7 @@
 	{"command": "entity.setActive", "parameters": {"active": false, "entity": {"$ref": "station_Probe.Dusk.Hut"}}},
 	{"command": "viewport.capture", "parameters": {"position": [-29.7, 25.811, -58.0], "target": [40.0, 0.0, 40.0], "fov": 50.0, "width": 960, "height": 540, "quality": "high"}, "expect": {"/pendingAssets": {"equals": 0}, "/reflectionProbesPending": {"equals": 0}, "/shadowFitSettled": {"equals": true}}},
 	{"command": "viewport.capture", "parameters": {"position": [-29.7, 25.811, -58.0], "target": [40.0, 0.0, 40.0], "fov": 50.0, "width": 960, "height": 540, "quality": "high", "debugView": "shadows"}, "expect": {"/debugView/shadows/cascades/3/far": {"min": 550}}},
+	{"command": "viewport.capture", "parameters": {"position": [-15.7067, 1.5, -17.2222], "target": [-19.2423, 0.6, -20.7577], "fov": 30.0, "width": 960, "height": 540, "quality": "high", "debugView": "lighting"}, "expect": {"/debugView/lighting/surfaceEv100/p50": {"min": 12.0}}},
 	{"command": "entity.find", "parameters": {"name": "Sun"}, "bind": {"station_Sun": "/entities/0"}},
 	{"command": "entity.find", "parameters": {"name": "Fog"}, "bind": {"station_Fog": "/entities/0"}},
 	{"command": "entity.find", "parameters": {"name": "Post Process"}, "bind": {"station_Post_Process": "/entities/0"}},

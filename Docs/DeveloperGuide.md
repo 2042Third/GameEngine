@@ -5811,7 +5811,10 @@ The three times of day are stations: the sun's direction and the values that go 
 Each has two reflection probe entities, `Probe.<Dawn, Golden or Dusk>.<Yard or Hut>`, never two probes baked three times
 (a bake trashes the capture an earlier bake made for that entity). `bake` sets each station with only its own probes
 active and bakes them twice (the second pass adds a bounce), Golden last, the saved station; rebake after any change the
-probes see, and never bake in a session that does not save (the old captures would be trashed under the saved scene).
+probes see, only through `bake`, and never in a session that does not save (the old captures would be trashed under the
+saved scene). The hut's box is its interior, so nothing outside takes the dark interior's light; its capture is taken in
+the back corner away from the sun's patches (from the middle the hut came out only 0.3 EV below the yard), so `bake`
+moves the probe there and back, and the probe projects no box (`BoxProjection` off: its capture is not at the box's center).
 The director switches stations with `SetActive`, holding the old probes on for a second with the new ones' priority raised,
 so a box never falls to the sky while its capture converts; `Assets::GetLoadProgress` in `OnCreate` keeps all six loaded.
 

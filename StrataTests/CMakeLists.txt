@@ -1023,8 +1023,10 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			--nonzero GPU.TAA --nonzero GPU.Reflections --nonzero GPU.Shadows --nonzero GPU.Aerial)
 	set_tests_properties(StrataRuntime.ShowcaseWindowedPerf PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataShowcaseWindowed)
 	# The six shots rendered by a headless editor on the exported project at their times of day: nothing pending, the dawn
-	# cascades reach 550 m, the hut's interior a third or less of the yard's light (StrataTests/Editor/ShowcaseRenderCommands.json;
-	# the yard's 14.0 EV is the graybox's measurement, measured again by every change of the yard's light).
+	# cascades reach 550 m, the lean-to in the hut's dawn shadow lit by the yard's probe, not the dark hut's (12.5 EV against
+	# 10.1 when the hut's box reached over it), the hut's interior a third or less of the yard's light
+	# (StrataTests/Editor/ShowcaseRenderCommands.json; the yard's 14.0 EV is the graybox's measurement, measured again by every
+	# change of the yard's light).
 	add_test(NAME StrataEditor.ShowcaseRender
 		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:StrataEditor>"
 			"-DARGUMENTS=--headless|--no-automation|--quit-after-commands|--frames|36000|--project|${STRATA_SHOWCASE_DIR}/Project|--commands|${CMAKE_CURRENT_SOURCE_DIR}/Editor/ShowcaseRenderCommands.json"
