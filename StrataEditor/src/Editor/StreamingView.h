@@ -34,13 +34,16 @@ namespace Strata
 		Shadows,   // Every receiver pixel by screen pixels per shadow texel, with the cascades (SceneRenderOptions::ShowShadowView)
 		// The lighting views (SceneLightingView), not tints either: lit surfaces shaded white, the ambient occlusion, the indirect
 		// light alone, the luminance as EV100 bands, the albedo with values outside 0.03-0.85 marked, and global illumination's
-		// voxels (the scene as the GI sees it).
+		// voxels (the scene as the GI sees it), its light on white surfaces, the share of the sky surfaces see and its probes.
 		Lighting,
 		AmbientOcclusion,
 		Indirect,
 		Luminance,
 		Albedo,
-		Voxels
+		Voxels,
+		GlobalIllumination,
+		OpenShare,
+		Probes
 	};
 
 	// The lighting view a debug view shows (SceneLightingView::None for the others).
@@ -116,6 +119,10 @@ namespace Strata
 	// The note under the voxels view's legend: the clipmap's levels, their voxel sizes and how many hold valid voxels, as
 	// "levels 4, 10-80 cm, valid 4 of 4"; "No GI" without a clipmap.
 	std::string GetVoxelLegendNote(const VoxelClipmap* clipmap);
+
+	// The note under the probes view: cascade 0's live and dead probes (dead ones, inside solids, are drawn dark red) and the
+	// field's size, as "probes 92160, dead 4210 (red); field 24 x 20 x 24 m"; "No GI" without a layout.
+	std::string GetProbeLegendNote(const SceneRendererGPUStats& stats, const GlobalIlluminationLayout* layout);
 
 	// Builds what a debug view draws over the viewport image for one frame: SceneRenderOptions::EntityTints (the drawn
 	// entities' colors) and, in the streaming view, placeholder boxes for entities whose mesh is not there to draw. Works on

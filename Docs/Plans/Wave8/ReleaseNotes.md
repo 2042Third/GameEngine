@@ -162,6 +162,15 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   each holds the scene, memory) and waits for the voxels to settle; every capture reports `globalIlluminationSettled`;
   `editor.perf` names the GPU stage `GPU.RadianceCascades`.
 
+**Global illumination (stage 2: the light, behind debug views).**
+
+- Editor: the Scene view's debug views **GI** (the bounce light on white surfaces), **Open** (the share of the sky each surface
+  sees) and **Probes** (the light probes, dead ones red) show world-space radiance cascades: the sun lights the voxel copy
+  of the scene every frame, and probes in the world gather it, so a sunlit floor lights the walls whether or not it is on
+  screen, and moving the sun moves the bounce in the same frame. The lit image does not use it yet (stage 3).
+- AI agents: `viewport.capture` and `viewport.setSettings` take `debugView` `"gi"`, `"open"` and `"probes"`; the capture's
+  `debugView.globalIllumination` adds the probes' spacing, grid, cascades, directions and live and dead counts.
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and

@@ -190,6 +190,45 @@ namespace Strata
 			return static_cast<float>(4.0 * glm::pi<double>() * GetSolidAngleWeight(u, v, a) / total);
 		}
 
+		float GetSolidAngleNormalization(uint32_t a)
+		{
+			double total = 0.0;
+			for (uint32_t row = 0; row < a; row++)
+			{
+				for (uint32_t column = 0; column < a; column++)
+					total += GetSolidAngleWeight(column, row, a);
+			}
+			return total > 0.0 ? static_cast<float>(4.0 * glm::pi<double>() / total) : 0.0f;
+		}
+
+		glm::vec3 GetFaceAxis(uint32_t face)
+
+		{
+			glm::vec3 axis(0.0f);
+			axis[static_cast<int>(std::min(face, 5u) / 2)] = (face % 2) == 0 ? 1.0f : -1.0f;
+			return axis;
+		}
+
+		float GetFaceCosineSum(uint32_t face, uint32_t a)
+		{
+			const glm::vec3 axis = GetFaceAxis(face);
+			double sum = 0.0;
+			for (uint32_t v = 0; v < a; v++)
+			{
+				for (uint32_t u = 0; u < a; u++)
+					sum += static_cast<double>(std::max(glm::dot(GetDirection(u, v, a), axis), 0.0f)) * GetSolidAngle(u, v, a);
+			}
+			return static_cast<float>(sum);
+		}
+
+		glm::dvec3 GetFieldMinimum(const GlobalIlluminationLayout& layout, const glm::dvec3& cameraPosition)
+		{
+			const double snap = static_cast<double>(layout.FieldSnap);
+			if (!(snap > 0.0))
+				return cameraPosition;
+			return snap * glm::floor((cameraPosition - glm::dvec3(layout.FieldExtent) * 0.5) / snap + 0.5);
+		}
+
 		glm::i64vec3 GetVoxelIndex(const glm::dvec3& position, float voxelSize)
 		{
 			const glm::dvec3 scaled = glm::floor(position / static_cast<double>(voxelSize));

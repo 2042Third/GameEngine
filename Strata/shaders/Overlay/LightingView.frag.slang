@@ -32,7 +32,7 @@ void st_Main()
 	{
 		color = UnpackDisplayColor(u_LightingView.Background);
 	}
-	else if (u_LightingView.View == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION)
+	else if (u_LightingView.View == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION || u_LightingView.View == ST_LIGHTING_VIEW_OPEN_SHARE)
 	{
 		color = LinearToSRGB(float3(clamp(hdr.r, 0.0, 1.0)));
 	}

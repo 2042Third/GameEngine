@@ -72,7 +72,7 @@ namespace Strata
 
 	bool SceneRenderer::IsLightingValueView(SceneLightingView view)
 	{
-		return view == SceneLightingView::AmbientOcclusion || view == SceneLightingView::Albedo;
+		return view == SceneLightingView::AmbientOcclusion || view == SceneLightingView::Albedo || view == SceneLightingView::OpenShare;
 	}
 
 	void SceneRenderer::BeginLightingViewFrame(SceneLightingView view)
@@ -231,7 +231,7 @@ namespace Strata
 			m_LightingViewReadbackRecorded = true;
 		}
 
-		if (view == SceneLightingView::AmbientOcclusion || view == SceneLightingView::Albedo || view == SceneLightingView::Luminance)
+		if (IsLightingValueView(view) || view == SceneLightingView::Luminance)
 		{
 			nvrhi::GraphicsState state;
 			state.pipeline = m_LightingOverlayPipeline;

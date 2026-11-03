@@ -46,7 +46,8 @@ void main(uint3 globalID : SV_DispatchThreadID)
 
 	uint key = u_Scratch.Load(GetScratchAddress(ST_SCRATCH_KEYS, voxel));
 	uint voxelClass = key >> 30;
-	float occupancy = voxelClass == ST_VOXEL_CLASS_MASKED ? ST_GI_MASKED_OCCUPANCY : (voxelClass != 0u ? 1.0 : 0.0);
+	float occupancy = voxelClass == ST_VOXEL_CLASS_MASKED ? ST_GI_MASKED_OCCUPANCY
+		: voxelClass == ST_VOXEL_CLASS_OPAQUE && (key & ST_VOXEL_KEY_SOLID) == 0u ? ST_GI_TOUCH_OCCUPANCY : (voxelClass != 0u ? 1.0 : 0.0);
 	float3 albedo = voxelClass == ST_VOXEL_CLASS_INTERIOR ? float3(0.0, 0.0, 0.0) : UnpackUnorm4x8(key & 0xFFFFFFu).rgb;
 	float4 normal = float4(0.0, 0.0, 0.0, 0.0);
 	if (voxelClass == ST_VOXEL_CLASS_OPAQUE || voxelClass == ST_VOXEL_CLASS_MASKED)

@@ -10,6 +10,7 @@
 #include "Include/Fog.slang"
 #include "Include/AerialPerspective.slang"
 #include "Include/AmbientOcclusionFit.slang"
+#include "Include/GIField.slang"
 #define ST_REFLECTION_PROBE_SAMPLING
 #include "Include/ReflectionProbes.slang"
 #include "Include/IndirectLight.slang"
@@ -77,7 +78,7 @@ uint GetLightingView()
 // The views whose values are not light (occlusion, albedo): written unexposed, without fog or what glass transmits.
 bool IsLightingValueView(uint view)
 {
-	return view == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION || view == ST_LIGHTING_VIEW_ALBEDO;
+	return view == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION || view == ST_LIGHTING_VIEW_ALBEDO || view == ST_LIGHTING_VIEW_OPEN_SHARE;
 }
 
 // The light a lit surface reflects from one light: the base's, under its clear coat when it has one (the coat reflects some of
@@ -164,6 +165,25 @@ IndirectInputs GetIndirectInputs(SurfaceData surface, float3 f0, float2 dfg, flo
 	// The same on the material's occlusion alone, for what screen-space reflections found (exactly 1 without an occlusion map).
 	inputs.ScreenReflectionOcclusion = clamp(pow(NoV + surface.Occlusion, exp2(-16.0 * surface.Roughness - 1.0)) - 1.0 + surface.Occlusion, 0.0, 1.0);
 	return inputs;
+}
+
+// The GI's views (SceneLightingView::GlobalIllumination, OpenShare): inside the field its diffuse light on a white surface (absolute
+// luminance, under the diffuse occlusion as the join will carry it) or the share of the sky it sees; beyond it, blended over the
+// field's fade, today's diffuse light on white (every form of Include/IndirectLight.slang) or 1 (today's light counts all open).
+float3 ShadeGlobalIlluminationView(uint lightingView, SurfaceData surface, float3 f0, float2 dfg, float NoV, float diffuseOcclusion, float diffuseWeight)
+{
+	float3 geometricNormal = normalize(v_Normal) * (st_FrontFacing ? 1.0 : -1.0);
+	float openShare;
+	float4 field = SampleIrradianceField(u_Samplers[0], surface.Position, geometricNormal, surface.Normal, openShare);
+	if (lightingView == ST_LIGHTING_VIEW_OPEN_SHARE)
+		return float3(openShare * field.a + (1.0 - field.a));
+	SurfaceData white = surface;
+	white.Albedo = float3(1.0);
+	white.Metallic = 0.0;
+	IndirectInputs inputs = GetIndirectInputs(white, f0, dfg, NoV, geometricNormal, st_FragCoord.xy, diffuseOcclusion, float3(diffuseOcclusion), diffuseWeight);
+	inputs.SpecularColor = float3(0.0);
+	float3 today = ComposeIndirect(inputs, GatherIndirectDiffuse(inputs, white), float3(0.0));
+	return field.rgb * (diffuseOcclusion / ST_GI_RADIANCE_SCALE) * field.a + today * (1.0 - field.a);
 }
 
 // The lit surface's color: the sun with its shadow, the punctual lights of the pixel's cluster (those with shadows through
@@ -267,6 +287,8 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 	float diffuseOcclusion = surface.Occlusion * screenOcclusion;
 	if (lightingView == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION)
 		return float3(diffuseOcclusion);
+	if (lightingView == ST_LIGHTING_VIEW_GLOBAL_ILLUMINATION || lightingView == ST_LIGHTING_VIEW_OPEN_SHARE)
+		return ShadeGlobalIlluminationView(lightingView, surface, f0, dfg, NoV, diffuseOcclusion, diffuseWeight);
 	// Multi-bounce (AOParams.y): occluded corners keep the light their walls, of the surface's diffuse albedo, reflect into
 	// them (Include/AmbientOcclusionFit.slang). Diffuse light only; specular occlusion keeps the visibility.
 	float3 diffuseOcclusionColor = u_Frame.AOParams.y > 0.0 ? AOMultiBounce(diffuseOcclusion, surface.Albedo * (1.0 - surface.Metallic))
@@ -342,8 +364,9 @@ void st_Main()
 	// The lighting debug view: Lighting shades every lit surface white without its emission (unlit ones draw as they are).
 	uint lightingView = GetLightingView();
 	bool valueView = IsLightingValueView(lightingView);
-	float3 albedo = lightingView == ST_LIGHTING_VIEW_LIGHTING ? float3(1.0) : baseColor.rgb;
-	float3 surfaceEmissive = lightingView == ST_LIGHTING_VIEW_LIGHTING ? float3(0.0) : emissive;
+	bool whiteView = lightingView == ST_LIGHTING_VIEW_LIGHTING || lightingView == ST_LIGHTING_VIEW_GLOBAL_ILLUMINATION;
+	float3 albedo = whiteView ? float3(1.0) : baseColor.rgb;
+	float3 surfaceEmissive = whiteView ? float3(0.0) : emissive;
 #ifdef ST_FORWARD_GLASS
 	float3 transmitted = float3(0.0);
 #endif
@@ -381,11 +404,11 @@ void st_Main()
 		color = ShadeLitSurface(albedo, baseColor.a, surfaceEmissive, metallicRoughness, roughness, shadingNormal, occlusion, material, coat,
 			diffuseWeight);
 	}
-	else if (lightingView == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION)
+	else if (lightingView == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION || lightingView == ST_LIGHTING_VIEW_OPEN_SHARE)
 	{
 		color = float3(1.0); // Nothing occludes the light of an unlit surface
 	}
-	else if (lightingView == ST_LIGHTING_VIEW_INDIRECT)
+	else if (lightingView == ST_LIGHTING_VIEW_INDIRECT || lightingView == ST_LIGHTING_VIEW_GLOBAL_ILLUMINATION)
 	{
 		color = float3(0.0); // Its emission is not indirect light
 	}

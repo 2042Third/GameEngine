@@ -4,6 +4,7 @@
 #include "Renderer/GPUTestUtils.h"
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Renderer/DeferredReleaseQueue.h"
 #include "Strata/Renderer/GeometryPool.h"
 #include "Strata/Renderer/GlobalIlluminationLayout.h"
 #include "Strata/Renderer/Mesh.h"
@@ -127,7 +128,12 @@ namespace
 		Scope<SceneRenderer> fresh = CreateVoxelRenderer(ExactSpecification(), 64, 64);
 		RenderUntilSettled(*fresh, scene, first);
 		RenderUntilSettled(*fresh, scene, camera);
-		return ReadLevels(*fresh);
+		std::vector<VoxelLevel> levels = ReadLevels(*fresh); // Waits for the GPU
+		// The renderer's GI resources (116 MiB at High) leave through the deferred release queue, which nothing pumps in a test:
+		// free them now, or a path of fresh renderers exhausts the GPU's memory.
+		fresh.reset();
+		Renderer::GetDeferredReleases().Collect();
+		return levels;
 	}
 
 	// How many voxels of two renderers' levels differ (the textures' bytes).
@@ -327,7 +333,8 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 				const float voxelSize = clipmap->GetLayout().Levels[level].VoxelSize;
 				// The surface voxels, and those some face faces: a face on the grid has none behind it (they are inside the box).
 				std::vector<glm::i64vec3> facing;
-				const std::vector<glm::i64vec3> surface = ReferenceVoxels(*cube, world, clipmap->GetLevel(level).Anchor, voxelSize, &facing);
+				std::vector<glm::i64vec3> solid;
+				const std::vector<glm::i64vec3> surface = ReferenceVoxels(*cube, world, clipmap->GetLevel(level).Anchor, voxelSize, &facing, &solid);
 				REQUIRE_FALSE(surface.empty());
 				const VoxelLevel voxels = ReadLevel(*renderer, level);
 				const glm::i64vec3 low = GlobalIllumination::GetVoxelIndex(glm::dvec3(position - 0.5f * placement.Scale), voxelSize) - int64_t(3);
@@ -350,8 +357,12 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 							const bool onSurface = Contains(surface, voxel);
 							const glm::u8vec4 material = voxels.GetMaterial(voxel);
 							const glm::vec4 normal = voxels.GetNormal(voxel);
-							if ((material.a == 255) != (onSurface || inside) || (material.a != 0 && material.a != 255))
+							// Opaque where a face reaches in or the box holds it; the layer only touched by faces in front of it at
+							// c_GITouchOccupancy (51 of 255).
+							const uint8_t expected = inside || Contains(solid, voxel) ? 255 : onSurface ? 51 : 0;
+							if (material.a != expected)
 								wrongOccupancy++;
+
 							if (onSurface)
 							{
 								surfaceCount++;

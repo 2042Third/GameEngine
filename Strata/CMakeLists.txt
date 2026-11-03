@@ -126,6 +126,14 @@ strata_add_shaders(Strata_Renderer
 		GI/VoxelFill.comp
 		GI/VoxelFinalize.comp
 		GI/VoxelView.frag
+		GI/VoxelInject.comp
+		GI/VoxelDownsample.comp
+
+		GI/ProbeValidity.comp
+		GI/ProbeWeights.comp
+		GI/CascadeMarch.comp
+		GI/FieldReduce.comp
+		GI/ProbeView.frag
 		PostProcess/Fullscreen.vert
 		PostProcess/Tonemap.frag
 		PostProcess/MotionBlurTiles.comp

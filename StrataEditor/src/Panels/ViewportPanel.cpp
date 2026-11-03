@@ -634,11 +634,17 @@ namespace Strata
 			label = "Albedo";
 		else if (settings.DebugView == ViewportDebugView::Voxels)
 			label = "Voxels";
+		else if (settings.DebugView == ViewportDebugView::GlobalIllumination)
+			label = "GI";
+		else if (settings.DebugView == ViewportDebugView::OpenShare)
+			label = "Open";
+		else if (settings.DebugView == ViewportDebugView::Probes)
+			label = "Probes";
 		if (UI::ToggleChip("Viewport.DebugView", Icons::Layers, label, &clicked,
 			"Debug views: color the scene by streaming state (meshes, materials and textures still loading or failed), by the level of detail "
 			"meshes are drawn at, by the mip levels textures lack against what the view needs, by how each pixel moved since the previous frame, "
 			"or by how many screen pixels a texel of the sun's shadow cascades spans; or show its light: surfaces shaded white, ambient "
-			"occlusion, indirect light alone, luminance in EV100 bands, or albedo; or the GI's voxels"))
+			"occlusion, indirect light alone, luminance in EV100 bands, or albedo; or the GI's voxels, light, sky share and probes"))
 		{
 			ImGui::OpenPopup("DebugView");
 		}
@@ -656,7 +662,10 @@ namespace Strata
 			{ ViewportDebugView::Indirect, "Indirect: sky, probe and reflected light only" },
 			{ ViewportDebugView::Luminance, "Luminance: EV100 bands of the scene's light" },
 			{ ViewportDebugView::Albedo, "Albedo: base colors, out of 0.03-0.85 marked" },
-			{ ViewportDebugView::Voxels, "Voxels: the scene as the GI sees it" }
+			{ ViewportDebugView::Voxels, "Voxels: the scene as the GI sees it" },
+			{ ViewportDebugView::GlobalIllumination, "GI: indirect light on white" },
+			{ ViewportDebugView::OpenShare, "Open: the share of sky each surface sees" },
+			{ ViewportDebugView::Probes, "Probes: the GI's probes, dead ones red" }
 		};
 		for (const auto& [view, name] : views)
 		{
@@ -788,6 +797,9 @@ namespace Strata
 			note = renderer->GetShadowViewStats().CascadeCount > 0 ? "White: cascade edges. Hatched: blend bands." : "No shadowed directional light";
 		else if (settings.DebugView == ViewportDebugView::Voxels)
 			note = GetVoxelLegendNote(renderer->GetSceneRenderer().GetVoxelClipmap());
+		else if (settings.DebugView == ViewportDebugView::Probes)
+			note = GetProbeLegendNote(renderer->GetSceneRenderer().GetGPUStats(), renderer->GetSceneRenderer().GetGlobalIlluminationLayout());
+
 		else if (GetLightingView(settings.DebugView) != SceneLightingView::None)
 			note = GetLightingLegendNote(settings.DebugView, lighting); // The sun to sky ratio on flat ground (a clear day's is 6 to 10)
 

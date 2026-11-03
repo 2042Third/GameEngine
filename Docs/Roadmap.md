@@ -655,6 +655,19 @@ rendering streams branch from its tip:
 
 Open items and deferrals later waves own:
 
+- FrameConstants' capture-to-capture difference (wave 8, `radiance-cascades` world stage 1, unresolved): appending 160 bytes
+  of fields to `FrameConstants` (and `Include/Scene.slang`'s mirror) that no shader read made look-dev repeats of unchanged
+  scenes differ: GTAO in ThirdPerson by one code on a few pixels (the ao view flips the same two pixels of `tp.lut` between two
+  values from one capture to the next), the Specular scene's screen-space reflections by up to ~700 px plus an exposure step
+  of 3e-5 EV that TAA spreads; main's repeats match. Known (DeveloperGuide, "Global illumination"): GTAO's inputs (depth,
+  normals) and its constants are the same bits between captures, sync validation is clean, a C++ struct or a buffer of the
+  new size with main's shaders matches, declaring the fields only in `Effects/GTAO.comp` reproduces it; slangc's SPIR-V of
+  GTAO with and without them is the same instruction for instruction (checked again in stage 2: only the struct's type and
+  member offsets differ). So the same code compiled by the driver under a larger uniform block gives a result that varies
+  between runs on unchanged input: not found within stage 2's time box. Next: run the recompiled GTAO twice over one
+  frame in a GPU test and compare its raw target. The GI takes its own constant buffer instead (`GIFieldConstants`, b3 of
+  the scene layout) and `FrameConstants` stays as it was; a pass that needs new frame constants checks the look-dev
+  repeats of `tp.lut`'s ao view and `lookdev.sheet` first.
 - GPU-driven rendering (wave 4's `gpu-driven-rendering`): skinning still runs per draw (compute skinning once per
   frame, measured by a GPU-time metric, is later work); the shadow cascade cache follows the GPU-driven path only (the
   CPU path redraws every layer each frame); render scenes are copied whole at play start, not shared by copy-on-write

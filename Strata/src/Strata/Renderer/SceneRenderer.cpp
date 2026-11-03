@@ -360,6 +360,9 @@ namespace Strata
 		sceneLayout.visibility = nvrhi::ShaderType::All;
 		sceneLayout.bindings = {
 			nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+			// Global illumination's field and voxel levels as the forward pass reads them (RenderData::GIFieldConstants; b1 and
+			// b2 belong to the shadow passes' and the GI's push constants).
+			nvrhi::BindingLayoutItem::VolatileConstantBuffer(3),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),
@@ -486,6 +489,12 @@ namespace Strata
 			.setIsVolatile(true)
 			.setMaxVersions(c_FrameConstantVersions)
 			.setDebugName(m_Specification.DebugName + ".FrameConstants"));
+		m_GIFieldConstantBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
+			.setByteSize(sizeof(RenderData::GIFieldConstants))
+			.setIsConstantBuffer(true)
+			.setIsVolatile(true)
+			.setMaxVersions(c_FrameConstantVersions)
+			.setDebugName(m_Specification.DebugName + ".GIFieldConstants"));
 
 		bool recreated = false;
 		const bool buffersCreated = EnsureBufferCapacity(m_DrawListBuffer, 1024, sizeof(uint32_t), "DrawList", recreated)
@@ -1057,7 +1066,7 @@ namespace Strata
 		nvrhi::ITexture* probeArray = GetBoundReflectionProbes();
 		nvrhi::ITexture* screenReflections = GetBoundScreenReflections();
 		nvrhi::ITexture* sceneColor = GetBoundSceneColor();
-		const std::array<nvrhi::ITexture*, 3> giVoxels = { GetBoundGIVoxels(0), GetBoundGIVoxels(1), GetBoundGIVoxels(2) };
+		const std::array<nvrhi::ITexture*, 5> giTextures = GetBoundGITextures();
 
 		// The shadow pass reads the same resources except for its own draw list (and never the shadow maps it draws into).
 		nvrhi::ITexture* screenShadows = GetBoundScreenShadows();
@@ -1067,6 +1076,7 @@ namespace Strata
 			nvrhi::BindingSetDesc desc;
 			desc.bindings = {
 				nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer),
+				nvrhi::BindingSetItem::ConstantBuffer(3, m_GIFieldConstantBuffer),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_SceneGPU->GetInstanceBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(14, drawList),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(15, m_SceneGPU->GetPaletteBuffer()),
@@ -1081,11 +1091,11 @@ namespace Strata
 				nvrhi::BindingSetItem::Texture_SRV(29, aerialVolume, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
 				nvrhi::BindingSetItem::Texture_SRV(32, boundRanges),
 				nvrhi::BindingSetItem::Texture_SRV(33, Renderer::GetBlueNoiseTexture()),
-				nvrhi::BindingSetItem::Texture_SRV(35, Renderer::GetBlack3DTexture(), nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
-				nvrhi::BindingSetItem::Texture_SRV(37, Renderer::GetBlack3DTexture(), nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
-				nvrhi::BindingSetItem::Texture_SRV(38, giVoxels[0], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
-				nvrhi::BindingSetItem::Texture_SRV(39, giVoxels[1], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
-				nvrhi::BindingSetItem::Texture_SRV(40, giVoxels[2], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
+				nvrhi::BindingSetItem::Texture_SRV(35, giTextures[0], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
+				nvrhi::BindingSetItem::Texture_SRV(37, giTextures[1], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
+				nvrhi::BindingSetItem::Texture_SRV(38, giTextures[2], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
+				nvrhi::BindingSetItem::Texture_SRV(39, giTextures[3], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
+				nvrhi::BindingSetItem::Texture_SRV(40, giTextures[4], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SceneGPU->GetMaterialBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment->Irradiance.Get() : blackCube),
@@ -1140,7 +1150,7 @@ namespace Strata
 		m_BoundReflectionProbes = probeArray;
 		m_BoundScreenReflections = screenReflections;
 		m_BoundSceneColor = sceneColor;
-		m_BoundGIVoxels = giVoxels;
+		m_BoundGITextures = giTextures;
 		if (!m_SceneBindingSet || !m_ShadowBindingSet || !m_ClusterBindingSet || (gpuSets && (!m_GPUSceneBindingSet || !m_GPUShadowBindingSet)))
 		{
 			m_SceneBindingSet = nullptr; // Recreated next frame
@@ -2950,7 +2960,7 @@ namespace Strata
 		ChoosePreExposure(postProcess, options, IsLightingValueView(options.LightingView));
 		m_Stats.PreExposure = m_PreExposure;
 		m_Stats.PreExposureSettled = m_PreExposureSettled;
-		m_Stats.LightingViewPending = options.LightingView != SceneLightingView::None && !IsGlobalIlluminationView(options.LightingView) && !m_LightingViewStats;
+		m_Stats.LightingViewPending = options.LightingView != SceneLightingView::None && !IsGlobalIlluminationOverlayView(options.LightingView) && !m_LightingViewStats;
 		// What the automatic exposure metered (frames late) and the gray card its key compared with (this frame's light).
 		if (postProcess.AutoExposure && m_PreExposureAutomatic && m_MeteredLog2Luminance)
 		{
@@ -3054,6 +3064,7 @@ namespace Strata
 		const bool giWanted = IsGlobalIlluminationView(options.LightingView);
 		bool giFailed = false;
 		m_GIFrame = false;
+		m_GIFieldConstants = {};
 		if (giWanted)
 		{
 			const GlobalIlluminationLevel giLevel = m_Specification.GlobalIllumination.Level;
@@ -3219,7 +3230,7 @@ namespace Strata
 		ReportVisibleAnimators(scene);
 		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
 		frame.AOParams = glm::vec4(postProcess.AmbientOcclusion ? 1.0f : 0.0f, postProcess.AmbientOcclusionMultiBounce ? 1.0f : 0.0f, 0.0f, 0.0f);
-		const SceneLightingView forwardView = IsGlobalIlluminationView(options.LightingView) ? SceneLightingView::None : options.LightingView;
+		const SceneLightingView forwardView = IsGlobalIlluminationOverlayView(options.LightingView) ? SceneLightingView::None : options.LightingView;
 		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, static_cast<float>(forwardView),
 			m_Specification.SpecularAntiAliasing ? 1.0f : 0.0f, options.ProbeCapture ? 1.0f : 0.0f);
 
@@ -3283,7 +3294,7 @@ namespace Strata
 		const bool rebind = buffersRecreated || m_BoundEnvironmentCube != GetEnvironmentCube() || m_BoundIrradiance != GetIrradianceMap()
 			|| m_BoundPrefiltered != GetPrefilteredMap() || m_BoundSkyView != GetBoundSkyView() || m_BoundAerialVolume != GetBoundAerialVolume()
 			|| m_BoundReflectionProbes != GetBoundReflectionProbes() || m_BoundScreenReflections != GetBoundScreenReflections() || m_BoundSceneColor != GetBoundSceneColor()
-			|| m_BoundGIVoxels[0] != GetBoundGIVoxels(0) || m_BoundGIVoxels[1] != GetBoundGIVoxels(1) || m_BoundGIVoxels[2] != GetBoundGIVoxels(2)
+			|| m_BoundGITextures != GetBoundGITextures()
 			|| m_BoundTextureTableVersion != textureTable.GetBufferVersion();
 		if (!tableUploaded || (rebind && !CreateSceneBindingSets()))
 		{
@@ -3298,6 +3309,7 @@ namespace Strata
 		}
 
 		WriteFrameConstants(commandList, frame);
+		commandList->writeBuffer(m_GIFieldConstantBuffer, &m_GIFieldConstants, sizeof(m_GIFieldConstants));
 		UploadSceneData(commandList, drawListsRecreated);
 		if (!m_LocalShadowData.empty())
 			commandList->writeBuffer(m_LocalShadowBuffer, m_LocalShadowData.data(), m_LocalShadowData.size() * sizeof(RenderData::LocalShadowData));
@@ -3439,6 +3451,9 @@ namespace Strata
 				degraded = true;
 				m_Stats.GlobalIlluminationPending = true;
 				m_Stats.GlobalIlluminationSettled = false;
+				// The forward pass reads no field this frame (a newer version of its constants, which the draws below bind).
+				m_GIFieldConstants.FieldSize.w = 0.0f;
+				commandList->writeBuffer(m_GIFieldConstantBuffer, &m_GIFieldConstants, sizeof(m_GIFieldConstants));
 			}
 			commandList->endMarker();
 		}
@@ -3662,11 +3677,15 @@ namespace Strata
 				overlayFrame.InverseViewProjection = glm::inverse(overlayFrame.ViewProjection);
 				WriteFrameConstants(commandList, overlayFrame);
 			}
-			if (IsGlobalIlluminationView(options.LightingView))
+			if (IsGlobalIlluminationOverlayView(options.LightingView))
 			{
-				// First among the overlays: the GI's views replace the image the others are drawn over.
-				commandList->beginMarker("VoxelView");
-				if (!m_GIFrame || !DrawVoxelView(commandList, options, nvrhi::Viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y))))
+				// First among the overlays: the voxels view replaces the image the others are drawn over; the probes view draws
+				// over the lit image.
+				const nvrhi::Viewport viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y));
+				commandList->beginMarker(options.LightingView == SceneLightingView::Voxels ? "VoxelView" : "ProbeView");
+				const bool drawn = m_GIFrame && (options.LightingView == SceneLightingView::Voxels ? DrawVoxelView(commandList, options, viewport)
+					: DrawProbeView(commandList, viewport));
+				if (!drawn)
 					degraded = true; // Reported; the image is the lit one
 				commandList->endMarker();
 			}

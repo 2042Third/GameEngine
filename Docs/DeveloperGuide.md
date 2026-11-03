@@ -4995,8 +4995,11 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   thinner than it: it will get no light rather than let one side's into the other; w 0 where every face touching the
   voxel has it behind (the layer inside a box's faces on the grid); w 0.5 for double-sided materials, whose triangles
   add no normal). The scene layout binds levels 0-2's material at SRV 38-40, the field at 35 and the
-  probes' validity at 37 (the black 3D texture without them). `FrameConstants` gains the GI's fields only with the forward
-  pass that reads them (stage 2). Declaring them, though no shader reads them, recompiles every shader that includes
+  probes' validity at 37 (the black 3D texture without them), and the forward pass's GI constants
+  (`RenderData::GIFieldConstants`: the field's origin, size and fade, levels 0-2's windows and valid boxes; zero without
+  GI) at b3, a buffer of their own written every frame, not `FrameConstants` fields (Roadmap, open items). Declaring
+  fields in `FrameConstants`, though no shader read them, recompiled every shader that includes
+
   `Include/Scene.slang`, and two passes then make look-dev's repeats of an unchanged view differ: GTAO
   (`Effects/GTAO.comp`; ThirdPerson: a few pixels by one code, and the `ao` view flips the same pixels between two
   values from one capture to the next) and the screen-space reflections (`Effects/ScreenSpaceReflections*.comp`,
@@ -5007,9 +5010,35 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   the AO the forward pass reads (temporary `ao` views that showed those bits); synchronization validation
   (`VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true` with the layer forced on the Release editor) finds no hazard on the AO,
   normal or constant resources; and GTAO's SPIR-V reads the constants by access chains only, so declaring the fields
-  changes only the struct's type. What differs arises in the recompiled pipelines themselves; it is found before the
-  fields are added (next: run the recompiled GTAO twice over one frame in a test and compare its raw target bit for bit),
-  with the `ao` view's repeats as the check.
+  changes only the struct's type. What differs arises in the recompiled pipelines themselves; not found within stage 2's
+  time box (next: run the recompiled GTAO twice over one frame in a test and compare its raw target bit for bit), so
+  frame constants a new pass needs check the `ao` view's repeats first.
+- **The light** (`GPU.RadianceCascades` after the voxels, every frame; `Include/GIProbes.slang`): `GI/VoxelInject` lights
+  every surface voxel of every level (albedo times the sun's illuminance on its normal times a march toward the sun
+  through the clipmap from its own level up, started on the ray through the surface's plane `c_GIShadowStartVoxels`
+  above it, plus its emission; radiance times `c_GIRadianceScale`, alpha 1; two-sided voxels a dark surface);
+  `GI/VoxelDownsample` gives each coarser level the mean of the finer level's light where that one holds the scene,
+  blended by the finer level's weight (coarse voxels close small openings: the sun room's window at 0.4 m let a third of
+  its patch in). Faces on the grid mark a lit layer in front of them at `c_GITouchOccupancy` (0.2: openings on the grid
+  keep their size), voxels a face reaches into or touches from behind stay solid. The probe cascades (D10-D12 of the
+  spec) then run top down: `ProbeValidity` (dead probes inside solids), `ProbeWeights` (the eight parents' trilinear
+  weights times their validity and the transmittance between the probes), `CascadeMarch` (one ray a thread, fixed
+  directions, light front to back with transmittance from the probe for every cascade but the first, the run's first
+  sample's light and normal for the whole run, the miss rule: an unabsorbed ray continues into the parents' merged rays,
+  only the top cascade, leaving the clipmap, reads the sky); cascade 0 keeps its own light, and `FieldReduce` merges
+  cascade 1 in each of its 64 directions into the field's ambient cube (six RGBA16F faces per cascade-0 probe: irradiance
+  over pi and the sky share, each part normalized by its directions' cosine sum).
+- **The field in the forward pass** (`Include/GIField.slang`, the `gi` and `open` views; stage 3 joins it to shading):
+  the eight cascade-0 probes around the point moved `c_GIGatherNormalBias` spacings along its geometric normal, each by its
+  trilinear weight, validity, whether it lies in front of the surface's plane and its visibility (a march through levels
+  0-2 from `c_GIGatherStartVoxels` off the surface; with none visible, again from up to two voxels down the occupancy's
+  gradient; still none: no field light, never the sky), faded to today's light within 2 m of the field's edge.
+  `SceneLightingView::GlobalIllumination` (`gi`) shades white and returns the diffuse indirect light (the field inside,
+  today's beyond, under the diffuse occlusion), `OpenShare` (`open`) the share of the sky a surface sees, as gray;
+  `Probes` (`probes`, `GI/ProbeView.frag` in `GPU.Overlays`) draws cascade 0's probes over the image, live ones lit by
+  their ambient cube, dead ones dark red. `SceneRendererGPUStats` adds `GIDeadProbes`, `GILiveProbes`,
+  `GISurfaceVoxels`; `ReadGlobalIlluminationValidity` and `ReadGlobalIlluminationField` read the probes (blocking).
+
 - **Sampling** (`Include/GlobalIllumination.slang`): a point reads the finest level whose valid box holds it with
   `c_GILevelGuardVoxels` to spare, blended into the next over `c_GILevelBlendVoxels` by its distance from the camera (not
   from the snapped window), so no sample switches level in a step as windows scroll.

@@ -10,16 +10,54 @@
 #define ST_GI_MAX_VOXEL_LEVELS 4          // c_GIMaxVoxelLevels
 #define ST_GI_SCROLL_VOXELS 4.0           // c_GIScrollVoxels
 #define ST_GI_LEVEL_GUARD_VOXELS 2.0      // c_GILevelGuardVoxels
-#define ST_GI_LEVEL_BLEND_VOXELS 8.0      // c_GILevelBlendVoxels
+#define ST_GI_LEVEL_BLEND_VOXELS 2.0      // c_GILevelBlendVoxels
 #define ST_GI_GROUP_TRIANGLES 64u         // c_GIGroupTriangles
 #define ST_GI_SMALL_TRIANGLE_VOXELS 64    // c_GISmallTriangleVoxels
 #define ST_GI_TILE_VOXELS 8               // c_GITileVoxels
 #define ST_GI_MAX_TILES 32768u            // c_GIMaxTiles
 #define ST_GI_MASKED_OCCUPANCY 0.15       // c_GIMaskedOccupancy
+#define ST_GI_TOUCH_OCCUPANCY 0.2         // c_GITouchOccupancy
 #define ST_GI_TWO_SIDED_SUM 0.5           // c_GITwoSidedSum
 #define ST_GI_SNAP_VOXELS (1.0 / 256.0)   // c_GISnapVoxels
 #define ST_GI_NORMAL_FIXED_POINT 256.0    // c_GINormalFixedPoint
 #define ST_GI_STEP_VOXELS 0.75            // c_GIStepVoxels
+#define ST_GI_OCCUPANCY_GAIN 2.5          // c_GIOccupancyGain
+#define ST_GI_SHADOW_START_VOXELS 1.5     // c_GIShadowStartVoxels
+#define ST_GI_TRANSMITTANCE_CUTOFF 1e-4   // c_GITransmittanceCutoff
+#define ST_GI_RADIANCE_SCALE (1.0 / 16.0) // c_GIRadianceScale
+#define ST_GI_MAX_RADIANCE 60000.0        // c_GIMaxRadiance
+#define ST_GI_SKY_LEVEL 5.3               // c_GISkyLevel
+#define ST_GI_MAX_MARCH_STEPS 1024u       // c_GIMaxMarchSteps
+#define ST_GI_GATHER_NORMAL_BIAS 0.25     // c_GIGatherNormalBias
+#define ST_GI_GATHER_START_VOXELS 1.5     // c_GIGatherStartVoxels
+#define ST_GI_VISIBILITY_CUTOFF 0.05      // c_GIVisibilityCutoff
+
+// The octahedral direction of texel (u, v) of an a x a tile (GlobalIllumination::GetDirection): OctahedralDecode (Include/Scene.slang)
+// of the texel's center mapped to [-1, 1]^2. The same arithmetic, written out so this header needs nothing of Scene.slang.
+float3 GetTileDirection(uint2 texel, uint a)
+{
+	float2 encoded = (float2(texel) + 0.5) / float(a) * 2.0 - 1.0;
+	float3 n = float3(encoded, 1.0 - abs(encoded.x) - abs(encoded.y));
+	float t = max(-n.z, 0.0);
+	n.x += n.x >= 0.0 ? -t : t;
+	n.y += n.y >= 0.0 ? -t : t;
+	return normalize(n);
+}
+
+// A color packed as shared-exponent RGB9E5 (GlobalIllumination::PackRGB9E5).
+float3 UnpackRGB9E5(uint value)
+{
+	float scale = exp2(float(int(value >> 27)) - 24.0);
+	return float3(float(value & 511u), float((value >> 9) & 511u), float((value >> 18) & 511u)) * scale;
+}
+
+// A face's axis (+X, -X, +Y, -Y, +Z, -Z: GlobalIllumination::GetFaceAxis).
+float3 GetFaceAxis(uint face)
+{
+	float3 axis = float3(0.0, 0.0, 0.0);
+	axis[face / 2u] = (face & 1u) == 0u ? 1.0 : -1.0;
+	return axis;
+}
 
 // VoxelWorkItem::Flags (c_VoxelItem*)
 #define ST_VOXEL_ITEM_CLOSED 1u
@@ -42,6 +80,11 @@ struct GlobalIlluminationConstants
 	GIVoxelLevel Levels[ST_GI_MAX_VOXEL_LEVELS];
 	uint4 Dimensions;   // xyz: voxels per axis of every level; w: the level count
 	uint4 Batch;        // x: the voxels a batch's scratch holds (GlobalIlluminationLayout::BatchVoxels)
+	float4 FieldOrigin; // xyz: the probe field's minimum corner, camera-relative (m); w: cascade 0's spacing (m)
+	uint4 FieldGrid;    // xyz: cascade 0's probes per axis; w: the cascade count
+	float4 SolidAngleNorms; // The solid angle of a tile texel is this over |p|^3 (p its octahedron point): x 4 x 4 tiles, y 8 x 8
+	float4 FaceWeights[2];  // 1 / C_f per face (+X, -X, +Y, -Y, +Z, -Z) over cascade 0's 16 directions
+	float4 FaceWeightsFar[2]; // ...and over cascade 1's 64
 };
 
 ConstantBuffer<GlobalIlluminationConstants> u_GI : register(b1);

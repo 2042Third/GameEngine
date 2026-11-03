@@ -702,7 +702,7 @@ namespace Strata
 		// VoxelClipmap.h; Docs/DeveloperGuide.md, "Global illumination"). Include/GlobalIllumination.slang mirrors them as ST_GI_*.
 		constexpr uint32_t c_GIScrollVoxels = 4;        // A level's window moves in steps of this many voxels: fewer, larger slabs
 		constexpr uint32_t c_GILevelGuardVoxels = 2;    // A level is never sampled this close to its window's (or valid box's) faces
-		constexpr uint32_t c_GILevelBlendVoxels = 8;    // Samples blend into the next level over this many voxels (by distance from the camera)
+		constexpr uint32_t c_GILevelBlendVoxels = 2;    // Samples blend into the next level over this many voxels (by distance from the camera)
 		constexpr uint32_t c_GIRegionBrick = 4;         // Changed boxes snap outward to bricks of this many voxels
 		constexpr uint32_t c_GIMaxRegionVoxels = 64;    // A region is at most this many voxels a side (slabs and windows are cut so)
 		// Windows are addressed from an anchor (a multiple of c_GIAnchorVoxels voxels), kept while the camera stays within
@@ -722,12 +722,27 @@ namespace Strata
 		constexpr uint32_t c_GIMaxTiles = 32768;         // Tiles per batch; beyond them a triangle walks its tiles itself (counted)
 		constexpr uint32_t c_GIMovingFrames = 30;        // A proxy placed anew within this many frames is moving: left out of the voxels
 		constexpr float c_GIMaskedOccupancy = 0.15f;     // Guess: alpha-masked surfaces' occupancy
+		// Guess: the occupancy of voxels marked only because a face on their boundary faces into them (the lit layer in front of a
+		// face on the grid): low, so openings on the grid keep their size, yet the layer's light is taken (Include/Voxelize.slang).
+		constexpr float c_GITouchOccupancy = 0.2f;
 		constexpr float c_GITwoSidedSum = 0.5f;          // A voxel whose triangles' unit normals sum to less than this times their count is two-sided
 		// Voxel coordinates this close to a voxel boundary snap onto it: faces meant to lie on the grid, or on each other, meet
 		// exactly whatever the floats' rounding (0.4 mm at level 0; four ulps of a coordinate 16,384 voxels from its anchor).
 		constexpr float c_GISnapVoxels = 1.0f / 256.0f;
 		constexpr float c_GINormalFixedPoint = 256.0f;   // Normals add as integers times this
 		constexpr float c_GIStepVoxels = 0.75f;          // Marches step this many voxels of the level they sample
+		// The light (GI/VoxelInject.comp, GI/CascadeMarch.comp, GI/FieldReduce.comp, Include/GIField.slang).
+		constexpr float c_GIOccupancyGain = 2.5f;        // A sample absorbs saturate(occupancy * this): a wall two voxels thick is opaque
+		constexpr float c_GIShadowStartVoxels = 1.5f;    // The sun's march starts where its ray is this many voxels above the surface's plane
+		constexpr float c_GITransmittanceCutoff = 1e-4f; // Below it a ray is opaque
+		constexpr float c_GIRadianceScale = 1.0f / 16.0f; // Stored radiance is luminance (nits) times this (half floats)
+		constexpr float c_GIMaxRadiance = 60000.0f;      // ...clamped to this
+		constexpr float c_GISkyLevel = 5.3f;             // The environment cube's level rays that leave the clipmap read (a top-cascade direction's solid angle)
+		constexpr uint32_t c_GIMaxMarchSteps = 1024;     // A march gives up after this many samples (the top cascade's leave the clipmap long before)
+		constexpr float c_GIGatherNormalBias = 0.25f;    // Guess: the forward gather's lookup point moves this many probe spacings along the geometric normal
+		constexpr float c_GIGatherStartVoxels = 1.5f;    // Guess: visibility marches start this many voxels off the surface
+		constexpr float c_GIVisibilityCutoff = 0.05f;    // A visibility march below this transmittance sees nothing
+		constexpr uint32_t c_GIFieldFaces = 6;           // The field's faces per probe: +X, -X, +Y, -Y, +Z, -Z
 
 		// VoxelWorkItem::Flags
 		constexpr uint32_t c_VoxelItemClosed = 1u << 0;      // A closed mesh whose submeshes are all opaque: its triangles add winding steps
@@ -793,8 +808,47 @@ namespace Strata
 			GIVoxelLevelData Levels[c_GIMaxVoxelLevels];
 			glm::uvec4 Dimensions; // xyz: voxels per axis of every level; w: the level count
 			glm::uvec4 Batch;      // x: the voxels a batch's scratch holds (GlobalIlluminationLayout::BatchVoxels)
+			glm::vec4 FieldOrigin; // xyz: the probe field's minimum corner, camera-relative (m); w: cascade 0's spacing (m)
+			glm::uvec4 FieldGrid;  // xyz: cascade 0's probes per axis; w: the cascade count
+			// A tile texel's solid angle is this over |p|^3, p its point on the octahedron (GlobalIllumination::
+			// GetSolidAngleNormalization): x for cascade 0's 4 x 4 tiles, y for cascade 1's 8 x 8; zw unused.
+			glm::vec4 SolidAngleNorms;
+			// 1 / C_f per face (+X, -X, +Y, -Y, +Z, -Z; [1].zw unused): C_f the sum of a tile's directions' cosines to the face
+			// times their solid angles, so a uniform radiance reduces to itself on every face (GetFaceCosineSum): over cascade 0's
+			// 16 directions (its own near light) and cascade 1's 64 (the far light the reduce merges).
+			glm::vec4 FaceWeights[2];
+			glm::vec4 FaceWeightsFar[2];
 		};
-		static_assert(sizeof(GlobalIlluminationConstants) == c_GIMaxVoxelLevels * 80 + 32);
+		static_assert(sizeof(GlobalIlluminationConstants) == c_GIMaxVoxelLevels * 80 + 32 + 32 + 16 + 64);
+
+		// The probe passes' push constants (b2; Include/GIProbes.slang): the cascade a dispatch works on.
+		struct GIProbePassParameters
+		{
+			glm::uvec4 Grid;          // xyz: the cascade's probes per axis; w: the cascade
+			glm::uvec4 ParentGrid;    // xyz: the next cascade's probes per axis (0 for the top one); w: its directions per axis
+			glm::vec4 Interval;       // x: spacing (m); y: the interval's start, z: its end (m; negative for the top: until the ray leaves); w: lead-in (m)
+			uint32_t DirectionsPerAxis;
+			uint32_t MinimumLevel;    // The finest voxel level its samples read
+			uint32_t Level;           // VoxelInject: the level it lights
+			uint32_t Padding;
+		};
+		static_assert(sizeof(GIProbePassParameters) == 64);
+
+		// What the scene passes read of global illumination (b3 of the scene layout; Include/GIField.slang): the field the
+		// forward pass gathers for the gi and open views, and voxel levels 0-2 for its visibility. Zero without GI. Its own
+		// buffer rather than FrameConstants fields (Docs/Roadmap.md's open item on FrameConstants).
+		struct GIFieldConstants
+		{
+			glm::vec4 FieldOrigin;        // xyz: the field's minimum corner, camera-relative (cascade 0's probe i at + (i + 0.5) spacings); w: s0
+			glm::vec4 FieldSize;          // xyz: cascade 0's probes per axis; w: 1 when the field is used this frame (ran, not pending)
+			glm::vec4 FieldFade;          // xyz: the half extents around the camera where the field's weight reaches 0 (m); w: the fade (m)
+			glm::vec4 VoxelOrigin[3];     // Levels 0-2: xyz the window's minimum corner, camera-relative (m); w: the voxel size, 0 when not valid
+			glm::ivec4 VoxelTexel[3];     // xyz: the minimum corner's texel
+			glm::ivec4 VoxelValidMinimum[3]; // xyz: the valid box's first voxel, relative to the window's minimum corner
+			glm::ivec4 VoxelValidMaximum[3]; // xyz: one past its last voxel
+			glm::vec4 VoxelDimensions;    // xyz: voxels per axis
+		};
+		static_assert(sizeof(GIFieldConstants) == 256);
 
 		// The voxelizer's push constants (b2; Include/Voxelize.slang): a batch of VoxelFrame.
 		struct VoxelPassParameters

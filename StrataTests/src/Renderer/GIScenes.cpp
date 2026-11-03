@@ -9,9 +9,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <random>
 #include <tuple>
+#include <utility>
 
 namespace Strata::Tests
 {
@@ -110,6 +112,107 @@ namespace Strata::Tests
 				}
 			}
 			return assets.AddTexture(c_Width, c_Height, pixels, TextureFormat::RGBA8SRGB, TextureFilter::Linear, TextureWrap::Clamp);
+		}
+
+		// A box of the sun room: its corners and diffuse albedo.
+		struct RoomBox
+		{
+			glm::dvec3 Minimum;
+			glm::dvec3 Maximum;
+			glm::vec3 Albedo;
+			bool Ground = false; // The ground plane (its top face at y = 0), not a cube
+		};
+
+		// LookDevScene.json's Room Floor, Ceiling and Walls (centers and sizes there) on its 60 x 60 m ground, with the options'
+		// seal, offset and paired room.
+		std::vector<RoomBox> GetSunRoomBoxes(const SunRoomOptions& options)
+		{
+			const glm::vec3 plaster(0.58f);
+			const glm::dvec3 offset(options.Offset);
+			const auto part = [&](const glm::dvec3& center, const glm::dvec3& size, const glm::vec3& albedo)
+			{
+				return RoomBox { center + offset - 0.5 * size, center + offset + 0.5 * size, albedo };
+			};
+			std::vector<RoomBox> boxes = {
+				RoomBox { { -30.0, -1.0, -30.0 }, { 30.0, 0.0, 30.0 }, glm::vec3(0.35f), true },
+				part({ -10.0, 0.05, -2.0 }, { 6.4, 0.1, 6.4 }, options.FloorAlbedo), // Floor
+				part({ -10.0, 3.1, -2.0 }, { 6.4, 0.2, 6.4 }, plaster),              // Ceiling
+				part({ -13.1, 1.5, -2.0 }, { 0.2, 3.0, 6.4 }, plaster),              // West wall
+				part({ -6.9, 1.5, -2.0 }, { 0.2, 3.0, 6.4 }, plaster),               // East wall
+				part({ -10.0, 1.5, -5.1 }, { 6.4, 3.0, 0.2 }, plaster),              // North wall
+				part({ -12.1, 1.5, 1.1 }, { 2.2, 3.0, 0.2 }, plaster),               // South wall, left of the window
+				part({ -7.9, 1.5, 1.1 }, { 2.2, 3.0, 0.2 }, plaster),                // Right of it
+				part({ -10.0, 0.45, 1.1 }, { 2.0, 0.9, 0.2 }, plaster),              // Below it
+				part({ -10.0, 2.6, 1.1 }, { 2.0, 0.8, 0.2 }, plaster)                // Above it
+			};
+			if (options.SealWindow)
+				boxes.push_back(part({ -10.0, 1.55, 1.1 }, { 2.0, 1.3, 0.2 }, plaster));
+			if (options.PairedRoom)
+			{
+				// Room B: x from -6.8 (A's east wall) to -0.8, sealed.
+				boxes.push_back(part({ -3.75, 0.05, -2.0 }, { 6.1, 0.1, 6.4 }, plaster)); // Floor
+				boxes.push_back(part({ -3.75, 3.1, -2.0 }, { 6.1, 0.2, 6.4 }, plaster));  // Ceiling
+				boxes.push_back(part({ -0.7, 1.5, -2.0 }, { 0.2, 3.0, 6.4 }, plaster));   // East wall
+				boxes.push_back(part({ -3.75, 1.5, -5.1 }, { 6.1, 3.0, 0.2 }, plaster));  // North wall
+				boxes.push_back(part({ -3.75, 1.5, 1.1 }, { 6.1, 3.0, 0.2 }, plaster));   // South wall
+			}
+			return boxes;
+		}
+
+		// The nearest box a ray enters at a distance above 1e-9, its distance and the normal of the face it enters.
+		const RoomBox* TraceRoom(const std::vector<RoomBox>& boxes, const glm::dvec3& origin, const glm::dvec3& direction, double& distance, glm::dvec3& normal)
+		{
+			const RoomBox* nearest = nullptr;
+			distance = std::numeric_limits<double>::max();
+			for (const RoomBox& box : boxes)
+			{
+				double enter = -std::numeric_limits<double>::max();
+				double exit = std::numeric_limits<double>::max();
+				int enterAxis = -1;
+				bool missed = false;
+				for (int axis = 0; axis < 3 && !missed; axis++)
+				{
+					if (std::abs(direction[axis]) < 1e-12)
+					{
+						missed = origin[axis] < box.Minimum[axis] || origin[axis] > box.Maximum[axis];
+						continue;
+					}
+					double first = (box.Minimum[axis] - origin[axis]) / direction[axis];
+					double second = (box.Maximum[axis] - origin[axis]) / direction[axis];
+					if (first > second)
+						std::swap(first, second);
+					if (first > enter)
+					{
+						enter = first;
+						enterAxis = axis;
+					}
+					exit = std::min(exit, second);
+					missed = enter > exit;
+				}
+				// Rays start outside every box (points on faces are moved off them first): a ray from inside one would leave it.
+				if (missed || enterAxis < 0 || enter <= 1e-9 || enter >= distance)
+					continue;
+				distance = enter;
+				normal = glm::dvec3(0.0);
+				normal[enterAxis] = direction[enterAxis] > 0.0 ? -1.0 : 1.0;
+				nearest = &box;
+			}
+			return nearest;
+		}
+
+		glm::dvec3 SunRadiance(const std::vector<RoomBox>& boxes, const SunRoomOptions& options, const RoomBox& box, const glm::dvec3& point, const glm::dvec3& normal)
+		{
+			if (!(options.SunIlluminance > 0.0f))
+				return glm::dvec3(0.0);
+			const glm::dvec3 towardSun = -glm::normalize(glm::dvec3(options.SunDirection));
+			const double cosine = glm::dot(normal, towardSun);
+			if (cosine <= 0.0)
+				return glm::dvec3(0.0);
+			double distance = 0.0;
+			glm::dvec3 ignored;
+			if (TraceRoom(boxes, point + normal * 1e-6, towardSun, distance, ignored))
+				return glm::dvec3(0.0);
+			return glm::dvec3(box.Albedo) * (static_cast<double>(options.SunIlluminance) * cosine / glm::pi<double>());
 		}
 
 		SceneCamera StrafeCamera(const glm::vec3& position, const glm::vec3& target, float verticalFieldOfView, float aspectRatio)
@@ -261,6 +364,100 @@ namespace Strata::Tests
 		sky.Intensity = 1.0f;
 	}
 
+	glm::vec3 SunRoomDirection(float pitch, float yaw)
+	{
+		return glm::normalize(Math::EulerDegreesToQuat(glm::vec3(pitch, yaw, 0.0f)) * glm::vec3(0.0f, 0.0f, -1.0f));
+	}
+
+	void BuildSunRoom(Scene& scene, SceneTestAssets& assets, const SunRoomOptions& options)
+	{
+		AddNeutralPostProcess(scene);
+		std::map<std::tuple<float, float, float>, AssetHandle> materials;
+		for (const RoomBox& box : GetSunRoomBoxes(options))
+		{
+			const auto key = std::make_tuple(box.Albedo.r, box.Albedo.g, box.Albedo.b);
+			if (materials.find(key) == materials.end())
+			{
+				MaterialProperties properties;
+				properties.BaseColor = glm::vec4(box.Albedo, 1.0f);
+				properties.Roughness = box.Ground ? 0.85f : 0.9f; // LookDevScene.json's Ground and Plaster
+				materials.emplace(key, assets.AddMaterial(properties));
+			}
+			const glm::vec3 center(0.5 * (box.Minimum + box.Maximum));
+			if (box.Ground)
+			{
+				AddMesh(scene, BuiltinAssets::PlaneMesh, materials[key], glm::vec3(0.0f), "Ground").GetComponent<TransformComponent>().Scale =
+					glm::vec3(static_cast<float>(box.Maximum.x - box.Minimum.x), 1.0f, static_cast<float>(box.Maximum.z - box.Minimum.z));
+				continue;
+			}
+			AddMesh(scene, BuiltinAssets::CubeMesh, materials[key], center, "Room").GetComponent<TransformComponent>().Scale = glm::vec3(box.Maximum - box.Minimum);
+		}
+		if (options.SunIlluminance > 0.0f)
+			AddSun(scene, options.SunDirection, options.SunIlluminance);
+		if (options.AmbientColor != glm::vec3(0.0f))
+			scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().AmbientColor = options.AmbientColor;
+	}
+
+	glm::vec3 SunRoomReference(const SunRoomOptions& options, const glm::vec3& point, const glm::vec3& normal, uint32_t strata)
+	{
+		const std::vector<RoomBox> boxes = GetSunRoomBoxes(options);
+		const glm::dvec3 n = glm::normalize(glm::dvec3(normal));
+		const glm::dvec3 origin = glm::dvec3(point) + n * 1e-6;
+		const glm::dvec3 helper = std::abs(n.y) < 0.9 ? glm::dvec3(0.0, 1.0, 0.0) : glm::dvec3(1.0, 0.0, 0.0);
+		const glm::dvec3 tangent = glm::normalize(glm::cross(helper, n));
+		const glm::dvec3 bitangent = glm::cross(n, tangent);
+		glm::dvec3 sum(0.0);
+		for (uint32_t i = 0; i < strata; i++)
+		{
+			for (uint32_t j = 0; j < strata; j++)
+			{
+				// Cosine-weighted directions (Malley's method over stratified cells): the mean radiance is the irradiance over pi.
+				const double u = (static_cast<double>(i) + 0.5) / strata;
+				const double v = (static_cast<double>(j) + 0.5) / strata;
+				const double radius = std::sqrt(u);
+				const double angle = glm::two_pi<double>() * v;
+				const glm::dvec3 direction = tangent * (radius * std::cos(angle)) + bitangent * (radius * std::sin(angle)) + n * std::sqrt(1.0 - u);
+				double distance = 0.0;
+				glm::dvec3 hitNormal;
+				const RoomBox* hit = TraceRoom(boxes, origin, direction, distance, hitNormal);
+				if (hit)
+					sum += SunRadiance(boxes, options, *hit, origin + direction * distance, hitNormal);
+				else
+					sum += glm::dvec3(options.AmbientColor); // The constant sky
+			}
+		}
+		return glm::vec3(sum / static_cast<double>(strata * strata));
+	}
+
+	glm::vec3 SunRoomRadiance(const SunRoomOptions& options, const glm::vec3& point, const glm::vec3& normal)
+	{
+		const std::vector<RoomBox> boxes = GetSunRoomBoxes(options);
+		const glm::dvec3 n = glm::normalize(glm::dvec3(normal));
+		const glm::dvec3 origin = glm::dvec3(point) + n * 1e-6;
+		double distance = 0.0;
+		glm::dvec3 hitNormal;
+		// The box the point lies on: the one a short ray back into the surface enters.
+		const RoomBox* box = TraceRoom(boxes, origin + n * 1e-3, -n, distance, hitNormal);
+		return box ? glm::vec3(SunRadiance(boxes, options, *box, origin, n)) : glm::vec3(0.0f);
+	}
+
+	float SunRoomPatchPower(const SunRoomOptions& options, float step)
+	{
+		const std::vector<RoomBox> boxes = GetSunRoomBoxes(options);
+		const RoomBox& floor = boxes[1];
+		const double area = static_cast<double>(step) * step;
+		double power = 0.0;
+		for (double x = floor.Minimum.x + 0.5 * step; x < floor.Maximum.x; x += step)
+		{
+			for (double z = floor.Minimum.z + 0.5 * step; z < floor.Maximum.z; z += step)
+			{
+				const glm::dvec3 radiance = SunRadiance(boxes, options, floor, glm::dvec3(x, floor.Maximum.y, z), glm::dvec3(0.0, 1.0, 0.0));
+				power += (0.2126 * radiance.r + 0.7152 * radiance.g + 0.0722 * radiance.b) * area;
+			}
+		}
+		return static_cast<float>(power);
+	}
+
 	SceneCamera YardStrafe(uint32_t frame, float speed, float aspectRatio)
 	{
 		const glm::vec3 offset(0.02f * speed * static_cast<float>(frame), 0.0f, 0.0f);
@@ -306,7 +503,7 @@ namespace Strata::Tests
 	}
 
 	std::vector<glm::i64vec3> ReferenceVoxels(const Mesh& mesh, const glm::mat4& world, const glm::i64vec3& anchorVoxel, float voxelSize,
-		std::vector<glm::i64vec3>* outFacing)
+		std::vector<glm::i64vec3>* outFacing, std::vector<glm::i64vec3>* outSolid)
 	{
 		const RenderData::AffineTransform rows = RenderData::AffineTransform::FromMatrix(world);
 		const glm::vec3 anchor = glm::vec3(glm::dvec3(anchorVoxel) * static_cast<double>(voxelSize));
@@ -341,6 +538,10 @@ namespace Strata::Tests
 							const float reach = glm::dot(facing, center - corners[0]) + 0.5f * (std::abs(facing.x) + std::abs(facing.y) + std::abs(facing.z));
 							if (outFacing && reach > 0.0f)
 								outFacing->push_back(anchorVoxel + glm::i64vec3(x, y, z));
+							// Include/Voxelize.slang's IsVoxelInFront.
+							const float front = glm::dot(facing, center - corners[0]) - 0.5f * (std::abs(facing.x) + std::abs(facing.y) + std::abs(facing.z));
+							if (outSolid && front < 0.0f)
+								outSolid->push_back(anchorVoxel + glm::i64vec3(x, y, z));
 						}
 					}
 				}
@@ -349,11 +550,14 @@ namespace Strata::Tests
 		const auto less = [](const glm::i64vec3& a, const glm::i64vec3& b) { return std::tie(a.x, a.y, a.z) < std::tie(b.x, b.y, b.z); };
 		std::sort(voxels.begin(), voxels.end(), less);
 		voxels.erase(std::unique(voxels.begin(), voxels.end()), voxels.end());
-		if (outFacing)
+		for (std::vector<glm::i64vec3>* list : { outFacing, outSolid })
 		{
-			std::sort(outFacing->begin(), outFacing->end(), less);
-			outFacing->erase(std::unique(outFacing->begin(), outFacing->end()), outFacing->end());
+			if (!list)
+				continue;
+			std::sort(list->begin(), list->end(), less);
+			list->erase(std::unique(list->begin(), list->end()), list->end());
 		}
+
 		return voxels;
 	}
 

@@ -21,10 +21,13 @@
 #include <utility>
 
 // Global illumination: world-space radiance cascades over a voxel clipmap (Docs/DeveloperGuide.md, "Global illumination").
-// Stage 1 holds the voxels: each frame that wants GI, the clipmap (VoxelClipmap) follows the camera and the scene on the CPU and
-// lists what changed; GPU.RadianceCascades voxelizes it batch by batch (GI/VoxelTriangles.comp, VoxelTiles.comp, VoxelFill.comp,
-// VoxelFinalize.comp) into each level's textures, which the voxels view (GI/VoxelView.frag) shows. Nothing is made before the
-// first frame that wants GI, and the first frame that does not releases everything.
+// Each frame that wants GI, the clipmap (VoxelClipmap) follows the camera and the scene on the CPU and lists what changed;
+// GPU.RadianceCascades voxelizes it batch by batch (GI/VoxelTriangles.comp, VoxelTiles.comp, VoxelFill.comp, VoxelFinalize.comp)
+// into each level's textures, then lights it: the sun and emission injected into every voxel (GI/VoxelInject.comp), the probe
+// cascades' validity and weights (ProbeValidity.comp, ProbeWeights.comp), their rays top down with the merge (CascadeMarch.comp)
+// and cascade 0 reduced to the irradiance field (FieldReduce.comp), which the forward pass gathers for the gi and open views
+// (Include/GIField.slang). The voxels and probes views draw over the image (GI/VoxelView.frag, ProbeView.frag). Nothing is made
+// before the first frame that wants GI, and the first frame that does not releases everything.
 
 namespace Strata
 {
@@ -34,6 +37,80 @@ namespace Strata
 
 		constexpr uint32_t c_GroupSize = 64;
 		constexpr uint32_t c_MaxDispatchGroups = 65535;
+		// The counters' words: tiles made, tile list overflows (VoxelTriangles), cascade 0's dead probes (ProbeValidity), unused,
+		// surface voxels (VoxelInject), three unused.
+		constexpr uint32_t c_CounterWords = 8;
+		constexpr uint32_t c_LightGroupSize = 4; // Inject, validity, weights, reduce: 4 x 4 x 4 threads
+		constexpr uint32_t c_MarchGroupSize = 8; // CascadeMarch: 8 x 8 x 1 rays
+
+		// A compute layout holding exactly a binding set's items (a volatile constant buffer as one).
+		nvrhi::BindingLayoutHandle CreateLayoutFor(nvrhi::IDevice* device, const nvrhi::BindingSetDesc& set)
+		{
+			nvrhi::BindingLayoutDesc desc;
+			desc.visibility = nvrhi::ShaderType::Compute;
+			for (const nvrhi::BindingSetItem& item : set.bindings)
+			{
+				nvrhi::BindingLayoutItem layoutItem = {};
+				layoutItem.slot = item.slot;
+				layoutItem.type = item.type;
+				layoutItem.size = 1;
+				if (item.type == nvrhi::ResourceType::PushConstants)
+					layoutItem.size = static_cast<uint16_t>(item.range.byteSize);
+				else if (item.type == nvrhi::ResourceType::ConstantBuffer && static_cast<nvrhi::IBuffer*>(item.resourceHandle)->getDesc().isVolatile)
+					layoutItem.type = nvrhi::ResourceType::VolatileConstantBuffer;
+				desc.bindings.push_back(layoutItem);
+			}
+			return device->createBindingLayout(desc);
+		}
+
+		// A 3D texture as the GPU holds it, texels in rows of x, then y, then z (tests and tools: waits for the GPU).
+		bool ReadTexture3D(nvrhi::IDevice* device, nvrhi::ITexture* texture, std::vector<uint8_t>& outTexels)
+		{
+			outTexels.clear();
+			if (!texture)
+				return false;
+			const nvrhi::TextureDesc& source = texture->getDesc();
+			nvrhi::TextureDesc stagingDesc;
+			stagingDesc.dimension = nvrhi::TextureDimension::Texture3D;
+			stagingDesc.width = source.width;
+			stagingDesc.height = source.height;
+			stagingDesc.depth = source.depth;
+			stagingDesc.format = source.format;
+			stagingDesc.initialState = nvrhi::ResourceStates::CopyDest;
+			stagingDesc.keepInitialState = true;
+			stagingDesc.debugName = "GIReadback";
+			nvrhi::StagingTextureHandle staging = device->createStagingTexture(stagingDesc, nvrhi::CpuAccessMode::Read);
+			nvrhi::CommandListHandle commandList = device->createCommandList();
+			if (!staging || !commandList)
+				return false;
+			// One copy per depth slice: staging copies take a slice at a time.
+			commandList->open();
+			for (uint32_t z = 0; z < source.depth; z++)
+			{
+				const nvrhi::TextureSlice slice = nvrhi::TextureSlice().setOrigin(0, 0, static_cast<int>(z)).setSize(source.width, source.height, 1);
+				commandList->copyTexture(staging, slice, texture, slice);
+			}
+			commandList->close();
+			device->executeCommandList(commandList);
+			device->waitForIdle();
+			size_t rowPitch = 0;
+			const uint8_t* mapped = static_cast<const uint8_t*>(device->mapStagingTexture(staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch));
+			if (!mapped)
+				return false;
+			const size_t texelBytes = nvrhi::getFormatInfo(source.format).bytesPerBlock;
+			const size_t row = static_cast<size_t>(source.width) * texelBytes;
+			outTexels.resize(row * source.height * source.depth);
+			for (uint32_t z = 0; z < source.depth; z++)
+			{
+				for (uint32_t y = 0; y < source.height; y++)
+					std::memcpy(outTexels.data() + (static_cast<size_t>(z) * source.height + y) * row, mapped + (static_cast<size_t>(z) * source.height + y) * rowPitch, row);
+			}
+			device->unmapStagingTexture(staging);
+			// The GPU is idle: what finished command lists still hold (this copy's staging texture, released renderers'
+			// resources) goes now; tools and tests that read in a loop pump no frames that would collect it.
+			device->runGarbageCollection();
+			return true;
+		}
 
 		// The render scene's GPU copy and the scene's assets as the voxel clipmap reads them.
 		class RendererVoxelSource final : public IVoxelSceneSource
@@ -124,7 +201,13 @@ namespace Strata
 
 	bool SceneRenderer::IsGlobalIlluminationView(SceneLightingView view)
 	{
-		return view == SceneLightingView::Voxels;
+		return view == SceneLightingView::Voxels || view == SceneLightingView::GlobalIllumination || view == SceneLightingView::OpenShare
+			|| view == SceneLightingView::Probes;
+	}
+
+	bool SceneRenderer::IsGlobalIlluminationOverlayView(SceneLightingView view)
+	{
+		return view == SceneLightingView::Voxels || view == SceneLightingView::Probes;
 	}
 
 	const GlobalIlluminationLayout* SceneRenderer::GetGlobalIlluminationLayout() const
@@ -142,11 +225,19 @@ namespace Strata
 		return m_GI ? m_GI->MemoryBytes : 0;
 	}
 
-	nvrhi::ITexture* SceneRenderer::GetBoundGIVoxels(uint32_t level) const
+	std::array<nvrhi::ITexture*, 5> SceneRenderer::GetBoundGITextures() const
 	{
-		if (m_GI && level < m_GI->Levels.size())
-			return m_GI->Levels[level].Material;
-		return Renderer::GetBlack3DTexture();
+		nvrhi::ITexture* black = Renderer::GetBlack3DTexture();
+		std::array<nvrhi::ITexture*, 5> textures = { black, black, black, black, black };
+		if (!m_GI)
+			return textures;
+		if (m_GI->Field)
+			textures[0] = m_GI->Field;
+		if (!m_GI->Cascades.empty() && m_GI->Cascades.front().Validity)
+			textures[1] = m_GI->Cascades.front().Validity;
+		for (uint32_t level = 0; level < 3 && level < m_GI->Levels.size(); level++)
+			textures[2 + level] = m_GI->Levels[level].Material;
+		return textures;
 	}
 
 	bool SceneRenderer::EnsureGlobalIlluminationResources(const GlobalIlluminationLayout& layout)
@@ -191,7 +282,35 @@ namespace Strata
 			textures.Material = createTexture(nvrhi::Format::RGBA8_UNORM, dimensions, name + "Material" + std::to_string(level));
 			textures.Emission = createTexture(nvrhi::Format::R32_UINT, dimensions, name + "Emission" + std::to_string(level));
 			textures.Normal = createTexture(nvrhi::Format::RGBA8_SNORM, dimensions, name + "Normal" + std::to_string(level));
+			textures.Radiance = createTexture(nvrhi::Format::RGBA16_FLOAT, dimensions, name + "Radiance" + std::to_string(level));
 			gi->Levels.push_back(textures);
+		}
+		// The probes: per cascade its validity, its weights (but the top's) and its rays (probe-major a x a tiles); the field.
+		for (uint32_t k = 0; k < layout.Cascades.size(); k++)
+		{
+			const ProbeCascadeLayout& cascade = layout.Cascades[k];
+			const std::string index = std::to_string(k);
+			GlobalIlluminationResources::Cascade textures;
+			textures.Validity = createTexture(nvrhi::Format::RGBA8_UNORM, cascade.Grid, name + "Validity" + index);
+			if (k + 1 < layout.Cascades.size())
+			{
+				textures.WeightsA = createTexture(nvrhi::Format::RGBA8_UNORM, cascade.Grid, name + "WeightsA" + index);
+				textures.WeightsB = createTexture(nvrhi::Format::RGBA8_UNORM, cascade.Grid, name + "WeightsB" + index);
+			}
+			const uint32_t a = cascade.DirectionsPerAxis;
+			textures.Atlas = createTexture(nvrhi::Format::RGBA16_FLOAT, glm::uvec3(cascade.Grid.x * a, cascade.Grid.y * a, cascade.Grid.z), name + "Atlas" + index);
+			gi->Cascades.push_back(textures);
+		}
+		const ProbeCascadeLayout& firstCascade = layout.Cascades.front();
+		gi->Field = createTexture(nvrhi::Format::RGBA16_FLOAT, glm::uvec3(3 * firstCascade.Grid.x, 2 * firstCascade.Grid.y, firstCascade.Grid.z), name + "Field");
+		// The solid angles' normalizations and the faces' cosine sums of cascades 0 and 1, the same every frame.
+		const uint32_t farDirections = layout.Cascades.size() > 1 ? layout.Cascades[1].DirectionsPerAxis : firstCascade.DirectionsPerAxis;
+		gi->SolidAngleNorms = glm::vec4(GlobalIllumination::GetSolidAngleNormalization(firstCascade.DirectionsPerAxis),
+			GlobalIllumination::GetSolidAngleNormalization(farDirections), 0.0f, 0.0f);
+		for (uint32_t face = 0; face < RenderData::c_GIFieldFaces; face++)
+		{
+			gi->FaceWeights[face / 4][face % 4] = 1.0f / GlobalIllumination::GetFaceCosineSum(face, firstCascade.DirectionsPerAxis);
+			gi->FaceWeightsFar[face / 4][face % 4] = 1.0f / GlobalIllumination::GetFaceCosineSum(face, farDirections);
 		}
 
 		// Buffers the voxelizer writes start and stay in UnorderedAccess; what the CPU writes is read as ShaderResource.
@@ -224,7 +343,7 @@ namespace Strata
 			gi->TileArguments = m_Device->createBuffer(desc);
 			created = created && gi->TileArguments;
 		}
-		gi->Counters = createBuffer(4 * sizeof(uint32_t), 0, true, true, "Counters");
+		gi->Counters = createBuffer(c_CounterWords * sizeof(uint32_t), 0, true, true, "Counters");
 		gi->Regions = createBuffer(static_cast<uint64_t>(RenderData::c_GIMaxRegions) * sizeof(RenderData::VoxelRegion), sizeof(RenderData::VoxelRegion), false, false,
 			"Regions");
 		gi->Items = createBuffer(static_cast<uint64_t>(RenderData::c_GIMaxWorkItems) * sizeof(RenderData::VoxelWorkItem), sizeof(RenderData::VoxelWorkItem), false,
@@ -242,7 +361,7 @@ namespace Strata
 		created = created && gi->RepeatSampler;
 		for (GlobalIlluminationResources::CounterReadback& readback : gi->Readbacks)
 		{
-			readback.Readback = CreateScope<BufferReadback>(m_Device, 4 * sizeof(uint32_t), name + "CountersReadback");
+			readback.Readback = CreateScope<BufferReadback>(m_Device, c_CounterWords * sizeof(uint32_t), name + "CountersReadback");
 			created = created && readback.Readback->IsValid();
 		}
 
@@ -322,7 +441,26 @@ namespace Strata
 			release(level.Material);
 			release(level.Emission);
 			release(level.Normal);
+			release(level.Radiance);
 		}
+		for (GlobalIlluminationResources::Cascade& cascade : gi.Cascades)
+		{
+			release(cascade.Validity);
+			release(cascade.WeightsA);
+			release(cascade.WeightsB);
+			release(cascade.Atlas);
+		}
+		release(gi.Field);
+		for (GlobalIlluminationResources::Pass* pass : { &gi.Inject, &gi.Downsample, &gi.Validity, &gi.Weights, &gi.March, &gi.Reduce })
+		{
+			for (nvrhi::BindingSetHandle& set : pass->Sets)
+				release(set);
+			release(pass->Pipeline);
+			release(pass->Layout);
+		}
+		release(gi.ProbeViewSet);
+		release(gi.ProbeViewPipeline);
+		release(gi.ProbeViewLayout);
 		release(gi.ConstantBuffer);
 		release(gi.Scratch);
 		release(gi.Tiles);
@@ -382,8 +520,35 @@ namespace Strata
 			data.ValidMaximum = glm::ivec4(glm::ivec3(state.Valid.Maximum - state.Window), 0);
 			data.Anchor = glm::vec4(glm::vec3(glm::dvec3(state.Anchor) * voxelSize), 0.0f);
 		}
+		// The probe field, snapped to whole top-cascade steps around the camera so every probe keeps its world position.
+		const ProbeCascadeLayout& firstCascade = gi.Layout.Cascades.front();
+		const glm::vec3 fieldOrigin(GlobalIllumination::GetFieldMinimum(gi.Layout, cameraPosition) - cameraPosition);
+		constants.FieldOrigin = glm::vec4(fieldOrigin, firstCascade.Spacing);
+		constants.FieldGrid = glm::uvec4(firstCascade.Grid, static_cast<uint32_t>(gi.Layout.Cascades.size()));
+		constants.SolidAngleNorms = gi.SolidAngleNorms;
+		for (size_t index = 0; index < gi.FaceWeights.size(); index++)
+		{
+			constants.FaceWeights[index] = gi.FaceWeights[index];
+			constants.FaceWeightsFar[index] = gi.FaceWeightsFar[index];
+		}
 
 		const VoxelFrame& work = gi.Frame;
+		// What the forward pass reads: the field (used unless the frame is pending) and voxel levels 0-2.
+		RenderData::GIFieldConstants& field = m_GIFieldConstants;
+		field = {};
+		field.FieldOrigin = constants.FieldOrigin;
+		field.FieldSize = glm::vec4(glm::vec3(firstCascade.Grid), work.Pending ? 0.0f : 1.0f);
+		const float fieldReach = gi.Layout.FieldFullExtent.x + gi.Layout.FieldFade;
+		field.FieldFade = glm::vec4(fieldReach, gi.Layout.FieldFullExtent.y + gi.Layout.FieldFade, fieldReach, gi.Layout.FieldFade);
+		for (uint32_t level = 0; level < 3 && level < levels; level++)
+		{
+			const RenderData::GIVoxelLevelData& data = constants.Levels[level];
+			field.VoxelOrigin[level] = glm::vec4(glm::vec3(data.Origin), data.Texel.w != 0 ? data.Origin.w : 0.0f);
+			field.VoxelTexel[level] = glm::ivec4(glm::ivec3(data.Texel), 0);
+			field.VoxelValidMinimum[level] = data.ValidMinimum;
+			field.VoxelValidMaximum[level] = data.ValidMaximum;
+		}
+		field.VoxelDimensions = glm::vec4(glm::vec3(dimensions), 0.0f);
 		m_Stats.GlobalIllumination = true;
 		m_Stats.GlobalIlluminationPending = work.Pending;
 		m_Stats.GlobalIlluminationSettled = !work.Pending && work.QueuedRegions == 0;
@@ -415,7 +580,17 @@ namespace Strata
 				commandList->clearTextureFloat(level.Material, nvrhi::AllSubresources, nvrhi::Color(0.0f));
 				commandList->clearTextureUInt(level.Emission, nvrhi::AllSubresources, 0);
 				commandList->clearTextureFloat(level.Normal, nvrhi::AllSubresources, nvrhi::Color(0.0f));
+				commandList->clearTextureFloat(level.Radiance, nvrhi::AllSubresources, nvrhi::Color(0.0f));
 			}
+			for (GlobalIlluminationResources::Cascade& cascade : gi.Cascades)
+			{
+				for (nvrhi::ITexture* texture : { cascade.Validity.Get(), cascade.WeightsA.Get(), cascade.WeightsB.Get(), cascade.Atlas.Get() })
+				{
+					if (texture)
+						commandList->clearTextureFloat(texture, nvrhi::AllSubresources, nvrhi::Color(0.0f));
+				}
+			}
+			commandList->clearTextureFloat(gi.Field, nvrhi::AllSubresources, nvrhi::Color(0.0f));
 			gi.Cleared = true;
 		}
 		commandList->clearBufferUInt(gi.Counters, 0);
@@ -454,7 +629,7 @@ namespace Strata
 		if (frame.Batches.empty())
 		{
 			gi.Recorded = true;
-			return true;
+			return RecordGlobalIlluminationLight(commandList);
 		}
 
 		// The geometry pool's tables, as the voxelizer reads them (the GPU-driven culling may not have run this frame).
@@ -579,11 +754,198 @@ namespace Strata
 		}
 
 		gi.Recorded = true;
+		return RecordGlobalIlluminationLight(commandList);
+	}
+
+	bool SceneRenderer::RecordGlobalIlluminationLight(nvrhi::ICommandList* commandList)
+	{
+		ST_PROFILE_FUNCTION();
+		GlobalIlluminationResources& gi = *m_GI;
+		const GlobalIlluminationLayout& layout = gi.Layout;
+		const uint32_t levels = static_cast<uint32_t>(gi.Levels.size());
+		const uint32_t cascades = static_cast<uint32_t>(gi.Cascades.size());
+		nvrhi::ITexture* black = Renderer::GetBlack3DTexture();
+		nvrhi::ITexture* environment = GetEnvironmentCube() ? GetEnvironmentCube() : Renderer::GetBlackCubeTexture();
+
+		// The binding sets, made again when the environment cube changes (the textures live as long as the resources).
+		if (!gi.LightBound || gi.BoundEnvironment != environment)
+		{
+			// What every light pass reads: the frame's and the GI's constants, the push constants, the sky, the levels' material
+			// and normal (and, for the march, radiance).
+			const auto common = [&](bool radiance)
+			{
+				nvrhi::BindingSetDesc desc;
+				desc.bindings = {
+					nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer),
+					nvrhi::BindingSetItem::ConstantBuffer(1, gi.ConstantBuffer),
+					nvrhi::BindingSetItem::PushConstants(2, sizeof(RenderData::GIProbePassParameters)),
+					nvrhi::BindingSetItem::Texture_SRV(6, environment),
+					nvrhi::BindingSetItem::Sampler(8, m_LinearClampSampler),
+					nvrhi::BindingSetItem::Sampler(12, gi.RepeatSampler)
+				};
+				const auto add3D = [&](uint32_t slot, nvrhi::ITexture* texture)
+				{
+					desc.bindings.push_back(nvrhi::BindingSetItem::Texture_SRV(slot, texture ? texture : black, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources,
+						nvrhi::TextureDimension::Texture3D));
+				};
+				for (uint32_t level = 0; level < RenderData::c_GIMaxVoxelLevels; level++)
+				{
+					const bool present = level < levels;
+					add3D(41 + level, present ? gi.Levels[level].Material.Get() : nullptr);
+					add3D(45 + level, present ? gi.Levels[level].Normal.Get() : nullptr);
+					if (radiance)
+						add3D(49 + level, present ? gi.Levels[level].Radiance.Get() : nullptr);
+				}
+				return desc;
+			};
+			const auto add3D = [&](nvrhi::BindingSetDesc& desc, uint32_t slot, nvrhi::ITexture* texture)
+			{
+				desc.bindings.push_back(nvrhi::BindingSetItem::Texture_SRV(slot, texture ? texture : black, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources,
+					nvrhi::TextureDimension::Texture3D));
+			};
+			const auto addUAV = [](nvrhi::BindingSetDesc& desc, uint32_t slot, nvrhi::ITexture* texture)
+			{
+				desc.bindings.push_back(nvrhi::BindingSetItem::Texture_UAV(slot, texture, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources,
+					nvrhi::TextureDimension::Texture3D));
+			};
+			bool created = true;
+			// A pass's layout and pipeline come with its first set (every set of a pass holds the same items).
+			const auto makeSet = [&](GlobalIlluminationResources::Pass& pass, const nvrhi::BindingSetDesc& desc, const char* shader)
+			{
+				if (!pass.Layout)
+				{
+					pass.Layout = CreateLayoutFor(m_Device, desc);
+					pass.Pipeline = pass.Layout ? CreateComputePipeline(shader, pass.Layout) : nullptr;
+				}
+				nvrhi::BindingSetHandle set = pass.Pipeline ? m_Device->createBindingSet(desc, pass.Layout) : nullptr;
+				created = created && set;
+				pass.Sets.push_back(set);
+			};
+			for (GlobalIlluminationResources::Pass* pass : { &gi.Inject, &gi.Downsample, &gi.Validity, &gi.Weights, &gi.March, &gi.Reduce })
+				pass->Sets.clear();
+			for (uint32_t level = 0; level < levels; level++)
+			{
+				nvrhi::BindingSetDesc desc = common(false);
+				add3D(desc, 53, gi.Levels[level].Emission);
+				addUAV(desc, 0, gi.Levels[level].Radiance);
+				desc.bindings.push_back(nvrhi::BindingSetItem::RawBuffer_UAV(7, gi.Counters));
+				makeSet(gi.Inject, desc, "GI/VoxelInject.comp");
+			}
+			for (uint32_t level = 1; level < levels; level++)
+			{
+				nvrhi::BindingSetDesc desc = common(false);
+				add3D(desc, 49, gi.Levels[level - 1].Radiance);
+				addUAV(desc, 0, gi.Levels[level].Radiance);
+				makeSet(gi.Downsample, desc, "GI/VoxelDownsample.comp");
+			}
+			for (uint32_t k = 0; k < cascades; k++)
+			{
+				const GlobalIlluminationResources::Cascade& cascade = gi.Cascades[k];
+				nvrhi::BindingSetDesc validity = common(false);
+				addUAV(validity, 0, cascade.Validity);
+				validity.bindings.push_back(nvrhi::BindingSetItem::RawBuffer_UAV(7, gi.Counters));
+				makeSet(gi.Validity, validity, "GI/ProbeValidity.comp");
+				const bool top = k + 1 == cascades;
+				if (!top)
+				{
+					nvrhi::BindingSetDesc weights = common(false);
+					add3D(weights, 57, gi.Cascades[k + 1].Validity);
+					addUAV(weights, 0, cascade.WeightsA);
+					addUAV(weights, 1, cascade.WeightsB);
+					makeSet(gi.Weights, weights, "GI/ProbeWeights.comp");
+				}
+				nvrhi::BindingSetDesc march = common(true);
+				add3D(march, 57, cascade.Validity);
+				add3D(march, 58, top ? nullptr : cascade.WeightsA.Get());
+				add3D(march, 59, top ? nullptr : cascade.WeightsB.Get());
+				add3D(march, 60, top ? nullptr : gi.Cascades[k + 1].Atlas.Get());
+				addUAV(march, 0, cascade.Atlas);
+				makeSet(gi.March, march, "GI/CascadeMarch.comp");
+			}
+			nvrhi::BindingSetDesc reduce = common(false);
+			const bool single = cascades == 1;
+			add3D(reduce, 57, gi.Cascades.front().Validity);
+			add3D(reduce, 58, single ? nullptr : gi.Cascades.front().WeightsA.Get());
+			add3D(reduce, 59, single ? nullptr : gi.Cascades.front().WeightsB.Get());
+			add3D(reduce, 60, gi.Cascades.front().Atlas);
+			add3D(reduce, 61, single ? nullptr : gi.Cascades[1].Atlas.Get());
+			addUAV(reduce, 0, gi.Field);
+			makeSet(gi.Reduce, reduce, "GI/FieldReduce.comp");
+			gi.LightBound = created;
+			gi.BoundEnvironment = environment;
+			if (!created)
+			{
+				m_Errors.Report("failed to create global illumination's light pipelines or bindings; its views show today's light");
+				return false;
+			}
+		}
+
+		const auto parameters = [&](uint32_t k)
+		{
+			RenderData::GIProbePassParameters pass = {};
+			const ProbeCascadeLayout& cascade = layout.Cascades[k];
+			const bool top = k + 1 == cascades;
+			pass.Grid = glm::uvec4(cascade.Grid, k);
+			if (!top)
+				pass.ParentGrid = glm::uvec4(layout.Cascades[k + 1].Grid, layout.Cascades[k + 1].DirectionsPerAxis);
+			pass.Interval = glm::vec4(cascade.Spacing, cascade.IntervalStart, top ? -1.0f : cascade.IntervalEnd, cascade.LeadIn);
+			pass.DirectionsPerAxis = cascade.DirectionsPerAxis;
+			pass.MinimumLevel = cascade.MinimumLevel;
+			return pass;
+		};
+		const auto dispatch = [&](const GlobalIlluminationResources::Pass& pass, size_t set, const RenderData::GIProbePassParameters& constants,
+			uint32_t x, uint32_t y, uint32_t z)
+		{
+			nvrhi::ComputeState state;
+			state.pipeline = pass.Pipeline;
+			state.bindings = { pass.Sets[set] };
+			commandList->setComputeState(state);
+			commandList->setPushConstants(&constants, sizeof(constants));
+			commandList->dispatch(x, y, z);
+		};
+
+		// Injection: every voxel of every level.
+		const glm::uvec3 dimensions = layout.Levels.front().Dimensions;
+		for (uint32_t level = 0; level < levels; level++)
+		{
+			RenderData::GIProbePassParameters inject = {};
+			inject.Level = level;
+			dispatch(gi.Inject, level, inject, DivideUp(dimensions.x, c_LightGroupSize), DivideUp(dimensions.y, c_LightGroupSize), DivideUp(dimensions.z, c_LightGroupSize));
+		}
+		// The coarser levels take the finer levels' light where those hold the scene, finest first.
+		for (uint32_t level = 1; level < levels; level++)
+		{
+			RenderData::GIProbePassParameters downsample = {};
+			downsample.Level = level;
+			dispatch(gi.Downsample, level - 1, downsample, DivideUp(dimensions.x, c_LightGroupSize), DivideUp(dimensions.y, c_LightGroupSize),
+				DivideUp(dimensions.z, c_LightGroupSize));
+		}
+		// The probes' validity, then their parents' weights (which read the next cascade's validity).
+		for (uint32_t k = 0; k < cascades; k++)
+		{
+			const glm::uvec3 grid = layout.Cascades[k].Grid;
+			dispatch(gi.Validity, k, parameters(k), DivideUp(grid.x, c_LightGroupSize), DivideUp(grid.y, c_LightGroupSize), DivideUp(grid.z, c_LightGroupSize));
+		}
+		for (uint32_t k = 0; k + 1 < cascades; k++)
+		{
+			const glm::uvec3 grid = layout.Cascades[k].Grid;
+			dispatch(gi.Weights, k, parameters(k), DivideUp(grid.x, c_LightGroupSize), DivideUp(grid.y, c_LightGroupSize), DivideUp(grid.z, c_LightGroupSize));
+		}
+		// The rays, top down: each cascade merges the one above it.
+		for (uint32_t k = cascades; k-- > 0;)
+		{
+			const ProbeCascadeLayout& cascade = layout.Cascades[k];
+			const uint32_t a = cascade.DirectionsPerAxis;
+			dispatch(gi.March, k, parameters(k), DivideUp(cascade.Grid.x * a, c_MarchGroupSize), DivideUp(cascade.Grid.y * a, c_MarchGroupSize), cascade.Grid.z);
+		}
+		const glm::uvec3 grid = layout.Cascades.front().Grid;
+		dispatch(gi.Reduce, 0, parameters(0), DivideUp(grid.x, c_LightGroupSize), DivideUp(grid.y, c_LightGroupSize), DivideUp(grid.z, c_LightGroupSize));
+
 		// The counters into the next free readback (a copy still under way leaves the frame unread).
 		GlobalIlluminationResources::CounterReadback& readback = gi.Readbacks[gi.ReadbackIndex];
 		if (!readback.Readback->IsPending() || readback.Readback->IsReady())
 		{
-			readback.Readback->Record(commandList, gi.Counters, 0, 4 * sizeof(uint32_t));
+			readback.Readback->Record(commandList, gi.Counters, 0, c_CounterWords * sizeof(uint32_t));
 			readback.Render = m_RenderCount + 1;
 			gi.ReadbackRecorded = true;
 		}
@@ -613,13 +975,18 @@ namespace Strata
 			if (entry.Readback->IsReady() && (!newest || entry.Render > newest->Render))
 				newest = &entry;
 		}
-		uint32_t counters[4] = {};
+		uint32_t counters[c_CounterWords] = {};
 		if (!newest || !newest->Readback->Read(counters, sizeof(counters)))
 			return;
 		m_GPUStats.HasGICounters = true;
 		m_GPUStats.GICountersRender = newest->Render;
 		m_GPUStats.GITiles = counters[0];
 		m_GPUStats.GITileOverflow = counters[1];
+		const glm::uvec3 grid = m_GI->Layout.Cascades.front().Grid;
+		const uint32_t probes = grid.x * grid.y * grid.z;
+		m_GPUStats.GIDeadProbes = std::min(counters[2], probes);
+		m_GPUStats.GILiveProbes = probes - m_GPUStats.GIDeadProbes;
+		m_GPUStats.GISurfaceVoxels = counters[4];
 	}
 
 	bool SceneRenderer::DrawVoxelView(nvrhi::ICommandList* commandList, const SceneRenderOptions& options, const nvrhi::Viewport& viewport)
@@ -691,44 +1058,74 @@ namespace Strata
 			return false;
 		const GlobalIlluminationResources::Level& textures = m_GI->Levels[level];
 		nvrhi::ITexture* texture = which == GlobalIlluminationTexture::Material ? textures.Material.Get()
-			: which == GlobalIlluminationTexture::Emission ? textures.Emission.Get() : textures.Normal.Get();
-		const nvrhi::TextureDesc& source = texture->getDesc();
-		nvrhi::TextureDesc stagingDesc;
-		stagingDesc.dimension = nvrhi::TextureDimension::Texture3D;
-		stagingDesc.width = source.width;
-		stagingDesc.height = source.height;
-		stagingDesc.depth = source.depth;
-		stagingDesc.format = source.format;
-		stagingDesc.initialState = nvrhi::ResourceStates::CopyDest;
-		stagingDesc.keepInitialState = true;
-		stagingDesc.debugName = "GIVoxelReadback";
-		nvrhi::StagingTextureHandle staging = m_Device->createStagingTexture(stagingDesc, nvrhi::CpuAccessMode::Read);
-		nvrhi::CommandListHandle commandList = m_Device->createCommandList();
-		if (!staging || !commandList)
+			: which == GlobalIlluminationTexture::Emission ? textures.Emission.Get()
+			: which == GlobalIlluminationTexture::Normal ? textures.Normal.Get() : textures.Radiance.Get();
+		return ReadTexture3D(m_Device, texture, outTexels);
+	}
+
+	bool SceneRenderer::ReadGlobalIlluminationValidity(uint32_t cascade, std::vector<uint8_t>& outTexels) const
+	{
+		outTexels.clear();
+		if (!m_GI || cascade >= m_GI->Cascades.size())
 			return false;
-		// One copy per depth slice: staging copies take a slice at a time.
-		commandList->open();
-		for (uint32_t z = 0; z < source.depth; z++)
-		{
-			const nvrhi::TextureSlice slice = nvrhi::TextureSlice().setOrigin(0, 0, static_cast<int>(z)).setSize(source.width, source.height, 1);
-			commandList->copyTexture(staging, slice, texture, slice);
-		}
-		commandList->close();
-		m_Device->executeCommandList(commandList);
-		m_Device->waitForIdle();
-		size_t rowPitch = 0;
-		const uint8_t* mapped = static_cast<const uint8_t*>(m_Device->mapStagingTexture(staging, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch));
-		if (!mapped)
+		return ReadTexture3D(m_Device, m_GI->Cascades[cascade].Validity, outTexels);
+	}
+
+	bool SceneRenderer::ReadGlobalIlluminationField(std::vector<uint8_t>& outTexels) const
+	{
+		outTexels.clear();
+		return m_GI && ReadTexture3D(m_Device, m_GI->Field, outTexels);
+	}
+
+	bool SceneRenderer::DrawProbeView(nvrhi::ICommandList* commandList, const nvrhi::Viewport& viewport)
+	{
+		if (!m_GI)
 			return false;
-		const size_t texelBytes = nvrhi::getFormatInfo(source.format).bytesPerBlock;
-		const size_t row = static_cast<size_t>(source.width) * texelBytes;
-		outTexels.resize(row * source.height * source.depth);
-		for (uint32_t z = 0; z < source.depth; z++)
+		GlobalIlluminationResources& gi = *m_GI;
+		if (!gi.ProbeViewPipeline)
 		{
-			for (uint32_t y = 0; y < source.height; y++)
-				std::memcpy(outTexels.data() + (static_cast<size_t>(z) * source.height + y) * row, mapped + (static_cast<size_t>(z) * source.height + y) * rowPitch, row);
+			nvrhi::BindingLayoutDesc layout;
+			layout.visibility = nvrhi::ShaderType::Pixel;
+			layout.bindings = { nvrhi::BindingLayoutItem::VolatileConstantBuffer(0), nvrhi::BindingLayoutItem::VolatileConstantBuffer(3),
+				nvrhi::BindingLayoutItem::Texture_SRV(35),
+				nvrhi::BindingLayoutItem::Texture_SRV(37), nvrhi::BindingLayoutItem::Texture_SRV(41) };
+			gi.ProbeViewLayout = m_Device->createBindingLayout(layout);
+			nvrhi::IShader* pixelShader = Renderer::GetShaderLibrary().Get("GI/ProbeView.frag");
+			ST_CORE_VERIFY(pixelShader, "SceneRenderer: the probes view's shader is missing");
+			if (gi.ProbeViewLayout)
+			{
+				// Over the lit image without blending or depth: pixels without a probe in front of the scene are discarded.
+				nvrhi::GraphicsPipelineDesc desc;
+				desc.primType = nvrhi::PrimitiveType::TriangleList;
+				desc.VS = m_FullscreenVertexShader;
+				desc.PS = pixelShader;
+				desc.bindingLayouts = { gi.ProbeViewLayout };
+				desc.renderState.rasterState.setCullNone();
+				desc.renderState.depthStencilState.setDepthTestEnable(false).setDepthWriteEnable(false);
+				gi.ProbeViewPipeline = m_Device->createGraphicsPipeline(desc, m_OutputFramebuffer->getFramebufferInfo());
+			}
 		}
-		m_Device->unmapStagingTexture(staging);
+		if (gi.ProbeViewPipeline && !gi.ProbeViewSet)
+		{
+			nvrhi::BindingSetDesc desc;
+			desc.bindings = { nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer), nvrhi::BindingSetItem::ConstantBuffer(3, m_GIFieldConstantBuffer),
+				nvrhi::BindingSetItem::Texture_SRV(35, gi.Field, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
+				nvrhi::BindingSetItem::Texture_SRV(37, gi.Cascades.front().Validity, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
+				nvrhi::BindingSetItem::Texture_SRV(41, m_DepthTexture) };
+			gi.ProbeViewSet = m_Device->createBindingSet(desc, gi.ProbeViewLayout);
+		}
+		if (!gi.ProbeViewPipeline || !gi.ProbeViewSet)
+		{
+			m_Errors.Report("failed to create the probes view's pipeline or bindings");
+			return false;
+		}
+		nvrhi::GraphicsState state;
+		state.pipeline = gi.ProbeViewPipeline;
+		state.framebuffer = m_OutputFramebuffer;
+		state.viewport.addViewportAndScissorRect(viewport);
+		state.bindings = { gi.ProbeViewSet };
+		commandList->setGraphicsState(state);
+		commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
 		return true;
 	}
 

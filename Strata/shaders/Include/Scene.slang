@@ -35,6 +35,9 @@
 #define ST_LIGHTING_VIEW_INDIRECT          3u // Indirect light only
 #define ST_LIGHTING_VIEW_LUMINANCE         4u // The lit image (the overlay bands it)
 #define ST_LIGHTING_VIEW_ALBEDO            5u // The base color, unexposed
+// 6 (the GI's voxels) and 9 (its probes) draw over the image; the forward pass shades them as the lit image.
+#define ST_LIGHTING_VIEW_GLOBAL_ILLUMINATION 7u // The GI's diffuse light on white (the field, today's beyond it)
+#define ST_LIGHTING_VIEW_OPEN_SHARE        8u // The share of the sky a surface sees through the world, unexposed
 
 #define ST_SAMPLER_COUNT 6
 

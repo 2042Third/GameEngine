@@ -114,6 +114,16 @@ namespace Strata
 		// point on the octahedron, |p.x| + |p.y| + |p.z| = 1), normalized so a tile's add up to 4 pi.
 		glm::vec3 GetDirection(uint32_t u, uint32_t v, uint32_t a);
 		float GetSolidAngle(uint32_t u, uint32_t v, uint32_t a);
+		// The field's face axes (+X, -X, +Y, -Y, +Z, -Z), and C_f: the sum over an a x a tile's directions of max(0, d . axis) times
+		// their solid angles. The reduce divides by it instead of pi, so a uniform radiance gives every face exactly that radiance
+		// (16 directions sum to 0.959 pi for the X and Y faces and 1.115 pi for the Z faces: OctahedralDecode folds along z).
+		glm::vec3 GetFaceAxis(uint32_t face);
+		// What GetSolidAngle multiplies the octahedron's Jacobian 1 / |p|^3 by for an a x a tile (its texels add up to 4 pi).
+		float GetSolidAngleNormalization(uint32_t a);
+		float GetFaceCosineSum(uint32_t face, uint32_t a);
+		// The probe field's minimum corner around a camera: the nearest whole step of the layout's FieldSnap to the camera less
+		// half the field's extent, per axis, so the camera stays within half a step of the field's center.
+		glm::dvec3 GetFieldMinimum(const GlobalIlluminationLayout& layout, const glm::dvec3& cameraPosition);
 
 		// The world voxel index of a position: floor(position / voxelSize).
 		glm::i64vec3 GetVoxelIndex(const glm::dvec3& position, float voxelSize);

@@ -339,7 +339,10 @@ namespace Strata
 		Indirect,         // Only the indirect light (sky, probes, screen-space reflections), through the scene's exposure
 		Luminance,        // The scene's luminance as EV100 bands (log2 nits + 3)
 		Albedo,           // The base color, with values outside [RenderData::c_AlbedoLow, c_AlbedoHigh] marked
-		Voxels            // Global illumination's voxels as the GI sees the scene (GI/VoxelView.frag over the lit image)
+		Voxels,           // Global illumination's voxels as the GI sees the scene, lit (GI/VoxelView.frag over the lit image)
+		GlobalIllumination, // Global illumination's diffuse light on white surfaces (the field, today's light beyond it), through the scene's exposure
+		OpenShare,        // The cosine-weighted share of the sky each surface sees through the world, as gray (1 beyond the field)
+		Probes            // Global illumination's first cascade of probes over the lit image (GI/ProbeView.frag): live ones lit, dead ones red
 	};
 
 	// Display colors of the lighting views that show values (sRGB; alpha unused). Not saved: the editor sets them from its theme.
@@ -795,6 +798,9 @@ namespace Strata
 		uint64_t GICountersRender = 0;
 		uint32_t GITiles = 0;
 		uint32_t GITileOverflow = 0;
+		uint32_t GIDeadProbes = 0;    // Cascade 0's probes inside solids (validity 0)
+		uint32_t GILiveProbes = 0;    // Cascade 0's other probes
+		uint32_t GISurfaceVoxels = 0; // Voxels of every level that hold a surface (lit or two-sided)
 	};
 
 	// A frame's statistics with what the GPU drew added (for SceneRendererStats::GPUDriven frames, as far as the GPU's counts
@@ -1054,6 +1060,8 @@ namespace Strata
 		// run it, the layout and voxel clipmap of the renderer's (null while it has none: no frame wanted it since its last
 		// release) and the bytes of its GPU resources (0 without).
 		static bool IsGlobalIlluminationView(SceneLightingView view);
+		// The GI's views drawn over the image (voxels, probes) rather than by the forward pass (gi, open).
+		static bool IsGlobalIlluminationOverlayView(SceneLightingView view);
 		const GlobalIlluminationLayout* GetGlobalIlluminationLayout() const;
 		const VoxelClipmap* GetVoxelClipmap() const;
 		uint64_t GetGlobalIlluminationMemoryBytes() const;
@@ -1064,9 +1072,17 @@ namespace Strata
 		{
 			Material = 0,
 			Emission,
-			Normal
+			Normal,
+			Radiance // RGBA16F: 8 bytes a texel
 		};
 		bool ReadGlobalIlluminationVoxels(uint32_t level, GlobalIlluminationTexture texture, std::vector<uint8_t>& outTexels) const;
+		// The probes' textures as the GPU holds them (tests and tools only, waiting for the GPU), texels in rows of x, then y, then z:
+		// a cascade's validity (RGBA8, r the validity), the field (RGBA16F, (3 x, 2 y, z) per cascade-0 probe: faces +X, -X, +Y in
+		// the first row, -Y, +Z, -Z in the second; rgb irradiance over pi times c_GIRadianceScale, a the face's sky share).
+		bool ReadGlobalIlluminationValidity(uint32_t cascade, std::vector<uint8_t>& outTexels) const;
+		bool ReadGlobalIlluminationField(std::vector<uint8_t>& outTexels) const;
+		// The forward pass's GI constants of the latest frame (zero without GI).
+		const RenderData::GIFieldConstants& GetGlobalIlluminationFieldConstants() const { return m_GIFieldConstants; }
 		// Frames rendered (Render calls that returned true) since the renderer was created.
 		uint64_t GetRenderCount() const { return m_RenderCount; }
 		// What the shadows debug view (SceneRenderOptions::ShowShadowView) counted in the newest frame that showed it whose counts
@@ -2030,10 +2046,16 @@ namespace Strata
 		bool RecordGlobalIllumination(nvrhi::ICommandList* commandList);
 		// The voxels view over the output (GI/VoxelView.frag, in GPU.Overlays); false when GPU resources failed (reported).
 		bool DrawVoxelView(nvrhi::ICommandList* commandList, const SceneRenderOptions& options, const nvrhi::Viewport& viewport);
+		// The probes view over the output (GI/ProbeView.frag, in GPU.Overlays); false when GPU resources failed (reported).
+		bool DrawProbeView(nvrhi::ICommandList* commandList, const nvrhi::Viewport& viewport);
+		// The GI's light (GPU.RadianceCascades after the voxelization): injection, probes, cascades, the field. False (reported) when
+		// its pipelines or bindings could not be made.
+		bool RecordGlobalIlluminationLight(nvrhi::ICommandList* commandList);
 		void SubmitGlobalIlluminationReadback();
 		void ResolveGlobalIlluminationCounters(bool wait);
-		// What the scene binding sets bind at SRV 38-40: voxel levels 0-2's material once made, else the black 3D texture.
-		nvrhi::ITexture* GetBoundGIVoxels(uint32_t level) const;
+		// What the scene binding sets bind at SRV 35, 37 and 38-40: the field, cascade 0's validity and voxel levels 0-2's material
+		// once made, else the black 3D texture.
+		std::array<nvrhi::ITexture*, 5> GetBoundGITextures() const;
 	private:
 		SceneRendererSpecification m_Specification;
 		nvrhi::IDevice* m_Device = nullptr;
@@ -2268,6 +2290,8 @@ namespace Strata
 		nvrhi::SamplerHandle m_PointClampSampler;
 
 		nvrhi::BufferHandle m_FrameConstantBuffer;
+		nvrhi::BufferHandle m_GIFieldConstantBuffer; // RenderData::GIFieldConstants (b3 of the scene layout), written every frame
+		RenderData::GIFieldConstants m_GIFieldConstants = {};
 		// Submitted frames that wrote FrameConstants, oldest first, with how many versions each holds until the GPU finishes it.
 		struct SubmittedFrameConstants
 		{
@@ -2880,7 +2904,7 @@ namespace Strata
 		// whether the frame runs it, and the voxel levels the scene binding sets name at SRV 38-40.
 		Scope<GlobalIlluminationResources> m_GI;
 		bool m_GIFrame = false;
-		std::array<nvrhi::ITexture*, 3> m_BoundGIVoxels = {};
+		std::array<nvrhi::ITexture*, 5> m_BoundGITextures = {};
 	};
 
 }

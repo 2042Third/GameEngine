@@ -148,7 +148,7 @@ namespace Strata
 		nlohmann::json DebugViewSchema(std::string description)
 		{
 			return { { "type", "string" }, { "enum", { "none", "streaming", "lod", "mip", "motion", "shadows", "lighting", "ao", "indirect", "luminance",
-				"albedo", "voxels" } }, { "description", std::move(description) } };
+				"albedo", "voxels", "gi", "open", "probes" } }, { "description", std::move(description) } };
 		}
 
 		// What the shadows debug view counted (SceneRenderer::GetShadowViewStats): shares of the image's pixels, and screen pixels
@@ -235,6 +235,23 @@ namespace Strata
 				}
 			}
 			result["voxelLevels"] = std::move(levels);
+			if (const GlobalIlluminationLayout* layout = renderer.GetGlobalIlluminationLayout(); layout && !layout->Cascades.empty())
+			{
+				const glm::uvec3 grid = layout->Cascades.front().Grid;
+				nlohmann::json directions = nlohmann::json::array();
+				for (const ProbeCascadeLayout& cascade : layout->Cascades)
+					directions.push_back(cascade.DirectionsPerAxis * cascade.DirectionsPerAxis);
+				result["probeSpacing"] = layout->Cascades.front().Spacing;
+				result["probeGrid"] = { grid.x, grid.y, grid.z };
+				result["cascades"] = layout->Cascades.size();
+				result["directions"] = std::move(directions);
+				const SceneRendererGPUStats& gpuStats = renderer.GetGPUStats();
+				if (gpuStats.HasGICounters)
+				{
+					result["liveProbes"] = gpuStats.GILiveProbes;
+					result["deadProbes"] = gpuStats.GIDeadProbes;
+				}
+			}
 			return result;
 		}
 
@@ -1074,8 +1091,8 @@ namespace Strata
 			"game's screen-space UI, its HUD text and UI canvases, and a click selects a UI element), canvasMode (the 2D canvas mode for placing game "
 			"UI), the gizmo mode and space, whether gizmo drags snap, the snap steps, debugView (\"none\", or \"streaming\" / \"lod\" / \"mip\" / "
 			"\"motion\" / \"shadows\": the image colored by streaming state, level of detail, the mip levels textures lack, motion or shadow texels "
-			"per pixel; or a lighting view: \"lighting\", \"ao\", \"indirect\", \"luminance\", \"albedo\", \"voxels\" (global illumination's "
-			"voxels)), gameView (the Game view's image: {mode, width, "
+			"per pixel; or a lighting view: \"lighting\", \"ao\", \"indirect\", \"luminance\", \"albedo\", or global illumination's \"voxels\", "
+			"\"gi\", \"open\", \"probes\"), gameView (the Game view's image: {mode, width, "
 			"height}, width and height for mode \"custom\"), pilotGameCamera (the Scene view looks through the scene's primary camera) and editPose "
 			"(\"rest\" or \"clipStart\": what skinned characters of the edited scene show while it does not play).",
 			ObjectSchema({}),
@@ -1116,7 +1133,9 @@ namespace Strata
 					"alone), \"ao\" shows the occlusion that darkens indirect light (white: none), \"indirect\" only the sky's, probes' and reflected light, "
 					"\"luminance\" the scene's luminance in EV100 bands (log2 nits + 3; the legend names them), \"albedo\" the base colors with values "
 					"below 0.03 marked Azurite and above 0.85 striped Cinnabar, \"voxels\" global illumination's voxels: the scene as the GI sees it, "
-					"each surface its voxels' albedo, two-sided voxels (no bounce) Cinnabar, \"none\" shows the image as rendered") },
+					"each surface its voxels' albedo, two-sided voxels (no bounce) Cinnabar, \"gi\" global illumination's diffuse light on white "
+					"surfaces (its field near the camera, today's light beyond), \"open\" the share of the sky each surface sees through the world "
+					"as gray, \"probes\" its first cascade's probes, dead ones (inside solids) dark red, \"none\" shows the image as rendered") },
 				{ "gameView", ObjectSchema({
 					{ "mode", { { "type", "string" }, { "enum", { "free", "16:9", "16:10", "4:3", "21:9", "1920x1080", "1280x720", "custom", "game" } },
 						{ "description", "The Game view's image: free fills the panel, an aspect ratio is the largest image of it inside the panel "
@@ -1293,7 +1312,8 @@ namespace Strata
 					request.DebugView = ViewportDebugViewFromString(arguments.GetString("debugView"));
 					if (!request.DebugView && arguments.IsValid())
 						arguments.SetError("Parameter 'debugView' must be \"none\", \"streaming\", \"lod\", \"mip\", \"motion\", \"shadows\", \"lighting\", "
-							"\"ao\", \"indirect\", \"luminance\", \"albedo\" or \"voxels\"");
+							"\"ao\", \"indirect\", \"luminance\", \"albedo\", \"voxels\", \"gi\", \"open\" or \"probes\"");
+
 				}
 				if (arguments.Has("quality"))
 				{

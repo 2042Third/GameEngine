@@ -91,11 +91,14 @@ RWByteAddressBuffer u_Counters : register(u6);
 #define ST_GI_COUNTER_TILES 0u
 #define ST_GI_COUNTER_TILE_OVERFLOW 4u
 
-// Voxel classes in a key's bits 30-31: the largest key wins, so opaque surfaces win over alpha-masked ones.
+// Voxel classes in a key's bits 30-31: the largest key wins, so opaque surfaces win over alpha-masked ones. Bit 29: a triangle
+// reaches into the voxel or touches it from behind (solid); without it every triangle marking the voxel lies on its boundary
+// facing into it (the layer in front of a face on the grid: ST_GI_TOUCH_OCCUPANCY). Bit 28: double-sided.
 #define ST_VOXEL_CLASS_MASKED 1u
 #define ST_VOXEL_CLASS_INTERIOR 2u
 #define ST_VOXEL_CLASS_OPAQUE 3u
-#define ST_VOXEL_KEY_DOUBLE_SIDED (1u << 29)
+#define ST_VOXEL_KEY_SOLID (1u << 29)
+#define ST_VOXEL_KEY_DOUBLE_SIDED (1u << 28)
 
 uint GetScratchAddress(uint block, uint voxel)
 {
@@ -126,12 +129,6 @@ uint PackRGB9E5(float3 color)
 	}
 	uint3 mantissa = uint3(min(floor(clamped / denominator + 0.5), float3(511.0)));
 	return mantissa.x | (mantissa.y << 9) | (mantissa.z << 18) | (uint(exponent) << 27);
-}
-
-float3 UnpackRGB9E5(uint value)
-{
-	float scale = exp2(float(int(value >> 27)) - 24.0);
-	return float3(float(value & 511u), float((value >> 9) & 511u), float((value >> 18) & 511u)) * scale;
 }
 
 // The voxel coordinate of a mesh position (GlobalIllumination::GetVoxelCoordinate): the world rows' translation relative to the
@@ -271,6 +268,15 @@ bool IsVoxelBehind(VoxelTriangle triangle, int3 voxel)
 	return reach <= 0.0;
 }
 
+// Whether a voxel (anchor-relative index) lies wholly in front of a triangle's plane, which then only touches its boundary from
+// the front: the voxel in front of a face on the grid, marked so the face has a lit layer (touching counts as overlap).
+bool IsVoxelInFront(VoxelTriangle triangle, int3 voxel)
+{
+	float3 facing = triangle.Facing;
+	precise float reach = dot(facing, (float3(voxel) + 0.5) - triangle.A) - 0.5 * (abs(facing.x) + abs(facing.y) + abs(facing.z));
+	return reach >= 0.0;
+}
+
 // The writes of a triangle to a voxel of its region's scratch (local: relative to the region's minimum). A glowing triangle adds
 // the share of the voxel's face it covers (fixed point, integer adds: the same in any order); the voxel's emission is the
 // brightest of its triangles' times their coverage together, at most 1 (GI/VoxelFinalize.comp). Its normal goes only to voxels
@@ -280,7 +286,9 @@ void WriteVoxel(VoxelTriangle triangle, int3 local, uint emission, uint coverage
 {
 	uint voxel = GetScratchVoxel(triangle.Region, local);
 	uint previous;
-	u_Scratch.InterlockedMax(GetScratchAddress(ST_SCRATCH_KEYS, voxel), triangle.Key, previous);
+	// Double-sided sheets are solid wherever they touch (both of their sides are surfaces).
+	bool solid = (triangle.Key & ST_VOXEL_KEY_DOUBLE_SIDED) != 0u || !IsVoxelInFront(triangle, triangle.Region.Minimum.xyz + local);
+	u_Scratch.InterlockedMax(GetScratchAddress(ST_SCRATCH_KEYS, voxel), triangle.Key | (solid ? ST_VOXEL_KEY_SOLID : 0u), previous);
 	if (emission != 0u)
 	{
 		u_Scratch.InterlockedMax(GetScratchAddress(ST_SCRATCH_EMISSION, voxel), emission, previous);

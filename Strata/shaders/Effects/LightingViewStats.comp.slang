@@ -19,7 +19,7 @@ groupshared uint s_Counts[4];
 
 bool IsValueView(uint view)
 {
-	return view == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION || view == ST_LIGHTING_VIEW_ALBEDO;
+	return view == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION || view == ST_LIGHTING_VIEW_ALBEDO || view == ST_LIGHTING_VIEW_OPEN_SHARE;
 }
 
 void st_Main()
@@ -44,7 +44,7 @@ void st_Main()
 		{
 			if (surface)
 			{
-				float value = u_LightingView.View == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION ? hdr.r : Luminance(hdr);
+				float value = u_LightingView.View == ST_LIGHTING_VIEW_ALBEDO ? Luminance(hdr) : hdr.r;
 				uint bin = uint(clamp(value * float(ST_LIGHTING_VIEW_VALUE_BINS), 0.0, float(ST_LIGHTING_VIEW_VALUE_BINS - 1u)));
 				InterlockedAdd(s_Value[bin], 1u);
 				if (u_LightingView.View == ST_LIGHTING_VIEW_ALBEDO && value < ST_ALBEDO_LOW)

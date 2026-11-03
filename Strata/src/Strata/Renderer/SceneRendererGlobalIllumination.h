@@ -27,12 +27,13 @@ namespace Strata
 		bool Recorded = true;
 		bool UnvoxelizedLogged = false;              // GIUnvoxelizedSubmeshes was logged (once while the resources live)
 		RenderData::GlobalIlluminationConstants Constants = {};
-		// Per voxel level: the material (albedo and occupancy), emission and normal textures, 3D, toroidal.
+		// Per voxel level: the material (albedo and occupancy), emission, normal and radiance textures, 3D, toroidal.
 		struct Level
 		{
 			nvrhi::TextureHandle Material;
 			nvrhi::TextureHandle Emission;
 			nvrhi::TextureHandle Normal;
+			nvrhi::TextureHandle Radiance;
 		};
 		std::vector<Level> Levels;
 		bool Cleared = false;                        // The textures were cleared (their first frame)
@@ -40,7 +41,7 @@ namespace Strata
 		nvrhi::BufferHandle Scratch;                 // A batch's eight words per voxel
 		nvrhi::BufferHandle Tiles;                   // The large triangles' tiles of a batch
 		nvrhi::BufferHandle TileArguments;           // VoxelTiles' dispatch arguments
-		nvrhi::BufferHandle Counters;                // Tiles made, tile list overflows
+		nvrhi::BufferHandle Counters;                // Tiles made, tile list overflows, dead probes, unused, surface voxels (c_GICounterWords)
 		nvrhi::BufferHandle Regions;                 // The frame's VoxelRegion records
 		nvrhi::BufferHandle Items;                   // VoxelWorkItem
 		nvrhi::BufferHandle Groups;                  // VoxelBatch
@@ -62,10 +63,44 @@ namespace Strata
 		uint64_t BoundPoolBuffers = 0;
 		uint64_t BoundPoolTables = 0;
 		const nvrhi::IBuffer* BoundMaterials = nullptr;
+		// The light: per cascade its probes' validity, weights (but the top) and rays; the field; the passes' pipelines (their
+		// layouts follow their binding sets) and binding sets, made again when a level's or cascade's texture, the environment
+		// cube or the counters change (Bound*).
+		struct Cascade
+		{
+			nvrhi::TextureHandle Validity;
+			nvrhi::TextureHandle WeightsA;
+			nvrhi::TextureHandle WeightsB;
+			nvrhi::TextureHandle Atlas;
+		};
+		std::vector<Cascade> Cascades;
+		nvrhi::TextureHandle Field;
+		glm::vec4 SolidAngleNorms { 0.0f };        // RenderData::GlobalIlluminationConstants::SolidAngleNorms
+		std::array<glm::vec4, 2> FaceWeights = {}; // ...FaceWeights
+		std::array<glm::vec4, 2> FaceWeightsFar = {}; // ...and FaceWeightsFar
+		struct Pass
+		{
+			nvrhi::BindingLayoutHandle Layout;
+			nvrhi::ComputePipelineHandle Pipeline;
+			std::vector<nvrhi::BindingSetHandle> Sets; // Per level (inject) or per cascade
+		};
+		Pass Inject;
+		Pass Downsample;
+		Pass Validity;
+		Pass Weights;
+		Pass March;
+		Pass Reduce;
+		const nvrhi::ITexture* BoundEnvironment = nullptr;
+		bool LightBound = false;
+		bool LightCleared = false;                   // The light's textures were cleared (their first frame)
 		// The voxels view.
 		nvrhi::BindingLayoutHandle ViewLayout;
 		nvrhi::GraphicsPipelineHandle ViewPipeline;
 		nvrhi::BindingSetHandle ViewSet;
+		// The probes view.
+		nvrhi::BindingLayoutHandle ProbeViewLayout;
+		nvrhi::GraphicsPipelineHandle ProbeViewPipeline;
+		nvrhi::BindingSetHandle ProbeViewSet;
 		// The counters' copies, each with the frame it copied (RenderCount + 1).
 		struct CounterReadback
 		{

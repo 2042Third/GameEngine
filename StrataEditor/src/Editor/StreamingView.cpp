@@ -47,6 +47,9 @@ namespace Strata
 			case ViewportDebugView::Luminance: return "luminance";
 			case ViewportDebugView::Albedo:    return "albedo";
 			case ViewportDebugView::Voxels:    return "voxels";
+			case ViewportDebugView::GlobalIllumination: return "gi";
+			case ViewportDebugView::OpenShare: return "open";
+			case ViewportDebugView::Probes:    return "probes";
 			case ViewportDebugView::None:      break;
 		}
 		return "none";
@@ -56,7 +59,8 @@ namespace Strata
 	{
 		for (ViewportDebugView view : { ViewportDebugView::None, ViewportDebugView::Streaming, ViewportDebugView::LOD, ViewportDebugView::Mip,
 			ViewportDebugView::Motion, ViewportDebugView::Shadows, ViewportDebugView::Lighting, ViewportDebugView::AmbientOcclusion,
-			ViewportDebugView::Indirect, ViewportDebugView::Luminance, ViewportDebugView::Albedo, ViewportDebugView::Voxels })
+			ViewportDebugView::Indirect, ViewportDebugView::Luminance, ViewportDebugView::Albedo, ViewportDebugView::Voxels,
+			ViewportDebugView::GlobalIllumination, ViewportDebugView::OpenShare, ViewportDebugView::Probes })
 		{
 			if (name == ViewportDebugViewToString(view))
 				return view;
@@ -74,6 +78,9 @@ namespace Strata
 			case ViewportDebugView::Luminance:        return SceneLightingView::Luminance;
 			case ViewportDebugView::Albedo:           return SceneLightingView::Albedo;
 			case ViewportDebugView::Voxels:           return SceneLightingView::Voxels;
+			case ViewportDebugView::GlobalIllumination: return SceneLightingView::GlobalIllumination;
+			case ViewportDebugView::OpenShare:        return SceneLightingView::OpenShare;
+			case ViewportDebugView::Probes:           return SceneLightingView::Probes;
 			case ViewportDebugView::None:
 			case ViewportDebugView::Streaming:
 			case ViewportDebugView::LOD:
@@ -113,7 +120,20 @@ namespace Strata
 			std::lround(layout.Levels.back().VoxelSize * 100.0f), valid, layout.Levels.size());
 	}
 
+	std::string GetProbeLegendNote(const SceneRendererGPUStats& stats, const GlobalIlluminationLayout* layout)
+	{
+		if (!layout || layout->Cascades.empty())
+			return "No GI";
+		const glm::uvec3 grid = layout->Cascades.front().Grid;
+		const std::string field = fmt::format("field {} x {} x {} m", std::lround(layout->FieldExtent.x), std::lround(layout->FieldExtent.y),
+			std::lround(layout->FieldExtent.z));
+		if (!stats.HasGICounters)
+			return fmt::format("probes {}; {}", grid.x * grid.y * grid.z, field);
+		return fmt::format("probes {}, dead {} (red); {}", stats.GILiveProbes + stats.GIDeadProbes, stats.GIDeadProbes, field);
+	}
+
 	std::string GetLightingLegendNote(ViewportDebugView view, const std::optional<LightingViewStats>& stats)
+
 	{
 		if (!stats)
 			return "Measuring...";
