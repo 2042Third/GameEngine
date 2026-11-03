@@ -723,6 +723,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     turns them on) for the strafe tests (`GPU.SceneRenderer.SSR`): change both. A highlight slides over its surface as the
     camera moves, so the flicker meter (which follows world points) counts its passing; "Sized highlights shimmer no more
     than points..." bounds shimmer itself, the pumping of the glint's summed light from frame to frame (`GetLightPumping`).
+    `lookdev.polished` (the polished panel head on, the yard probe active) shows the probe's resolution: its `center` crop's
+    gradient energy (the mean squared luminance step between neighbors, in codes) is 4.55 at High (256) against 2.62 with
+    a Custom quality that differs from High only in `ReflectionProbeResolution` 128 (1.74 times; 4K, no AA).
   - Shots and look-dev content are appended, never changed, so that captures of every build keep comparing. GPU times
     are kept only from runs alone on the machine, under `python Tools/PerfLock.py --label lookdev-<label> --limit 90 -- ...`
     (a full run takes longer than the lock's default limit); the pictures are read and cropped on every core after the
