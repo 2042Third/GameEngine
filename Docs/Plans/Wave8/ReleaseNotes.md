@@ -89,7 +89,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   wedges at the sides of wet ground or hard cuts across a metal sheet (Medium too).
 - Screen-space reflections at High and Ultra keep only rays that really crossed a surface: no ghost columns beside thin
   objects in front of a grazing mirror or metal sheet, and the reflected top edges of walls are whole instead of stepping
-  into the sky. A ray that passes behind something goes on to what lies beyond it.
+  into the sky. A ray that passes behind something goes on to what lies beyond it, out to its far end: a far wall seen
+  past thin posts in a rough metal sheet shows no sky-coloured columns where 0.7.0 drew ghost copies of the posts.
 - Surfaces without a normal map are exactly flat: their shading normal was tilted by 0.3 degrees, which moved mirror
   images (a wall 10 m away lost the top 8 cm of its reflection in a polished floor).
 - Ambient occlusion no longer darkens what screen-space reflections found: no dark smudges beside objects on wet ground
@@ -148,6 +149,11 @@ projects, the template and scenes or projects without the value get.
 - In motion, screen-space reflections at High and Ultra still add a fine crawl to rough metal and wet ground, in the
   reflections of thin posts, shiny balls and edges: a third to a half less than 0.7.0's without TAA, up to a third less
   on metal with TAA and none less on wet ground with TAA, not yet the half less the wave aims at.
+- Thin posts far behind a reflection (12 cm at 30 m) fall between the screen-space march's far steps: a rough metal
+  sheet shows the wall behind them instead of the posts.
+- At Ultra, shiny balls reflected in rough metal keep a fine grain in still pictures (`lookdev.sheet`'s spheres: noise
+  1.05-1.08% at 3840x2160 against the 1% aimed at, High 0.95-0.96%): whether a ray grazing a ball's outline passes just
+  behind it, which is not a hit, depends on its step offset.
 
 **Lane Render**
 

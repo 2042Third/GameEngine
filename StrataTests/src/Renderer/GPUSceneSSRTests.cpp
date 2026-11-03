@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iterator>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -241,6 +242,73 @@ namespace
 		camera.VerticalFOV = glm::radians(fov);
 		camera.Far = 500.0f;
 		return camera;
+	}
+
+	// A row of upright square posts standing on y = 0: their centers' x, their z, half width and height.
+	struct PostRow
+	{
+		std::span<const float> X;
+		float Z = 0.0f;
+		float HalfWidth = 0.0f;
+		float Height = 0.0f;
+	};
+
+	// How many posts of `posts` a reflected ray from `origin` passes behind before `reach` as a camera at `eye`, looking toward
+	// `target`, sees them (by more than 5 cm): within a post's interval of angles in the horizontal plane, beyond its square, at a
+	// height where the line of sight crosses the post.
+	uint32_t CountPostsPassedBehind(const glm::vec3& eye, const glm::vec3& target, const PostRow& posts, const glm::vec3& origin, const glm::vec3& direction, float reach)
+	{
+		const glm::vec2 eyePoint(eye.x, eye.z);
+		const glm::vec2 forward = glm::normalize(glm::vec2(target.x, target.z) - eyePoint);
+		const auto cross2 = [](const glm::vec2& a, const glm::vec2& b) { return a.x * b.y - a.y * b.x; };
+		const auto angleOf = [&](const glm::vec2& towards) { return std::atan2(cross2(forward, towards), glm::dot(forward, towards)); };
+		const auto directionAt = [&](float angle) { return forward * std::cos(angle) + glm::vec2(-forward.y, forward.x) * std::sin(angle); };
+		uint32_t count = 0;
+		const glm::vec2 start(origin.x, origin.z);
+		const glm::vec2 along(direction.x, direction.z);
+		for (const float postX : posts.X)
+		{
+			float lowAngle = 1e9f;
+			float highAngle = -1e9f;
+			float farthest = 0.0f;
+			const glm::vec2 corners[4] = { glm::vec2(postX - posts.HalfWidth, posts.Z - posts.HalfWidth), glm::vec2(postX + posts.HalfWidth, posts.Z - posts.HalfWidth),
+				glm::vec2(postX - posts.HalfWidth, posts.Z + posts.HalfWidth), glm::vec2(postX + posts.HalfWidth, posts.Z + posts.HalfWidth) };
+			for (const glm::vec2& corner : corners)
+			{
+				const float angle = angleOf(corner - eyePoint);
+				lowAngle = std::min(lowAngle, angle);
+				highAngle = std::max(highAngle, angle);
+				farthest = std::max(farthest, glm::length(corner - eyePoint));
+			}
+			// The ray's distances where its point is seen at the interval's two angles (a line that misses the eye is seen at
+			// monotonic angles).
+			float bounds[2] = { 0.0f, 0.0f };
+			bool solvable = true;
+			for (int side = 0; side < 2; side++)
+			{
+				const glm::vec2 sight = directionAt(side == 0 ? lowAngle : highAngle);
+				const float facing = cross2(sight, along);
+				if (std::abs(facing) < 1e-6f)
+					solvable = false;
+				else
+					bounds[side] = -cross2(sight, start - eyePoint) / facing;
+			}
+			if (!solvable)
+				continue;
+			const float enter = std::max(0.0f, std::min(bounds[0], bounds[1]));
+			const float leave = std::min(reach, std::max(bounds[0], bounds[1]));
+			if (!(enter < leave))
+				continue;
+			const glm::vec3 point = origin + direction * (0.5f * (enter + leave));
+			const glm::vec2 seen = glm::vec2(point.x, point.z) - eyePoint;
+			if (glm::dot(seen, forward) <= 0.0f || glm::length(seen) < farthest + 0.05f)
+				continue;
+			const float postDistance = glm::length(glm::vec2(postX, posts.Z) - eyePoint);
+			const float sightHeight = eye.y + (point.y - eye.y) * postDistance / glm::length(seen);
+			if (sightHeight > 0.05f && sightHeight < posts.Height - 0.05f)
+				count++;
+		}
+		return count;
 	}
 
 	// A camera path of the strafe: its first position and target, both moving by Step a frame, the surface measured and the
@@ -1178,63 +1246,7 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 				REQUIRE(renderer.GetTracedReflectionTexture());
 				const ReadbackImage image = ReadHalfImage(renderer.GetTracedReflectionTexture());
 
-				// The camera's view in the horizontal plane (x, z): each post's square spans an interval of angles from the eye.
-				const glm::vec2 eye(camera.Position.x, camera.Position.z);
-				const glm::vec2 forward = glm::normalize(glm::vec2(target.x, target.z) - eye);
-				const auto cross2 = [](const glm::vec2& a, const glm::vec2& b) { return a.x * b.y - a.y * b.x; };
-				const auto angleOf = [&](const glm::vec2& direction) { return std::atan2(cross2(forward, direction), glm::dot(forward, direction)); };
-				const auto directionAt = [&](float angle) { return forward * std::cos(angle) + glm::vec2(-forward.y, forward.x) * std::sin(angle); };
-				// How many posts a reflected ray passes behind before `reach` as the camera sees them (by more than 5 cm): within a
-				// post's angles, beyond its square, at a height where the line of sight crosses the post.
-				const auto postsPassedBehind = [&](const glm::vec3& origin, const glm::vec3& direction, float reach)
-				{
-					uint32_t count = 0;
-					const glm::vec2 start(origin.x, origin.z);
-					const glm::vec2 along(direction.x, direction.z);
-					for (const float postX : c_PostX)
-					{
-						float lowAngle = 1e9f;
-						float highAngle = -1e9f;
-						float farthest = 0.0f;
-						const glm::vec2 corners[4] = { glm::vec2(postX - c_PostHalfWidth, c_PostZ - c_PostHalfWidth), glm::vec2(postX + c_PostHalfWidth, c_PostZ - c_PostHalfWidth),
-							glm::vec2(postX - c_PostHalfWidth, c_PostZ + c_PostHalfWidth), glm::vec2(postX + c_PostHalfWidth, c_PostZ + c_PostHalfWidth) };
-						for (const glm::vec2& corner : corners)
-						{
-							const float angle = angleOf(corner - eye);
-							lowAngle = std::min(lowAngle, angle);
-							highAngle = std::max(highAngle, angle);
-							farthest = std::max(farthest, glm::length(corner - eye));
-						}
-						// The ray's distances where its point is seen at the interval's two angles (a line that misses the eye is seen
-						// at monotonic angles).
-						float bounds[2] = { 0.0f, 0.0f };
-						bool solvable = true;
-						for (int side = 0; side < 2; side++)
-						{
-							const glm::vec2 sight = directionAt(side == 0 ? lowAngle : highAngle);
-							const float facing = cross2(sight, along);
-							if (std::abs(facing) < 1e-6f)
-								solvable = false;
-							else
-								bounds[side] = -cross2(sight, start - eye) / facing;
-						}
-						if (!solvable)
-							continue;
-						const float enter = std::max(0.0f, std::min(bounds[0], bounds[1]));
-						const float leave = std::min(reach, std::max(bounds[0], bounds[1]));
-						if (!(enter < leave))
-							continue;
-						const glm::vec3 point = origin + direction * (0.5f * (enter + leave));
-						const glm::vec2 seen = glm::vec2(point.x, point.z) - eye;
-						if (glm::dot(seen, forward) <= 0.0f || glm::length(seen) < farthest + 0.05f)
-							continue;
-						const float postDistance = glm::length(glm::vec2(postX, c_PostZ) - eye);
-						const float sightHeight = camera.Position.y + (point.y - camera.Position.y) * postDistance / glm::length(seen);
-						if (sightHeight > 0.05f && sightHeight < c_PostHeight - 0.05f)
-							count++;
-					}
-					return count;
-				};
+				const PostRow posts { c_PostX, c_PostZ, c_PostHalfWidth, c_PostHeight };
 
 				const glm::mat4 viewProjection = camera.Projection * camera.View;
 				const glm::mat4 inverseViewProjection = glm::inverse(viewProjection);
@@ -1274,7 +1286,7 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 						if (postReach >= 0.0f)
 						{
 							const glm::vec3 atPost = mirrorPoint + ray * meetsPost(mirrorPoint, ray, wallReach, 0.0f);
-							bool hidden = postsPassedBehind(mirrorPoint, ray, postReach) > 1u;
+							bool hidden = CountPostsPassedBehind(camera.Position, target, posts, mirrorPoint, ray, postReach) > 1u;
 							for (const float side : { -0.04f, 0.0f, 0.04f })
 							{
 								const glm::vec3 around = atPost + glm::vec3(0.0f, 0.0f, side);
@@ -1288,7 +1300,7 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 							continue;
 						}
 						// Behind exactly one post on the way to the wall, 5 cm clear of every post: the wall's blue.
-						if (!meetsWall || meetsPost(mirrorPoint, ray, wallReach, 0.05f) >= 0.0f || postsPassedBehind(mirrorPoint, ray, wallReach) != 1u)
+						if (!meetsWall || meetsPost(mirrorPoint, ray, wallReach, 0.05f) >= 0.0f || CountPostsPassedBehind(camera.Position, target, posts, mirrorPoint, ray, wallReach) != 1u)
 							continue;
 						ghostTexels++;
 						ghostBlue += texel.a >= 0.9f && texel.b > 2.0f * texel.r && texel.b > 2.0f * texel.g ? 1u : 0u;
@@ -1304,6 +1316,154 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 				CHECK(postWhite >= postTexels - postTexels / 10);
 				CHECK(ghostBlue >= ghostTexels - ghostTexels / 50);
 			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Rays from the rough sheet that pass behind thin posts go on to the wall beyond them")
+	{
+		// lookdev.sheet's view of the specular lab at the editor's clip planes: the sheet's reflected rays cross the screen sideways
+		// toward the yellow block, some of them behind the images of the 12 cm posts in front of it. The march's steps grow toward
+		// the ray's far end: one step spans the last tens of meters. A ray whose last offset step fell short of the block, or
+		// landed on a post's image (a candidate rejected, as it must be: the ray passes behind the post), found nothing, and so did
+		// one whose next candidate's bisection closed in on that post again: the sky's reflection filled the ghost columns where
+		// Strata 0.7.0 showed copies of the posts. On the CPU each sheet texel's reflected ray is followed to the block's face,
+		// clear of everything else by 5 cm, where the camera sees it; the trace must find the block there. (The trace precedes the
+		// anti-aliasing, so one run per mode covers no AA and FXAA. The posts' own reflections are not checked: 12 cm at 30 m is
+		// narrower than the march's far steps, as DG "Reflections" says.)
+		constexpr uint32_t c_Width = 1920;
+		constexpr uint32_t c_Height = 1080;
+		constexpr float c_Aspect = static_cast<float>(c_Width) / static_cast<float>(c_Height);
+		constexpr float c_EditorFar = 2000.0f; // EditorCamera's far plane, as the look-dev captures render
+		constexpr float c_PostX[6] = { -20.0f, -14.0f, -8.0f, 8.0f, 14.0f, 20.0f };
+		constexpr float c_BlockFace = -44.0f; // The yellow block's face toward the lab (+X)
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		SpecularLab lab(assets);
+		const glm::vec3 eye(16.0f, 1.6f, -3.6f);
+		const glm::vec3 target(0.0f, 1.5f, -6.0f);
+		SceneCamera camera = LookAt(eye, target, c_Aspect);
+		camera.Projection = Math::PerspectiveReverseZ(glm::radians(50.0f), c_Aspect, 0.1f, c_EditorFar);
+		camera.VerticalFOV = glm::radians(50.0f);
+		camera.Far = c_EditorFar;
+
+		// What of the lab (SpecularLab) a ray or a line of sight can meet before the block: the posts, crates and the box beside
+		// the sheet, and the ladder's spheres.
+		struct Box
+		{
+			glm::vec3 Low;
+			glm::vec3 High;
+		};
+		std::vector<Box> boxes;
+		for (const float x : c_PostX)
+			boxes.push_back({ glm::vec3(x - 0.06f, 0.0f, 8.94f), glm::vec3(x + 0.06f, 3.0f, 9.06f) });
+		for (const glm::vec2& place : { glm::vec2(-17.0f, 13.0f), glm::vec2(-11.0f, 11.0f), glm::vec2(12.0f, 11.0f), glm::vec2(17.0f, 14.0f) })
+			boxes.push_back({ glm::vec3(place.x - 0.5f, 0.0f, place.y - 0.5f), glm::vec3(place.x + 0.5f, 1.0f, place.y + 0.5f) });
+		boxes.push_back({ glm::vec3(-14.0f, 0.2f, -7.25f), glm::vec3(-2.0f, 3.2f, -4.75f) });
+		const auto blocked = [&boxes](const glm::vec3& origin, const glm::vec3& direction, float reach, float grow)
+		{
+			for (const Box& box : boxes)
+			{
+				float enter = 0.0f;
+				float leave = reach;
+				for (int axis = 0; axis < 3 && enter <= leave; axis++)
+				{
+					if (std::abs(direction[axis]) < 1e-8f)
+					{
+						if (origin[axis] < box.Low[axis] - grow || origin[axis] > box.High[axis] + grow)
+							leave = -1.0f;
+						continue;
+					}
+					const float first = (box.Low[axis] - grow - origin[axis]) / direction[axis];
+					const float second = (box.High[axis] + grow - origin[axis]) / direction[axis];
+					enter = std::max(enter, std::min(first, second));
+					leave = std::min(leave, std::max(first, second));
+				}
+				if (enter <= leave)
+					return true;
+			}
+			for (int index = 0; index < 8; index++)
+			{
+				const glm::vec3 offset = origin - glm::vec3(-7.0f + 2.0f * static_cast<float>(index), 0.5f, 1.0f);
+				const float b = glm::dot(offset, direction);
+				const float discriminant = b * b - (glm::dot(offset, offset) - (0.5f + grow) * (0.5f + grow));
+				if (discriminant >= 0.0f && -b - std::sqrt(discriminant) < reach && -b + std::sqrt(discriminant) > 0.0f)
+					return true;
+			}
+			return false;
+		};
+
+		// The texels whose ray meets the block, and whether it passes behind a post on the way as the camera sees it (one at most
+		// here: one rejected candidate, which every mode allows).
+		struct Expected
+		{
+			uint32_t X = 0;
+			uint32_t Y = 0;
+			bool BehindPost = false;
+		};
+		std::vector<Expected> expected;
+		const glm::mat4 viewProjection = camera.Projection * camera.View;
+		const glm::mat4 inverseViewProjection = glm::inverse(viewProjection);
+		const PostRow posts { c_PostX, 9.0f, 0.06f, 3.0f };
+		for (uint32_t y = 0; y < c_Height; y++)
+		{
+			for (uint32_t x = 0; x < c_Width; x++)
+			{
+				const glm::vec2 ndc(2.0f * (static_cast<float>(x) + 0.5f) / c_Width - 1.0f, 1.0f - 2.0f * (static_cast<float>(y) + 0.5f) / c_Height);
+				const glm::vec4 nearPoint = inverseViewProjection * glm::vec4(ndc, 1.0f, 1.0f);
+				const glm::vec3 view = glm::normalize(glm::vec3(nearPoint) / nearPoint.w - eye);
+				// The sheet's face (z = -4.75), away from its edges.
+				if (!(view.z < -1e-4f))
+					continue;
+				const glm::vec3 sheetPoint = eye + view * ((-4.75f - eye.z) / view.z);
+				if (sheetPoint.x < 2.3f || sheetPoint.x > 13.7f || sheetPoint.y < 0.4f || sheetPoint.y > 3.0f)
+					continue;
+				const glm::vec3 ray(view.x, view.y, -view.z);
+				if (!(ray.x < -1e-4f))
+					continue;
+				const float blockReach = (c_BlockFace - sheetPoint.x) / ray.x;
+				const glm::vec3 atBlock = sheetPoint + ray * blockReach;
+				if (atBlock.y < 0.3f || atBlock.y > 13.5f || std::abs(atBlock.z) > 29.5f || blocked(sheetPoint, ray, blockReach, 0.05f))
+					continue;
+				const float seen = glm::length(atBlock - eye);
+				const glm::vec4 clip = viewProjection * glm::vec4(atBlock, 1.0f);
+				const glm::vec2 uv(clip.x / clip.w * 0.5f + 0.5f, 0.5f - clip.y / clip.w * 0.5f);
+				if (clip.w <= 0.0f || uv.x < 0.02f || uv.x > 0.98f || uv.y < 0.02f || uv.y > 0.98f || blocked(eye, (atBlock - eye) / seen, seen - 0.05f, 0.02f))
+					continue;
+				expected.push_back({ x, y, CountPostsPassedBehind(eye, target, posts, sheetPoint, ray, blockReach) > 0u });
+			}
+		}
+
+		for (const ReflectionsQuality reflections : { ReflectionsQuality::Spatial, ReflectionsQuality::SpatialHigh })
+		{
+			CAPTURE(static_cast<int>(reflections));
+			SceneRendererSpecification specification = ExactSpecification();
+			specification.Quality.Reflections = reflections;
+			specification.DebugName = "SheetPosts";
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_Width, c_Height);
+			WarmUp(gpu, renderer, lab.Contents, camera);
+			RenderFrames(gpu, renderer, lab.Contents, camera, 3);
+			REQUIRE(renderer.GetStats().ScreenSpaceReflections);
+			REQUIRE(renderer.GetTracedReflectionTexture());
+			const ReadbackImage image = ReadHalfImage(renderer.GetTracedReflectionTexture());
+			uint32_t texels[2] = {}; // Clear of the posts, behind a post
+			uint32_t found[2] = {};
+			for (const Expected& texel : expected)
+			{
+				// The block's yellow at full confidence, not the sky's blue.
+				const glm::vec4 value = ReadHalfTexel(image, texel.X, texel.Y);
+				const size_t group = texel.BehindPost ? 1 : 0;
+				texels[group]++;
+				found[group] += value.a >= 0.9f && value.r > 1.5f * value.b && value.g > 1.5f * value.b ? 1u : 0u;
+			}
+			MESSAGE(fmt::format("Sheet toward the block, {}: {} of {} clear rays and {} of {} behind a post find it",
+				reflections == ReflectionsQuality::Spatial ? "Spatial" : "SpatialHigh", found[0], texels[0], found[1], texels[1]));
+			CHECK(texels[0] >= 10000u);
+			CHECK(texels[1] >= 200u);
+			CHECK(found[0] >= texels[0] - texels[0] / 50);
+			CHECK(found[1] >= texels[1] - texels[1] / 20);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

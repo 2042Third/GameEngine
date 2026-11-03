@@ -5373,10 +5373,17 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   the last interval's change of the ray's distance) and on one continuous surface (the ends' depths as close), or, for a
   plane crossing, at the ray's depth where the depth buffer shows it; where the interval ends on a surface's last pixel
   and the sky, at that surface's edge if the ray had passed its depth. During the bisection a point over the sky counts
-  as behind while the low end is on a surface (comparing it with that end's depth lost a wall's top edge, whose depth
-  shrinks toward the top seen from below it). A false candidate does not end the march: up to `MaxCandidates` of them
-  (Spatial 2, SpatialHigh 3; the push constants' `SpatialReflectionParameters::MaxCandidates`), after which the ray finds
-  nothing and the probes or the sky fill in, which bounds the cost in clutter. Strata 0.7.0 took any point behind a
+  as behind while the low end is on a surface the ray is not passing behind (comparing it with that end's depth lost a
+  wall's top edge, whose depth shrinks toward the top seen from below it). A bisection that closed in on an occluder inside
+  the segment (a post between two points on the wall behind it) bisects what lies beyond the occluder once more; while the
+  low end is behind an occluder, a surface nearer than the ray already was there counts as in front and the low end's own
+  depth is not compared (it hides the surface the ray met). A false candidate does not end the march: up to
+  `MaxCandidates` of them (Spatial 2, SpatialHigh 3; the push constants' `SpatialReflectionParameters::MaxCandidates`),
+  after which the ray finds nothing and the probes or the sky fill in, which bounds the cost in clutter. After its steps
+  the march takes one more point, half a pixel before the ray's end: the offset steps stop up to a step short of it, and
+  toward the far plane that step spans everything beyond some tens of meters (on `lookdev.sheet` rays toward the far
+  yellow wall found nothing for some offsets, and those whose last step passed behind a post showed the sky where 0.7.0
+  drew a ghost of the post: `GPU.SceneRenderer.SSR`'s sheet case). Strata 0.7.0 took any point behind a
   surface by less than its step's change of distance plus the tolerance for a hit, so a ray that passed far behind a thin
   post read the post (ghost columns beside its reflection), and the reflected top edge of a wall stepped into the sky
   (`GPU.SceneRenderer.SSR`: thin posts in front of a grazing mirror, the wall's edge within 2 px). Checkerboard's march is
@@ -5407,7 +5414,8 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   runs the mirror floor's edge, rough-floor, off-screen and moving-cube cases in both modes (Spatial with FXAA), checks
   that Spatial traces without TAA where the CPU predicts, alike on both paths, with the same image in every later frame,
   that a changed mode releases one mode's targets for the other's (Off makes none), that the specular lab's rough sheet
-  shows no screen door (`Pattern3` and `Pattern4` at most 0.2%) and, in a strafe past the sheet and over the wet plane,
+  shows no screen door (`Pattern3` and `Pattern4` at most 0.2%), that its rays reach the far wall, also past a post's image
+  (at `lookdev.sheet`'s view and the editor's far plane), and, in a strafe past the sheet and over the wet plane,
   what the reflections add to the flicker meter's `Blocks` and `Mean` ("GPU tests").
   `PerfGPU.Renderer.SSRSpatial4K` (+ `GPU`, `StageGPU`: `GPU.Reflections`, target 1.2 ms; provisional) measures Spatial
   on the 100,000-cube grid at 3840x2160 with FXAA, and `SSRSpatialHigh4K` (target 1.8 ms) SpatialHigh there: clutter is
