@@ -34,6 +34,7 @@ namespace Strata
 		// The capture's cube is projected onto the irradiance coefficients from its 32-texel level (2 at 128, 3 at 256):
 		// irradiance is smooth, and the projection runs in one work group.
 		constexpr uint32_t c_ProbeIrradianceSize = 32;
+		constexpr uint32_t c_NoSlot = std::numeric_limits<uint32_t>::max();
 
 		uint32_t GetProbeIrradianceLevel(uint32_t size)
 		{
@@ -82,17 +83,22 @@ namespace Strata
 		return m_ReflectionProbes ? m_ReflectionProbes->Array.Get() : Renderer::GetBlackCubeArrayTexture();
 	}
 
+	void SceneRenderer::ReleaseReflectionProbeState(std::optional<ReflectionProbeState>& state)
+	{
+		if (!state)
+			return;
+		// Frames still in flight may sample the array: released once the GPU is done with them.
+		std::vector<nvrhi::ResourceHandle> released;
+		released.emplace_back(state->Array.Get());
+		released.emplace_back(state->Scratch.Get());
+		Renderer::ReleaseDeferred(std::move(released));
+		state.reset();
+	}
+
 	void SceneRenderer::ReleaseReflectionProbes()
 	{
-		if (m_ReflectionProbes)
-		{
-			// Frames still in flight may sample the array: released once the GPU is done with them.
-			std::vector<nvrhi::ResourceHandle> released;
-			released.emplace_back(m_ReflectionProbes->Array.Get());
-			released.emplace_back(m_ReflectionProbes->Scratch.Get());
-			Renderer::ReleaseDeferred(std::move(released));
-			m_ReflectionProbes.reset();
-		}
+		ReleaseReflectionProbeState(m_ReflectionProbes);
+		ReleaseReflectionProbeState(m_ReflectionProbesNext);
 		m_ReflectionProbeHolds.clear();
 		m_ReflectionProbeList.clear();
 		m_ReflectionProbeConversions.clear();
@@ -108,8 +114,17 @@ namespace Strata
 	{
 		const uint32_t slots = std::min(m_Specification.MaxReflectionProbes, RenderData::c_MaxReflectionProbes);
 		const uint32_t size = m_Specification.Quality.ReflectionProbeResolution;
-		if (m_ReflectionProbes && static_cast<uint32_t>(m_ReflectionProbes->Slots.size()) == slots && m_ReflectionProbes->Array->getDesc().width == size)
+		const auto hasSlots = [slots](const std::optional<ReflectionProbeState>& state) { return state && static_cast<uint32_t>(state->Slots.size()) == slots; };
+		const auto fits = [&](const std::optional<ReflectionProbeState>& state) { return hasSlots(state) && state->Array->getDesc().width == size; };
+		if (fits(m_ReflectionProbes))
+		{
+			// Back at the shown cubes' size before the new ones took over: those are dropped.
+			ReleaseReflectionProbeState(m_ReflectionProbesNext);
 			return true;
+		}
+		if (fits(m_ReflectionProbesNext))
+			return true;
+		ReleaseReflectionProbeState(m_ReflectionProbesNext); // Made for another size or slot count: of no use now
 		if (!m_ProbeIrradiancePipeline)
 		{
 			nvrhi::BindingLayoutDesc layoutDesc;
@@ -151,14 +166,26 @@ namespace Strata
 		nvrhi::TextureHandle scratch = array ? m_Device->createTexture(scratchDesc) : nullptr;
 		if (!array || !scratch)
 		{
-			m_Errors.Report(fmt::format("failed to create the cube array of {} reflection probes; the scene is lit without its probes", slots));
+			if (hasSlots(m_ReflectionProbes))
+				m_Errors.Report(fmt::format("failed to create the cube array of {} reflection probes at {} texels; the probes keep their cubes of {}", slots, size,
+					m_ReflectionProbes->Array->getDesc().width));
+			else
+				m_Errors.Report(fmt::format("failed to create the cube array of {} reflection probes; the scene is lit without its probes", slots));
 			return false;
 		}
-		ReleaseReflectionProbes();
 		ReflectionProbeState state;
 		state.Array = std::move(array);
 		state.Scratch = std::move(scratch);
 		state.Slots.resize(slots);
+		if (hasSlots(m_ReflectionProbes))
+		{
+			// A new resolution: the shown cubes keep shading while these are filled, each capture in the slot it has there.
+			for (uint32_t index = 0; index < slots; index++)
+				state.Slots[index] = ReflectionProbeSlot { m_ReflectionProbes->Slots[index].Capture, {}, m_ReflectionProbes->Slots[index].LastUsed };
+			m_ReflectionProbesNext = std::move(state);
+			return true;
+		}
+		ReleaseReflectionProbes();
 		m_ReflectionProbes = std::move(state);
 		return true;
 	}
@@ -214,7 +241,9 @@ namespace Strata
 			ReleaseStaleReflectionProbeHolds(); // Nothing in this view waits for its capture
 			return true;
 		}
-		if (!EnsureReflectionProbeResources())
+		// Without cubes of the quality's size (reported: the frame is degraded) the shown ones keep shading when they have the slots.
+		const bool resources = EnsureReflectionProbeResources();
+		if (!m_ReflectionProbes || m_ReflectionProbes->Slots.size() != maxProbes)
 		{
 			m_Stats.ReflectionProbesPending = static_cast<uint32_t>(std::min<size_t>(candidates.size(), maxProbes));
 			return false;
@@ -223,13 +252,51 @@ namespace Strata
 		if (candidates.size() > maxProbes)
 			candidates.resize(maxProbes);
 
-		ReflectionProbeState& state = *m_ReflectionProbes;
 		const uint64_t gather = ++m_ReflectionProbeGathers;
 		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
 		TextureStreamer* streamer = manager ? TextureStreamer::Find(*manager) : nullptr;
-		uint32_t conversionsLeft = m_Specification.SpreadLightingUpdates && !m_ReflectionProbesConvertAll ? c_ReflectionProbeConversionsPerFrame
-			: std::numeric_limits<uint32_t>::max();
-		m_ReflectionProbesConvertAll = false;
+		uint32_t conversionsLeft = m_Specification.SpreadLightingUpdates ? c_ReflectionProbeConversionsPerFrame : std::numeric_limits<uint32_t>::max();
+		// The slot holding a capture in a set of cubes, or c_NoSlot; and whether that slot was converted from the texture.
+		const auto findSlot = [](const ReflectionProbeState& state, AssetHandle capture)
+		{
+			for (uint32_t index = 0; index < static_cast<uint32_t>(state.Slots.size()); index++)
+			{
+				if (state.Slots[index].Capture == capture)
+					return index;
+			}
+			return c_NoSlot;
+		};
+		const auto holdsConverted = [&findSlot](const ReflectionProbeState& state, AssetHandle capture, const Ref<Texture>& texture)
+		{
+			const uint32_t slot = findSlot(state, capture);
+			return texture && slot != c_NoSlot && state.Slots[slot].Source.lock() == texture;
+		};
+		std::vector<Ref<Texture>> textures;
+		textures.reserve(candidates.size());
+		for (const ProbeCandidate& candidate : candidates)
+			textures.push_back(m_Assets.Resolve<Texture>(candidate.Capture, AssetPriority::High));
+
+		// A capture's slot in a set of cubes: the one holding it, else a free one, else the least recently used one this gather
+		// does not use.
+		const auto acquireSlot = [gather](ReflectionProbeState& cubes, AssetHandle capture)
+		{
+			uint32_t replaceable = c_NoSlot;
+			for (uint32_t index = 0; index < static_cast<uint32_t>(cubes.Slots.size()); index++)
+			{
+				const ReflectionProbeSlot& candidateSlot = cubes.Slots[index];
+				if (candidateSlot.Capture == capture)
+					return index;
+				if (candidateSlot.LastUsed == gather)
+					continue;
+				if (replaceable == c_NoSlot || !candidateSlot.Capture.IsValid()
+					|| (cubes.Slots[replaceable].Capture.IsValid() && candidateSlot.LastUsed < cubes.Slots[replaceable].LastUsed))
+					replaceable = index;
+			}
+			// At most as many probes as slots are kept, so a slot this gather does not use is left.
+			ST_CORE_ASSERT(replaceable != c_NoSlot, "No reflection probe slot left");
+			cubes.Slots[replaceable] = ReflectionProbeSlot { capture, {}, 0 };
+			return replaceable;
+		};
 		// The holds of captures still waiting, renewed for this frame.
 		auto hold = [&](AssetHandle capture)
 		{
@@ -243,59 +310,31 @@ namespace Strata
 			streamer->Hold(held.Hold);
 		};
 
-		const glm::dvec3 cameraPosition = glm::dvec3(camera.Position);
-		for (const ProbeCandidate& candidate : candidates)
+		// Holds a capture whole until it is converted, counted as pending for the frame's resolve cache while levels are missing.
+		const auto holdWhole = [&](AssetHandle capture, const Ref<Texture>& texture)
 		{
-			const Ref<Texture> texture = m_Assets.Resolve<Texture>(candidate.Capture, AssetPriority::High);
-			// A capture that is not on its way (an unknown or failed handle, another type of asset) lights nothing: it takes no
-			// slot and counts as pending for nobody, so captures and bakes do not wait for it.
-			if (!texture && (!manager || manager->GetAssetState(candidate.Capture) != AssetState::Loading))
-				continue;
-			// The capture's slot: the one holding it, else a free one, else the least recently used one this gather does not use.
-			uint32_t slot = std::numeric_limits<uint32_t>::max();
-			uint32_t replaceable = std::numeric_limits<uint32_t>::max();
-			for (uint32_t index = 0; index < state.Slots.size(); index++)
-			{
-				const ReflectionProbeSlot& candidateSlot = state.Slots[index];
-				if (candidateSlot.Capture == candidate.Capture)
-				{
-					slot = index;
-					break;
-				}
-				if (candidateSlot.LastUsed == gather)
-					continue;
-				if (replaceable == std::numeric_limits<uint32_t>::max() || !candidateSlot.Capture.IsValid()
-					|| (state.Slots[replaceable].Capture.IsValid() && candidateSlot.LastUsed < state.Slots[replaceable].LastUsed))
-					replaceable = index;
-			}
-			if (slot == std::numeric_limits<uint32_t>::max())
-			{
-				// At most as many probes as slots are kept, so a slot this gather does not use is left.
-				ST_CORE_ASSERT(replaceable != std::numeric_limits<uint32_t>::max(), "No reflection probe slot left");
-				slot = replaceable;
-				state.Slots[slot] = ReflectionProbeSlot { candidate.Capture, {}, 0 };
-			}
-			ReflectionProbeSlot& probeSlot = state.Slots[slot];
-			probeSlot.LastUsed = gather;
-
-			const bool converted = texture && probeSlot.Source.lock() == texture;
-			const bool convertingNow = std::any_of(m_ReflectionProbeConversions.begin(), m_ReflectionProbeConversions.end(),
-				[slot](const ReflectionProbeConversion& conversion) { return conversion.Slot == slot; });
-			if (!converted && !convertingNow)
-			{
-				// The conversion reads the whole capture: until it is loaded with every level, the sky lights the box.
-				if (!texture || !texture->GetGPUTexture() || texture->GetResidentLevel() > 0 || conversionsLeft == 0)
-				{
-					hold(candidate.Capture);
-					if (texture && texture->GetResidentLevel() > 0)
-						m_Assets.CountPending(candidate.Capture);
-					m_Stats.ReflectionProbesPending++;
-					continue;
-				}
-				conversionsLeft--;
-				m_ReflectionProbeConversions.push_back(ReflectionProbeConversion { slot, texture });
-			}
-
+			hold(capture);
+			if (texture && texture->GetResidentLevel() > 0)
+				m_Assets.CountPending(capture);
+		};
+		// Whether a set of cubes' slot holds the capture converted, or the frame converts it: the conversion reads the whole
+		// capture, so one not loaded with every level, or beyond the frame's conversions, waits.
+		const auto convert = [&](const ReflectionProbeState& cubes, uint32_t slot, const Ref<Texture>& texture)
+		{
+			if (texture && cubes.Slots[slot].Source.lock() == texture)
+				return true;
+			if (std::any_of(m_ReflectionProbeConversions.begin(), m_ReflectionProbeConversions.end(),
+				[slot](const ReflectionProbeConversion& conversion) { return conversion.Slot == slot; }))
+				return true;
+			if (!texture || !texture->GetGPUTexture() || texture->GetResidentLevel() > 0 || conversionsLeft == 0)
+				return false;
+			conversionsLeft--;
+			m_ReflectionProbeConversions.push_back(ReflectionProbeConversion { slot, texture });
+			return true;
+		};
+		const glm::dvec3 cameraPosition = glm::dvec3(camera.Position);
+		const auto list = [&](const ProbeCandidate& candidate, uint32_t slot)
+		{
 			RenderData::ReflectionProbeData data;
 			data.CenterBlend = glm::vec4(glm::vec3(candidate.Center - cameraPosition), candidate.BlendDistance);
 			data.AxisX = glm::vec4(candidate.Axes[0], candidate.Extents.x);
@@ -303,13 +342,90 @@ namespace Strata
 			data.AxisZ = glm::vec4(candidate.Axes[2], candidate.Extents.z);
 			data.Parameters = glm::vec4(candidate.Intensity, candidate.BoxProjection ? 1.0f : 0.0f, static_cast<float>(slot), 0.0f);
 			m_ReflectionProbeList.push_back(data);
+		};
+		// A probe in view outside a change of resolution: shaded from its slot once converted (or in this frame), else the sky
+		// lights its box until it is.
+		const auto place = [&](size_t index)
+		{
+			ReflectionProbeState& cubes = *m_ReflectionProbes;
+			const uint32_t slot = acquireSlot(cubes, candidates[index].Capture);
+			cubes.Slots[slot].LastUsed = gather;
+			if (convert(cubes, slot, textures[index]))
+			{
+				list(candidates[index], slot);
+			}
+			else
+			{
+				holdWhole(candidates[index].Capture, textures[index]);
+				m_Stats.ReflectionProbesPending++;
+			}
+		};
+
+		// After a new resolution, while its cubes are filled (m_ReflectionProbesNext), the shown cubes shade with what they hold,
+		// and only those captures convert, into the same slots of the new cubes (the two share each slot's irradiance
+		// coefficients in the probe buffer). The other probes in view wait. The new cubes take over in the frame that converts the
+		// last of those captures, and the probes that waited are then placed as usual.
+		const bool filling = m_ReflectionProbesNext.has_value();
+		bool filled = true;
+		std::vector<size_t> waiting;
+		for (size_t index = 0; index < candidates.size(); index++)
+		{
+			const ProbeCandidate& candidate = candidates[index];
+			const Ref<Texture>& texture = textures[index];
+			// A capture that is not on its way (an unknown or failed handle, another type of asset) lights nothing: it takes no
+			// slot and counts as pending for nobody, so captures and bakes do not wait for it.
+			if (!texture && (!manager || manager->GetAssetState(candidate.Capture) != AssetState::Loading))
+				continue;
+			if (!filling)
+			{
+				place(index);
+				continue;
+			}
+			ReflectionProbeState& shown = *m_ReflectionProbes;
+			if (!holdsConverted(shown, candidate.Capture, texture))
+			{
+				waiting.push_back(index);
+				continue;
+			}
+			const uint32_t slot = findSlot(shown, candidate.Capture);
+			ReflectionProbeSlot& newSlot = m_ReflectionProbesNext->Slots[slot];
+			ST_CORE_ASSERT(newSlot.Capture == candidate.Capture, "The cubes being filled lost the shown cubes' slots");
+			shown.Slots[slot].LastUsed = gather;
+			newSlot.LastUsed = gather;
+			if (!convert(*m_ReflectionProbesNext, slot, texture))
+			{
+				holdWhole(candidate.Capture, texture);
+				filled = false;
+			}
+			list(candidate, slot);
+		}
+		if (filling && filled)
+		{
+			// The new cubes hold what the shown ones shaded with in this view (the list's slots are the same in both): they take
+			// over in this frame, its conversions going into them (ConvertReflectionProbes).
+			std::optional<ReflectionProbeState> old = std::move(m_ReflectionProbes);
+			m_ReflectionProbes = std::move(m_ReflectionProbesNext);
+			m_ReflectionProbesNext.reset();
+			ReleaseReflectionProbeState(old);
+			for (size_t index : waiting)
+				place(index);
+		}
+		else if (filling)
+		{
+			// Every probe in view waits for the new cubes: those shaded with the old ones too, so captures wait for the change.
+			m_Stats.ReflectionProbesPending += static_cast<uint32_t>(m_ReflectionProbeList.size());
+			for (size_t index : waiting)
+			{
+				holdWhole(candidates[index].Capture, textures[index]);
+				m_Stats.ReflectionProbesPending++;
+			}
 		}
 		// Captures converted (or no longer wanted) are held no more once no view of this frame or the previous one waited for
 		// them: their levels may drop to their tail.
 		ReleaseStaleReflectionProbeHolds();
 		m_Stats.ReflectionProbes = static_cast<uint32_t>(m_ReflectionProbeList.size());
 		m_Stats.ReflectionProbeConversions = static_cast<uint32_t>(m_ReflectionProbeConversions.size());
-		return true;
+		return resources;
 	}
 
 	void SceneRenderer::UploadReflectionProbes(nvrhi::ICommandList* commandList)
@@ -337,7 +453,8 @@ namespace Strata
 		ST_PROFILE_FUNCTION();
 		if (!m_ReflectionProbes)
 			return;
-		ReflectionProbeState& state = *m_ReflectionProbes;
+		// The gather's conversions go into the cubes being filled after a new resolution, else into the shown ones.
+		ReflectionProbeState& state = m_ReflectionProbesNext ? *m_ReflectionProbesNext : *m_ReflectionProbes;
 		const uint32_t size = state.Array->getDesc().width; // The row's size (EnsureReflectionProbeResources)
 		const uint32_t scratchMips = RenderData::GetReflectionProbeMipChain(size);
 		const uint32_t irradianceLevel = GetProbeIrradianceLevel(size);

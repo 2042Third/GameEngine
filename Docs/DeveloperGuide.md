@@ -5350,8 +5350,13 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   (one work group over the cube's 32-texel level: 2 at 128, 3 at 256) into the slot's coefficients in the probe buffer.
   With `SpreadLightingUpdates` (`c_ReflectionProbeConversionsPerFrame`, 2) at most two captures convert per frame and a
   probe waiting for its capture lights nothing meanwhile; without it (captures, thumbnails, the bake) every loaded one
-  converts in the frame, and so does the first frame after `SetQuality` changed the resolution (the cubes are made again;
-  the boxes never fall to the sky). Two conversions take at most 0.45 ms of `GPU.Reflections` at 128 and 0.39 ms at 256
+  converts in the frame. After `SetQuality` changed the resolution (nothing is released then, and the change alone returns
+  false), the next gather with a probe in view makes the new size's cubes beside the shown ones (both in memory meanwhile),
+  with the same slots: the shown cubes keep shading the probes they hold while those captures convert into the new cubes,
+  spread as always (a capture that dropped to its tail streams in whole first), and the new cubes take over in the frame that
+  converts the last of them, so the boxes in view never fall to the sky; every probe in view counts as pending until then,
+  and the others wait for the takeover. A probe out of view at the change converts when it comes into view, as on its first
+  appearance. Two conversions take at most 0.45 ms of `GPU.Reflections` at 128 and 0.39 ms at 256
   on the reference machine's temporary memory (`PerfGPU.Renderer.ProbeConversion128MaxStageGPU`, `...256MaxStageGPU`,
   target 2 ms; the 128 case runs first, which may explain its higher reading), so conversions are spread by count, not split
   by work.

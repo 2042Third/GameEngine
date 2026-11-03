@@ -46,7 +46,9 @@ what each one costs:
   moves). It is filtered only when the sky changes.
 - **Reflection probe resolution** is the size of the reflection probes' pictures: 256 keeps polished metal's reflections
   of nearby things sharp, for 51 MiB more memory in views that show a probe (17 MiB at 128, 68 MiB at 256, for up to 16
-  probes) and a little more GPU time when a probe's picture is prepared (in the `GPU.Reflections` stage).
+  probes) and a little more GPU time when a probe's picture is prepared (in the `GPU.Reflections` stage). After a change
+  the old pictures stay on screen until the probes in view have their new ones, two per frame, so nothing flashes to the sky
+  (both sizes are in memory for those frames).
 - **Screen-space reflections** apply only to scenes whose Post Process turns them on. Medium keeps 0.6.0's half-resolution
   trace, which needs TAA; High and Ultra trace every pixel at full resolution with any anti-aliasing (Ultra's rays take more
   steps), for GPU time in the `GPU.Reflections` stage and memory: 20 MiB at 1920 x 1080 and 79 MiB at 3840 x 2160 at
