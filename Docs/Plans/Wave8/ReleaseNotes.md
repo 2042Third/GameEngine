@@ -258,3 +258,6 @@ projects, the template and scenes or projects without the value get.
 - A character or body that rides something a script moves every frame in `OnUpdate` is drawn a step behind it (a
   constant 5 cm at 3 m/s and 60 steps per second; it flickered between 0 and 5 cm before): move carriers in
   `OnFixedUpdate` or as kinematic bodies.
+- A frame that runs a fixed step costs more with interpolation, bound by memory: with 100,000 moving roots 5.5 ms
+  against 2.6 ms without it on the development machine (`Perf.Scene.InterpolatedStepFrame100k.Ratio` 2.1 against the 1.5
+  aimed at), while a real scene in the editor paid about 0.05 ms. Interpolation off removes the cost.

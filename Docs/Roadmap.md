@@ -606,10 +606,10 @@ Windows reference machine, back with a replaced CPU, and landed on main before t
   fix), their GPU busy time at a median ratio of 1.003. High at 3840x2160 costs the samples' scene cameras 0 to 0.52 ms
   of GPU time over Medium.
 
-**Wave 8 in progress (step 0 landed, 2026-11-02).** The owner asked for the wave on 2026-11-01 ("### Wave 8" below,
-with what each step 0 lane landed); its plan, reviewed specs, the orchestrator's rulings and the release notes that each
-landing adds to are in `Docs/Plans/Wave8/`. Step 0's lanes landed on main one by one, and the rendering streams branch
-from its tip:
+**Wave 8 in progress (step 0 landed on 2026-11-02, then landing 1).** The owner asked for the wave on 2026-11-01
+("### Wave 8" below, with what each step 0 lane landed); its plan, reviewed specs, the orchestrator's rulings and the
+release notes that each landing adds to are in `Docs/Plans/Wave8/`. Step 0's lanes landed on main one by one, and the
+rendering streams branch from its tip:
 
 - The 0.7.0 baseline: every look-dev shot of 76f28a21's Release build, both sizes, all three anti-aliasing modes, 5
   repeats and the live shots, is kept on the reference machine in `.worktrees/wave8-plan/lookdev/0.7.0`, its Medium
@@ -636,6 +636,10 @@ from its tip:
   (`lookdev.night`'s largest step 3 codes, 23 before) and 256-texel probes at High and Ultra (`lookdev.polished` 1.74
   times sharper). Objects in front of mirrors stay crescents: keeping hits on back faces filled no silhouette, only
   front-lit rims.
+- `physics-timing` landed in landing 1: games, Play and Simulate draw what fixed steps move between its last two poses
+  (`Scene.Timing`'s Interpolation, on by default), so the Third-Person robot's 29.4 px sawtooth at 700 fps is at most
+  0.37 px from 30 to 730 fps, for half a step more latency on average. A frame that runs a step with 100,000 moving roots
+  costs 2.1 times one without interpolation (target 1.5, `Provisional`), bound by the capture's memory traffic ("Later").
 - `showcase`, High Desert Outpost (`Samples/Showcase`), landed in landing 1: a derelict fuel stop in a rocky desert
   valley the day after rain, made through the editor from 22 Poly Haven CC0 scans (56 MB) and terrain and props written
   by committed generators (`Tools/GenerateShowcase*.py`), in the showcase budget class: an 80 s camera tour
@@ -1700,7 +1704,8 @@ upscaling, and nothing may need temporal accumulation to look right (TAA stays o
 - **Interpolation, the rest (below `physics-timing`'s cut in wave 8):** world-space game UI and editor gizmos and picking
   on drawn poses; reflection probes, fog and post-process volumes, the sky and the sun on drawn poses; attachments placed
   outside their animator's hierarchy following its drawn pose; a cap on interpolated bodies and parallel proxy placement,
-  if a real scene's per-frame proxy work caps its frame rate.
+  if a real scene's per-frame proxy work caps its frame rate; a capture that fills per-batch chunks and keeps continuing
+  entries in place, to bring `Perf.Scene.InterpolatedStepFrame100k.Ratio` from 2.1 to its 1.5 target.
 
 Further:
 - JobSystem v2 with work stealing and a frame task graph, once `Perf.Jobs` shows a need.
