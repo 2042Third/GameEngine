@@ -9,9 +9,9 @@
 		],
 		"AttenuationDistance": 0,
 		"BaseColor": [
-			0.72,
-			0.72,
-			0.72,
+			0.62,
+			0.62,
+			0.62,
 			1
 		],
 		"BaseColorMap": "7441C2EB807B5769",
@@ -35,7 +35,7 @@
 		"NormalScale": 1,
 		"OcclusionMap": "8A3A2A1312934026",
 		"OcclusionStrength": 1,
-		"Roughness": 0.55,
+		"Roughness": 0.5,
 		"Thickness": 0,
 		"Transmission": 0,
 		"TransmissionMap": "0000000000000000",

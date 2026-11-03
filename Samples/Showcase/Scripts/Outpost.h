@@ -81,7 +81,7 @@ public:
 	float StationWaitSeconds = 5.0f; // The longest the tour waits for the probes' captures to load
 	float PhotoHourMax = Showcase::c_LastHour;
 	float SunIlluminance = Showcase::c_SunIlluminance;
-	float FireCandela = 250.0f;     // The local lights at dusk
+	float FireCandela = 400.0f;     // The local lights at dusk
 	float LanternACandela = 40.0f;
 	float LanternBCandela = 25.0f;
 

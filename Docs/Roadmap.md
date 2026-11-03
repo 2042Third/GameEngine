@@ -1481,7 +1481,8 @@ upscaling, and nothing may need temporal accumulation to look right (TAA stays o
   of six shots at three baked times of day (dawn over the valley, the low sun sliding along a bus's painted and bare
   sheet steel, the streak on a weathered oil tank, the glint column on a wet apron, the hut's interior, dusk with the fire
   and lanterns), each time of day with its own reflection probe entities; a first-person walk, free flight and a photo
-  mode (time of day, exposure, lens, the Graphics options, seven bookmarks); High by default.
+  mode (time of day, exposure, lens, the Graphics options, seven bookmarks); High by default. Its metal and wet ground
+  are tuned against 0.7.0's screen-space reflections: `reflections`' adoption pass retunes them, rebakes and retakes.
   `PerfGPU.Samples.ShowcaseHigh1440` and `.ShowcaseUltra1440` record the tour at 2560 x 1440 (a 4K window does not fit
   a 4K display). Later: grass with coverage-preserving alpha, people, the B-list of scans, sound, the walk on a
   character controller (after `physics-timing`), supersampled stills, and sunlight thrown off a sheet onto nearby

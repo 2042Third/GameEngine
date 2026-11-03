@@ -6,6 +6,7 @@ The props and maps are committed and a CTest (StrataTools.ShowcaseProps) keeps t
 
     python3 -I Tools/GenerateShowcaseProps.py props     --output Samples/Showcase/Assets/Generated/Props
     python3 -I Tools/GenerateShowcaseProps.py materials --output <Materials.json>
+    python3 -I Tools/GenerateShowcaseProps.py tune      --output <Tune.json>
     python3 -I Tools/GenerateShowcaseProps.py prefabs   --output <Prefabs.json>
     python3 -I Tools/GenerateShowcaseProps.py selftest  --committed Samples/Showcase/Assets/Generated/Props --work <dir>
 
@@ -18,10 +19,13 @@ so a slot is a node); <Prop>.Collision nodes are convex hulls of at most 32 vert
 convex mesh colliders.
 
 props      writes Bus.glb, OilTank.glb, FuelTank.glb, Pipes.glb, Hut.glb, LeanTo.glb, Embers.glb and Wick.glb, and the bare
-           steel's two maps from one tileable field (1024 x 1024 over 4 m): WeatheredSteel_diff.png (sRGB: steel mixed
-           toward rust by the rust mask) and WeatheredSteel_arm.png (linear: R 255, G roughness, B metalness, 0 on rust).
+           steel's three maps from one tileable field (1024 x 1024 over 4 m): WeatheredSteel_diff.png (sRGB: steel mixed
+           toward rust by the rust mask), WeatheredSteel_arm.png (linear: R 255, G roughness, B metalness, 0 on rust) and
+           WeatheredSteel_nor_gl.png (the sheet's waves and dents, and pits on rust).
 materials  writes the command script that creates the sample's materials (Assets/Materials/*.stmat) from the scans and
            the steel's maps (material.create).
+tune       writes the command script that gives the existing materials the table's values (material.set): how the
+           sample follows a change of the table.
 prefabs    writes the command script that turns the models into prefabs (Assets/Prefabs/*.stprefab): each slot's
            material, convex colliders from the hulls, the bus's tyres, the tank's pipes and ladder, the hut's lean-to, the
            fire pit's embers and light, the lantern's wick and light. Run both in an editor with the project open, e.g.
@@ -86,6 +90,19 @@ FUEL_TANK_AXIS = 1.75
 
 STEEL_SIZE = 1024
 STEEL_TILE_METERS = 4.0
+# The bare steel's look (linear values): its color, darkened by shade = a - b * f along the rain streaks; its roughness
+# a + b * f on steel; rust's color and roughness. Weathered steel is darker than clean iron (0.56), and its clean patches
+# are smooth while the streaks are dull: that spread, not one roughness, is what keeps an 8 m tank from reading as foil.
+STEEL_COLOR = (0.42, 0.42, 0.43)
+STEEL_SHADE = (1.10, 0.30)
+STEEL_ROUGHNESS = (0.16, 0.38)
+RUST_COLOR = (0.20, 0.09, 0.04)
+RUST_ROUGHNESS = 0.85
+# The steel's relief (meters of height, lattice cells over the 4 m tile): oil-canning waves of 0.36-0.8 m, dents of
+# 6.6 cm, and pits of 1.7 cm on rust only.
+STEEL_WAVES = ((0.012, 5), (0.008, 7), (0.004, 11))
+STEEL_DENTS = (0.0015, 61)
+STEEL_PITS = (0.0008, 229)
 
 # Slots and their factor-only glTF materials (color, roughness, metallic); the .stmat files replace them.
 SLOT_FACTORS = {
@@ -1181,10 +1198,39 @@ def png_bytes(width, height, rows):
             + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
 
 
+def steel_normal_rows(m_rows, size=STEEL_SIZE):
+    """The bare steel's tangent-space normals (OpenGL convention, +Y toward the image's top) as byte rows, from a tileable
+    height field in meters: sheet steel is never flat, and its waviness is what breaks the sun's reflection on a flat
+    panel into the streaks that read as metal (a flat mirror panel shows one even glare). The waves and dents are low
+    frequencies a mip chain keeps, so they do not shimmer; the pits are only on rust."""
+    texel = STEEL_TILE_METERS / size
+    heights = [[0.0] * size for _ in range(size)]
+    specs = [(amplitude, cells, SEED + 30 + k) for k, (amplitude, cells) in enumerate(STEEL_WAVES + (STEEL_DENTS,))]
+    for amplitude, cells, seed in specs:
+        field = lattice_rows(cells, cells, seed, size, size)
+        for y in range(size):
+            heights[y] = [h + amplitude * v for h, v in zip(heights[y], field[y])]
+    pits = lattice_rows(STEEL_PITS[1], STEEL_PITS[1], SEED + 40, size, size)
+    for y in range(size):
+        heights[y] = [h + STEEL_PITS[0] * p * m for h, p, m in zip(heights[y], pits[y], m_rows[y])]
+    rows = []
+    for y in range(size):
+        above = heights[(y - 1) % size]
+        below = heights[(y + 1) % size]
+        row = heights[y]
+        out = bytearray()
+        for x in range(size):
+            slope_x = (row[(x + 1) % size] - row[x - 1]) / (2.0 * texel)
+            slope_y = (above[x] - below[x]) / (2.0 * texel)
+            length = math.sqrt(slope_x * slope_x + slope_y * slope_y + 1.0)
+            out += bytes(int(round((0.5 + 0.5 * c / length) * 255.0)) for c in (-slope_x, -slope_y, 1.0))
+        rows.append(out)
+    return rows
+
+
 def steel_maps():
+    """The bare steel's color, arm and normal maps (PNG bytes) and the rust's share of the tile."""
     f_rows, m_rows = steel_fields()
-    steel = (0.56, 0.56, 0.57)
-    rust = (0.20, 0.09, 0.04)
     arm = []
     diff = []
     rusty = 0
@@ -1192,17 +1238,19 @@ def steel_maps():
         arm_row = bytearray()
         diff_row = bytearray()
         for f, m in zip(f_row, m_row):
-            roughness = (0.22 + 0.28 * f) * (1.0 - m) + 0.85 * m
+            roughness = (STEEL_ROUGHNESS[0] + STEEL_ROUGHNESS[1] * f) * (1.0 - m) + RUST_ROUGHNESS * m
             arm_row += bytes((255, int(round(roughness * 255.0)), int(round(255.0 * (1.0 - m)))))
-            # Steel darkens a little where the rain streaks ran (f high), rust is brown.
-            shade = 1.08 - 0.16 * f
-            diff_row += bytes(srgb_code(steel[k] * shade * (1.0 - m) + rust[k] * m) for k in range(3))
+            # Steel darkens where the rain streaks ran (f high), rust is brown.
+            shade = STEEL_SHADE[0] - STEEL_SHADE[1] * f
+            diff_row += bytes(srgb_code(STEEL_COLOR[k] * shade * (1.0 - m) + RUST_COLOR[k] * m) for k in range(3))
             if m > 0.5:
                 rusty += 1
         arm.append(arm_row)
         diff.append(diff_row)
     share = rusty / float(STEEL_SIZE * STEEL_SIZE)
-    return png_bytes(STEEL_SIZE, STEEL_SIZE, diff), png_bytes(STEEL_SIZE, STEEL_SIZE, arm), share
+    normals = steel_normal_rows(m_rows)
+    return (png_bytes(STEEL_SIZE, STEEL_SIZE, diff), png_bytes(STEEL_SIZE, STEEL_SIZE, arm),
+            png_bytes(STEEL_SIZE, STEEL_SIZE, normals), share)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -1242,9 +1290,10 @@ def generate():
     models = build_models()
     for name, meshes in models.items():
         files["%s.glb" % name] = model_bytes(name, meshes)
-    diff, arm, share = steel_maps()
+    diff, arm, normals, share = steel_maps()
     files["WeatheredSteel_diff.png"] = diff
     files["WeatheredSteel_arm.png"] = arm
+    files["WeatheredSteel_nor_gl.png"] = normals
     return files, models, share
 
 
@@ -1256,12 +1305,12 @@ TEXTURE_SETS = {"asphalt_02": "2k", "brown_mud_03": "1k", "dry_ground_01": "2k",
 # roughness, other properties. The painted metal sets are paint: their arm maps' metalness is zero (S1's check), so
 # their materials are dielectric; bare steel is WeatheredSteel, metal by its own map.
 MATERIALS = [
-    ("Asphalt", "asphalt_02", 1.0 / 3.0, (0.72, 0.72, 0.72), 0.0, 0.55, {}),
+    ("Asphalt", "asphalt_02", 1.0 / 3.0, (0.62, 0.62, 0.62), 0.0, 0.50, {}),
     ("Mud", "brown_mud_03", 1.0 / 1.3, (0.85, 0.85, 0.85), 0.0, 0.80, {}),
     ("Ground", "dry_ground_01", 0.25, (1.0, 1.0, 1.0), 0.0, 1.0, {}),
     ("RingGround", "rocky_terrain_02", 1.0 / 90.0, (1.0, 1.0, 1.0), 0.0, 1.0, {}),
     ("Water", None, 1.0, (0.018, 0.020, 0.022), 0.0, 0.03, {"IOR": 1.5}),
-    ("BusPaint", "rusty_metal_03", 1.0 / 1.35, (1.0, 1.0, 1.0), 0.0, 0.45, {"Clearcoat": 0.0}),
+    ("BusPaint", "rusty_metal_03", 1.0 / 1.35, (0.85, 0.85, 0.85), 0.0, 0.35, {"Clearcoat": 0.0}),
     ("TankPaint", "green_metal_rust", 1.0, (1.0, 1.0, 1.0), 0.0, 0.70, {}),
     ("Plaster", "beige_wall_001", 1.0 / 3.0, (0.85, 0.85, 0.85), 0.0, 1.0, {}),
     ("Concrete", "beige_wall_001", 0.25, (0.55, 0.55, 0.55), 0.0, 1.0, {}),
@@ -1274,8 +1323,10 @@ MATERIALS = [
 PROPS_DIRECTORY = "Generated/Props"
 
 
-def materials_script():
-    steps = []
+def materials_script(tune=False):
+    """material.create steps of every material (D8), or with tune the material.set steps that give the existing
+    materials the same values (how a project made before a change of the table follows it)."""
+    tables = []
     for name, scan, tiling, color, metallic, roughness, extra in MATERIALS:
         properties = {"BaseColor": [color[0], color[1], color[2], 1.0], "Metallic": metallic, "Roughness": roughness}
         if scan:
@@ -1285,15 +1336,21 @@ def materials_script():
                                "MetallicRoughnessMap": prefix + "arm_%s.jpg" % res, "OcclusionMap": prefix + "arm_%s.jpg" % res,
                                "UVTiling": [round(tiling, 5), round(tiling, 5)]})
         properties.update(extra)
-        steps.append({"command": "material.create", "parameters": {"path": "Materials/%s.stmat" % name, "properties": properties},
-                      "expect": {"/warnings": {"equals": []}}})
-    # Bare steel: color and metal/roughness from the generated maps over 4 m, the bus paint's sheet normal map at the same
-    # tiling (a tile is 4 m), scaled down.
-    steps.append({"command": "material.create", "parameters": {"path": "Materials/WeatheredSteel.stmat", "properties": {
-        "BaseColor": [1.0, 1.0, 1.0, 1.0], "Metallic": 1.0, "Roughness": 1.0, "NormalScale": 0.6,
+        tables.append((name, properties))
+    # Bare steel: color, metal/roughness and relief from the generated maps over 4 m.
+    tables.append(("WeatheredSteel", {
+        "BaseColor": [1.0, 1.0, 1.0, 1.0], "Metallic": 1.0, "Roughness": 1.0, "NormalScale": 1.0,
         "BaseColorMap": PROPS_DIRECTORY + "/WeatheredSteel_diff.png", "MetallicRoughnessMap": PROPS_DIRECTORY + "/WeatheredSteel_arm.png",
-        "NormalMap": "Textures/rusty_metal_03/rusty_metal_03_nor_gl_1k.jpg", "UVTiling": [1.0 / STEEL_TILE_METERS, 1.0 / STEEL_TILE_METERS]}},
-        "expect": {"/warnings": {"equals": []}}})
+        "NormalMap": PROPS_DIRECTORY + "/WeatheredSteel_nor_gl.png", "UVTiling": [1.0 / STEEL_TILE_METERS, 1.0 / STEEL_TILE_METERS]}))
+    steps = []
+    for name, properties in tables:
+        path = "Materials/%s.stmat" % name
+        if tune:
+            steps.append({"command": "material.set", "parameters": {"material": path, "properties": properties},
+                          "expect": {"/warnings": {"equals": []}}})
+        else:
+            steps.append({"command": "material.create", "parameters": {"path": path, "properties": properties},
+                          "expect": {"/warnings": {"equals": []}}})
     return steps
 
 
@@ -1589,6 +1646,8 @@ def main():
     props.add_argument("--output", required=True, help="The directory to write them into")
     materials = commands.add_parser("materials", help="Write the materials' command script")
     materials.add_argument("--output", required=True, help="The command script to write (.json)")
+    tune = commands.add_parser("tune", help="Write the command script that gives the existing materials the table's values")
+    tune.add_argument("--output", required=True, help="The command script to write (.json)")
     prefabs = commands.add_parser("prefabs", help="Write the prefabs' command script")
     prefabs.add_argument("--output", required=True, help="The command script to write (.json)")
     selftest = commands.add_parser("selftest", help="Generate twice and compare with the committed files")
@@ -1598,8 +1657,8 @@ def main():
     try:
         if arguments.command == "props":
             return command_props(arguments)
-        if arguments.command == "materials":
-            write_script(materials_script(), arguments.output)
+        if arguments.command in ("materials", "tune"):
+            write_script(materials_script(arguments.command == "tune"), arguments.output)
             return 0
         if arguments.command == "prefabs":
             write_script(prefabs_script(), arguments.output)

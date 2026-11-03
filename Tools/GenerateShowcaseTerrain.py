@@ -10,6 +10,7 @@ The outputs are committed and a CTest (StrataTools.ShowcaseTerrain) keeps them e
         --stations Samples/Showcase/Scripts/Stations.h --work <dir>
     python3 -I Tools/GenerateShowcaseTerrain.py layout --output <Layout.json>
     python3 -I Tools/GenerateShowcaseTerrain.py controls --output <Controls.json>
+    python3 -I Tools/GenerateShowcaseTerrain.py dress --output <Dress.json>
     python3 -I Tools/GenerateShowcaseTerrain.py bake --output <Bake.json>
     python3 -I Tools/GenerateShowcaseTerrain.py setup --station Dawn|Golden|Dusk --format lookdev|script [--output <file>]
     python3 -I Tools/GenerateShowcaseTerrain.py checkshots --capture <LookDev output directory> [--live]
@@ -58,7 +59,10 @@ layout    writes the editor command script that builds the scene's entities in S
           is run once (StrataEditor --quit-after-commands), later edits are commands of their own.
 controls  writes the command script of the director's controls: the project's input actions (Gameplay: Move, Look, Jump,
           Run, Up, Down; Showcase: Fly, Photo, HideUI, Tour, Bookmark1-7), the photo mode's canvas and the loading scene.
-bake      writes the command script that bakes the six probes: per station (Dawn, Dusk, Golden last, the saved one) its
+dress     writes the command script of the dressing, run once on the laid-out scene: drums and tyres along the bus's sill
+          on shot 4's side (they break the straight edge its puddles reflect), stones on the apron's edge and rocks on
+          the rim framing shot 1.
+bake     writes the command script that bakes the six probes: per station (Dawn, Dusk, Golden last, the saved one) its
           edit-mode steps with only its two probes on, then lighting.bakeProbes of them twice (the second adds a bounce).
 setup     prints a station's edit-mode steps: the GoldenHour preset turned to its sun, the sun's intensity and shadow
           distance, the fog, the exposure, the local lights, the embers and wicks, and its probes on (LookDev Setup
@@ -132,8 +136,8 @@ WALK_RADIUS = 140.0
 # azimuth, light scale, fog density, exposure compensation (EV), shadow distance (m), local lights on.
 STATIONS = (
     ("Dawn", 6.5, 5.0, 5.0, 140.0, 1.0, 0.006, 0.0, 600.0, False),
-    ("Golden", 17.75, 6.0, 6.0, 45.0, 1.0, 0.0006, 0.0, 200.0, False),
-    ("Dusk", 19.0, 1.0, 2.0, 32.0, 0.002, 0.0015, -1.0, 150.0, True),
+    ("Golden", 17.75, 6.0, 6.0, 45.0, 1.0, 0.0006, -0.7, 200.0, False),
+    ("Dusk", 19.0, 1.0, 2.0, 32.0, 0.002, 0.0015, -2.5, 150.0, True),
 )
 SUN_LUX = 120000.0
 
@@ -1494,6 +1498,11 @@ TYRES_SCATTERED = ((-6.5, 19.5), (21.5, -9.0), (-17.0, -9.5))
 CLIFFS = 8
 BOULDERS = {"namaqualand_boulder_02": 25, "namaqualand_boulder_03": 20}
 BRUSH = (40, 20)  # Near the apron's edge, at the slopes' feet
+DRESS_STONE_CLUSTERS = 14  # The dressing's stones on the apron's edge
+# The dressing's rocks on the rim: where shot 1's key sees them (image x, y), the scan and its scale. The ground there
+# lies 20-40 m below and ahead of the camera, so they are boulders of 3-6 m, clear of the hero boulder at (0.2, 0.84).
+DRESS_RIM_ROCKS = ((0.04, 0.90, "namaqualand_boulder_02", 2.4), (0.11, 0.98, "namaqualand_boulder_03", 1.6),
+                   (0.31, 0.93, "namaqualand_boulder_02", 1.1), (0.02, 0.78, "namaqualand_boulder_03", 1.3))
 
 # The probes (the showcase spec's D10): (part, position, yaw, half extents, blend distance, priority). The hut's captures
 # its interior from beside the door's and the window's sun beams (hut-local (1.9, 0.7, -1.3)): from the hut's middle the
@@ -1506,7 +1515,7 @@ PROBES = (
              local_to_world(HUT["center"], HUT["yaw"], HUT_PROBE_LOCAL[0], HUT_PROBE_LOCAL[2])[1]), HUT["yaw"], (4.35, 1.35, 3.35), 0.3, 2),
 )
 # The local lights at dusk (candela) and the glowing embers and wicks, which only burn at dusk.
-LOCAL_LIGHTS = (("Fire", 250.0), ("LanternA.Light", 40.0), ("LanternB.Light", 25.0))
+LOCAL_LIGHTS = (("Fire", 400.0), ("LanternA.Light", 40.0), ("LanternB.Light", 25.0))
 GLOWS = ("FirePit.Embers", "LanternA.Wick", "LanternB.Wick")
 FOG = {"BaseHeight": -8.0, "HeightFalloff": 0.10, "StartDistance": 80.0, "MaxOpacity": 0.7, "ColorFromSky": True, "SunScattering": 0.6}
 EYE_HEIGHT = 1.6
@@ -2266,8 +2275,91 @@ def write_steps(steps, output):
     print("%s: %d steps" % (output, len(steps)))
 
 
+def dress_script(world):
+    """The dressing's command script (S6), run once on the laid-out scene: drums and tyres along the bus's sill on the
+    side shot 4 sees (their outlines break the long straight edge the puddles would reflect), stones along the apron's
+    edge, where the asphalt meets the dirt without a blend, and rocks on the rim framing shot 1. Seeded; everything
+    stands on the surface under it, off the potholes, the pads and the shots' cameras. It saves the scene."""
+    s = SceneScript()
+    rng = random.Random(SEED + 400)
+    layout = world.layout
+    s.add("scene.open", {"scene": SCENE})
+    props = s.find("Props")
+    rocks = s.find("Rocks")
+    report = shots(world)
+    cameras = [p for shot in report for p in (shot["key"], shot["from"], shot["to"])]
+
+    def dry(x, z):
+        return all(hole.depth_at(x, z) <= 0.0 for hole in world.apron.holes)
+
+    # The bus's -X side: three drums and a stack of two tyres, 0.3 m off its flank, between and beyond its wheels.
+    flank = BUS["center"][0] - BUS["half"][0] - 0.3
+    drum_count = 11  # The layout's Drum0-Drum10
+    for index, (z_offset, model) in enumerate(((-4.4, "Barrel_02"), (-0.9, "barrel_03"), (1.4, "Barrel_01"))):
+        low, high = SCAN_BOUNDS[model]
+        radius = 0.5 * (high[0] - low[0])
+        x, z = flank - radius - rng.uniform(0.0, 0.25), BUS["center"][1] + z_offset
+        if not dry(x, z):
+            raise CheckFailed("a drum by the bus at (%.2f, %.2f) stands in a pothole" % (x, z))
+        name = "Drum%d" % (drum_count + index)
+        s.instantiate(scan_path(model), name, props, {
+            "Transform": transform((x, surface_at(world, x, z), z), rng.uniform(0.0, 360.0)),
+            "BoxCollider": {"HalfExtents": rounded([radius * 0.9, high[1] * 0.5, radius * 0.9]), "Offset": [0.0, round(high[1] * 0.5, 4), 0.0]}})
+        s.rename({"$ref": name}, name)
+    low, high = SCAN_BOUNDS["old_tyre"]
+    half_width = 0.5 * (high[2] - low[2])
+    tyre_count = 4 + len(TYRES_SCATTERED)  # The layout's Tyre0-Tyre6
+    x, z = flank - 0.35, BUS["center"][1] + 0.25
+    for level in range(2):
+        name = "Tyre%d" % (tyre_count + level)
+        s.instantiate(scan_path("old_tyre"), name, props, {
+            "Transform": transform((x, surface_at(world, x, z) + half_width * (2 * level + 1), z), rng.uniform(0.0, 360.0), pitch=90.0)})
+        s.rename({"$ref": name}, name)
+
+    # Stones in clusters of one to three just outside the apron's edge.
+    instances = {}
+    clusters = 0
+    while clusters < DRESS_STONE_CLUSTERS:
+        x, z = rng.uniform(APRON_X[0] - 3.0, APRON_X[1] + 3.0), rng.uniform(APRON_Z[0] - 3.0, APRON_Z[1] + 3.0)
+        if not 0.2 <= layout.outline.signed_distance(x, z) <= 1.4:
+            continue
+        if any(name != "Apron" and distance(x, z) < 1.5 for name, distance, _ in layout.pads):
+            continue
+        if any((x - c[0]) ** 2 + (z - c[2]) ** 2 < 6.0 ** 2 for c in cameras):
+            continue
+        clusters += 1
+        for _ in range(rng.randint(1, 3)):
+            sx, sz = x + rng.uniform(-0.8, 0.8), z + rng.uniform(-0.8, 0.8)
+            model = rng.choice(("namaqualand_boulder_02", "namaqualand_boulder_03"))
+            scale = rng.uniform(0.15, 0.4)
+            low, high = SCAN_BOUNDS[model]
+            y = world.ground.surface(sx, sz) - 0.3 * (high[1] - low[1]) * scale
+            instances.setdefault(model, []).append({"parent": rocks, "components": {
+                "Transform": transform((sx, y, sz), rng.uniform(0.0, 360.0), scale), "BoxCollider": box_collider(SCAN_BOUNDS[model])}})
+
+    # Rocks on the rim in shot 1's lower left, around its hero boulder, framing the vista (the lower right shows the hut).
+    shot1 = report[0]
+    for ix, iy, model, scale in DRESS_RIM_ROCKS:
+        x, _, z = ground_at_image(world, shot1["key"], shot1["look"], shot1["fov"], ix, iy)
+        if any((x - c[0]) ** 2 + (z - c[2]) ** 2 < 2.5 ** 2 for c in cameras):
+            raise CheckFailed("a rim rock at (%.2f, %.2f) stands within 2.5 m of a shot's camera" % (x, z))
+        low, high = SCAN_BOUNDS[model]
+        y = world.ground.surface(x, z) - 0.2 * (high[1] - low[1]) * scale
+        instances.setdefault(model, []).append({"parent": rocks, "components": {
+            "Transform": transform((x, y, z), rng.uniform(0.0, 360.0), scale), "BoxCollider": box_collider(SCAN_BOUNDS[model])}})
+    for model, model_instances in sorted(instances.items()):
+        s.add("prefab.instantiate", {"prefab": scan_path(model), "instances": model_instances})
+    s.add("scene.save")
+    return s.steps
+
+
 def command_layout(arguments):
     write_steps(layout_script(World()), arguments.output)
+    return 0
+
+
+def command_dress(arguments):
+    write_steps(dress_script(World()), arguments.output)
     return 0
 
 
@@ -2315,6 +2407,8 @@ def main():
     layout_parser.add_argument("--output", required=True, help="The command script to write (.json)")
     controls = commands.add_parser("controls", help="Write the command script of the input actions, the photo mode and the loading scene")
     controls.add_argument("--output", required=True, help="The command script to write (.json)")
+    dress = commands.add_parser("dress", help="Write the command script of the dressing: drums and tyres by the bus, stones on the apron's edge")
+    dress.add_argument("--output", required=True, help="The command script to write (.json)")
     bake = commands.add_parser("bake", help="Write the command script that bakes the six probes")
     bake.add_argument("--output", required=True, help="The command script to write (.json)")
     setup = commands.add_parser("setup", help="Print a station's edit-mode steps")
@@ -2327,7 +2421,8 @@ def main():
     arguments = parser.parse_args()
     try:
         return {"terrain": command_terrain, "check": command_check, "stations": command_stations,
-                "selftest": command_selftest, "layout": command_layout, "controls": command_controls, "bake": command_bake, "setup": command_setup,
+                "selftest": command_selftest, "layout": command_layout, "controls": command_controls, "dress": command_dress,
+                "bake": command_bake, "setup": command_setup,
                 "checkshots": command_checkshots}[arguments.command](arguments)
     except CheckFailed as error:
         print("FAIL: %s" % error)

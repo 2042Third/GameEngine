@@ -5790,15 +5790,20 @@ where alpha or exact palettes need it.
 `Samples/Showcase` (High Desert Outpost) is the presets' reference scene: wave 8's look is judged on its six shots, and
 every later change to rendering is measured on them. Two standard-library generators make everything that is not a scan
 and keep it reproducible: `Tools/GenerateShowcaseTerrain.py` (the valley, the apron, its water and mud) and
-`Tools/GenerateShowcaseProps.py` (the bus, the tanks, the pipes, the hut, the bare steel's maps). Both seed their noise,
+`Tools/GenerateShowcaseProps.py` (the bus, the tanks, the pipes, the hut, the bare steel's color, metal/roughness and
+normal maps: rust, rain streaks, and the sheet's waves and dents, which break the sun's reflection on a flat panel into
+streaks instead of one even glare). Both seed their noise,
 use no transcendental functions where a vertex depends on them and quantize every attribute, so every platform writes
 the same bytes; `selftest` (CTests `StrataTools.ShowcaseTerrain` and `.ShowcaseProps`, label `tools`) writes twice, compares
 with the committed files (the maps by their pixels), checks the design's rules (the golden sun clears the hills from the
 apron, the pads are flat, the letterboard is vertical, the shots' mirror points lie on their surfaces) and that the
 scripts' `Scripts/Stations.h` rows equal the generator's table. To change the ground or a prop, change the generator,
 write in place (`terrain` or `props --output Samples/Showcase/Assets/Generated/...`): the editor reimports and keeps the
-handles. The generators' command scripts (`materials`, `prefabs`, `layout`, `controls`, `bake`) are run once with
-`StrataEditor --quit-after-commands`; `layout` builds a fresh scene only, later edits are commands of their own.
+handles. The generators' command scripts (`materials`, `prefabs`, `layout`, `controls`, `dress`, `bake`) are run once
+with `StrataEditor --quit-after-commands` (on Windows through `Start-Process -Wait`: the editor is a GUI program, and a
+second run would add `dress`'s props again); `layout` builds a fresh scene only, later edits are commands of their own.
+The materials' values live in `GenerateShowcaseProps.py`'s table: change them there and run its `tune` script, which
+sets them on the existing materials.
 
 The three times of day are stations: the sun's direction and the values that go with it (`Stations.h`, `setup --station`).
 Each has two reflection probe entities, `Probe.<Dawn, Golden or Dusk>.<Yard or Hut>`, never two probes baked three times

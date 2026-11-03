@@ -9,9 +9,9 @@
 		],
 		"AttenuationDistance": 0,
 		"BaseColor": [
-			1,
-			1,
-			1,
+			0.85,
+			0.85,
+			0.85,
 			1
 		],
 		"BaseColorMap": "A26A056D529C79BF",
