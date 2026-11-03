@@ -152,6 +152,8 @@
 	{"command": "entity.create", "parameters": {"name": "Probe Yard", "components": {"Transform": {"Translation": [0, 2, 14]}, "ReflectionProbe": {"Extents": [46, 20, 32], "BlendDistance": 2, "BoxProjection": true}}}, "bind": {"probeYard": "/id"}},
 	{"command": "lighting.bakeProbes", "parameters": {"entities": [{"$ref": "probeYard"}]}},
 	{"command": "entity.setActive", "parameters": {"entities": [{"$ref": "probeYard"}], "active": false}},
+	{"command": "entity.create", "parameters": {"name": "Probe Patch", "components": {"Transform": {"Translation": [0, 2, 14]}, "ReflectionProbe": {"Extents": [46, 20, 32], "BlendDistance": 2, "BoxProjection": false}}}, "bind": {"probePatch": "/id"}},
+	{"command": "entity.setActive", "parameters": {"entities": [{"$ref": "probePatch"}], "active": false}},
 	{"command": "scene.saveAs", "parameters": {"path": "Scenes/Specular.stscene"}},
 	{"command": "project.setStartScene", "parameters": {"scene": "Scenes/LookDev.stscene"}},
 	{"command": "project.save", "parameters": {}}

@@ -114,38 +114,77 @@ float RefinePlaneCrossing(ScreenRay ray, MarchPoint low, MarchPoint high, float3
 	return -1.0;
 }
 
-// Bisects a candidate segment, from a point in front of a surface to one behind it, and validates the crossing: where along
-// the ray the hit is, -1 for a false candidate. A point over the sky counts as behind while the low end is on a surface (the
-// crossing, or that surface's edge, lies before it) and as in front once the low end is over the sky too. Comparing it with the
-// low end's depth instead would lose the crossing at a reflected wall's top edge: the depth of a wall seen from below its top
-// shrinks toward the top, so a point just beyond the edge is nearer than the wall's depth further down where the low end was.
-// The hit must be on a surface, behind it by no more than the thickness tolerance plus the last interval's change of the ray's
-// distance, and on one continuous surface (the two ends' depths as close): a ray that passed behind a thin post fails (its
-// ends sit on the post and on what is far behind it), one that met a wall passes. Where the interval ends on a surface's last
-// pixel and the sky beyond it, the ray met that surface at its edge if it had passed its depth there.
-float RefineCrossing(ScreenRay ray, MarchPoint low, MarchPoint high, int2 size)
+// Whether the ray at a point is behind its pixel's surface by more than the thickness tolerance: a surface it passes behind.
+bool IsPassingBehind(MarchPoint point)
+{
+	return point.SceneDistance < c_SkyDistance && point.RayDistance > point.SceneDistance + GetThickness(point.SceneDistance);
+}
+
+// Bisects a segment from a point in front of a surface (low) to one behind it (high) onto the crossing. A point over the sky
+// counts as behind while the low end is on a surface it is not passing behind (the crossing, or that surface's edge, lies
+// before it) and as in front otherwise. Comparing it with the low end's depth instead would lose the crossing at a reflected
+// wall's top edge: the depth of a wall seen from below its top shrinks toward the top, so a point just beyond the edge is
+// nearer than the wall's depth further down where the low end was. While the low end is behind an occluder, a point on a
+// surface nearer than the receding ray already was there counts as in front: the ray passes behind that surface and cannot
+// have crossed it since.
+void BisectCrossing(ScreenRay ray, inout MarchPoint low, inout MarchPoint high, int2 size)
 {
 	for (uint index = 0u; index < u_Reflections.RefineSteps; index++)
 	{
 		MarchPoint middle = MarchPointAt(ray, 0.5 * (low.Along + high.Along), size);
-		bool behind = middle.SceneDistance < c_SkyDistance ? middle.RayDistance > middle.SceneDistance : low.SceneDistance < c_SkyDistance;
+		bool behind;
+		if (middle.SceneDistance >= c_SkyDistance)
+			behind = low.SceneDistance < c_SkyDistance && !IsPassingBehind(low);
+		else
+		{
+			bool passedBefore = IsPassingBehind(low) && middle.RayDistance >= low.RayDistance
+				&& middle.SceneDistance + GetThickness(middle.SceneDistance) < low.RayDistance;
+			behind = middle.RayDistance > middle.SceneDistance && !passedBefore;
+		}
 		if (behind)
 			high = middle;
 		else
 			low = middle;
 	}
+}
+
+// Where along the ray a bisected crossing is, -1 if it is not valid. The hit must be on a surface, behind it by no more than
+// the thickness tolerance plus the last interval's change of the ray's distance, and on one continuous surface (the two ends'
+// depths as close): a ray that passed behind a thin post fails (its ends sit on the post and on what is far behind it), one
+// that met a wall passes. Where the low end is itself behind an occluder, the surface the ray met is hidden there and only the
+// high end is checked. Where the interval ends on a surface's last pixel and the sky beyond it, the ray met that surface at
+// its edge if it had passed its depth there.
+float ValidateCrossing(MarchPoint low, MarchPoint high)
+{
 	float interval = abs(high.RayDistance - low.RayDistance);
 	if (high.SceneDistance >= c_SkyDistance)
 	{
-		if (low.SceneDistance >= c_SkyDistance)
+		if (low.SceneDistance >= c_SkyDistance || IsPassingBehind(low))
 			return -1.0;
 		float edgeSlack = GetThickness(low.SceneDistance) + interval;
 		return high.RayDistance > low.SceneDistance && high.RayDistance - low.SceneDistance <= edgeSlack ? low.Along : -1.0;
 	}
 	float slack = GetThickness(high.SceneDistance) + interval;
 	bool valid = high.RayDistance > high.SceneDistance && high.RayDistance - high.SceneDistance <= slack
-		&& abs(high.SceneDistance - low.SceneDistance) <= slack;
+		&& (IsPassingBehind(low) || abs(high.SceneDistance - low.SceneDistance) <= slack);
 	return valid ? high.Along : -1.0;
+}
+
+// Refines a candidate segment and validates the crossing: where along the ray the hit is, -1 for a false candidate. When the
+// bisection closed in on an occluder inside the segment (a thin post between two points on the wall behind it: the ray passes
+// behind the post), what lies beyond the occluder is bisected once more from there, so the ray still meets the wall; a segment
+// that starts behind an occluder (after a rejected candidate) passes over it the same way.
+float RefineCrossing(ScreenRay ray, MarchPoint low, MarchPoint high, int2 size)
+{
+	MarchPoint segmentEnd = high;
+	BisectCrossing(ray, low, high, size);
+	float hitAlong = ValidateCrossing(low, high);
+	if (hitAlong >= 0.0 || !IsPassingBehind(high) || high.Along >= segmentEnd.Along)
+		return hitAlong;
+	low = high;
+	high = segmentEnd;
+	BisectCrossing(ray, low, high, size);
+	return ValidateCrossing(low, high);
 }
 
 float4 TraceReflection(int2 pixel, int2 size)
@@ -172,17 +211,23 @@ float4 TraceReflection(int2 pixel, int2 size)
 	// normal's) that must be crossed: that finds the crossing between two samples on it (a reflected wall's top edge, the
 	// face of a post narrower than a step), while a ray running in front of a receding floor, beyond each earlier pixel's depth,
 	// crosses nothing. A false candidate does not end the march, up to MaxCandidates of them; after that the ray finds nothing
-	// (the probes or the sky fill in), which bounds the cost in clutter.
+	// (the probes or the sky fill in), which bounds the cost in clutter. After its Steps steps the march takes one more point,
+	// half a pixel before the ray's end: the offset steps stop short of the end by up to a step, and on a ray toward the far plane
+	// that last step spans everything beyond some tens of meters (a far wall, or the wall behind a post whose image the last step
+	// landed on, would show the sky).
 	MarchPoint previous;
 	previous.Along = 0.0;
 	previous.RayDistance = GetViewDistance(ray.Start.z);
 	previous.SceneDistance = c_SkyDistance; // The start crosses no surface of its own
 	uint candidates = 0u;
 	float hitAlong = -1.0;
-	for (uint index = 0u; index < u_Reflections.Steps && hitAlong < 0.0; index++)
+	for (uint index = 0u; index <= u_Reflections.Steps && hitAlong < 0.0; index++)
 	{
 		float fraction = (float(index) + offset) / float(u_Reflections.Steps);
-		MarchPoint current = MarchPointAt(ray, max(fraction * fraction, minStep), size);
+		float along = index < u_Reflections.Steps ? max(fraction * fraction, minStep) : 1.0 - 0.5 * minStep;
+		if (index == u_Reflections.Steps && along <= previous.Along)
+			break; // A short ray's last step is already past that point
+		MarchPoint current = MarchPointAt(ray, along, size);
 		bool candidate = false;
 		if (previous.RayDistance <= current.SceneDistance && current.RayDistance > current.SceneDistance)
 		{

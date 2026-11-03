@@ -712,7 +712,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     dark dielectric of roughness 0.06), six thin posts, four crates, three colored walls, two lanterns and a box-projected
     probe (baked, then inactive: shots activate it), under the Clear preset's sun at 30 degrees. Its shots
     (`lookdev.sheet`, `.sheet.angle`, `.wet`, `.wet.sunward`, `.tank`) measure the reflections' noise and pattern, and
-    `lookdev.patch` (golden hour, the yard's probe baked without box projection) shows what the probe fills in;
+    `lookdev.patch` (golden hour, `Probe Patch` at the yard probe's place without box projection) shows what the probe fills
+    in. That probe is saved inactive and unbaked and only that shot bakes it: a bake moves its probe's previous capture to the
+    trash, which would leave the saved scene's yard probe naming a trashed capture for every later shot (projects in a
+    `--work` directory are reused: `--fresh-work` after changing `LookDevScene.json`);
     `lookdev.overcast` (the Overcast preset's 10-degree sun on the ladder and the IOR spheres), `lookdev.lantern.wet` and
     `.lantern.sheet` (at dusk, the sun 3 degrees below the horizon: the lanterns' glints on the wet plane and the sheet) and
     their `.sized` forms (both lanterns' `SourceRadius` 0.06, the bulbs' radius, set by a `Setup` step so the scene still
@@ -5444,10 +5447,17 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   the last interval's change of the ray's distance) and on one continuous surface (the ends' depths as close), or, for a
   plane crossing, at the ray's depth where the depth buffer shows it; where the interval ends on a surface's last pixel
   and the sky, at that surface's edge if the ray had passed its depth. During the bisection a point over the sky counts
-  as behind while the low end is on a surface (comparing it with that end's depth lost a wall's top edge, whose depth
-  shrinks toward the top seen from below it). A false candidate does not end the march: up to `MaxCandidates` of them
-  (Spatial 2, SpatialHigh 3; the push constants' `SpatialReflectionParameters::MaxCandidates`), after which the ray finds
-  nothing and the probes or the sky fill in, which bounds the cost in clutter. Strata 0.7.0 took any point behind a
+  as behind while the low end is on a surface the ray is not passing behind (comparing it with that end's depth lost a
+  wall's top edge, whose depth shrinks toward the top seen from below it). A bisection that closed in on an occluder inside
+  the segment (a post between two points on the wall behind it) bisects what lies beyond the occluder once more; while the
+  low end is behind an occluder, a surface nearer than the ray already was there counts as in front and the low end's own
+  depth is not compared (it hides the surface the ray met). A false candidate does not end the march: up to
+  `MaxCandidates` of them (Spatial 2, SpatialHigh 3; the push constants' `SpatialReflectionParameters::MaxCandidates`),
+  after which the ray finds nothing and the probes or the sky fill in, which bounds the cost in clutter. After its steps
+  the march takes one more point, half a pixel before the ray's end: the offset steps stop up to a step short of it, and
+  toward the far plane that step spans everything beyond some tens of meters (on `lookdev.sheet` rays toward the far
+  yellow wall found nothing for some offsets, and those whose last step passed behind a post showed the sky where 0.7.0
+  drew a ghost of the post: `GPU.SceneRenderer.SSR`'s sheet case). Strata 0.7.0 took any point behind a
   surface by less than its step's change of distance plus the tolerance for a hit, so a ray that passed far behind a thin
   post read the post (ghost columns beside its reflection), and the reflected top edge of a wall stepped into the sky
   (`GPU.SceneRenderer.SSR`: thin posts in front of a grazing mirror, the wall's edge within 2 px). Checkerboard's march is
@@ -5470,7 +5480,10 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   less the more their mirror directions differ (at 3840x2160 still 0.97: about two pixels of softening). The kernel was
   chosen over a 3x3 order of the march with a 3x3 window by noise (`lookdev.sheet`'s crops at 4K, High and Ultra, every
   anti-aliasing mode: 0.31-0.37% and 0.95-1.01% against 0.38-0.43% and 1.15-1.24%), at 0.43 ms on
-  `PerfGPU.Renderer.SSRSpatial4KStageGPU`. It writes the full-resolution target the
+  `PerfGPU.Renderer.SSRSpatial4KStageGPU`, within its 1.2 ms target (so its separable form was not built). With the
+  validated crossings the stage measures 0.59 ms there at Spatial and 0.70 ms at SpatialHigh (`GPU.Opaque` 0.64 ms), and
+  on `lookdev.sheet` and `tp.scene` at 4K about 2.1 and 2.3 times the base build's `GPU.Reflections` as a share of
+  `GPU.Opaque` (R1's A/B; the plan proposed 1.3 times). It writes the full-resolution target the
   forward pass reads at SRV 18 (the same premultiplied lookup). Memory at 3840x2160: the surface target 63 MiB (as
   Checkerboard's), the trace and the resolve 63 MiB each (RGBA16F), the full-resolution copy 32 MiB (B10G11R11; 63 MiB in
   the RGBA16F fallback), beside the scene-color copy (11 MiB): about 150 MiB more than Checkerboard,
@@ -5478,7 +5491,8 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   runs the mirror floor's edge, rough-floor, off-screen and moving-cube cases in both modes (Spatial with FXAA), checks
   that Spatial traces without TAA where the CPU predicts, alike on both paths, with the same image in every later frame,
   that a changed mode releases one mode's targets for the other's (Off makes none), that the specular lab's rough sheet
-  shows no screen door (`Pattern3` and `Pattern4` at most 0.2%) and, in a strafe past the sheet and over the wet plane,
+  shows no screen door (`Pattern3` and `Pattern4` at most 0.2%), that its rays reach the far wall, also past a post's image
+  (at `lookdev.sheet`'s view and the editor's far plane), and, in a strafe past the sheet and over the wet plane,
   what the reflections add to the flicker meter's `Blocks` and `Mean` ("GPU tests").
   `PerfGPU.Renderer.SSRSpatial4K` (+ `GPU`, `StageGPU`: `GPU.Reflections`, target 1.2 ms; provisional) measures Spatial
   on the 100,000-cube grid at 3840x2160 with FXAA, and `SSRSpatialHigh4K` (target 1.8 ms) SpatialHigh there: clutter is
