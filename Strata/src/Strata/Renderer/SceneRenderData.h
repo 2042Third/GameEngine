@@ -676,6 +676,69 @@ namespace Strata
 		// c_GIAnchorMeters of it: what voxelizes relative to the same anchor gives the same voxels whatever the camera.
 		constexpr int64_t c_GIAnchorVoxels = 1024;
 		constexpr double c_GIAnchorMeters = 1000.0;
+		constexpr uint32_t c_GIMaxVoxelLevels = 4;
+		// Voxelization (VoxelClipmap, GI/Voxel*.comp): what a frame voxelizes, within its budget of triangles.
+		constexpr uint32_t c_GIVoxelizeTrianglesPerFrame = 500000; // Guess: the voxelization's share of the stage at most 0.5 ms on the 5090
+		constexpr uint32_t c_GIVoxelizeTrianglesOnCut = 4000000;   // Guess: a rebuild's or a jump's frame (Open World's whole scene)
+		constexpr uint32_t c_GIMaxWorkItems = 65536;               // Work items a frame (VoxelWorkItem)
+		constexpr uint32_t c_GIMaxTriangleGroups = 65536;          // Groups of c_GIGroupTriangles triangles a frame (VoxelBatch)
+		constexpr uint32_t c_GIGroupTriangles = 64;
+		constexpr uint32_t c_GIMaxRegions = 4096;                  // Regions a frame
+		constexpr uint32_t c_GISmallTriangleVoxels = 64; // A triangle whose bounds within its region hold more voxels goes to tiles
+		constexpr uint32_t c_GITileVoxels = 8;           // A tile is 8^3 voxels, a group of 64 threads with 8 voxels each
+		constexpr uint32_t c_GIMaxTiles = 32768;         // Tiles per batch; beyond them a triangle walks its tiles itself (counted)
+		constexpr uint32_t c_GIMovingFrames = 30;        // A proxy placed anew within this many frames is moving: left out of the voxels
+		constexpr float c_GIMaskedOccupancy = 0.15f;     // Guess: alpha-masked surfaces' occupancy
+		constexpr float c_GITwoSidedSum = 0.5f;          // A voxel whose triangles' unit normals sum to less is two-sided
+		constexpr float c_GINormalFixedPoint = 256.0f;   // Normals add as integers times this
+		constexpr float c_GIStepVoxels = 0.75f;          // Marches step this many voxels of the level they sample
+
+		// VoxelWorkItem::Flags
+		constexpr uint32_t c_VoxelItemClosed = 1u << 0;      // A closed mesh whose submeshes are all opaque: its triangles add winding steps
+		constexpr uint32_t c_VoxelItemAlphaMasked = 1u << 1; // Voxels of class 1 (c_GIMaskedOccupancy)
+		constexpr uint32_t c_VoxelItemDoubleSided = 1u << 2; // Lit from either side; adds no normal
+		constexpr uint32_t c_VoxelItemMirrored = 1u << 3;    // Negative determinant: normals and winding steps reverse
+		constexpr uint32_t c_VoxelItemFillOnly = 1u << 4;    // Outside the region: only its winding steps (closed meshes below it)
+
+		// A box of voxels the frame voxelizes, contiguous in its level's textures (Include/Voxelize.slang).
+		struct VoxelRegion
+		{
+			glm::ivec4 Minimum; // xyz: the region's first voxel, relative to the level's anchor voxel; w: the level
+			glm::ivec4 Maximum; // xyz: one past its last voxel; w: its first voxel in the batch's scratch
+			glm::ivec4 Texel;   // xyz: the texel of Minimum; w: its first column (x, z) among the batch's
+		};
+		static_assert(sizeof(VoxelRegion) == 48);
+
+		// A submesh of a proxy instance voxelized into a region.
+		struct VoxelWorkItem
+		{
+			uint32_t Instance;       // Into the render scene GPU copy's instances (world rows, material slot)
+			uint32_t MeshSubmeshLOD; // Mesh slot (bits 0-19), submesh (20-27), level of detail (28-31)
+			uint32_t Region;         // Into the frame's regions
+			uint32_t Flags;          // c_VoxelItem*
+		};
+		static_assert(sizeof(VoxelWorkItem) == 16);
+		constexpr uint32_t c_VoxelItemMaxMeshSlot = (1u << 20) - 1;
+		constexpr uint32_t c_VoxelItemMaxSubmesh = 255;
+
+		// c_GIGroupTriangles triangles of a work item, a group of the voxelizer's threads.
+		struct VoxelBatch
+		{
+			uint32_t Item;
+			uint32_t FirstTriangle;
+		};
+		static_assert(sizeof(VoxelBatch) == 8);
+
+		// A material slot as the voxelizer reads it (GIMaterialBuffer): the CPU's means of its maps, so no compute pass reads
+		// bindless textures.
+		struct GIMaterial
+		{
+			uint32_t Albedo;   // Linear diffuse albedo as RGB8 (BaseColor.rgb * (1 - Metallic) times its base color map's mean)
+			uint32_t Emission; // RGB9E5 of its emission (nits) times its emissive map's mean
+			uint32_t Flags;    // c_CullMaterial* (GPUSceneData.h) of the material as drawn
+			uint32_t Padding;
+		};
+		static_assert(sizeof(GIMaterial) == 16);
 
 	}
 

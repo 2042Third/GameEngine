@@ -9,7 +9,10 @@
 
 #include <glm/gtc/packing.hpp>
 
+#include <algorithm>
 #include <bit>
+#include <cmath>
+#include <cstring>
 
 namespace Strata
 {
@@ -162,6 +165,82 @@ namespace Strata
 
 	}
 
+	namespace
+	{
+
+		float DecodeSRGB(float value)
+		{
+			return value <= 0.04045f ? value / 12.92f : std::pow((value + 0.055f) / 1.055f, 2.4f);
+		}
+
+		// The mean of a level as linear RGBA (Texture::GetLinearMean); white when its data does not have the level's size.
+		glm::vec4 ComputeLinearMean(const TextureSpecification& specification, uint32_t width, uint32_t height, std::span<const uint8_t> data)
+		{
+			TextureFormat format = specification.Format;
+			std::vector<uint8_t> decoded;
+			if (IsBlockCompressedFormat(format))
+			{
+				const TextureFormat decodedFormat = GetDecodedFormat(format);
+				decoded.resize(static_cast<size_t>(GetMipByteSize(decodedFormat, width, height)));
+				if (!BlockCompression::DecodeLevel(format, width, height, data, decoded))
+					return glm::vec4(1.0f);
+				format = decodedFormat;
+				data = decoded;
+			}
+			const uint64_t texels = static_cast<uint64_t>(width) * height;
+			if (texels == 0 || data.size() != GetMipByteSize(format, width, height))
+				return glm::vec4(1.0f);
+			glm::dvec4 sum(0.0);
+			for (uint64_t texel = 0; texel < texels; texel++)
+			{
+				glm::vec4 value(0.0f, 0.0f, 0.0f, 1.0f);
+				switch (format)
+				{
+				case TextureFormat::RGBA8:
+				case TextureFormat::RGBA8SRGB:
+					for (int channel = 0; channel < 4; channel++)
+						value[channel] = static_cast<float>(data[texel * 4 + channel]) / 255.0f;
+					if (format == TextureFormat::RGBA8SRGB)
+						value = glm::vec4(DecodeSRGB(value.r), DecodeSRGB(value.g), DecodeSRGB(value.b), value.a);
+					break;
+				case TextureFormat::R8:
+					value.r = static_cast<float>(data[texel]) / 255.0f;
+					break;
+				case TextureFormat::RG8:
+					value.r = static_cast<float>(data[texel * 2]) / 255.0f;
+					value.g = static_cast<float>(data[texel * 2 + 1]) / 255.0f;
+					break;
+				case TextureFormat::RGBA16F:
+					for (int channel = 0; channel < 4; channel++)
+					{
+						uint16_t bits = 0;
+						std::memcpy(&bits, data.data() + texel * 8 + channel * 2, sizeof(bits));
+						value[channel] = glm::unpackHalf1x16(bits);
+					}
+					break;
+				case TextureFormat::RGBA32F:
+					std::memcpy(&value, data.data() + texel * 16, sizeof(value));
+					break;
+				default:
+					return glm::vec4(1.0f);
+				}
+				if (specification.Grayscale)
+					value = glm::vec4(value.r, value.r, value.r, 1.0f);
+				sum += glm::dvec4(value);
+			}
+			const glm::vec4 mean = glm::vec4(sum / static_cast<double>(texels));
+			return std::isfinite(mean.r) && std::isfinite(mean.g) && std::isfinite(mean.b) && std::isfinite(mean.a) ? mean : glm::vec4(1.0f);
+		}
+
+		glm::vec4 ComputeSmallestLevelMean(const Texture& texture)
+		{
+			const uint32_t level = texture.GetMipCount() - 1;
+			return ComputeLinearMean(texture.GetSpecification(), std::max(texture.GetWidth() >> level, 1u), std::max(texture.GetHeight() >> level, 1u),
+				texture.GetMipData(level));
+		}
+
+	}
+
 	Ref<Texture> Texture::Create(const TextureSpecification& specification, std::vector<TextureMip> mips, std::string* outError)
 	{
 		std::vector<size_t> sizes;
@@ -182,6 +261,7 @@ namespace Strata
 		texture->m_MipCount = static_cast<uint32_t>(mips.size());
 		texture->m_Mips = std::move(mips);
 		texture->m_CookedLayout = ComputeCookedTextureLayout(texture->GetCookedDescription());
+		texture->m_LinearMean = ComputeSmallestLevelMean(*texture);
 		return texture;
 	}
 
@@ -229,6 +309,7 @@ namespace Strata
 		// The view refers to the taken-over buffer, which moves along without being copied: its offsets stay valid.
 		if (takeOver)
 			texture->m_Cooked = std::move(*takeOver);
+		texture->m_LinearMean = ComputeSmallestLevelMean(*texture);
 		return texture;
 	}
 

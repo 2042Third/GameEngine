@@ -4,6 +4,7 @@
 #include "Strata/Renderer/CookedTexture.h"
 #include "Strata/Renderer/TextureFormat.h"
 
+#include <glm/glm.hpp>
 #include <nvrhi/nvrhi.h>
 
 #include <atomic>
@@ -114,6 +115,10 @@ namespace Strata
 		const std::vector<TextureMip>& GetMips() const { return m_Mips; }
 		// A level's pixels (or blocks) while the CPU copy exists (empty after it was released, and for levels out of range).
 		std::span<const uint8_t> GetMipData(uint32_t level) const;
+		// The mean of its smallest level as linear RGBA (sRGB formats decoded, a grayscale texture gray, missing channels 0 and
+		// alpha 1): the color global illumination's voxels take for a map (VoxelClipmap's materials), the same whatever levels
+		// stream in. Computed when the texture is made, before its CPU copy goes.
+		const glm::vec4& GetLinearMean() const { return m_LinearMean; }
 
 		// Where the levels are in the cooked form, and in which format (CookedTextureLayout::Format): the data the texture
 		// was loaded from - also when it was decoded at load time (Decompress), whose layout is the block-compressed data's
@@ -235,6 +240,7 @@ namespace Strata
 		uint32_t m_Width = 0;
 		uint32_t m_Height = 0;
 		uint32_t m_MipCount = 0;
+		glm::vec4 m_LinearMean = glm::vec4(1.0f);
 
 		nvrhi::TextureHandle m_GPUTexture;
 		uint32_t m_BindlessSlot = UINT32_MAX;

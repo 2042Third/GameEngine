@@ -56,6 +56,40 @@ namespace
 
 TEST_SUITE("Renderer.Texture")
 {
+	TEST_CASE("The linear mean is its smallest level's")
+	{
+		const auto decode = [](float code) { return code <= 0.04045f ? code / 12.92f : std::pow((code + 0.055f) / 1.055f, 2.4f); };
+		// One sRGB level of four colors: their decoded mean.
+		TextureSpecification srgb;
+		srgb.Format = TextureFormat::RGBA8SRGB;
+		const std::vector<uint8_t> texels = { 255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 128, 128, 128, 128, 0 };
+		const Ref<Texture> colors = Texture::Create(srgb, { TextureMip { 2, 2, texels } });
+		REQUIRE(colors);
+		const glm::vec4 mean = colors->GetLinearMean();
+		const float gray = decode(128.0f / 255.0f);
+		CHECK(mean.r == doctest::Approx((1.0f + gray) / 4.0f));
+		CHECK(mean.g == doctest::Approx((1.0f + gray) / 4.0f));
+		CHECK(mean.b == doctest::Approx((1.0f + gray) / 4.0f));
+		CHECK(mean.a == doctest::Approx((255.0f + 255.0f + 128.0f + 0.0f) / (4.0f * 255.0f)));
+
+		// Only the smallest level counts, whatever the finer ones hold; a grayscale texture is gray.
+		TextureSpecification gray8;
+		gray8.Format = TextureFormat::R8;
+		gray8.Grayscale = true;
+		const Ref<Texture> chain = Texture::Create(gray8, { TextureMip { 2, 2, { 0, 0, 0, 0 } }, TextureMip { 1, 1, { 51 } } });
+		REQUIRE(chain);
+		CHECK(chain->GetLinearMean().r == doctest::Approx(0.2f));
+		CHECK(chain->GetLinearMean().b == doctest::Approx(0.2f));
+		CHECK(chain->GetLinearMean().a == 1.0f);
+
+		// The same through the cooked form.
+		std::string error;
+		const Ref<Texture> cooked = Texture::Deserialize(colors->Serialize(), &error);
+		REQUIRE_MESSAGE(cooked, error);
+		CHECK(cooked->GetLinearMean().r == doctest::Approx(mean.r));
+		CHECK(cooked->GetLinearMean().a == doctest::Approx(mean.a));
+	}
+
 	TEST_CASE("Mip counts cover the full chain")
 	{
 		CHECK(TextureUtils::CalculateMipCount(1, 1) == 1);
