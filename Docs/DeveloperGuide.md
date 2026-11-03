@@ -5333,7 +5333,13 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   `FrameConstants::ReflectionParams.x` is 1) and mixes it over the probes' and the sky's specular radiance before the
   split-sum BRDF, as `radiance * (1 - a) + rgb`: premultiplied, a texel that found nothing adds no black to the pixels
   beside a reflection (`GPU.SceneRenderer.SSR`'s edge case); without a sky the constant ambient still lights the diffuse
-  part. Transparent surfaces get none (deferred). Memory: the surface target's 8 and the result's 2 bytes per pixel (about 20 MiB at 1920x1080), made by
+  part. What a ray found is visible light, so the specular occlusion (the screen's ambient occlusion with Lagarde's
+  formula and the horizon fade) darkens only the fallback it replaces, `(fallback * occlusion * (1 - a) + rgb *
+  materialOcclusion) * reflectance` (`GatherIndirectSpecular`); the material's own occlusion map stays on what the ray
+  found (`IndirectInputs::ScreenReflectionOcclusion`, Lagarde's formula on it alone: exactly 1 without a map), since no
+  screen-space ray sees crevices below a pixel. Pixels without a screen reflection keep the expression bit for bit
+  (`GPU.SceneRenderer.SSR`: "Ambient occlusion leaves a mirror's reflection alone"; Strata 0.7.0 darkened the
+  reflections beside objects on wet ground). Transparent surfaces get none (deferred). Memory: the surface target's 8 and the result's 2 bytes per pixel (about 20 MiB at 1920x1080), made by
   the first frame that traces, released with the targets. Pixels that find nothing render bit for bit as without
   reflections (`GPU.SceneRenderer.SSR`: a rough floor and a cube above the view; its other cases are the mirror floor
   against the CPU's prediction on both paths, a moving cube's reflection that keeps up only when fetched along the hit's

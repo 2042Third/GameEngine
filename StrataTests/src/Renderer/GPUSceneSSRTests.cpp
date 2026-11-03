@@ -972,6 +972,123 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Ambient occlusion leaves a mirror's reflection alone")
+	{
+		// What a screen-space ray found is visible light: screen-space ambient occlusion (which sees what blocks the ray at the
+		// screen's scale, as the trace did) must not darken it again, as it made dark smudges beside objects on wet ground. A
+		// mirror floor under the red cube, now resting on it: the cube's reflection next to its base, where ambient occlusion
+		// is below 0.8 (what GTAO reaches at 128 px), is the same with it on and off; beside the cube, where the rays leave the
+		// screen and find nothing, the sky's reflection is still darker with it. A material's own occlusion map (crevices no
+		// screen-space ray sees) still darkens the reflection: by Lagarde's factor of the map's 0.5.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		const auto render = [&](bool ambientOcclusion, AssetHandle occlusionMap, std::vector<glm::vec3>& hdr, ReadbackImage& occlusion, ReadbackImage& reflections,
+			SceneCamera& camera)
+		{
+			MirrorScene scene(assets, 0.0f);
+			TransformComponent& cube = scene.Cube.GetComponent<TransformComponent>();
+			cube.Translation = glm::vec3(0.0f, 0.5f, 0.0f);
+			if (occlusionMap)
+			{
+				MaterialProperties floor;
+				floor.BaseColor = glm::vec4(1.0f);
+				floor.Metallic = 1.0f;
+				floor.Roughness = 0.0f;
+				floor.OcclusionMap = occlusionMap;
+				floor.OcclusionStrength = 1.0f;
+				scene.Floor.GetComponent<MeshRendererComponent>().Material = assets.AddMaterial(floor);
+			}
+			scene.Camera = LookAt(glm::vec3(0.0f, 1.2f, 3.0f), glm::vec3(0.0f, 0.3f, 0.0f));
+			camera = scene.Camera;
+			SetAntiAliasingFor(scene.Contents, ReflectionsQuality::Spatial);
+			GetPostProcess(scene.Contents).AmbientOcclusion = ambientOcclusion;
+			SceneRenderer renderer = CreateReflectionRenderer("Occlusion", ReflectionsQuality::Spatial);
+			renderer.SetViewportSize(c_ViewSize, c_ViewSize);
+			WarmUp(gpu, renderer, scene.Contents, scene.Camera);
+			RenderFrames(gpu, renderer, scene.Contents, scene.Camera, 3);
+			REQUIRE(renderer.GetStats().ScreenSpaceReflections);
+			hdr = ReadHDR(renderer.GetHDRTexture());
+			if (ambientOcclusion)
+			{
+				REQUIRE(renderer.GetAmbientOcclusionTexture());
+				REQUIRE(Renderer::ReadTexture(renderer.GetAmbientOcclusionTexture(), occlusion));
+			}
+			reflections = ReadHalfImage(renderer.GetScreenReflectionTexture());
+		};
+		std::vector<glm::vec3> off;
+		std::vector<glm::vec3> on;
+		ReadbackImage occlusion;
+		ReadbackImage reflections;
+		ReadbackImage unused;
+		SceneCamera camera;
+		render(false, UUID::Null(), off, unused, reflections, camera);
+		render(true, UUID::Null(), on, occlusion, reflections, camera);
+		REQUIRE(occlusion.Width == c_ViewSize);
+
+		// The cube's front face (z = 0.5) mirrored in the floor, within 0.3 m of its base.
+		uint32_t reflected = 0;
+		for (float x = -0.4f; x <= 0.4f; x += 0.05f)
+		{
+			for (float height = 0.02f; height <= 0.3f; height += 0.02f)
+			{
+				const glm::uvec2 pixel = MirrorPixel(camera, glm::vec3(x, height, 0.5f));
+				if (ReadOcclusionTexel(occlusion, pixel) >= 0.8f || ReadHalfTexel(reflections, pixel.x, pixel.y).a < 0.9f)
+					continue;
+				const glm::vec3 withOcclusion = TexelAt(on, pixel);
+				const glm::vec3 without = TexelAt(off, pixel);
+				CAPTURE(pixel);
+				CAPTURE(withOcclusion);
+				CAPTURE(without);
+				CHECK(std::abs(withOcclusion.r - without.r) <= 0.01f * without.r);
+				reflected++;
+			}
+		}
+		CHECK(reflected >= 8u);
+		// Beside the cube on the floor: its reflected rays leave the screen (no screen reflection), ambient occlusion still
+		// darkens the sky's reflection there.
+		uint32_t beside = 0;
+		for (const glm::vec3& point : { glm::vec3(0.55f, 0.0f, 0.3f), glm::vec3(-0.55f, 0.0f, 0.3f), glm::vec3(0.55f, 0.0f, 0.0f), glm::vec3(-0.55f, 0.0f, 0.0f) })
+		{
+			const glm::uvec2 pixel = ProjectToPixel(camera, point, c_ViewSize);
+			if (ReadHalfTexel(reflections, pixel.x, pixel.y).a > 0.0f || ReadOcclusionTexel(occlusion, pixel) >= 0.95f)
+				continue;
+			CAPTURE(pixel);
+			CHECK(TexelAt(on, pixel).b < 0.99f * TexelAt(off, pixel).b);
+			beside++;
+		}
+		CHECK(beside >= 1u);
+
+		// The floor with a constant occlusion map of 0.5: its reflection of the cube is the plain floor's times Lagarde's factor.
+		std::vector<uint8_t> half;
+		for (int texel = 0; texel < 16; texel++)
+			AppendPixel(half, 128, 128, 128, 255);
+		const AssetHandle occlusionMap = assets.AddTexture(4, 4, half, TextureFormat::RGBA8);
+		std::vector<glm::vec3> occluded;
+		render(false, occlusionMap, occluded, unused, reflections, camera);
+		const float occlusionValue = 128.0f / 255.0f;
+		uint32_t compared = 0;
+		for (float x = -0.4f; x <= 0.4f; x += 0.1f)
+		{
+			const glm::vec3 point(x, 0.25f, 0.5f);
+			const glm::uvec2 pixel = MirrorPixel(camera, point);
+			if (ReadHalfTexel(reflections, pixel.x, pixel.y).a < 0.99f)
+				continue;
+			// The floor point the pixel shows and its view: N.V of the mirror's upward normal.
+			const glm::vec3 mirrored(point.x, -point.y, point.z);
+			const float noV = glm::normalize(camera.Position - mirrored).y;
+			const float roughness = 0.0f; // The mirror's, as the forward pass gives it to the occlusion
+			const float factor = std::clamp(std::pow(noV + occlusionValue, std::exp2(-16.0f * roughness - 1.0f)) - 1.0f + occlusionValue, 0.0f, 1.0f);
+			CAPTURE(pixel);
+			CAPTURE(factor);
+			CHECK(TexelAt(occluded, pixel).r == doctest::Approx(TexelAt(off, pixel).r * factor).epsilon(0.02));
+			compared++;
+		}
+		CHECK(compared >= 4u);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A strafe past a rough metal sheet and over a wet floor: the reflections do not flicker")
 	{
 		// The look-dev scene's specular lab (SpecularLab), strafed 1 cm a frame toward the rough sheet and across the wet plane, as

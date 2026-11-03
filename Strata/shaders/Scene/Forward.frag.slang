@@ -158,6 +158,8 @@ IndirectInputs GetIndirectInputs(SurfaceData surface, float3 f0, float2 dfg, flo
 	inputs.SpecularOcclusion = inputs.Form == ST_INDIRECT_AMBIENT ? 1.0
 		: clamp(pow(NoV + diffuseOcclusion, exp2(-16.0 * surface.Roughness - 1.0)) - 1.0 + diffuseOcclusion, 0.0, 1.0)
 		* GetHorizonFade(inputs.Reflected, geometricNormal);
+	// The same on the material's occlusion alone, for what screen-space reflections found (exactly 1 without an occlusion map).
+	inputs.ScreenReflectionOcclusion = clamp(pow(NoV + surface.Occlusion, exp2(-16.0 * surface.Roughness - 1.0)) - 1.0 + surface.Occlusion, 0.0, 1.0);
 	return inputs;
 }
 

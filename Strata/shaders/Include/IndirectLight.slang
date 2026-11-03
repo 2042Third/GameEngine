@@ -29,6 +29,7 @@ struct IndirectInputs
 	float3 SkyIrradiance;         // The sky's irradiance at the shading normal (0 without the environment)
 	float3 SkyRadiance;           // The sky's prefiltered radiance along Reflected at the surface's roughness (0 without)
 	float DiffuseWeight;          // The share of its diffuse light the surface scatters (glass: 1 - transmission)
+	float ScreenReflectionOcclusion; // From the material's occlusion alone (Lagarde): what screen-space reflections keep
 };
 
 // The share of its diffuse light a surface scatters: transmissive surfaces pass the rest through (the glass variant). The other
@@ -76,29 +77,27 @@ float3 GatherIndirectDiffuse(IndirectInputs inputs, SurfaceData surface)
 
 // The base's specular indirect light, by its reflectance and occlusion (reflections' region). Screen-space reflections replace
 // the probes' and the sky's light by their confidence (the scene's luminance as the previous frame showed it, which no
-// intensity of the sky scales).
+// intensity of the sky scales). What a screen-space ray found is visible light: the specular occlusion, which holds the
+// screen's ambient occlusion and the horizon fade, darkens only the fallback it replaces (the trace saw what blocks the ray at
+// the screen's scale, and refuses rays below the geometric surface); the material's own occlusion (crevices below a pixel)
+// still darkens what the ray found. Pixels without a screen reflection keep the expression of the forms before (bit for bit).
 float3 GatherIndirectSpecular(IndirectInputs inputs)
 {
-	float3 radiance;
+	float3 fallback;
 	if (inputs.Form == ST_INDIRECT_PROBES)
-	{
-		radiance = inputs.Probes.Radiance + inputs.SkyRadiance * (inputs.Environment ? u_Frame.EnvironmentParams.x * inputs.Sky : 0.0);
-		if (inputs.ScreenReflection.a > 0.0)
-			radiance = radiance * (1.0 - inputs.ScreenReflection.a) + inputs.ScreenReflection.rgb;
-	}
+		fallback = inputs.Probes.Radiance + inputs.SkyRadiance * (inputs.Environment ? u_Frame.EnvironmentParams.x * inputs.Sky : 0.0);
 	else if (inputs.Form == ST_INDIRECT_SCREEN)
-	{
-		radiance = inputs.SkyRadiance * (inputs.Environment ? u_Frame.EnvironmentParams.x : 0.0) * (1.0 - inputs.ScreenReflection.a) + inputs.ScreenReflection.rgb;
-	}
+		fallback = inputs.SkyRadiance * (inputs.Environment ? u_Frame.EnvironmentParams.x : 0.0);
 	else if (inputs.Form == ST_INDIRECT_SKY)
-	{
-		radiance = inputs.SkyRadiance;
-	}
+		fallback = inputs.SkyRadiance;
 	else
-	{
 		return float3(0.0); // The constant ambient lights the diffuse part only
+	if (inputs.ScreenReflection.a > 0.0)
+	{
+		return (fallback * inputs.SpecularOcclusion * (1.0 - inputs.ScreenReflection.a) + inputs.ScreenReflection.rgb * inputs.ScreenReflectionOcclusion)
+			* inputs.SpecularColor;
 	}
-	return radiance * inputs.SpecularColor * inputs.SpecularOcclusion;
+	return fallback * inputs.SpecularColor * inputs.SpecularOcclusion;
 }
 
 // The base's indirect light from the two gathers, each form's scale where 0.7.0 applied it (the sky's intensity on the sum of
