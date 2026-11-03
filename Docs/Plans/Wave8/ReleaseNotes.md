@@ -87,6 +87,9 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   offsets exactly (about two pixels softer on mirrors at 3840x2160).
 - Reflections fade only where the reflected ray would leave the screen, not within 10% of every side: no more sky
   wedges at the sides of wet ground or hard cuts across a metal sheet (Medium too).
+- Screen-space reflections at High and Ultra keep only rays that really crossed a surface: no ghost columns beside thin
+  objects in front of a grazing mirror or metal sheet, and the reflected top edges of walls are whole instead of stepping
+  into the sky. A ray that passes behind something goes on to what lies beyond it.
 - Surfaces without a normal map are exactly flat: their shading normal was tilted by 0.3 degrees, which moved mirror
   images (a wall 10 m away lost the top 8 cm of its reflection in a polished floor).
 - Ambient occlusion no longer darkens what screen-space reflections found: no dark smudges beside objects on wet ground
@@ -140,9 +143,8 @@ projects, the template and scenes or projects without the value get.
 
 **Reflections (R1)**
 
-- Screen-space reflections at High and Ultra still show ghost columns beside thin objects in front of a grazing metal
-  sheet, and the reflected top edges of walls stay slightly hatched: the crossing test with hit validation (the stream's
-  step 4) is not in this release's R1.
+- In motion, screen-space reflections still add a fine crawl to rough metal and wet ground at High and Ultra: a third to
+  a half less than 0.7.0's without TAA, not yet the half less the wave aims at.
 
 **Lane Render**
 

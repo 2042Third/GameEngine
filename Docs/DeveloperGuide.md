@@ -5355,12 +5355,27 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   `ProjectThumbnail::c_MaxReflectionFrames`), the prepass writes the same surface target and
   `Effects/ScreenSpaceReflectionsSpatial.comp` traces every pixel at full resolution: the same reflected ray
   (`Include/ScreenReflections.slang`, shared with Checkerboard's trace), marched against the full-resolution depth over its
-  whole length in 32 steps closer together near its start, a hit where it passed behind a surface by less than the same
-  thickness, refined in 6 bisections (SpatialHigh 48 and 8, `RendererQuality::GetScreenReflectionSteps`), its steps offset
-  by ambient occlusion's fixed 4x4 order, never by the frame. (A hierarchical march over a nearest-depth pyramid ran out of
-  iterations on rays grazing a floor, whose nearer pixels below the ray fill every coarse cell: at 3840x2160 a polished
-  floor reflected a wall as broken stripes, which `GPU.SceneRenderer.SSR`'s wall case and the look-dev shot
-  `lookdev.mirror` show.) What a ray sees is the previous frame's color before its transparent surfaces: in these modes every frame copies
+  whole length in 32 steps closer together near its start (SpatialHigh 48, `RendererQuality::GetScreenReflectionSteps`),
+  its steps offset by ambient occlusion's fixed 4x4 order, never by the frame. (A hierarchical march over a nearest-depth
+  pyramid ran out of iterations on rays grazing a floor, whose nearer pixels below the ray fill every coarse cell: at
+  3840x2160 a polished floor reflected a wall as broken stripes, which `GPU.SceneRenderer.SSR`'s wall case and the
+  look-dev shot `lookdev.mirror` show.) A step is a candidate where its segment crossed a surface: in front of the depth at
+  the step's pixel at the previous point and behind it at this one (refined by 6 bisections, SpatialHigh 8), or in front
+  of the previous pixel's surface and behind that surface's plane (its geometric normal's) at this point (bisected along
+  the plane), which finds the crossing between two samples on one surface (a reflected wall's top edge, a post narrower
+  than a step) while a ray running in front of a receding floor crosses nothing. A candidate is a hit only if it is
+  valid: on a surface, behind it by no more than the thickness tolerance (the larger of 5 cm and 2% of its distance, plus
+  the last interval's change of the ray's distance) and on one continuous surface (the ends' depths as close), or, for a
+  plane crossing, at the ray's depth where the depth buffer shows it; where the interval ends on a surface's last pixel
+  and the sky, at that surface's edge if the ray had passed its depth. During the bisection a point over the sky counts
+  as behind while the low end is on a surface (comparing it with that end's depth lost a wall's top edge, whose depth
+  shrinks toward the top seen from below it). A false candidate does not end the march: up to `MaxCandidates` of them
+  (Spatial 2, SpatialHigh 3; the push constants' `SpatialReflectionParameters::MaxCandidates`), after which the ray finds
+  nothing and the probes or the sky fill in, which bounds the cost in clutter. Strata 0.7.0 took any point behind a
+  surface by less than its step's change of distance plus the tolerance for a hit, so a ray that passed far behind a thin
+  post read the post (ghost columns beside its reflection), and the reflected top edge of a wall stepped into the sky
+  (`GPU.SceneRenderer.SSR`: thin posts in front of a grazing mirror, the wall's edge within 2 px). Checkerboard's march is
+  unchanged (Medium's 0.6.0 costs; TAA averages its noise). What a ray sees is the previous frame's color before its transparent surfaces: in these modes every frame copies
   its HDR image after the sky into the scene-color copy glass reads (half resolution, blurred levels) and, beside it, into
   a full-resolution copy (`Effects/SceneColorCopy.comp` with a destination of the source's size, in `GPU.Transparent`),
   and the next frame fetches where the hit surface was along its motion vector (these modes draw motion vectors), scaled

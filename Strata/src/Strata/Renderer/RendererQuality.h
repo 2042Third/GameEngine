@@ -103,6 +103,7 @@ namespace Strata
 	{
 		uint32_t Steps = 24;
 		uint32_t RefineSteps = 6;
+		uint32_t MaxCandidates = 1; // Crossings Spatial's march may refine and reject before a ray finds nothing (Checkerboard's takes the first)
 	};
 
 	// The costly knobs of a renderer: what a person, project or player chooses for a machine, never a scene's look (that

@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -747,9 +748,10 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 		RenderFrames(gpu, renderer, scene.Contents, scene.Camera, 3);
 		REQUIRE(renderer.GetStats().ScreenSpaceReflections);
 
-		// The face's mirror image in the floor, away from the screen's edges (where hits fade) and from the face's: rays that
-		// reach it near its top edge, last and in their longest steps (the bottom of its reflection), may step past it, so
-		// that edge is ragged over a few pixels, as it is for the Checkerboard trace in a frame.
+		// The face's mirror image in the floor, away from the screen's edges and up to 2 px from the face's own. Rays that reach
+		// it near its top edge, last and in their longest steps (the bottom of its reflection), step from the wall onto the sky
+		// beyond it: the crossing found at the previous step's pixel keeps them on the wall (a test of the step's pixel alone
+		// left that edge ragged over 15% of the reflection's height).
 		glm::vec2 low(1e9f);
 		glm::vec2 high(-1e9f);
 		for (const glm::vec3& corner : { glm::vec3(-3.0f, 0.0f, -3.9f), glm::vec3(3.0f, 0.0f, -3.9f), glm::vec3(-3.0f, -2.0f, -3.9f), glm::vec3(3.0f, -2.0f, -3.9f) })
@@ -759,7 +761,7 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 			high = glm::max(high, pixel);
 		}
 		const float margin = 0.12f * static_cast<float>(c_WideSize);
-		const float raggedEdge = 0.15f * (high.y - low.y);
+		const float raggedEdge = 2.0f;
 		const glm::uvec2 first = glm::uvec2(glm::max(low + glm::vec2(4.0f), glm::vec2(margin)));
 		const glm::uvec2 last = glm::uvec2(glm::min(high - glm::vec2(4.0f, 4.0f + raggedEdge), glm::vec2(static_cast<float>(c_WideSize) - margin)));
 		REQUIRE(last.x >= first.x + 100);
@@ -1089,12 +1091,234 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Thin posts in front of a mirror leave no ghost columns")
+	{
+		// The specular audit's view along a vertical mirror at a grazing angle (about 6 degrees) with posts in front of it: the
+		// reflected rays cross the screen sideways toward a blue wall and pass behind the posts' images on the way. A test that
+		// took any point behind a surface by less than its step's change of distance for a hit made each post a ghost column
+		// beside its reflection; a crossing must be validated (behind its own surface by no more than the tolerance, on one
+		// continuous surface), so those rays go on to the wall. On the CPU each mirror texel's reflected ray is classified: it
+		// meets a post (expected white), or it meets the wall after passing behind a post as the camera sees it (expected blue).
+		// The posts are 20 cm wide: narrower ones fall between the march's steps whatever counts as a hit (of the rays that meet
+		// a 5 cm post, a fifth find it).
+		constexpr uint32_t c_PostsSize = 512;
+		constexpr float c_PostX[5] = { -6.0f, -3.0f, 0.0f, 3.0f, 6.0f };
+		constexpr float c_PostZ = 1.0f;
+		constexpr float c_PostHalfWidth = 0.1f;
+		constexpr float c_PostHeight = 2.0f;
+		constexpr float c_WallX = -16.0f; // Facing +X, across the rays' way
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		// Where a ray from `origin` first meets a post's box grown by `grow` on every side within `reach` (slabs), -1 if nowhere.
+		const auto meetsPost = [&](const glm::vec3& origin, const glm::vec3& direction, float reach, float grow)
+		{
+			float nearest = -1.0f;
+			for (const float postX : c_PostX)
+			{
+				const glm::vec3 low(postX - c_PostHalfWidth - grow, -grow, c_PostZ - c_PostHalfWidth - grow);
+				const glm::vec3 high(postX + c_PostHalfWidth + grow, c_PostHeight + grow, c_PostZ + c_PostHalfWidth + grow);
+				float enter = 0.0f;
+				float leave = reach;
+				for (int axis = 0; axis < 3; axis++)
+				{
+					if (std::abs(direction[axis]) < 1e-8f)
+					{
+						if (origin[axis] < low[axis] || origin[axis] > high[axis])
+							leave = -1.0f;
+						continue;
+					}
+					const float first = (low[axis] - origin[axis]) / direction[axis];
+					const float second = (high[axis] - origin[axis]) / direction[axis];
+					enter = std::max(enter, std::min(first, second));
+					leave = std::min(leave, std::max(first, second));
+				}
+				if (enter <= leave && (nearest < 0.0f || enter < nearest))
+					nearest = enter;
+			}
+			return nearest;
+		};
+		for (const ReflectionsQuality reflections : { ReflectionsQuality::Spatial, ReflectionsQuality::SpatialHigh })
+		{
+			for (const bool fxaa : { true, false })
+			{
+				CAPTURE(static_cast<int>(reflections));
+				CAPTURE(fxaa);
+				Scene scene;
+				PostProcessComponent& post = AddNeutralPostProcess(scene);
+				post.ScreenSpaceReflections = true;
+				post.AntiAliasingMethod = AntiAliasingMode::FXAA;
+				post.AntiAliasing = fxaa;
+				scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().EnvironmentMap =
+					assets.Add(CreateEnvironmentTexture(glm::vec3(0.1f, 0.2f, 0.5f), glm::vec3(0.05f)), "Sky");
+				MaterialProperties mirror;
+				mirror.Metallic = 1.0f;
+				mirror.Roughness = 0.0f;
+				AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(mirror), glm::vec3(0.0f, 1.5f, -0.05f), "Mirror")
+					.GetComponent<TransformComponent>().Scale = glm::vec3(20.0f, 3.0f, 0.1f);
+				const AssetHandle white = assets.AddMaterial(UnlitColor({ 1.0f, 1.0f, 1.0f, 1.0f }));
+				for (const float x : c_PostX)
+				{
+					AddMesh(scene, BuiltinAssets::CubeMesh, white, glm::vec3(x, 0.5f * c_PostHeight, c_PostZ), "Post").GetComponent<TransformComponent>().Scale =
+						glm::vec3(2.0f * c_PostHalfWidth, c_PostHeight, 2.0f * c_PostHalfWidth);
+				}
+				AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(UnlitColor({ 0.05f, 0.1f, 1.0f, 1.0f })), glm::vec3(c_WallX - 0.1f, 1.5f, 0.0f), "Wall")
+					.GetComponent<TransformComponent>().Scale = glm::vec3(0.2f, 12.0f, 60.0f);
+				const glm::vec3 target(0.0f, 1.2f, 0.0f);
+				const SceneCamera camera = LookAt(glm::vec3(14.0f, 1.2f, 1.4f), target);
+				SceneRendererSpecification specification = ExactSpecification();
+				specification.Quality.Reflections = reflections;
+				specification.DebugName = "Posts";
+				SceneRenderer renderer(specification);
+				renderer.SetViewportSize(c_PostsSize, c_PostsSize);
+				WarmUp(gpu, renderer, scene, camera);
+				RenderFrames(gpu, renderer, scene, camera, 3);
+				REQUIRE(renderer.GetStats().ScreenSpaceReflections);
+				REQUIRE(renderer.GetTracedReflectionTexture());
+				const ReadbackImage image = ReadHalfImage(renderer.GetTracedReflectionTexture());
+
+				// The camera's view in the horizontal plane (x, z): each post's square spans an interval of angles from the eye.
+				const glm::vec2 eye(camera.Position.x, camera.Position.z);
+				const glm::vec2 forward = glm::normalize(glm::vec2(target.x, target.z) - eye);
+				const auto cross2 = [](const glm::vec2& a, const glm::vec2& b) { return a.x * b.y - a.y * b.x; };
+				const auto angleOf = [&](const glm::vec2& direction) { return std::atan2(cross2(forward, direction), glm::dot(forward, direction)); };
+				const auto directionAt = [&](float angle) { return forward * std::cos(angle) + glm::vec2(-forward.y, forward.x) * std::sin(angle); };
+				// How many posts a reflected ray passes behind before `reach` as the camera sees them (by more than 5 cm): within a
+				// post's angles, beyond its square, at a height where the line of sight crosses the post.
+				const auto postsPassedBehind = [&](const glm::vec3& origin, const glm::vec3& direction, float reach)
+				{
+					uint32_t count = 0;
+					const glm::vec2 start(origin.x, origin.z);
+					const glm::vec2 along(direction.x, direction.z);
+					for (const float postX : c_PostX)
+					{
+						float lowAngle = 1e9f;
+						float highAngle = -1e9f;
+						float farthest = 0.0f;
+						const glm::vec2 corners[4] = { glm::vec2(postX - c_PostHalfWidth, c_PostZ - c_PostHalfWidth), glm::vec2(postX + c_PostHalfWidth, c_PostZ - c_PostHalfWidth),
+							glm::vec2(postX - c_PostHalfWidth, c_PostZ + c_PostHalfWidth), glm::vec2(postX + c_PostHalfWidth, c_PostZ + c_PostHalfWidth) };
+						for (const glm::vec2& corner : corners)
+						{
+							const float angle = angleOf(corner - eye);
+							lowAngle = std::min(lowAngle, angle);
+							highAngle = std::max(highAngle, angle);
+							farthest = std::max(farthest, glm::length(corner - eye));
+						}
+						// The ray's distances where its point is seen at the interval's two angles (a line that misses the eye is seen
+						// at monotonic angles).
+						float bounds[2] = { 0.0f, 0.0f };
+						bool solvable = true;
+						for (int side = 0; side < 2; side++)
+						{
+							const glm::vec2 sight = directionAt(side == 0 ? lowAngle : highAngle);
+							const float facing = cross2(sight, along);
+							if (std::abs(facing) < 1e-6f)
+								solvable = false;
+							else
+								bounds[side] = -cross2(sight, start - eye) / facing;
+						}
+						if (!solvable)
+							continue;
+						const float enter = std::max(0.0f, std::min(bounds[0], bounds[1]));
+						const float leave = std::min(reach, std::max(bounds[0], bounds[1]));
+						if (!(enter < leave))
+							continue;
+						const glm::vec3 point = origin + direction * (0.5f * (enter + leave));
+						const glm::vec2 seen = glm::vec2(point.x, point.z) - eye;
+						if (glm::dot(seen, forward) <= 0.0f || glm::length(seen) < farthest + 0.05f)
+							continue;
+						const float postDistance = glm::length(glm::vec2(postX, c_PostZ) - eye);
+						const float sightHeight = camera.Position.y + (point.y - camera.Position.y) * postDistance / glm::length(seen);
+						if (sightHeight > 0.05f && sightHeight < c_PostHeight - 0.05f)
+							count++;
+					}
+					return count;
+				};
+
+				const glm::mat4 viewProjection = camera.Projection * camera.View;
+				const glm::mat4 inverseViewProjection = glm::inverse(viewProjection);
+				uint32_t postTexels = 0;
+				uint32_t postWhite = 0;
+				uint32_t ghostTexels = 0;
+				uint32_t ghostBlue = 0;
+				for (uint32_t y = 0; y < c_PostsSize; y++)
+				{
+					for (uint32_t x = 0; x < c_PostsSize; x++)
+					{
+						const glm::vec2 ndc(2.0f * (static_cast<float>(x) + 0.5f) / c_PostsSize - 1.0f, 1.0f - 2.0f * (static_cast<float>(y) + 0.5f) / c_PostsSize);
+						const glm::vec4 nearPoint = inverseViewProjection * glm::vec4(ndc, 1.0f, 1.0f);
+						const glm::vec3 view = glm::normalize(glm::vec3(nearPoint) / nearPoint.w - camera.Position);
+						// The mirror's face (z = 0), seen past the posts (and 1 cm from their edges).
+						if (!(view.z < -1e-4f))
+							continue;
+						const float mirrorReach = -camera.Position.z / view.z;
+						const glm::vec3 mirrorPoint = camera.Position + view * mirrorReach;
+						if (std::abs(mirrorPoint.x) > 9.5f || mirrorPoint.y < 0.1f || mirrorPoint.y > 2.9f || meetsPost(camera.Position, view, mirrorReach, 0.01f) >= 0.0f)
+							continue;
+						const glm::vec3 ray(view.x, view.y, -view.z);
+						// Where it meets the wall, away from the screen's edges (no fade).
+						if (!(ray.x < -1e-4f))
+							continue;
+						const float wallReach = (c_WallX - mirrorPoint.x) / ray.x;
+						const glm::vec3 atWall = mirrorPoint + ray * wallReach;
+						const glm::vec4 wallClip = viewProjection * glm::vec4(atWall, 1.0f);
+						const glm::vec2 wallUV(wallClip.x / wallClip.w * 0.5f + 0.5f, 0.5f - wallClip.y / wallClip.w * 0.5f);
+						const bool meetsWall = std::abs(atWall.z) < 29.0f && wallClip.w > 0.0f && wallUV.x > 0.15f && wallUV.x < 0.85f && wallUV.y > 0.15f && wallUV.y < 0.85f;
+						const glm::vec4 texel = ReadHalfTexel(image, x, y);
+						// Well inside a post's silhouette as the ray sees it (it meets the box shrunk by 2 cm), where the camera sees the
+						// post 4 cm to either side (a face toward it, no other post in front: a sliver of a post seen beside a nearer one
+						// is narrower than the march's steps), after passing behind at most one other post (one rejected candidate,
+						// which every mode allows): the post's white.
+						const float postReach = meetsPost(mirrorPoint, ray, wallReach, -0.02f);
+						if (postReach >= 0.0f)
+						{
+							const glm::vec3 atPost = mirrorPoint + ray * meetsPost(mirrorPoint, ray, wallReach, 0.0f);
+							bool hidden = postsPassedBehind(mirrorPoint, ray, postReach) > 1u;
+							for (const float side : { -0.04f, 0.0f, 0.04f })
+							{
+								const glm::vec3 around = atPost + glm::vec3(0.0f, 0.0f, side);
+								const float seen = glm::length(around - camera.Position);
+								hidden = hidden || meetsPost(camera.Position, (around - camera.Position) / seen, seen - 0.01f, 0.0f) >= 0.0f;
+							}
+							if (hidden)
+								continue;
+							postTexels++;
+							postWhite += texel.a > 0.5f && texel.r > 0.5f && texel.g > 0.5f && texel.b > 0.5f ? 1u : 0u;
+							continue;
+						}
+						// Behind exactly one post on the way to the wall, 5 cm clear of every post: the wall's blue.
+						if (!meetsWall || meetsPost(mirrorPoint, ray, wallReach, 0.05f) >= 0.0f || postsPassedBehind(mirrorPoint, ray, wallReach) != 1u)
+							continue;
+						ghostTexels++;
+						ghostBlue += texel.a >= 0.9f && texel.b > 2.0f * texel.r && texel.b > 2.0f * texel.g ? 1u : 0u;
+					}
+				}
+				CAPTURE(postTexels);
+				CAPTURE(postWhite);
+				CAPTURE(ghostTexels);
+				CAPTURE(ghostBlue);
+				MESSAGE("Posts: " << postWhite << " of " << postTexels << " white, " << ghostBlue << " of " << ghostTexels << " behind them blue");
+				CHECK(postTexels >= 20u);
+				CHECK(ghostTexels >= 50u);
+				CHECK(postWhite >= postTexels - postTexels / 10);
+				CHECK(ghostBlue >= ghostTexels - ghostTexels / 50);
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A strafe past a rough metal sheet and over a wet floor: the reflections do not flicker")
 	{
 		// The look-dev scene's specular lab (SpecularLab), strafed 1 cm a frame toward the rough sheet and across the wet plane, as
 		// the person sees it (the 8-bit output) without anti-aliasing, with FXAA and with TAA, measured on that surface by the
 		// wave's flicker meter. Blocks catches regions that pump; a screen-locked pattern sliding under moving content averages
-		// out within a 32 px block, so the per-pixel Mean is what shows a crawl the reflections add.
+		// out within a 32 px block, so the per-pixel Mean is what shows a crawl the reflections add. Blocks stays within 1% in
+		// every mode (0.7.0's too). What the reflections add to Mean (their Mean less the SSR-off run's) was, on 0.7.0, 1.36% on
+		// the sheet at Spatial and 0.92% at SpatialHigh without AA (0.94% and 0.71% with TAA), 0.49% and 0.41% on the wet plane;
+		// the resolve and the validated crossings took it to about 0.57% and 0.28% (0.63% and 0.40% with TAA). Half of 0.7.0's
+		// holds only on the sheet at Spatial without TAA, so the bounds keep what was gained (1.25 times the measure), and 0.7.0
+		// exceeds the sheet's.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
@@ -1109,6 +1333,7 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 			{ StrafeAntiAliasing::TAA, "TAA" } };
 		const std::pair<ReflectionsQuality, std::string> reflectionModes[] = { { ReflectionsQuality::Spatial, "Spatial" },
 			{ ReflectionsQuality::SpatialHigh, "SpatialHigh" } };
+		const double addedMeanBounds[] = { 0.008, 0.005 }; // The sheet's, the wet plane's
 		const auto report = [](const StrafePath& path, const std::string& antiAliasing, const std::string& reflections, const StrafeMeasure& measure)
 		{
 			const FlickerResult& flicker = measure.Flicker;
@@ -1123,8 +1348,9 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 			CHECK(measure.SurfaceShare > 0.02);
 			CHECK(flicker.MeasuredShare > path.MinimumMeasured * measure.SurfaceShare);
 		};
-		for (const StrafePath& path : paths)
+		for (size_t pathIndex = 0; pathIndex < std::size(paths); pathIndex++)
 		{
+			const StrafePath& path = paths[pathIndex];
 			CAPTURE(path.Name);
 			for (const auto& antiAliasing : antiAliasingModes)
 			{
@@ -1137,7 +1363,10 @@ TEST_SUITE("GPU.SceneRenderer.SSR")
 				for (const auto& reflections : reflectionModes)
 				{
 					CAPTURE(reflections.second);
-					report(path, antiAliasing.second, reflections.second, MeasureStrafe(gpu, lab, path, reflections.first, antiAliasing.first, true));
+					const StrafeMeasure on = MeasureStrafe(gpu, lab, path, reflections.first, antiAliasing.first, true);
+					report(path, antiAliasing.second, reflections.second, on);
+					CHECK(on.Flicker.Blocks <= 0.01);
+					CHECK(on.Flicker.Mean - off.Flicker.Mean <= addedMeanBounds[pathIndex]);
 				}
 			}
 		}

@@ -184,9 +184,9 @@ namespace Strata
 			const char* Name;
 			ScreenReflectionSteps Steps;
 		};
-		constexpr ReflectionsName c_ReflectionsNames[] = { { ReflectionsQuality::Off, "Off", { 24, 6 } },
-			{ ReflectionsQuality::Checkerboard, "Checkerboard", { 24, 6 } }, { ReflectionsQuality::Spatial, "Spatial", { 32, 6 } },
-			{ ReflectionsQuality::SpatialHigh, "SpatialHigh", { 48, 8 } } };
+		constexpr ReflectionsName c_ReflectionsNames[] = { { ReflectionsQuality::Off, "Off", { 24, 6, 1 } },
+			{ ReflectionsQuality::Checkerboard, "Checkerboard", { 24, 6, 1 } }, { ReflectionsQuality::Spatial, "Spatial", { 32, 6, 2 } },
+			{ ReflectionsQuality::SpatialHigh, "SpatialHigh", { 48, 8, 3 } } };
 
 		constexpr ResolutionName c_ResolutionNames[] = { { ShadowMapResolution::Auto, "Auto" }, { ShadowMapResolution::AutoFine, "AutoFine" },
 			{ ShadowMapResolution::Size1024, "1024" }, { ShadowMapResolution::Size2048, "2048" }, { ShadowMapResolution::Size4096, "4096" },

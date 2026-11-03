@@ -5,8 +5,9 @@
 // Screen-space reflections at RendererQualitySettings::Reflections Spatial and SpatialHigh (SceneRenderer::
 // TraceSpatialReflections, in GPU.Reflections, after the prepass): every pixel at full resolution, the same in every frame (no
 // TAA needed). A ray along the view reflected about the surface target's normal is marched in screen space against the
-// frame's depth in Steps steps over its whole length, closer together near its start; where it passed behind a surface by
-// less than its step's change of distance plus a margin it hit it, refined by bisection. Its steps are offset by a fixed 4x4
+// frame's depth in Steps steps over its whole length, closer together near its start; a step whose segment crossed a
+// surface's depth is a candidate, refined by bisection and kept only when the crossing is valid (behind its own surface by
+// no more than a tolerance, on one continuous surface), else the march goes on. Its steps are offset by a fixed 4x4
 // pattern (GTAO's order), so neighboring pixels sample between each other's steps and the resolve
 // (Effects/ReflectionResolve.comp) averages them. (A hierarchical march over a nearest-depth pyramid ran out of steps on
 // rays grazing a floor, whose nearer pixels below the ray fill every coarse cell: at 3840x2160 a polished floor reflected
@@ -39,8 +40,8 @@ struct SpatialReflectionParameters
 	uint Steps;          // Steps of the march along the ray
 	uint RefineSteps;    // Bisections of a hit
 	uint ColorLevels;    // Levels of u_PreviousColorLevels
-	uint Padding0;
-	uint Padding1;
+	uint MaxCandidates;  // Refined candidates a ray may reject before it finds nothing
+	uint Padding;
 };
 [[vk::push_constant]] ConstantBuffer<SpatialReflectionParameters> u_Reflections;
 
@@ -49,12 +50,102 @@ static const uint c_PatternOrder[16] = { 0u, 8u, 2u, 10u, 12u, 4u, 14u, 6u, 3u, 
 static const float c_SharpRoughness = 0.05; // Up to this roughness the full-resolution copy alone
 static const float c_BlurredRoughness = 0.15; // From this roughness its blurred levels alone
 
-// Whether the ray's point (UV and depth) lies behind the depth buffer's surface there (reversed-Z: smaller is farther).
-bool IsBehindSurface(float3 point, int2 size)
+static const float c_SkyDistance = 1.0e30; // The depth buffer's 0 (nothing drawn): nothing to cross
+
+// A point of the march: where along the ray (0 to 1), the view distance of the ray's point and that of the depth buffer's
+// surface at its pixel (c_SkyDistance where nothing was drawn).
+struct MarchPoint
+{
+	float Along;
+	float RayDistance;
+	float SceneDistance;
+};
+
+float SceneDistanceAt(float3 point, int2 size)
 {
 	int2 pixel = clamp(int2(point.xy * u_Frame.ViewportSize.xy), int2(0), size - 1);
-	float sceneDepth = u_Depth.Load(int3(pixel, 0)).r;
-	return sceneDepth > 0.0 && point.z < sceneDepth;
+	float depth = u_Depth.Load(int3(pixel, 0)).r;
+	return depth > 0.0 ? GetViewDistance(depth) : c_SkyDistance;
+}
+
+MarchPoint MarchPointAt(ScreenRay ray, float along, int2 size)
+{
+	float3 point = ray.Start + ray.Delta * along;
+	MarchPoint result;
+	result.Along = along;
+	result.RayDistance = GetViewDistance(point.z);
+	result.SceneDistance = SceneDistanceAt(point, size);
+	return result;
+}
+
+// The thickness tolerance of a surface at a view distance: what the march assumes lies behind a depth.
+float GetThickness(float distance)
+{
+	return max(c_MinThickness, c_ThicknessScale * distance);
+}
+
+// The view-space position of the ray's point `along` it.
+float3 GetRayPosition(ScreenRay ray, float along)
+{
+	float3 point = ray.Start + ray.Delta * along;
+	float4 position = mul(u_Frame.InverseProjection, float4(UVToNDC(point.xy), point.z, 1.0));
+	return position.xyz / position.w;
+}
+
+// Bisects a segment along which the ray passes behind the plane of a surface it was in front of (a line crosses a plane once)
+// and keeps the crossing where the depth buffer shows a surface at the ray's depth: that surface, not beyond its edge (the sky,
+// or what lies far behind a post's side) and not hidden behind something nearer. Where along the ray the hit is, -1 if none.
+float RefinePlaneCrossing(ScreenRay ray, MarchPoint low, MarchPoint high, float3 planePoint, float3 planeNormal, int2 size)
+{
+	for (uint index = 0u; index < u_Reflections.RefineSteps; index++)
+	{
+		float along = 0.5 * (low.Along + high.Along);
+		MarchPoint middle = MarchPointAt(ray, along, size);
+		if (dot(GetRayPosition(ray, along) - planePoint, planeNormal) < 0.0)
+			high = middle;
+		else
+			low = middle;
+	}
+	float interval = abs(high.RayDistance - low.RayDistance);
+	if (high.SceneDistance < c_SkyDistance && abs(high.RayDistance - high.SceneDistance) <= GetThickness(high.SceneDistance) + interval)
+		return high.Along;
+	if (low.SceneDistance < c_SkyDistance && abs(low.RayDistance - low.SceneDistance) <= GetThickness(low.SceneDistance) + interval)
+		return low.Along;
+	return -1.0;
+}
+
+// Bisects a candidate segment, from a point in front of a surface to one behind it, and validates the crossing: where along
+// the ray the hit is, -1 for a false candidate. A point over the sky counts as behind while the low end is on a surface (the
+// crossing, or that surface's edge, lies before it) and as in front once the low end is over the sky too. Comparing it with the
+// low end's depth instead would lose the crossing at a reflected wall's top edge: the depth of a wall seen from below its top
+// shrinks toward the top, so a point just beyond the edge is nearer than the wall's depth further down where the low end was.
+// The hit must be on a surface, behind it by no more than the thickness tolerance plus the last interval's change of the ray's
+// distance, and on one continuous surface (the two ends' depths as close): a ray that passed behind a thin post fails (its
+// ends sit on the post and on what is far behind it), one that met a wall passes. Where the interval ends on a surface's last
+// pixel and the sky beyond it, the ray met that surface at its edge if it had passed its depth there.
+float RefineCrossing(ScreenRay ray, MarchPoint low, MarchPoint high, int2 size)
+{
+	for (uint index = 0u; index < u_Reflections.RefineSteps; index++)
+	{
+		MarchPoint middle = MarchPointAt(ray, 0.5 * (low.Along + high.Along), size);
+		bool behind = middle.SceneDistance < c_SkyDistance ? middle.RayDistance > middle.SceneDistance : low.SceneDistance < c_SkyDistance;
+		if (behind)
+			high = middle;
+		else
+			low = middle;
+	}
+	float interval = abs(high.RayDistance - low.RayDistance);
+	if (high.SceneDistance >= c_SkyDistance)
+	{
+		if (low.SceneDistance >= c_SkyDistance)
+			return -1.0;
+		float edgeSlack = GetThickness(low.SceneDistance) + interval;
+		return high.RayDistance > low.SceneDistance && high.RayDistance - low.SceneDistance <= edgeSlack ? low.Along : -1.0;
+	}
+	float slack = GetThickness(high.SceneDistance) + interval;
+	bool valid = high.RayDistance > high.SceneDistance && high.RayDistance - high.SceneDistance <= slack
+		&& abs(high.SceneDistance - low.SceneDistance) <= slack;
+	return valid ? high.Along : -1.0;
 }
 
 float4 TraceReflection(int2 pixel, int2 size)
@@ -76,43 +167,53 @@ float4 TraceReflection(int2 pixel, int2 size)
 	uint2 phase = uint2(pixel) & 3u;
 	float offset = (float(c_PatternOrder[phase.y * 4u + phase.x]) + 0.5) / 16.0;
 	float minStep = 1.0 / ray.Pixels;
-	float previousStep = 0.0;
-	float previousDistance = GetViewDistance(ray.Start.z);
-	float hitStep = -1.0;
-	for (uint index = 0u; index < u_Reflections.Steps; index++)
+	// A candidate is a step whose segment from the previous point crossed the surface at either end's pixel: in front of its
+	// depth at the previous point, behind it at this one. Of the previous pixel's surface it is its plane (the geometric
+	// normal's) that must be crossed: that finds the crossing between two samples on it (a reflected wall's top edge, the
+	// face of a post narrower than a step), while a ray running in front of a receding floor, beyond each earlier pixel's depth,
+	// crosses nothing. A false candidate does not end the march, up to MaxCandidates of them; after that the ray finds nothing
+	// (the probes or the sky fill in), which bounds the cost in clutter.
+	MarchPoint previous;
+	previous.Along = 0.0;
+	previous.RayDistance = GetViewDistance(ray.Start.z);
+	previous.SceneDistance = c_SkyDistance; // The start crosses no surface of its own
+	uint candidates = 0u;
+	float hitAlong = -1.0;
+	for (uint index = 0u; index < u_Reflections.Steps && hitAlong < 0.0; index++)
 	{
 		float fraction = (float(index) + offset) / float(u_Reflections.Steps);
-		float along = max(fraction * fraction, minStep);
-		float3 point = ray.Start + ray.Delta * along;
-		int2 samplePixel = clamp(int2(point.xy * u_Frame.ViewportSize.xy), int2(0), size - 1);
-		float sceneDepth = u_Depth.Load(int3(samplePixel, 0)).r;
-		float rayDistance = GetViewDistance(point.z);
-		// A hit where the ray passed behind a surface by less than its step's change of distance plus the surface's margin (it
-		// crossed the surface since its previous point); nothing drawn (the sky) is never hit.
-		float thickness = abs(rayDistance - previousDistance) + max(c_MinThickness, c_ThicknessScale * rayDistance);
-		float behind = sceneDepth > 0.0 ? rayDistance - GetViewDistance(sceneDepth) : -1.0;
-		if (behind > 0.0 && behind < thickness)
+		MarchPoint current = MarchPointAt(ray, max(fraction * fraction, minStep), size);
+		bool candidate = false;
+		if (previous.RayDistance <= current.SceneDistance && current.RayDistance > current.SceneDistance)
 		{
-			hitStep = along;
-			break;
+			candidate = true;
+			hitAlong = RefineCrossing(ray, previous, current, size);
 		}
-		previousStep = along;
-		previousDistance = rayDistance;
+		else if (previous.SceneDistance < c_SkyDistance && previous.RayDistance <= previous.SceneDistance
+			&& current.RayDistance > previous.SceneDistance - GetThickness(previous.SceneDistance))
+		{
+			float2 previousUV = (ray.Start + ray.Delta * previous.Along).xy;
+			int2 previousPixel = clamp(int2(previousUV * u_Frame.ViewportSize.xy), int2(0), size - 1);
+			float4 planeView = mul(u_Frame.InverseProjection, float4(UVToNDC((float2(previousPixel) + 0.5) * u_Frame.ViewportSize.zw), u_Depth.Load(int3(previousPixel, 0)).r, 1.0));
+			float3 planePoint = planeView.xyz / planeView.w;
+			float3 planeNormal = OctahedralDecode(TexelFetch(u_Normals, previousPixel, 0).rg);
+			if (dot(GetRayPosition(ray, current.Along) - planePoint, planeNormal) < 0.0)
+			{
+				candidate = true;
+				hitAlong = RefinePlaneCrossing(ray, previous, current, planePoint, planeNormal, size);
+			}
+		}
+		if (candidate && hitAlong < 0.0)
+		{
+			candidates++;
+			if (candidates >= u_Reflections.MaxCandidates)
+				break;
+		}
+		previous = current;
 	}
-	if (hitStep < 0.0)
+	if (hitAlong < 0.0)
 		return float4(0.0);
-	// Where between the last point in front and the first behind the ray crosses the surface.
-	float low = previousStep;
-	float high = hitStep;
-	for (uint index = 0u; index < u_Reflections.RefineSteps; index++)
-	{
-		float middle = 0.5 * (low + high);
-		if (IsBehindSurface(ray.Start + ray.Delta * middle, size))
-			high = middle;
-		else
-			low = middle;
-	}
-	float2 hitUV = (ray.Start + ray.Delta * high).xy;
+	float2 hitUV = (ray.Start + ray.Delta * hitAlong).xy;
 	int2 hitPixel = clamp(int2(hitUV * u_Frame.ViewportSize.xy), int2(0), size - 1);
 
 	// The hit surface where the previous frame showed it.

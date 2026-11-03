@@ -375,11 +375,11 @@ TEST_SUITE("Renderer.Quality")
 		}
 		CHECK_FALSE(RendererQuality::ReflectionsQualityFromString("spatial").has_value());
 		const ScreenReflectionSteps checkerboard = RendererQuality::GetScreenReflectionSteps(ReflectionsQuality::Checkerboard);
-		CHECK((checkerboard.Steps == 24u && checkerboard.RefineSteps == 6u));
+		CHECK((checkerboard.Steps == 24u && checkerboard.RefineSteps == 6u && checkerboard.MaxCandidates == 1u));
 		const ScreenReflectionSteps spatial = RendererQuality::GetScreenReflectionSteps(ReflectionsQuality::Spatial);
-		CHECK((spatial.Steps == 32u && spatial.RefineSteps == 6u));
+		CHECK((spatial.Steps == 32u && spatial.RefineSteps == 6u && spatial.MaxCandidates == 2u));
 		const ScreenReflectionSteps spatialHigh = RendererQuality::GetScreenReflectionSteps(ReflectionsQuality::SpatialHigh);
-		CHECK((spatialHigh.Steps == 48u && spatialHigh.RefineSteps == 8u));
+		CHECK((spatialHigh.Steps == 48u && spatialHigh.RefineSteps == 8u && spatialHigh.MaxCandidates == 3u));
 		// An unknown value clamps to Medium's.
 		RendererQualitySettings settings;
 		settings.Reflections = static_cast<ReflectionsQuality>(7);

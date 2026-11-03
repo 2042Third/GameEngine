@@ -306,6 +306,7 @@ namespace Strata
 		parameters.HistoryScale = m_PreExposure / m_ReflectionColorPreExposure;
 		parameters.Steps = steps.Steps;
 		parameters.RefineSteps = steps.RefineSteps;
+		parameters.MaxCandidates = steps.MaxCandidates;
 		parameters.ColorLevels = m_SceneColorTexture->getDesc().mipLevels;
 		nvrhi::ComputeState state;
 		state.pipeline = m_SpatialReflectionPipeline;

@@ -431,7 +431,8 @@ namespace Strata
 			uint32_t Steps;         // Steps of the march along the ray (RendererQuality::GetScreenReflectionSteps)
 			uint32_t RefineSteps;   // Bisections of a hit
 			uint32_t ColorLevels;   // Levels of the half-resolution color copy
-			uint32_t Padding[2] = {};
+			uint32_t MaxCandidates = 1; // Refined candidates a ray may reject before it finds nothing
+			uint32_t Padding = 0;
 		};
 		static_assert(sizeof(SpatialReflectionParameters) == 32);
 
