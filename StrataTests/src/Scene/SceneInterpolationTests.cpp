@@ -259,8 +259,8 @@ TEST_SUITE("Scene.Timing")
 			CHECK(FindRole(scene, root) == InterpolationRole::Blend);
 			CHECK(FindRole(scene, child) == InterpolationRole::Compose);
 			CHECK(FindRole(scene, grandchild) == InterpolationRole::Compose);
-			CHECK(SameMatrix(*childDrawn, *rootDrawn * child.GetComponent<TransformComponent>().GetTransform()));
-			CHECK(SameMatrix(*grandchildDrawn, *childDrawn * grandchild.GetComponent<TransformComponent>().GetTransform()));
+			CHECK(SameMatrix(*childDrawn, Math::ComposeWorldTransform(*rootDrawn, child.GetComponent<TransformComponent>().GetTransform())));
+			CHECK(SameMatrix(*grandchildDrawn, Math::ComposeWorldTransform(*childDrawn, grandchild.GetComponent<TransformComponent>().GetTransform())));
 			composed++;
 			if (!SameMatrix(*rootDrawn, scene.GetWorldTransform(root)))
 				between++;
@@ -348,7 +348,7 @@ TEST_SUITE("Scene.Timing")
 			WriteTranslation(scene, rider, glm::vec3(0.0f, 1.0f, 0.0f));
 			const glm::mat4 drawn = GetRenderedTransform(scene, rider);
 			CHECK(FindRole(scene, rider) == InterpolationRole::Compose);
-			CHECK(SameMatrix(drawn, *scene.FindDrawnTransform(body.GetHandle()) * rider.GetComponent<TransformComponent>().GetTransform()));
+			CHECK(SameMatrix(drawn, Math::ComposeWorldTransform(*scene.FindDrawnTransform(body.GetHandle()), rider.GetComponent<TransformComponent>().GetTransform())));
 		}
 		CHECK(scene.ValidateInterpolation());
 		scene.OnRuntimeStop();
@@ -383,7 +383,8 @@ TEST_SUITE("Scene.Timing")
 			CHECK(FindRole(scene, spawnedChild) == InterpolationRole::Compose);
 			CHECK(FindRole(scene, spawnedRoot) == InterpolationRole::Exact);
 			const glm::mat4 childDrawn = GetRenderedTransform(scene, spawnedChild);
-			CHECK(SameMatrix(childDrawn, *scene.FindDrawnTransform(body.GetHandle()) * spawnedChild.GetComponent<TransformComponent>().GetTransform()));
+			CHECK(SameMatrix(childDrawn,
+				Math::ComposeWorldTransform(*scene.FindDrawnTransform(body.GetHandle()), spawnedChild.GetComponent<TransformComponent>().GetTransform())));
 			CHECK(std::abs(childDrawn[3].y - 1.0f) <= 1.0e-6f);
 			CHECK(SameMatrix(GetRenderedTransform(scene, spawnedRoot), scene.GetWorldTransform(spawnedRoot)));
 			CHECK(GetRenderedTransform(scene, spawnedRoot)[3].x == 10.0f);
@@ -725,7 +726,8 @@ namespace
 			}
 			else if (entry.Role == InterpolationRole::Compose)
 			{
-				const glm::mat4 expected = drawn[entry.ParentSlot] * registry.get<TransformComponent>(entities[slot]).GetTransform();
+				// Through the engine's composition, as UpdateDrawnTransforms composes: an inlined product may round differently.
+				const glm::mat4 expected = Math::ComposeWorldTransform(drawn[entry.ParentSlot], registry.get<TransformComponent>(entities[slot]).GetTransform());
 				wrong += SameMatrix(drawn[slot], expected) ? 0 : 1;
 			}
 			else
