@@ -164,12 +164,13 @@
 				"MotionBlurQuality": "Samples16",
 				"Preset": "Custom",
 				"ContactShadows": 16,
+				"ReflectionProbeResolution": "256",
 				"Reflections": "SpatialHigh",
 				"ShadowCascades": 3,
 				"ShadowFilterQuality": "32",
 				"ShadowResolution": "1024"
 			},
-			"Version": 4
+			"Version": 5
 		},
 		"Scene.CollisionLayers": {
 			"Value": {

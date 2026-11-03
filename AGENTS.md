@@ -400,7 +400,8 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - Light keeps its energy and needs no history: specular is compensated for multiple scattering (`GetSpecularEnergy`)
   and screen-space lighting denoises within the frame; check lighting changes with the debug views and the white-furnace
   test ([Lighting](Docs/DeveloperGuide.md#lighting)).
-- Screen-space reflections march fixed steps, keep only validated crossings and fade only where rays leave the screen
+- Screen-space reflections march fixed steps, keep only validated crossings, fade only where rays leave the screen; F0
+  comes from the IOR (1.5 stays 0.04); a light's size widens only its highlight
   ([Reflections](Docs/DeveloperGuide.md#reflections)).
 - Temporal effects jitter only the frame's camera copy and keep history per renderer; single images settle or turn TAA
   off.

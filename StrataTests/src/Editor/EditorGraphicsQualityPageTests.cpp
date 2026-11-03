@@ -163,9 +163,9 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 			CHECK(IsDrawn(PageKey("Custom." + field)));
 		}
 		// Shadows and detail (7), the sun's filter taps and contact shadows, the ambient occlusion's samples, the sky's reflection
-		// map, the screen-space reflections, the motion blur's samples; the players' anti-aliasing, motion blur, depth of field,
-		// film grain and chromatic aberration.
-		CHECK(RendererQuality::GetRowTraits().size() == 18);
+		// map, the screen-space reflections, the motion blur's samples, the reflection probes' resolution; the players'
+		// anti-aliasing, motion blur, depth of field, film grain and chromatic aberration.
+		CHECK(RendererQuality::GetRowTraits().size() == 19);
 		CHECK(choices == 5);
 		// The project's preset, High (the default), is chosen: its header and cells on the accent's highlight.
 		for (const char* preset : { "Low", "Medium", "High", "Ultra", "Custom" })
@@ -191,14 +191,15 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		// Cascades plus the local lights' atlas of one view, the sky's prefiltered cube (4 MiB at 256 per face, 16 at 512), and the
 		// screen-space reflections' and the motion blur's targets but at Low, which turns both off (RowTraits::MemoryBytes; the
 		// reflections': Checkerboard 19.8 MiB at 1920 x 1080 and 79.1 MiB at 3840 x 2160, Spatial 58.0 and 232.0 MiB; the motion
-		// blur's: 24.2 and 96.9 MiB). Whole MiB, rounded down.
-		CHECK(TextOf(PageKey("Memory1080.Low")) == "31 MiB");
-		CHECK(TextOf(PageKey("Memory1080.Medium")) == "175 MiB");
-		CHECK(TextOf(PageKey("Memory1080.High")) == "226 MiB");
-		CHECK(TextOf(PageKey("Memory2160.High")) == "664 MiB");
-		CHECK(TextOf(PageKey("Memory2160.Ultra")) == "1.59 GiB");
+		// blur's: 24.2 and 96.9 MiB), and the reflection probes' cubes (17.0 MiB at 128 per face, 68.0 at 256). Whole MiB, rounded
+		// down.
+		CHECK(TextOf(PageKey("Memory1080.Low")) == "48 MiB");
+		CHECK(TextOf(PageKey("Memory1080.Medium")) == "192 MiB");
+		CHECK(TextOf(PageKey("Memory1080.High")) == "294 MiB");
+		CHECK(TextOf(PageKey("Memory2160.High")) == "732 MiB");
+		CHECK(TextOf(PageKey("Memory2160.Ultra")) == "1.65 GiB");
 		// Custom's column under High shows where a switch to Custom starts: High's values.
-		CHECK(TextOf(PageKey("Memory2160.Custom")) == "664 MiB");
+		CHECK(TextOf(PageKey("Memory2160.Custom")) == "732 MiB");
 		CHECK(ColorOf(PageKey("Memory2160.High")) == AccentMuted());
 		// The harness renders nothing on a GPU.
 		CHECK(TextOf(PageKey("GPU")) == "GPU times appear while the Scene view renders");
@@ -223,9 +224,9 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		CHECK_FALSE(editor.Context().IsSceneModified());
 		CHECK(ColorOf(PageKey("Header.Ultra")) == AccentMuted());
 		// Custom's column keeps showing the stored tuning (two cascades of High's, 128 MiB, with the atlas, the sky's map and the
-		// reflections' and motion blur's targets), which comes back when Custom is chosen, and an edit there starts from it, as
-		// its tooltip says.
-		CHECK(TextOf(PageKey("Memory2160.Custom")) == "536 MiB");
+		// reflections' and motion blur's targets and the probes' cubes), which comes back when Custom is chosen, and an edit there
+		// starts from it, as its tooltip says.
+		CHECK(TextOf(PageKey("Memory2160.Custom")) == "604 MiB");
 		CHECK(HoverCustomTooltip(editor, "ShadowCascades") == "Editing a value switches to Custom, starting from the Custom values chosen earlier, "
 			"which this column shows");
 

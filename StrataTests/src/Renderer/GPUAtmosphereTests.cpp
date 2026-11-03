@@ -2,6 +2,8 @@
 #include "Strata/Renderer/Atmosphere.h"
 #include "Strata/Renderer/RendererComponents.h"
 
+#include <spdlog/fmt/fmt.h>
+
 #include <algorithm>
 #include <cmath>
 #include <string>
@@ -72,6 +74,32 @@ namespace
 		const uint32_t x = std::min(static_cast<uint32_t>(u * static_cast<float>(width)), width - 1);
 		const uint32_t y = std::min(static_cast<uint32_t>(std::lround(unit * static_cast<float>(height - 1))), height - 1);
 		return glm::vec3(table[static_cast<size_t>(y) * width + x]);
+	}
+
+	// The channels of a half-float table's texels [first, last) that are not zero, and those of them below the smallest normal
+	// half (2^-14): subnormals, whose step is fixed at 2^-24, so a smooth gradient there turns into a few levels.
+	struct SubnormalCount
+	{
+		size_t NonZero = 0;
+		size_t Subnormal = 0;
+	};
+
+	SubnormalCount CountSubnormals(const std::vector<glm::vec4>& texels, size_t first, size_t last)
+	{
+		constexpr float c_SmallestNormal = 6.103515625e-5f; // 2^-14
+		SubnormalCount count;
+		for (size_t texel = first; texel < last; texel++)
+		{
+			for (int channel = 0; channel < 3; channel++)
+			{
+				const float value = texels[texel][channel];
+				if (value == 0.0f)
+					continue;
+				count.NonZero++;
+				count.Subnormal += value < c_SmallestNormal ? 1u : 0u;
+			}
+		}
+		return count;
 	}
 
 }
@@ -554,6 +582,118 @@ TEST_SUITE("GPU.Atmosphere")
 				const int brightest = std::max({ image.Pixels[mirrorIndex], image.Pixels[mirrorIndex + 1], image.Pixels[mirrorIndex + 2] });
 				CHECK(brightest > 13);
 			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The night sky at -10 degrees has no bands")
+	{
+		// After sunset the atmosphere's tables, which hold the sky per lux of sun in half floats, fell below the smallest normal
+		// half: a smooth twilight gradient became a few levels, bands of 8 to 17 codes across the sky (99% of the sky view's
+		// channels above the horizon were subnormal at -10 degrees). The background toward the sun's azimuth, 20 degrees up, at an
+		// exposure that brings it to mid-gray, changes smoothly from row to row.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddAtmosphere(scene);
+		AddSun(scene, -TowardSun(-10.0f), 100000.0f, false);
+		constexpr uint32_t c_NightSize = 512;
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_NightSize, c_NightSize);
+		const float up = glm::radians(20.0f);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.7f, 0.0f), glm::vec3(0.0f, 1.7f + std::sin(up), -std::cos(up)));
+		const auto renderHDR = [&](float preExposure)
+		{
+			REQUIRE(renderer.Render(scene, camera, nullptr, Forced(preExposure)));
+			CHECK(renderer.GetStats().Atmosphere);
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
+			return image;
+		};
+		const auto luminance = [](const glm::vec4& color) { return 0.2126f * color.r + 0.7152f * color.g + 0.0722f * color.b; };
+		const float level = luminance(ReadHalfTexel(renderHDR(1.0f), c_NightSize / 2, c_NightSize / 2));
+		REQUIRE(level > 0.0f);
+		const ReadbackImage sky = renderHDR(0.18f / level);
+
+		// The tables, per texel channel: the sky view above the horizon (its upper half), the multiple scattering and the
+		// transmittance whole.
+		uint32_t width = 0;
+		uint32_t height = 0;
+		const std::vector<glm::vec4> skyView = ReadHalfImage(renderer.GetAtmosphereSkyViewTable(), width, height);
+		const SubnormalCount skyViewCount = CountSubnormals(skyView, static_cast<size_t>(height / 2) * width, skyView.size());
+		const std::vector<glm::vec4> multiple = ReadHalfImage(renderer.GetAtmosphereMultipleScatteringTable(), width, height);
+		const SubnormalCount multipleCount = CountSubnormals(multiple, 0, multiple.size());
+		const std::vector<glm::vec4> transmittance = ReadHalfImage(renderer.GetAtmosphereTransmittanceTable(), width, height);
+		const SubnormalCount transmittanceCount = CountSubnormals(transmittance, 0, transmittance.size());
+
+		// Rows above the horizon (it lies 20 degrees below the view's center: row 256 + 256 tan(20) / tan(30) = 417), each column
+		// in linear HDR. The twilight sky brightens toward the horizon by up to 3.5% a row (270 times from the top row to row
+		// 375), so a band is not a large step but a step its neighbors do not share: the second difference over the value, which
+		// a smooth gradient keeps near 0 and a band raises to the band's size (184% before the storage scale).
+		constexpr uint32_t c_LastSkyRow = 400;
+		float largestStep = 0.0f;
+		float largestCurvature = 0.0f;
+		for (uint32_t x = 0; x < c_NightSize; x++)
+		{
+			for (uint32_t y = 1; y + 1 < c_LastSkyRow; y++)
+			{
+				const float previous = luminance(ReadHalfTexel(sky, x, y - 1));
+				const float value = luminance(ReadHalfTexel(sky, x, y));
+				const float next = luminance(ReadHalfTexel(sky, x, y + 1));
+				REQUIRE(value > 0.0f);
+				largestStep = std::max(largestStep, std::abs(next - value) / value);
+				largestCurvature = std::max(largestCurvature, std::abs(next - 2.0f * value + previous) / value);
+			}
+		}
+		MESSAGE(fmt::format("Night sky: level {:.3e} at pre-exposure 1; sky view {} of {} channels above the horizon subnormal, multiple scattering {} "
+			"of {}, transmittance {} of {}; largest row step {:.2f}%, largest second difference {:.2f}%", level, skyViewCount.Subnormal, skyViewCount.NonZero,
+			multipleCount.Subnormal, multipleCount.NonZero, transmittanceCount.Subnormal, transmittanceCount.NonZero, 100.0f * largestStep,
+			100.0f * largestCurvature));
+		CHECK(skyViewCount.Subnormal == 0);
+		CHECK(largestCurvature <= 0.02f);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("No daytime table reaches the storage clamp")
+	{
+		// The tables store the sky per lux times Atmosphere::c_StorageScale, clamped to 65,000 within half floats: no daytime sky
+		// comes within half of it, not at noon, not at golden hour's 6 degrees with the aureole around a low sun, not under haze
+		// 4, nor the most haze the property allows (10) with the sun 2 degrees up.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		SkyLightComponent& sky = AddAtmosphere(scene);
+		Entity sun = AddSun(scene, -TowardSun(60.0f), 100000.0f, false);
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.7f, 0.0f), glm::vec3(0.0f, 1.8f, -1.0f));
+		struct Daylight
+		{
+			float Elevation;
+			float Haze;
+		};
+		const Daylight days[] = { { 60.0f, 1.0f }, { 6.0f, 1.0f }, { 60.0f, 4.0f }, { 6.0f, 4.0f }, { 2.0f, 10.0f } };
+		for (const Daylight& daylight : days)
+		{
+			CAPTURE(daylight.Elevation);
+			CAPTURE(daylight.Haze);
+			PointSun(sun, daylight.Elevation);
+			sky.AtmosphereHaze = daylight.Haze;
+			scene.GetRegistry().patch<SkyLightComponent>(scene.GetRegistry().view<SkyLightComponent>().front());
+			REQUIRE(renderer.Render(scene, camera, nullptr, Forced(1.0f / 65536.0f)));
+			float largest = 0.0f;
+			for (nvrhi::ITexture* table : { renderer.GetAtmosphereSkyViewTable(), renderer.GetAtmosphereMultipleScatteringTable() })
+			{
+				uint32_t width = 0;
+				uint32_t height = 0;
+				for (const glm::vec4& texel : ReadHalfImage(table, width, height))
+					largest = std::max({ largest, texel.r, texel.g, texel.b });
+			}
+			MESSAGE(fmt::format("Atmosphere at {} degrees, haze {}: the largest stored texel {:.1f}", daylight.Elevation, daylight.Haze, largest));
+			CHECK(largest > 0.0f);
+			CHECK(largest < 65000.0f * 0.5f);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

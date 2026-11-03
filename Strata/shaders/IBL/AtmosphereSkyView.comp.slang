@@ -46,8 +46,8 @@ void st_Main()
 		float sunMu = dot(normalize(groundPosition), toSun);
 		light += transmittance * GetSunTransmittance(c_AtmosphereBottomRadius, sunMu) * max(sunMu, 0.0) * u_Atmosphere.GroundAlbedo.rgb / PI;
 	}
-	// Finite and within half floats, like every sky.
-	o_Table[texel] = float4(clamp(light * u_Atmosphere.SunColor.rgb, float3(0.0), float3(65000.0)), 1.0);
+	// Finite and within half floats, like every sky, stored scaled (ST_ATMOSPHERE_STORAGE_SCALE).
+	o_Table[texel] = float4(clamp(light * u_Atmosphere.SunColor.rgb * ST_ATMOSPHERE_STORAGE_SCALE, float3(0.0), float3(65000.0)), 1.0);
 }
 
 // --- Entry point ---

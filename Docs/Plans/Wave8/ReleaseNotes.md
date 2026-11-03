@@ -118,6 +118,21 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   them.
 - `play.state` and `physics.stats` report interpolation.
 
+**Reflections (R2)**
+
+- The sun's highlight takes the light's size (Directional Light **Angular Diameter**, stored as `ShadowSoftness`):
+  Overcast's 10-degree sun gives a soft glow instead of a pin dot; on mirror-smooth surfaces the midday sun's glint is the
+  disk's size. The property now sits with the light's own settings and applies without shadows too.
+- Point and spot lights have a **Source Radius** (default 0, as before): a lantern's or a fire's highlight on metal and wet
+  ground takes the bulb's or flame's size, the same light spread wider; their diffuse light and shadows do not change.
+- A material's IOR sets its reflectance: water (1.33) reflects 2%, glass (1.5) 4% as before; imported `KHR_materials_ior`
+  values count, without re-importing.
+- The physical atmosphere's sky after sunset no longer shows bands, nor do its reflections: its tables keep the twilight's
+  faint light at full precision (daytime skies are unchanged to the bit).
+- At High and Ultra reflection probes are 256 texels per face: sharper on polished metal, 68 MiB of GPU memory per view that
+  shows probes instead of 17 (Graphics Quality's **Reflection probe resolution**). No probe needs baking again.
+- Asset thumbnails render again once (the sun's highlight and dielectrics' reflectance changed how materials look).
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and
@@ -129,6 +144,8 @@ projects, the template and scenes or projects without the value get.
 | Compiled shaders | glslang | slangc; pictures differ by rounding only | S0.10 |
 | First configure of a clone | offline after submodules | fetches Slang's archive once, or `STRATA_SLANG_ROOT` | S0.10 |
 | What games, Play and Simulate draw | each body's last fixed pose | between its last two fixed poses, a step behind the clock | physics-timing |
+| Reflection probe resolution of the High and Ultra presets | 128 | 256 | reflections R2 |
+| A directional light's highlight | a point's | its Angular Diameter's disk (0.53 degrees by default) | reflections R2 |
 
 ## Upgrading from 0.7.0
 
@@ -162,6 +179,12 @@ projects, the template and scenes or projects without the value get.
 | Scripts that place something from a moving body's position every frame (a follow camera, an effect) | the body's last fixed pose, which is what was drawn | the body is drawn up to a step behind its last fixed pose, so it seems to jitter against them | read `GetDrawnPosition()`/`GetDrawnRotation()` in `OnLateUpdate` instead of the world position |
 | Scripts that move an entity far by setting its transform in `OnFixedUpdate` | drawn there at the step | drawn sliding there over a step if within 400 m/s | call `GetTransform().ResetInterpolation()` after the move |
 | What games, Play and Simulate draw | each body's last fixed pose | between its last two fixed poses | Project Settings > Physics > Timing > Interpolation off |
+| **Reflections (R2)** | | | |
+| A directional light's highlight | A point's (the smallest roughness's pin dot) whatever its Shadow Softness | Its disk's size: mirrors 1.8 times wider at the default 0.53 degrees, roughness 0.06 30% wider, 0.18 0.4% | Angular Diameter 0 (also hardens its shadows) |
+| Shaders reading the atmosphere's sky-view, multiple-scattering or aerial tables, or its environment cube | Light per lux of sun | Per lux times `Atmosphere::c_StorageScale` (16384) | Multiply by `EnvironmentParams.x`, which divides by it (or by `1.0 / ST_ATMOSPHERE_STORAGE_SCALE`) |
+| Reflection probes' resolution at High and Ultra | 128 texels per face (17 MiB per view with probes) | 256 (68 MiB) | Graphics Quality Custom with **Reflection probe resolution** 128 |
+| A non-metal's reflectance (F0) | 0.04 whatever its IOR | From its IOR: 1.5 (the default) exactly 0.04 as before, water 1.33 0.02, 2 0.11, 1 none | Set the IOR to 1.5 (it also bends what transmissive materials show) |
+| Directional Light **Shadow Softness** | In the Shadows section, inactive without shadows | **Angular Diameter**, with the light's own settings, active with and without shadows; stored, scripted and set by commands as `ShadowSoftness` | Nothing to do |
 
 ## Known issues
 
@@ -175,6 +198,17 @@ projects, the template and scenes or projects without the value get.
 - At Ultra, shiny balls reflected in rough metal keep a fine grain in still pictures (`lookdev.sheet`'s spheres: noise
   1.05-1.08% at 3840x2160 against the 1% aimed at, High 0.95-0.96%): whether a ray grazing a ball's outline passes just
   behind it, which is not a hit, depends on its step offset.
+
+**Reflections (R2)**
+
+- An object in front of a mirror is reflected only where the camera also sees it (often a crescent), with the probes or
+  the sky where its back would be: the screen holds only its front. Filling that silhouette with the front's colors was
+  tried and drew front-lit rims instead.
+- Where a mirror meets a ball's side at a slant, the screen-space march still misses part of it in fine stripes (in a
+  test, 42% of those pixels hit at High, 65% at Ultra), which the resolve and the probes fill.
+- With TAA, every highlight that slides over a surface as the camera moves pumps by 4.5-9.5% from frame to frame (the
+  history follows the surface, not the highlight); a Source Radius roughly halves it on lanterns. Without TAA, lanterns'
+  glints on wet ground pump by 1.4% as points and 0.3% sized, with FXAA by 4.2% and 1.3%.
 
 **Lane Render**
 

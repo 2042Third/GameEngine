@@ -166,7 +166,8 @@ TEST_SUITE("Renderer.Material")
 		CHECK(data.Flags == 0u);
 		CHECK(data.Clearcoat == 0.0f);
 		CHECK(data.Transmission == 0.0f);
-		CHECK(data.Absorption == glm::vec4(0.0f));
+		CHECK(glm::vec3(data.Absorption) == glm::vec3(0.0f));
+		CHECK(data.Absorption.w == 0.04f); // Glass's F0, as every dielectric reflected before IOR set it
 		CHECK((MaterialGPU::GetFlags(loaded) & RenderData::c_CullMaterialTransparent) == 0u);
 	}
 
@@ -233,7 +234,7 @@ TEST_SUITE("Renderer.Material")
 		// Beer's law: what is left after the distance is the attenuation color.
 		for (int channel = 0; channel < 3; channel++)
 			CHECK(std::exp(-data.Absorption[channel] * glass.AttenuationDistance) == doctest::Approx(glass.AttenuationColor[channel]));
-		CHECK(data.Absorption.w == 0.0f);
+		CHECK(data.Absorption.w == doctest::Approx(0.02006f).epsilon(0.001)); // Water's F0 from its IOR
 
 		// A channel the color removes entirely still absorbs a finite amount.
 		glass.AttenuationColor = { 0.0f, 1.0f, 1.0f };
@@ -250,6 +251,36 @@ TEST_SUITE("Renderer.Material")
 		CHECK_FALSE(MaterialGPU::HasClearcoat(glass));
 		CHECK_FALSE(MaterialGPU::IsTransmissive(MaterialProperties {}));
 		CHECK_FALSE(MaterialGPU::HasClearcoat(MaterialProperties {}));
+	}
+
+	TEST_CASE("The dielectric F0 comes from the IOR, 1.5 exactly 0.04")
+	{
+		// ((n - 1) / (n + 1))^2 with n within [1, 3]; the default 1.5 is the literal 0.04 (the formula's 0.040000003 would move
+		// every default material's highlight by a rounding), and values that are not finite fall back to it.
+		const auto f0 = [](float ior)
+		{
+			MaterialProperties properties;
+			properties.IOR = ior;
+			return MaterialGPU::GetDielectricF0(properties);
+		};
+		CHECK(MaterialProperties().IOR == 1.5f);
+		CHECK(f0(1.5f) == 0.04f);
+		CHECK(f0(1.33f) == doctest::Approx(0.02006f).epsilon(1e-5 / 0.02006));
+		CHECK(f0(1.0f) == 0.0f);
+		CHECK(f0(2.0f) == doctest::Approx(1.0f / 9.0f));
+		CHECK(f0(3.0f) == doctest::Approx(0.25f));
+		CHECK(f0(5.0f) == doctest::Approx(0.25f)); // Clamped to 3
+		CHECK(f0(0.5f) == 0.0f);                   // Clamped to 1
+		CHECK(f0(std::numeric_limits<float>::quiet_NaN()) == 0.04f);
+		CHECK(f0(std::numeric_limits<float>::infinity()) == 0.04f);
+		CHECK(f0(-std::numeric_limits<float>::infinity()) == 0.04f);
+
+		// Build writes it into Absorption.w, which shaders read as the dielectric's F0.
+		const MaterialGPU::TextureIndexResolver missing = [](AssetHandle, uint32_t missingIndex, uint32_t) { return missingIndex; };
+		MaterialProperties water;
+		water.IOR = 1.33f;
+		CHECK(MaterialGPU::Build(*Material::Create(water), missing).Absorption.w == f0(1.33f));
+		CHECK(MaterialGPU::Build(*Material::Create(MaterialProperties()), missing).Absorption.w == 0.04f);
 	}
 
 	TEST_CASE("Material reflection describes every property")

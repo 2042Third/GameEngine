@@ -36,6 +36,10 @@ namespace Strata
 		// What a transmissive volume absorbs per world unit (Beer's law), from its attenuation color and distance: 0 where it
 		// absorbs nothing (AttenuationDistance 0).
 		glm::vec3 GetAbsorption(const MaterialProperties& properties);
+		// How much a dielectric reflects head-on (its F0) from its IOR: ((n - 1) / (n + 1))^2 with n within [1, 3] (water 1.33:
+		// 0.02, glass 1.5: 0.04, diamond 2.42: 0.17, 1: nothing). 0.04 exactly at 1.5 and for values that are not finite, so
+		// materials at the default shade as before bit for bit (the formula gives 0.040000003 there).
+		float GetDielectricF0(const MaterialProperties& properties);
 
 		// The texture table index of one of a material's maps (TextureTable): given the map's handle, the index to use where it
 		// has none (`missingIndex`) and where it is not uploaded yet (`loadingIndex`).

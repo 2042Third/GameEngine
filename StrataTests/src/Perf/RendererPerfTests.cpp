@@ -24,6 +24,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <optional>
 #include <random>
 #include <string>
@@ -557,6 +558,97 @@ TEST_SUITE("PerfGPU.Renderer")
 			if (measuresGPU)
 				values.emplace("PerfGPU.Renderer.ReflectionProbes16GPU", Perf::MeasureGPU(measurement));
 			return values;
+		});
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("GPU time of the frames that convert six reflection probes, at 128 and 256 texels per face")
+	{
+		// Six captures of the bakes' size (1024x512, with their levels) in view, converted with SpreadLightingUpdates (two a frame)
+		// and screen-space reflections off, so GPU.Reflections holds only the conversions: its largest frame, at Medium's 128 and
+		// High's 256 texels per face (RendererQualitySettings::ReflectionProbeResolution; provisional).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+		constexpr int c_Probes = 6;
+		const auto createCapture = [](float shade)
+		{
+			constexpr uint32_t c_CaptureWidth = 1024;
+			constexpr uint32_t c_CaptureHeight = 512;
+			TextureMip level0;
+			level0.Width = c_CaptureWidth;
+			level0.Height = c_CaptureHeight;
+			level0.Data.resize(static_cast<size_t>(c_CaptureWidth) * c_CaptureHeight * 8);
+			for (uint32_t y = 0; y < c_CaptureHeight; y++)
+			{
+				for (uint32_t x = 0; x < c_CaptureWidth; x++)
+				{
+					const float value = shade * (0.5f + 0.5f * static_cast<float>((x / 32 + y / 32) % 2));
+					const uint16_t texel[4] = { glm::packHalf1x16(value), glm::packHalf1x16(value), glm::packHalf1x16(1.0f), glm::packHalf1x16(1.0f) };
+					std::memcpy(level0.Data.data() + (static_cast<size_t>(y) * c_CaptureWidth + x) * sizeof(texel), texel, sizeof(texel));
+				}
+			}
+			std::vector<TextureMip> mips = { level0 };
+			REQUIRE(TextureUtils::GenerateMips(mips, TextureFormat::RGBA16F, false));
+			TextureSpecification specification;
+			specification.Format = TextureFormat::RGBA16F;
+			specification.Wrap = TextureWrap::Clamp;
+			return Texture::Create(specification, std::move(mips));
+		};
+		Scene scene("ProbeConversions");
+		Perf::AddCameraAndLight(scene);
+		for (int index = 0; index < c_Probes; index++)
+		{
+			Entity probe = scene.CreateEntity("Probe");
+			probe.GetComponent<TransformComponent>().Translation = glm::vec3(static_cast<float>(index) * 3.0f - 7.5f, 0.0f, 0.0f);
+			ReflectionProbeComponent& component = probe.AddComponent<ReflectionProbeComponent>();
+			component.Capture = assets.Add(createCapture(0.2f + 0.1f * static_cast<float>(index)), "Capture");
+			component.Extents = glm::vec3(1.4f);
+		}
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 2.0f, 14.0f), glm::vec3(0.0f), static_cast<float>(c_Width) / static_cast<float>(c_Height));
+		const bool measuresGPU = Perf::MeasuresGPU();
+		const auto largestConversionFrame = [&](uint32_t resolution)
+		{
+			SceneRendererSpecification specification = Perf::MeasuredRendererSpecification();
+			specification.Quality.ReflectionProbeResolution = resolution;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_Width, c_Height);
+			uint32_t converted = 0;
+			Perf::MeasureFrames(gpu, 0, 6, [&]
+			{
+				REQUIRE(renderer.Render(scene, camera));
+				converted += renderer.GetStats().ReflectionProbeConversions;
+				CHECK(renderer.GetStats().ReflectionProbeConversions <= SceneRenderer::c_ReflectionProbeConversionsPerFrame);
+			});
+			CHECK(converted == static_cast<uint32_t>(c_Probes));
+			CHECK(renderer.GetStats().ReflectionProbes == static_cast<uint32_t>(c_Probes));
+			CHECK_FALSE(renderer.GetStats().ScreenSpaceReflections);
+			double largest = 0.0;
+			const FrameProfiler& profiler = FrameProfiler::Get();
+			for (FrameStageID stage = 0; stage < profiler.GetStageCount(); stage++)
+			{
+				if (profiler.GetStageName(stage) != "GPU.Reflections")
+					continue;
+				for (uint32_t age = 0; age < profiler.GetRecordedFrameCount(); age++)
+				{
+					const FrameSample frame = profiler.GetFrame(age);
+					if (frame.HasGPU)
+						largest = std::max(largest, static_cast<double>(frame.GPUStageMs[stage]));
+				}
+			}
+			MESSAGE(fmt::format("Probe conversions at {} texels per face: the largest frame's GPU.Reflections {:.3f} ms", resolution, largest));
+			return largest;
+		};
+		if (!measuresGPU)
+		{
+			MESSAGE("No GPU timing on this device: nothing to measure");
+			return;
+		}
+		Perf::CheckBudgetsConfirmed({ "PerfGPU.Renderer.ProbeConversion128MaxStageGPU", "PerfGPU.Renderer.ProbeConversion256MaxStageGPU" }, [&]
+		{
+			return Perf::MetricValues { { "PerfGPU.Renderer.ProbeConversion128MaxStageGPU", largestConversionFrame(128) },
+				{ "PerfGPU.Renderer.ProbeConversion256MaxStageGPU", largestConversionFrame(256) } };
 		});
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

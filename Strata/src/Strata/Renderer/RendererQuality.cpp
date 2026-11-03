@@ -6,6 +6,7 @@
 #include "Strata/Core/ProjectSettings.h"
 #include "Strata/Core/SettingsRegistry.h"
 #include "Strata/Renderer/PostProcessData.h"
+#include "Strata/Renderer/SceneRenderData.h"
 
 #include <nlohmann/json.hpp>
 
@@ -47,6 +48,7 @@ namespace Strata
 		constexpr PresetRow<uint32_t> c_EnvironmentResolutionRow = { 256, 256, 512, 512 };
 		constexpr PresetRow<ReflectionsQuality> c_ReflectionsRow = { ReflectionsQuality::Off, ReflectionsQuality::Checkerboard, ReflectionsQuality::Spatial, ReflectionsQuality::SpatialHigh };
 		constexpr PresetRow<MotionBlurSamples> c_MotionBlurQualityRow = { MotionBlurSamples::Off, MotionBlurSamples::Samples8, MotionBlurSamples::Samples12, MotionBlurSamples::Samples16 };
+		constexpr PresetRow<uint32_t> c_ReflectionProbeResolutionRow = { 128, 128, 256, 256 };
 
 		// GPU memory of the rows that allocate (RowTraits::MemoryBytes), as the renderer makes the resources.
 		uint64_t CascadeBytes(const RendererQualitySettings& settings, glm::uvec2 output)
@@ -75,6 +77,26 @@ namespace Strata
 				texels += size * size;
 			}
 			return texels * 6 * 8;
+		}
+
+		uint64_t ReflectionProbeBytes(const RendererQualitySettings& settings, glm::uvec2)
+		{
+			// The probes' cube array (SceneRendererReflectionProbes.cpp): RenderData::c_MaxReflectionProbes slots of six RGBA16F faces
+			// with RenderData::c_ReflectionProbeMipCount levels, and the scratch cube with its whole chain. A renderer with a lower
+			// MaxReflectionProbes allocates less; the row counts the default.
+			const uint32_t size = RendererQuality::Clamp(settings).ReflectionProbeResolution;
+			const auto cubeTexels = [](uint32_t edge, uint32_t levels)
+			{
+				uint64_t texels = 0;
+				for (uint32_t level = 0; level < levels; level++)
+				{
+					const uint64_t levelEdge = std::max(1u, edge >> level);
+					texels += levelEdge * levelEdge;
+				}
+				return texels * 6;
+			};
+			return (RenderData::c_MaxReflectionProbes * cubeTexels(size, RenderData::c_ReflectionProbeMipCount)
+				+ cubeTexels(size, RenderData::GetReflectionProbeMipChain(size))) * 8;
 		}
 
 		uint64_t ReflectionsBytes(const RendererQualitySettings& settings, glm::uvec2 output)
@@ -134,6 +156,7 @@ namespace Strata
 			{ "EnvironmentResolution", true, "", &EnvironmentBytes },      // Filtered only when the sky changes: no stage of its own
 			{ "Reflections", true, "GPU.Reflections", &ReflectionsBytes },
 			{ "MotionBlurQuality", true, "GPU.MotionBlur", &MotionBlurBytes },
+			{ "ReflectionProbeResolution", true, "GPU.Reflections", &ReflectionProbeBytes }, // Conversions run in the reflections' stage
 			// The players' rows: comfort and preference, not cost.
 			{ "AntiAliasing", false, "", nullptr },                 // Its cost is the chosen method's (GPU.TAA or GPU.Post)
 			{ "MotionBlur", false, "GPU.MotionBlur", nullptr },     // Counted with MotionBlurQuality
@@ -425,6 +448,7 @@ namespace Strata
 					settings.EnvironmentResolution = c_EnvironmentResolutionRow[index];
 					settings.Reflections = c_ReflectionsRow[index];
 					settings.MotionBlurQuality = c_MotionBlurQualityRow[index];
+					settings.ReflectionProbeResolution = c_ReflectionProbeResolutionRow[index];
 				}
 				return presets;
 			}();
@@ -463,6 +487,7 @@ namespace Strata
 				clamped.Reflections = medium.Reflections;
 			if (static_cast<size_t>(clamped.MotionBlurQuality) >= std::size(c_MotionBlurSamplesNames))
 				clamped.MotionBlurQuality = medium.MotionBlurQuality;
+			clamped.ReflectionProbeResolution = clamped.ReflectionProbeResolution == 256 ? 256 : 128;
 			if (static_cast<size_t>(clamped.AntiAliasing) >= std::size(c_AntiAliasingChoiceNames))
 				clamped.AntiAliasing = AntiAliasingChoice::Scene;
 			if (static_cast<size_t>(clamped.MotionBlur) >= std::size(c_SceneEffectChoiceNames))
@@ -644,6 +669,14 @@ namespace Strata
 			return size > 256 && (mip == 1 || mip == 2) ? c_NarrowLobeSamples : c_Samples;
 		}
 
+		uint32_t GetProbePrefilterSamples(uint32_t size, uint32_t mip)
+		{
+			// Half the sky's samples: a probe's cube is smaller than the sky's, and filtered importance sampling reads its levels.
+			constexpr uint32_t c_Samples = 256;
+			constexpr uint32_t c_NarrowLobeSamples = 128;
+			return size > 128 && (mip == 1 || mip == 2) ? c_NarrowLobeSamples : c_Samples;
+		}
+
 		SettingsSection MakeSection()
 		{
 			const RendererQualitySettings high = GetPreset(RendererQualityPreset::High);
@@ -718,6 +751,10 @@ namespace Strata
 			section.Fields.push_back(EnumField("MotionBlurQuality", "Motion blur samples", "Samples per pixel of the motion blur, in scenes that "
 				"use it: more samples show less streak noise where things move fast, for more GPU time (Off: no motion blur).",
 				EnumOptions(c_MotionBlurSamplesNames), MotionBlurSamplesToString(high.MotionBlurQuality)));
+			section.Fields.push_back(EnumField("ReflectionProbeResolution", "Reflection probe resolution", "Texels each way of each face of the "
+				"reflection probes' pictures: 256 keeps polished metal's reflections of nearby things sharp, for about 51 MiB more GPU memory per "
+				"view that shows a probe (17 MiB at 128, 68 MiB at 256 for 16 probes) and more GPU time when a probe's picture is prepared.",
+				{ "128", "256" }, std::to_string(high.ReflectionProbeResolution)));
 			// The players' rows: read under every preset.
 			section.Fields.push_back(EnumField("AntiAliasing", "Anti-aliasing", "How jagged edges are smoothed: Scene uses the game's own method; "
 				"Off is the sharpest and costs nothing; FXAA and Morphological smooth each frame on its own (Morphological keeps more texture "
@@ -763,6 +800,7 @@ namespace Strata
 				ReadField(*value, "EnvironmentResolution", settings.EnvironmentResolution);
 				ReadField(*value, "Reflections", settings.Reflections);
 				ReadEnumField(*value, "MotionBlurQuality", c_MotionBlurSamplesNames, settings.MotionBlurQuality);
+				ReadField(*value, "ReflectionProbeResolution", settings.ReflectionProbeResolution);
 			}
 			// Knobs read under every preset (players' comfort rows) follow here, one line each.
 			if (value)
@@ -793,6 +831,7 @@ namespace Strata
 				{ "EnvironmentResolution", std::to_string(settings.EnvironmentResolution) },
 				{ "Reflections", ReflectionsQualityToString(settings.Reflections) },
 				{ "MotionBlurQuality", MotionBlurSamplesToString(settings.MotionBlurQuality) },
+				{ "ReflectionProbeResolution", std::to_string(settings.ReflectionProbeResolution) },
 				{ "AntiAliasing", AntiAliasingChoiceToString(settings.AntiAliasing) },
 				{ "MotionBlur", SceneEffectChoiceToString(settings.MotionBlur) },
 				{ "DepthOfField", SceneEffectChoiceToString(settings.DepthOfField) },

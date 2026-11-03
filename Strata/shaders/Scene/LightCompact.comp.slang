@@ -66,7 +66,7 @@ void st_Main()
 		data.PositionRange = float4(light.PositionRange.xyz - u_Frame.CameraPosition.xyz, light.PositionRange.w);
 		data.Color = light.Color;
 		data.DirectionType = light.DirectionType;
-		data.SpotAngles = float4(light.SpotAngles.xy, float(u_LightShadowSlots[record]), 0.0);
+		data.SpotAngles = float4(light.SpotAngles.xy, float(u_LightShadowSlots[record]), light.Source.x);
 		o_Lights[position] = data;
 		float3 center = light.Bounds.xyz - u_Frame.CameraPosition.xyz;
 		o_LightBounds[position] = float4(mul(((float3x3)(u_Frame.View)), center), light.Bounds.w);

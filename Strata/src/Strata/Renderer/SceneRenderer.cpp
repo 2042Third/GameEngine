@@ -5,6 +5,7 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Math/Frustum.h"
 #include "Strata/Math/Math.h"
+#include "Strata/Renderer/Atmosphere.h"
 #include "Strata/Renderer/FontAtlasCache.h"
 #include "Strata/Renderer/LODSelection.h"
 #include "Strata/Renderer/Material.h"
@@ -945,8 +946,9 @@ namespace Strata
 			// non-finite values as 0, as SetHeightFog sanitizes its inputs.
 			const float scale = skyLight->AerialPerspectiveScale;
 			m_AerialScale = skyLight->AerialPerspective && std::isfinite(scale) ? std::clamp(scale, 0.0f, SkyLightComponent::c_MaxAerialPerspectiveScale) : 0.0f;
-			// The tables and the environment hold the sky per lux of sun: times the light's illuminance above the atmosphere.
-			intensity *= m_AtmosphereSunIlluminance;
+			// The tables and the environment hold the sky per lux of sun, scaled for storage (Atmosphere::c_StorageScale): times the
+			// light's illuminance above the atmosphere, over the scale.
+			intensity *= m_AtmosphereSunIlluminance / Atmosphere::c_StorageScale;
 		}
 		else if (procedural)
 		{
@@ -1908,6 +1910,9 @@ namespace Strata
 		const bool environment = quality.EnvironmentResolution != current.EnvironmentResolution;
 		// Screen-space reflections: the next frame that traces them makes the new mode's targets (none at Off).
 		const bool reflections = quality.Reflections != current.Reflections;
+		// Reflection probes: nothing to release. The next gather with a probe in view makes cubes of the new size beside the old
+		// ones, which keep shading until the captures in view are converted into the new ones (m_ReflectionProbesNext): a capture
+		// that dropped to its tail streams in whole first, and the boxes are never lit by the sky meanwhile.
 		std::vector<nvrhi::ResourceHandle> released;
 		if (reflections)
 			ReleaseScreenReflections(released);
@@ -2523,12 +2528,16 @@ namespace Strata
 
 		frame.DirectionalLightDirection = glm::vec4(0.0f, -1.0f, 0.0f, 0.0f);
 		frame.DirectionalLightColor = glm::vec4(0.0f);
+		// Written here, after RenderFrame assigned the vector whole, so the frame shades with this frame's disk.
+		frame.ReflectionParams.w = 0.0f;
 		m_ShadowLight = {};
 		m_SunColor = glm::vec3(1.0f);
 		auto useDirectionalLight = [&](const DirectionalLightComponent& light, const glm::vec3& direction)
 		{
 			frame.DirectionalLightDirection = glm::vec4(direction, 1.0f);
 			frame.DirectionalLightColor = glm::vec4(light.Color * light.Intensity, 1.0f);
+			// Its highlight takes the disk's size, with or without shadows.
+			frame.ReflectionParams.w = RenderData::GetSunLobeAlpha2(light.ShadowSoftness);
 			m_SunColor = light.Color;
 			m_ShadowLight.Enabled = light.CastShadows && light.Intensity > 0.0f;
 			m_ShadowLight.Direction = direction;
@@ -2609,7 +2618,7 @@ namespace Strata
 			candidate.Data.PositionRange = record.PositionRange;
 			candidate.Data.Color = record.Color;
 			candidate.Data.DirectionType = record.DirectionType;
-			candidate.Data.SpotAngles = glm::vec4(record.SpotAngles.x, record.SpotAngles.y, 0.0f, 0.0f);
+			candidate.Data.SpotAngles = glm::vec4(record.SpotAngles.x, record.SpotAngles.y, 0.0f, record.Source.x);
 			const float distance = glm::length(glm::vec3(candidate.Bounds) - camera.Position);
 			if (camera.Orthographic)
 				candidate.Relevance = candidate.Bounds.w; // The projected size does not depend on the distance

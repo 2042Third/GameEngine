@@ -717,7 +717,16 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     in. That probe is saved inactive and unbaked and only that shot bakes it: a bake moves its probe's previous capture to the
     trash, which would leave the saved scene's yard probe naming a trashed capture for every later shot (projects in a
     `--work` directory are reused: `--fresh-work` after changing `LookDevScene.json`);
-    `Tests::SpecularLab` builds the same lab for the strafe test (`GPU.SceneRenderer.SSR`): change both.
+    `lookdev.overcast` (the Overcast preset's 10-degree sun on the ladder and the IOR spheres), `lookdev.lantern.wet` and
+    `.lantern.sheet` (at dusk, the sun 3 degrees below the horizon: the lanterns' glints on the wet plane and the sheet) and
+    their `.sized` forms (both lanterns' `SourceRadius` 0.06, the bulbs' radius, set by a `Setup` step so the scene still
+    builds with older editors) judge highlights; `Tests::SpecularLab` builds the same lab (its lanterns inactive until a test
+    turns them on) for the strafe tests (`GPU.SceneRenderer.SSR`): change both. A highlight slides over its surface as the
+    camera moves, so the flicker meter (which follows world points) counts its passing; "Sized highlights shimmer no more
+    than points..." bounds shimmer itself, the pumping of the glint's summed light from frame to frame (`GetLightPumping`).
+    `lookdev.polished` (the polished panel head on, the yard probe active) shows the probe's resolution: its `center` crop's
+    gradient energy (the mean squared luminance step between neighbors, in codes) is 4.55 at High (256) against 2.62 with
+    a Custom quality that differs from High only in `ReflectionProbeResolution` 128 (1.74 times; 4K, no AA).
   - Shots and look-dev content are appended, never changed, so that captures of every build keep comparing. GPU times
     are kept only from runs alone on the machine, under `python Tools/PerfLock.py --label lookdev-<label> --limit 90 -- ...`
     (a full run takes longer than the lock's default limit); the pictures are read and cropped on every core after the
@@ -3985,12 +3994,14 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | `EnvironmentResolution` (prefiltered sky per face) | 256 | 256 | 512 | 512 |
 | `Reflections` (screen-space reflections a scene asks for) | Off | Checkerboard (TAA only) | Spatial | SpatialHigh |
 | `MotionBlurQuality` (samples, for scenes with motion blur) | Off | 8 | 12 | 16 |
+| `ReflectionProbeResolution` (reflection probes' cubes per face) | 128 | 128 | 256 | 256 |
 | `AntiAliasing`, `MotionBlur`, `DepthOfField`, `FilmGrain`, `ChromaticAberration` (players' rows, under every preset: they only turn off what a scene uses) | Scene | Scene | Scene | Scene |
 | Cascades' memory per view (D32) | 12 MiB | 64 MiB | 64 MiB, 256 MiB from 1440 rows | 256 MiB, 1 GiB from 1440 rows |
 | Atlas memory per view | 16 MiB | 64 MiB | 64 MiB | 256 MiB |
 | Prefiltered sky per set of maps (RGBA16F, six levels; the atmosphere keeps two sets) | 4 MiB | 4 MiB | 16 MiB | 16 MiB |
 | Screen-space reflections' targets per view (scenes that ask for them; "Reflections") | none | 20 MiB, 79 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows |
 | Motion blur's targets per view (scenes with motion blur) | none | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows |
+| Reflection probes per view (16 slots, scenes with probes) | 17 MiB | 17 MiB | 68 MiB | 68 MiB |
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
   High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for rows that cost at every
@@ -4455,6 +4466,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   `GetLightRelevance`, `Include/Clusters.slang`), and `Forward.frag` loops only over its pixel's cluster. The GPU's light
   counts come back with its other counts (`SceneRendererGPUStats::Lights`, `CulledLights`; `Tests::GetLightCounts`).
   The directional light's shadows are cascades; point and spot lights' are views in an atlas ("Local light shadows").
+  A record (`RenderData::LightRecord`, 96 bytes; every reader sizes by `sizeof`, and `Include/Lights.slang` mirrors it)
+  ends with `Source`, whose x is the light's `SourceRadius` (highlights only, "Lighting"): both paths copy it into
+  `LightData::SpotAngles.w` (the CPU path in `CollectLights`, the GPU-driven one in `LightCompact.comp`), which stays 64
+  bytes.
 - The cascades are one D32 array (`SceneRenderer::GetShadowMap`) of a layer per cascade the quality draws
   (`RendererQualitySettings::ShadowCascades`; thumbnails draw one), made by the first frame with a shadowed sun and kept
   across resizes; a zero viewport (a capture renderer between pictures, the editor's hidden Game view) releases it,
@@ -4761,6 +4776,42 @@ lights, Post Process and the sky), and never a resolution below the output's.
   draw with the same vertex module, so they stay pixel-equal (`GPU.SceneRenderer.GPUDriven`'s "Lit materials"). A flat
   surface without a normal map has zero derivatives and keeps its roughness exactly. `GPU.SceneRenderer.Materials` checks
   that a bumpy sphere's highlight variance halves and its light stays within 15%.
+- **F0 from the IOR** (`MaterialGPU::GetDielectricF0`): a dielectric's reflectance at normal incidence is `((n - 1) / (n +
+  1))^2` with `n = clamp(IOR, 1, 3)` (water 1.33: 0.02006, 2: 0.111, 1: 0), written on the CPU into
+  `MaterialData::Absorption.w` (the layout stays 144 bytes; both paths read the same buffer). 1.5 and values that are not
+  finite give the literal 0.04: the formula's 0.040000003 would move every default material by a rounding, so materials at
+  the default shade bit for bit as before. `ShadeLitSurface` forms `f0 = lerp(Absorption.w, albedo, metallic)` once
+  (`SurfaceData::F0`, which `EvaluateLightWeighted` reads; the split sum's `IndirectInputs::SpecularColor` follows), and
+  `TransmitLight` alike; the clear coat keeps `c_ClearcoatF0` (a coat is 1.5 by definition). The glTF importer already
+  reads `KHR_materials_ior` into `IOR`, so imported values count without a re-import. "The furnace keeps a dielectric's
+  light at every IOR..." checks a white dielectric at 1, 1.33, 1.5, 2 and 3 (1.000 at center and rim) and a black one's
+  reflectance against the split sum read back (within 0.05%).
+- **Highlights of sized sources** (`PBR.slang`): a source of angular radius theta spans the half maximum of a GGX lobe of
+  `alpha_s = tan(theta) / 1.287` (`2 sqrt(sqrt(2) - 1)`: the reflected angle per alpha where GGX falls to half its peak), and
+  the lobes of the surface and the source combine about as variances add, so the distribution takes `sqrt(alpha^2 +
+  sourceAlpha2)` with `sourceAlpha2 = max(alpha_s^2 - c_MinRoughness^4, 0)` (the smallest roughness's own spread is
+  subtracted, so a mirror shows the source at its size). Only D widens (`GetLobeAlpha`): the visibility keeps the surface's
+  alpha, as masking belongs to the microsurface, and D stays normalized, so a larger source lowers the peak without adding
+  light. The term is a constant per light, no derivative (the derivative rule holds). With 0 the shading is the point
+  light's bit for bit. The sun: `RenderData::GetSunLobeAlpha2(DirectionalLightComponent::ShadowSoftness)` (shown as
+  **Angular Diameter**, 0 to 10 degrees, active with and without shadows), written by `CollectLights` into
+  `FrameConstants::ReflectionParams.w` (after `RenderFrame` assigns the vector whole, so a frame never shades with the
+  previous frame's disk) and passed by the sun's `LightSurface` call to `EvaluateLightWeighted` and `EvaluateClearcoat`.
+  0.53 degrees adds 8.81e-6 (a mirror's lobe 1.77 times as wide, roughness 0.06 30% wider, 0.18 0.4%), Overcast's 10
+  degrees 0.0046 (a soft glow instead of a pin dot). A source's size changes its highlights only, never diffuse light,
+  shadows or culling. `GPU.SceneRenderer.Lighting`'s "A sized sun..." measures a white mirror sphere orthographically (projected
+  area maps to reflected solid angle as `d omega = 4 dA / R^2`): the half-peak cone is 4.97 degrees at 10 (5 expected) and
+  0.265 at 0.53 (0.143 for a point), and the light at 5 and 10 degrees agrees within 1%.
+  Point and spot lights: `SourceRadius` (meters, 0 to `PointLightComponent::c_MaxSourceRadius` 2, default 0: a point) rides
+  in the record's `Source.x` and `LightData::SpotAngles.w` on both light paths ("Render scene"), and the light loop computes
+  `GetSourceLobeAlpha2(radius, distanceSquared)` once per light after its attenuation test: a sphere spans `sin(theta) =
+  radius / distance`, so `alpha_s^2 = sin^2 / ((1 - sin^2) 1.287^2)`, with `sin^2` at most 0.5 (a surface touching the bulb)
+  and the same `c_MinRoughness^4` subtracted. A radius of 0 returns 0 before any arithmetic (one compare per light).
+  Nothing else reads the radius: range, culling, the local shadow views' keys and the diffuse term are unchanged, so a
+  changed radius re-records the light (an upload) and redraws no shadow view. Authoring rule: the bulb's or flame's real
+  radius (a lantern 0.03 to 0.06 m, a fire pit's flames 0.2 to 0.3 m), never more: a larger value widens and dims the
+  highlight. "A point light's source radius..." checks a mirror plane's half-peak area against the bulb's mirror image,
+  the light kept on a distant bulb, a matte surface and the shadow atlas unchanged.
 - **The horizon fade** (`GetHorizonFade`): a normal map can turn the reflected vector into the surface, where image light
   would show the surface's own underside. Image light (probes, sky, screen-space reflections, through the specular
   occlusion) is multiplied by `clamp(1 + R . Ng / 0.25, 0, 1)^2` with Ng the geometric normal (facing the viewer), reaching
@@ -5332,8 +5383,19 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
     the horizon; per lux of sun), when the sun's direction or the camera's 250 m height band (`c_AtmosphereHeightBand`,
     viewed from the band's middle) changes (`AtmosphereSkyViewUpdates`). Scene shaders sample it at SRV 27 (a black
     texture without the atmosphere).
+  - **The storage scale** (`Atmosphere::c_StorageScale`, `ST_ATMOSPHERE_STORAGE_SCALE`, 16384 = 2^14): the tables of light
+    per lux (multiple scattering, sky view, aerial perspective's in-scattering, and the environment cube made from the
+    sky view) store it times the scale, and `EnvironmentParams.x` divides by it, so every reader's product is the same:
+    **readers of these tables multiply by `EnvironmentParams.x`**, and only `GetMultipleScattering` (inside the tables'
+    passes) divides itself. After sunset the sky per lux falls below the smallest normal half float (2^-14), where the
+    fixed step of 2^-24 turned a smooth twilight into bands of 8 to 17 codes; at -10 degrees 99% of the sky view's channels
+    above the horizon were subnormal, at a scale of 1024 still 26%, at 16384 none. A power of two is exact in half and full
+    floats, so every value that was normal before gives the same picture bit for bit (daytime pictures do not change). The
+    tables clamp at 65,000 (4 per lux): the brightest daytime texel, golden hour's aureole under haze 4, stores 15,072
+    ("No daytime table reaches the storage clamp"). The transmittance is not light and is not scaled (3% of its texels are
+    subnormal, along paths deep in the planet's shadow; the night sky shows no bands without scaling it).
   - Background: `Scene/SkyboxAtmosphere.frag` (`ST_ATMOSPHERE`) draws the sky-view table times `EnvironmentParams.x`
-    (the sky's `Intensity` times the sun's illuminance) and the sun's disk analytically: the light's illuminance at the
+    (the sky's `Intensity` times the sun's illuminance over the storage scale) and the sun's disk analytically: the light's illuminance at the
     ground over the disk's solid angle (about 1.3 billion nits for a real sun, which the pre-exposure keeps in range),
     its edge smoothed over a pixel; `BackgroundBlur` is inactive.
   - Light: the CPU evaluates the transmittance from the ground toward the sun with the same quadrature in double
@@ -5378,6 +5440,10 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
 
 ### Reflections
 
+- **Highlights** are the lights' reflections: a light's size (the sun's Angular Diameter, a point or spot light's
+  `SourceRadius`) widens only its highlight's lobe, never its diffuse light, shadows, range or culling ("Lighting",
+  Highlights of sized sources). How strongly a dielectric reflects head-on (its F0) comes from its IOR, 1.5 staying exactly
+  0.04 ("Lighting", F0 from the IOR).
 - **Reflection probes** (`ReflectionProbeComponent`, `SceneRendererReflectionProbes.cpp`): a `Capture` (an equirectangular
   HDR texture asset, luminance in nits, as the sky's map is) of the scene seen from the entity's position lights the
   surfaces inside its influence box (`Extents`, half sizes along the entity's axes, times its scale): their specular
@@ -5392,10 +5458,11 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   `Priority`, then the smaller box (the more specific place), then the entity. `Scene/Forward.frag` walks that list
   (`Include/ReflectionProbes.slang`: at most 16 box tests per pixel, opaque and transparent surfaces alike) and blends the
   first two whose boxes hold the pixel: the stronger takes its weight, the weaker its weight of the rest.
-- **The probe cache**: a renderer's cube array (RGBA16F, 128 texels across, six levels for roughness 0 to 1 as the sky's
-  prefiltered map, a cube per slot of `MaxReflectionProbes`: about 1 MiB a slot, 16 MiB at 16, with a 0.5 MiB scratch
-  cube; made with the first probe in view, released with the viewport, `SetViewportSize(0, 0)`, or once the scene has no
-  probe, kept across resizes) holds each capture in a slot, given to another capture only when the frame does not use it,
+- **The probe cache**: a renderer's cube array (RGBA16F, `RendererQualitySettings::ReflectionProbeResolution` texels
+  across: 128 at Low and Medium, 256 at High and Ultra; six levels for roughness 0 to 1 as the sky's prefiltered map, a cube
+  per slot of `MaxReflectionProbes`: about 1 MiB a slot at 128 and 4 MiB at 256, 17 and 68 MiB at 16 with the scratch cube
+  of the whole chain, `RenderData::GetReflectionProbeMipChain`; made with the first probe in view, released with the
+  viewport, `SetViewportSize(0, 0)`, or once the scene has no probe, kept across resizes, made again at a new resolution) holds each capture in a slot, given to another capture only when the frame does not use it,
   least recently used first. A capture is requested through the frame's `AssetResolveCache` (High) and held whole in the texture
   streamer (`TextureStreamer::Hold`: nothing draws it, so nothing else raises its levels) until it is converted, then
   released, so it drops to its tail while the slot keeps lighting; a reload of the texture converts it again. A hold
@@ -5403,10 +5470,24 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   ending with one view: the streamer raises levels between frames, and a renderer drawing several views per frame (a
   probe bake's six) would otherwise end in its last view the holds its first ones placed. A
   conversion (`GPU.Reflections`, between `GPU.AO` and `GPU.Opaque`): `IBL/EquirectToCube.comp` into a scratch cube of
-  128 with its levels, `IBL/Prefilter.comp` into the slot's six levels, `IBL/ProbeIrradiance.comp` (one work group over
-  the cube's 32-texel level) into the slot's coefficients in the probe buffer. With `SpreadLightingUpdates`
-  (`c_ReflectionProbeConversionsPerFrame`, 2) at most two captures convert per frame and a probe waiting for its capture
-  lights nothing meanwhile; without it (captures, thumbnails, the bake) every loaded one converts in the frame.
+  the row's size with its levels (the capture's level 0 for 256 faces of a 1024x512 capture, level 1 for 128: no re-bake),
+  `IBL/Prefilter.comp` into the slot's six levels (`RendererQuality::GetProbePrefilterSamples`: 256 samples, 128 for levels
+  1 and 2 at 256, so a conversion at 256 filters 2.1 times the samples of one at 128, not 4), `IBL/ProbeIrradiance.comp`
+  (one work group over the cube's 32-texel level: 2 at 128, 3 at 256) into the slot's coefficients in the probe buffer.
+  With `SpreadLightingUpdates` (`c_ReflectionProbeConversionsPerFrame`, 2) at most two captures convert per frame and a
+  probe waiting for its capture lights nothing meanwhile; without it (captures, thumbnails, the bake) every loaded one
+  converts in the frame. After `SetQuality` changed the resolution (nothing is released then, and the change alone returns
+  false), the next gather with a probe in view makes the new size's cubes beside the shown ones (both in memory meanwhile),
+  with the same slots: the shown cubes keep shading the probes they hold while those captures convert into the new cubes,
+  spread as always (a capture that dropped to its tail streams in whole first), and the new cubes take over in the frame that
+  converts the last of them, so the boxes in view never fall to the sky; every probe in view counts as pending until then,
+  and the others wait for the takeover. A probe out of view at the change converts when it comes into view, as on its first
+  appearance. Two conversions take at most 0.46 ms of `GPU.Reflections` at 128 and 0.38 ms at 256
+  on the reference machine's temporary memory (`PerfGPU.Renderer.ProbeConversion128MaxStageGPU`, `...256MaxStageGPU`,
+  target 2 ms; the stage holds only the conversions, and an unmeasured pass of each first changes neither reading). The
+  conversions leave most of the GPU idle, so their time follows each texel's chain of prefilter samples, not their
+  total: 1,280 at 128 (256 on each of levels 1 to 5) and 1,024 at 256 (128 on levels 1 and 2). With 256 on every level, 256
+  measured 0.50 ms, 10% above 128 for four times the samples. So conversions are spread by count, not split by work.
   `SceneRendererStats::ReflectionProbes` (shaded with), `ReflectionProbeConversions` and `ReflectionProbesPending`
   (kept in view, waiting for their capture to load or convert: captures and the project's picture wait for them; a
   capture that is not on its way, an unknown or failed handle or another type of asset, takes no slot and is not waited for).
@@ -5515,7 +5596,13 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   drew a ghost of the post: `GPU.SceneRenderer.SSR`'s sheet case). Strata 0.7.0 took any point behind a
   surface by less than its step's change of distance plus the tolerance for a hit, so a ray that passed far behind a thin
   post read the post (ghost columns beside its reflection), and the reflected top edge of a wall stepped into the sky
-  (`GPU.SceneRenderer.SSR`: thin posts in front of a grazing mirror, the wall's edge within 2 px). Checkerboard's march is
+  (`GPU.SceneRenderer.SSR`: thin posts in front of a grazing mirror, the wall's edge within 2 px). A hit on a surface the
+  ray meets from behind keeps no confidence in these modes either (`GetHitConfidence`'s facing term), so an object in
+  front of a mirror is reflected as a crescent, the side the camera also sees, with the probes or the sky where its back
+  belongs. Wave 8 tried keeping validated back-facing hits at half confidence ("option F"): a ray toward an object's back
+  passes behind its front by more than the tolerance and validates nothing, so no silhouette filled, and only front-lit
+  rims appeared at silhouettes and box edges (`lookdev.sheet.angle` and `lookdev.wet` at 4K High, no AA and FXAA);
+  `GPU.SceneRenderer.SSR`'s ball case holds the crescent. Checkerboard's march is
   unchanged (Medium's 0.6.0 costs; TAA averages its noise). What a ray sees is the previous frame's color before its transparent surfaces: in these modes every frame copies
   its HDR image after the sky into the scene-color copy glass reads (half resolution, blurred levels) and, beside it, into
   a full-resolution copy (`Effects/SceneColorCopy.comp` with a destination of the source's size, in `GPU.Transparent`),
