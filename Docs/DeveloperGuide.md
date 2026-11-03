@@ -4798,9 +4798,15 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   thinner than it: it will get no light rather than let one side's into the other; w 0.5 for double-sided materials,
   whose triangles add no normal). The scene layout binds levels 0-2's material at SRV 38-40, the field at 35 and the
   probes' validity at 37 (the black 3D texture without them). `FrameConstants` gains the GI's fields only with the forward
-  pass that reads them (stage 2): 160 more bytes in it made look-dev captures of unchanged scenes differ between
-  repeats (single pixels by one code; the Specular scene's exposure) although no shader read them, so the cause is
-  found before they are added, with the look-dev repeats as the check.
+  pass that reads them (stage 2). Declaring them, though no shader reads them, recompiles every shader that includes
+  `Include/Scene.slang`, and two passes then make look-dev's repeats of an unchanged view differ: GTAO
+  (`Effects/GTAO.comp`; ThirdPerson: a few pixels by one code, and the `ao` view flips the same pixels between two
+  values from one capture to the next) and the screen-space reflections (`Effects/ScreenSpaceReflections*.comp`,
+  `ReflectionResolve.comp`; the Specular scene: up to 700 pixels, and an exposure 3e-5 EV apart that TAA spreads over
+  0.4 M pixels). The C++ struct, the buffer's size and a 256-byte stride, and every other pass, each tried alone, do
+  not; main's compile of those two passes repeats exactly. GTAO reads only targets the frame clears and writes, so the
+  likely cause is an input that differs between consecutive captures by less than main's compile shows; it is found
+  before the fields are added, with the `ao` view's repeats as the check.
 - **Sampling** (`Include/GlobalIllumination.slang`): a point reads the finest level whose valid box holds it with
   `c_GILevelGuardVoxels` to spare, blended into the next over `c_GILevelBlendVoxels` by its distance from the camera (not
   from the snapped window), so no sample switches level in a step as windows scroll.
