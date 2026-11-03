@@ -107,7 +107,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - Editor: the Scene view's debug view **Voxels** shows the scene as global illumination will see it: a voxel copy of
   everything around the camera (10 cm voxels near it, coarser further out), kept up to date as the camera moves and the
   scene changes, each surface in its albedo; walls thinner than two voxels show in the error color (they will get no bounce).
-  It costs nothing unless the view is on (about 58 MB of GPU memory while it is).
+  A textured surface shows its texture's average color, so models colored from one shared palette texture show that
+  palette's average. It costs nothing unless the view is on (about 58 MiB of GPU memory while it is).
 - AI agents: `viewport.capture {debugView: "voxels"}` reports `debugView.globalIllumination` (levels, voxel sizes, whether
   each holds the scene, memory) and waits for the voxels to settle; every capture reports `globalIlluminationSettled`;
   `editor.perf` names the GPU stage `GPU.RadianceCascades`.

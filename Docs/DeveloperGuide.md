@@ -4795,9 +4795,10 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   alpha-masked voxels; `Emission<l>` R32_UINT: RGB9E5 nits; `Normal<l>` RGBA8_SNORM: the summed normal, w 1; w -1 where
   the sum is shorter than `c_GITwoSidedSum` times the triangles that added (they face against each other: the scratch
   counts them, since a face's triangles touch a voxel once or twice), a **two-sided** voxel holding both faces of a wall
-  thinner than it: it will get no light rather than let one side's into the other; w 0.5 for double-sided materials). The scene layout binds levels 0-2's material at SRV
-  38-40, the field at 35 and the probes' validity at 37 (the black 3D texture without them); the frame constants'
-  `GIVoxelOrigin`, `GIVoxelTexel` and `GIVoxelDimensions` place them (zero without GI).
+  thinner than it: it will get no light rather than let one side's into the other; w 0.5 for double-sided materials,
+  whose triangles add no normal). The scene layout binds levels 0-2's material at SRV 38-40, the field at 35 and the
+  probes' validity at 37 (the black 3D texture without them); the frame constants' `GIVoxelOrigin`, `GIVoxelTexel` and
+  `GIVoxelDimensions` place them (zero without GI).
 - **Sampling** (`Include/GlobalIllumination.slang`): a point reads the finest level whose valid box holds it with
   `c_GILevelGuardVoxels` to spare, blended into the next over `c_GILevelBlendVoxels` by its distance from the camera (not
   from the snapped window), so no sample switches level in a step as windows scroll.
@@ -4820,8 +4821,10 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   GI's voxels" (both paths give the same voxels).
 - **What it cannot do** (so far): walls thinner than two voxels go two-sided (dark from both sides), thin props blur into
   blobs of whole voxels, characters and moving objects are not in the voxels until they rest, textured albedo and emission
-  count by their maps' means, glowing values above 65,408 nits clamp, and an editor top view far above a scene shows its
-  coarse levels only.
+  count by their maps' means (models colored from one shared palette map, as the ThirdPerson sample's Kenney models are,
+  take the palette's mean everywhere: one mauve for grass, wood and rock), double-sided materials' voxels have no facing
+  (the voxels view shades them flat), glowing values above 65,408 nits clamp, and an editor top view far above a scene
+  shows its coarse levels only.
 
 ### Light units and exposure
 
