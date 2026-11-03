@@ -9,6 +9,7 @@
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/packing.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
 #include <chrono>
@@ -515,6 +516,104 @@ TEST_SUITE("GPU.SceneRenderer.ReflectionProbes")
 		// The spread renderer's image matches once all are converted.
 		const ReadbackImage settled = RenderToImage(spread, scene, camera);
 		CHECK(first.Pixels == settled.Pixels);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("ReflectionProbeResolution sizes the cube array, and a new resolution converts every probe in view in the next frame")
+	{
+		// Medium's 128 texels per face, then High's 256: the array is made again at the new size, and the next frame converts
+		// every capture in view at once even when spreading conversions over frames, so the boxes never fall to the sky.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		for (int index = 0; index < 3; index++)
+			AddProbe(scene, AddCapture(assets, glm::vec3(0.2f * static_cast<float>(index + 1))), glm::vec3(static_cast<float>(index) * 1.5f - 1.5f, 0.0f, 0.0f),
+				glm::vec3(0.6f));
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 6.0f), glm::vec3(0.0f));
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_Size, c_Size);
+		CHECK(renderer.GetSpecification().Quality.ReflectionProbeResolution == 128); // Medium, SceneRendererSpecification{}'s
+		for (int frame = 0; frame < 2; frame++)
+			REQUIRE(renderer.Render(scene, camera));
+		REQUIRE(renderer.GetReflectionProbeArray());
+		CHECK(renderer.GetReflectionProbeArray()->getDesc().width == 128);
+		CHECK(renderer.GetStats().ReflectionProbes == 3);
+
+		RendererQualitySettings high = renderer.GetSpecification().Quality;
+		high.ReflectionProbeResolution = 256;
+		CHECK(renderer.SetQuality(high));
+		CHECK(renderer.GetReflectionProbeArray() == nullptr); // Released: made again at the new size by the next frame
+		REQUIRE(renderer.Render(scene, camera));
+		REQUIRE(renderer.GetReflectionProbeArray());
+		CHECK(renderer.GetReflectionProbeArray()->getDesc().width == 256);
+		CHECK(renderer.GetReflectionProbeArray()->getDesc().mipLevels == RenderData::c_ReflectionProbeMipCount);
+		const SceneRendererStats stats = renderer.GetStats();
+		CHECK(stats.ReflectionProbeConversions == 3);
+		CHECK(stats.ReflectionProbes == 3);
+		CHECK(stats.ReflectionProbesPending == 0);
+		// The next change of nothing else returns false; a third frame converts nothing more.
+		CHECK_FALSE(renderer.SetQuality(high));
+		REQUIRE(renderer.Render(scene, camera));
+		CHECK(renderer.GetStats().ReflectionProbeConversions == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A probe at 256 shows finer detail on a mirror ball")
+	{
+		// A checker capture reflected by a mirror ball inside the probe's box: at 256 texels per face the reflection keeps more of
+		// the checker's edges than at 128 (gradient energy over the ball, the sky's 512 case's method).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::SphereMesh));
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		const AssetHandle checker = assets.Add(CreateCapture([](const glm::vec3& direction)
+		{
+			const float u = std::atan2(direction.z, direction.x) * 24.0f / glm::two_pi<float>();
+			const float v = std::asin(std::clamp(direction.y, -1.0f, 1.0f)) * 12.0f / glm::pi<float>();
+			const bool light = (static_cast<int>(std::floor(u)) + static_cast<int>(std::floor(v))) % 2 == 0;
+			return glm::vec3(light ? 1.0f : 0.05f);
+		}, 1024), "Checker");
+		AddProbe(scene, checker, glm::vec3(0.0f), glm::vec3(5.0f));
+		Entity ball = AddMirrorBall(scene, assets, glm::vec3(0.0f));
+		ball.GetComponent<TransformComponent>().Scale = glm::vec3(2.0f);
+		constexpr uint32_t c_BallSize = 256;
+		// Half a unit around the ball's center (radius 1), where a pixel spans 0.22 degrees of reflected directions: finer than the
+		// probe's texels at either size, so the picture shows what the probe holds.
+		const SceneCamera camera = OrthographicLookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f), 0.5f);
+		const auto gradientEnergy = [&](uint32_t resolution)
+		{
+			SceneRendererSpecification specification = ExactSpecification();
+			specification.Quality.ReflectionProbeResolution = resolution;
+			specification.SpecularAntiAliasing = false;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_BallSize, c_BallSize);
+			REQUIRE(renderer.Render(scene, camera));
+			REQUIRE(renderer.GetReflectionProbeArray());
+			CHECK(renderer.GetReflectionProbeArray()->getDesc().width == resolution);
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
+			double energy = 0.0;
+			for (uint32_t y = 1; y + 1 < c_BallSize; y++)
+			{
+				for (uint32_t x = 1; x + 1 < c_BallSize; x++)
+				{
+					const float center = ReadHalfTexel(image, x, y).g;
+					const float dx = ReadHalfTexel(image, x + 1, y).g - center;
+					const float dy = ReadHalfTexel(image, x, y + 1).g - center;
+					energy += static_cast<double>(dx) * dx + static_cast<double>(dy) * dy;
+				}
+			}
+			return energy;
+		};
+		const double low = gradientEnergy(128);
+		const double high = gradientEnergy(256);
+		MESSAGE(fmt::format("Mirror ball gradient energy: 128 {:.2f}, 256 {:.2f} ({:.2f} times)", low, high, high / low));
+		CHECK(low > 0.0);
+		CHECK(high >= 1.5 * low);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

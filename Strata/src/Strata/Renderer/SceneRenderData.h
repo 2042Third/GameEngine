@@ -294,10 +294,21 @@ namespace Strata
 
 		// Reflection probes (ReflectionProbeComponent; Include/ReflectionProbes.slang): a renderer keeps at most this many in
 		// view, each capture converted into a slot of its cube array (a prefiltered cube, one level per roughness step,
-		// c_ReflectionProbeSize texels across) with its irradiance as spherical-harmonic coefficients.
+		// RendererQualitySettings::ReflectionProbeResolution texels across: 128 or 256) with its irradiance as spherical-harmonic
+		// coefficients.
 		constexpr uint32_t c_MaxReflectionProbes = 16;
-		constexpr uint32_t c_ReflectionProbeSize = 128;
 		constexpr uint32_t c_ReflectionProbeMipCount = 6; // Roughness 0, 0.2, ... 1.0, as the sky's prefiltered map
+		// The levels of a cube's whole chain down to 1 texel (the scratch cube a capture is converted through): 8 at 128.
+		constexpr uint32_t GetReflectionProbeMipChain(uint32_t size)
+		{
+			uint32_t count = 1;
+			while (size > 1)
+			{
+				size >>= 1;
+				count++;
+			}
+			return count;
+		}
 		constexpr uint32_t c_ReflectionProbeSHCoefficients = 9; // Bands 0 to 2
 		// A probe in view as the forward pass reads it, in the frame's list (strongest first: priority, then the smaller box).
 		struct ReflectionProbeData

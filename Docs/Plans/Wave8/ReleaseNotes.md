@@ -112,6 +112,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   values count, without re-importing.
 - The physical atmosphere's sky after sunset no longer shows bands, nor do its reflections: its tables keep the twilight's
   faint light at full precision (daytime skies are unchanged to the bit).
+- At High and Ultra reflection probes are 256 texels per face: sharper on polished metal, 68 MiB of GPU memory per view that
+  shows probes instead of 17 (Graphics Quality's **Reflection probe resolution**). No probe needs baking again.
 
 ## Defaults that change
 
@@ -123,6 +125,8 @@ projects, the template and scenes or projects without the value get.
 | Contact shadow steps of the Graphics Quality presets | Low 0, Medium 0, High 12, Ultra 16 | 0 in every preset | lane Render |
 | Compiled shaders | glslang | slangc; pictures differ by rounding only | S0.10 |
 | First configure of a clone | offline after submodules | fetches Slang's archive once, or `STRATA_SLANG_ROOT` | S0.10 |
+| Reflection probe resolution of the High and Ultra presets | 128 | 256 | reflections R2 |
+| A directional light's highlight | a point's | its Angular Diameter's disk (0.53 degrees by default) | reflections R2 |
 
 ## Upgrading from 0.7.0
 
@@ -155,6 +159,7 @@ projects, the template and scenes or projects without the value get.
 | **Reflections (R2)** | | | |
 | A directional light's highlight | A point's (the smallest roughness's pin dot) whatever its Shadow Softness | Its disk's size: mirrors 1.8 times wider at the default 0.53 degrees, roughness 0.06 30% wider, 0.18 0.4% | Angular Diameter 0 (also hardens its shadows) |
 | Shaders reading the atmosphere's sky-view, multiple-scattering or aerial tables, or its environment cube | Light per lux of sun | Per lux times `Atmosphere::c_StorageScale` (16384) | Multiply by `EnvironmentParams.x`, which divides by it (or by `1.0 / ST_ATMOSPHERE_STORAGE_SCALE`) |
+| Reflection probes' resolution at High and Ultra | 128 texels per face (17 MiB per view with probes) | 256 (68 MiB) | Graphics Quality Custom with **Reflection probe resolution** 128 |
 | A non-metal's reflectance (F0) | 0.04 whatever its IOR | From its IOR: 1.5 (the default) exactly 0.04 as before, water 1.33 0.02, 2 0.11, 1 none | Set the IOR to 1.5 (it also bends what transmissive materials show) |
 | Directional Light **Shadow Softness** | In the Shadows section, inactive without shadows | **Angular Diameter**, with the light's own settings, active with and without shadows; stored, scripted and set by commands as `ShadowSoftness` | Nothing to do |
 

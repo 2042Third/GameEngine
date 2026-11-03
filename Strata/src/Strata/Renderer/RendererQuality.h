@@ -148,6 +148,11 @@ namespace Strata
 		ReflectionsQuality Reflections = ReflectionsQuality::Checkerboard;
 		// The motion blur's gather samples, for scenes whose Post Process turns it on (8 at Medium; Off at Low turns it off).
 		MotionBlurSamples MotionBlurQuality = MotionBlurSamples::Samples8;
+		// The reflection probes' texels each way per face, 128 or 256 (Clamp takes any other value to 128): 256 keeps polished
+		// metal's reflections of nearby things sharp. Six levels at both sizes, RGBA16F, for RenderData::c_MaxReflectionProbes
+		// slots and a scratch cube: 17 MiB at 128, 68 MiB at 256, allocated only by renderers that show a probe. Captures are
+		// 1024x512 from 256-texel faces, so 256 needs no new bake.
+		uint32_t ReflectionProbeResolution = 128;
 		// The players' rows, the same under every preset (comfort and preference, not cost): the anti-aliasing method (the
 		// scene's, or off, FXAA, TAA or the morphological anti-aliasing) and whether the scene's motion blur, its cameras' depth
 		// of field, its film grain and its chromatic aberration show.
@@ -167,7 +172,7 @@ namespace Strata
 	namespace RendererQuality
 	{
 		constexpr std::string_view c_SectionId = "Renderer.Quality";
-		constexpr uint32_t c_SectionVersion = 4; // Each landing of a row adds one (Docs/DeveloperGuide.md, "Quality settings")
+		constexpr uint32_t c_SectionVersion = 5; // Each landing of a row adds one (Docs/DeveloperGuide.md, "Quality settings")
 		constexpr uint32_t c_HighResolutionRows = 1440;
 		constexpr uint32_t c_MaxShadowMapSize = 8192; // The most texels each way of a cascade (SceneRenderer applies it)
 
@@ -205,6 +210,10 @@ namespace Strata
 		// at every level of 256 (Strata 0.6.0's); at 512, levels 1 and 2 take 128 (their narrow lobes read finer source levels)
 		// and the others 512, so no level costs more than 0.6.0's largest (size^2 x samples).
 		uint32_t GetPrefilterSamples(uint32_t size, uint32_t mip);
+		// The same for a reflection probe's cube of `size` texels (ReflectionProbeResolution): 256 at every level of 128 (0.7.0's);
+		// at 256, levels 1 and 2 take 128 (the sky's rule at 512), so a conversion at 256 takes 2.2 times the samples of one at 128,
+		// not 4.
+		uint32_t GetProbePrefilterSamples(uint32_t size, uint32_t mip);
 
 		// The Renderer.Quality section (simple; registered by RegisterRendererModule).
 		SettingsSection MakeSection();

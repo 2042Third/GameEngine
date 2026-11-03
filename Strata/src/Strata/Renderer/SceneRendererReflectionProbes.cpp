@@ -5,6 +5,7 @@
 #include "Strata/Core/Assert.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/RendererComponents.h"
+#include "Strata/Renderer/RendererQuality.h"
 #include "Strata/Renderer/ShaderLibrary.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureStreamer.h"
@@ -30,21 +31,13 @@ namespace Strata
 	{
 
 		constexpr nvrhi::Format c_ReflectionProbeFormat = nvrhi::Format::RGBA16_FLOAT;
-		// The capture's cube is projected onto the irradiance coefficients from this level (32 texels across): irradiance is
-		// smooth, and the projection runs in one work group.
-		constexpr uint32_t c_ProbeIrradianceLevel = 2;
-		// Half the sky's samples: a probe's cube is a quarter of the sky's size, and filtered importance sampling reads its levels.
-		constexpr uint32_t c_ProbePrefilterSamples = 256;
+		// The capture's cube is projected onto the irradiance coefficients from its 32-texel level (2 at 128, 3 at 256):
+		// irradiance is smooth, and the projection runs in one work group.
+		constexpr uint32_t c_ProbeIrradianceSize = 32;
 
-		uint32_t ProbeMipCount(uint32_t size)
+		uint32_t GetProbeIrradianceLevel(uint32_t size)
 		{
-			uint32_t count = 1;
-			while (size > 1)
-			{
-				size >>= 1;
-				count++;
-			}
-			return count;
+			return RenderData::GetReflectionProbeMipChain(size) - RenderData::GetReflectionProbeMipChain(c_ProbeIrradianceSize);
 		}
 
 		// A probe in view, ranked for the frame's list.
@@ -114,7 +107,8 @@ namespace Strata
 	bool SceneRenderer::EnsureReflectionProbeResources()
 	{
 		const uint32_t slots = std::min(m_Specification.MaxReflectionProbes, RenderData::c_MaxReflectionProbes);
-		if (m_ReflectionProbes && static_cast<uint32_t>(m_ReflectionProbes->Slots.size()) == slots)
+		const uint32_t size = m_Specification.Quality.ReflectionProbeResolution;
+		if (m_ReflectionProbes && static_cast<uint32_t>(m_ReflectionProbes->Slots.size()) == slots && m_ReflectionProbes->Array->getDesc().width == size)
 			return true;
 		if (!m_ProbeIrradiancePipeline)
 		{
@@ -138,8 +132,8 @@ namespace Strata
 		}
 
 		nvrhi::TextureDesc arrayDesc;
-		arrayDesc.width = RenderData::c_ReflectionProbeSize;
-		arrayDesc.height = RenderData::c_ReflectionProbeSize;
+		arrayDesc.width = size;
+		arrayDesc.height = size;
 		arrayDesc.arraySize = 6 * slots;
 		arrayDesc.mipLevels = RenderData::c_ReflectionProbeMipCount;
 		arrayDesc.dimension = nvrhi::TextureDimension::TextureCubeArray;
@@ -150,7 +144,7 @@ namespace Strata
 		arrayDesc.keepInitialState = true;
 		nvrhi::TextureDesc scratchDesc = arrayDesc;
 		scratchDesc.arraySize = 6;
-		scratchDesc.mipLevels = ProbeMipCount(RenderData::c_ReflectionProbeSize);
+		scratchDesc.mipLevels = RenderData::GetReflectionProbeMipChain(size);
 		scratchDesc.dimension = nvrhi::TextureDimension::TextureCube;
 		scratchDesc.debugName = m_Specification.DebugName + ".ReflectionProbeCapture";
 		nvrhi::TextureHandle array = m_Device->createTexture(arrayDesc);
@@ -233,7 +227,9 @@ namespace Strata
 		const uint64_t gather = ++m_ReflectionProbeGathers;
 		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
 		TextureStreamer* streamer = manager ? TextureStreamer::Find(*manager) : nullptr;
-		uint32_t conversionsLeft = m_Specification.SpreadLightingUpdates ? c_ReflectionProbeConversionsPerFrame : std::numeric_limits<uint32_t>::max();
+		uint32_t conversionsLeft = m_Specification.SpreadLightingUpdates && !m_ReflectionProbesConvertAll ? c_ReflectionProbeConversionsPerFrame
+			: std::numeric_limits<uint32_t>::max();
+		m_ReflectionProbesConvertAll = false;
 		// The holds of captures still waiting, renewed for this frame.
 		auto hold = [&](AssetHandle capture)
 		{
@@ -342,8 +338,9 @@ namespace Strata
 		if (!m_ReflectionProbes)
 			return;
 		ReflectionProbeState& state = *m_ReflectionProbes;
-		const uint32_t size = RenderData::c_ReflectionProbeSize;
-		const uint32_t scratchMips = ProbeMipCount(size);
+		const uint32_t size = state.Array->getDesc().width; // The row's size (EnsureReflectionProbeResources)
+		const uint32_t scratchMips = RenderData::GetReflectionProbeMipChain(size);
+		const uint32_t irradianceLevel = GetProbeIrradianceLevel(size);
 		for (const ReflectionProbeConversion& conversion : m_ReflectionProbeConversions)
 		{
 			// The capture into the scratch cube's level 0, then its levels (what filtered importance sampling reads).
@@ -363,13 +360,13 @@ namespace Strata
 				const uint32_t mipSize = std::max(1u, size >> mip);
 				const float roughness = static_cast<float>(mip) / static_cast<float>(RenderData::c_ReflectionProbeMipCount - 1);
 				DispatchIBL(commandList, m_PrefilterPipeline, state.Scratch, wholeScratch, nvrhi::TextureDimension::TextureCube, state.Array, mip,
-					nvrhi::TextureDimension::Texture2DArray, RenderData::IBLParameters { mipSize, size, roughness, c_ProbePrefilterSamples }, 6,
+					nvrhi::TextureDimension::Texture2DArray, RenderData::IBLParameters { mipSize, size, roughness, RendererQuality::GetProbePrefilterSamples(size, mip) }, 6,
 					conversion.Slot * 6);
 			}
 			// Its irradiance coefficients, into the slot's part of the probe buffer.
 			nvrhi::BindingSetDesc setDesc;
 			setDesc.bindings = {
-				nvrhi::BindingSetItem::Texture_SRV(0, state.Scratch, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(c_ProbeIrradianceLevel, 1, 0, 6),
+				nvrhi::BindingSetItem::Texture_SRV(0, state.Scratch, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(irradianceLevel, 1, 0, 6),
 					nvrhi::TextureDimension::Texture2DArray),
 				nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_ReflectionProbeBuffer),
 				nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::ProbeIrradianceParameters))
@@ -381,7 +378,7 @@ namespace Strata
 			computeState.bindings = { bindingSet };
 			commandList->setComputeState(computeState);
 			RenderData::ProbeIrradianceParameters parameters;
-			parameters.SourceSize = std::max(1u, size >> c_ProbeIrradianceLevel);
+			parameters.SourceSize = std::max(1u, size >> irradianceLevel);
 			parameters.Slot = conversion.Slot;
 			commandList->setPushConstants(&parameters, sizeof(parameters));
 			commandList->dispatch(1, 1, 1);

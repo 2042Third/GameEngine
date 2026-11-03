@@ -1908,6 +1908,13 @@ namespace Strata
 		const bool environment = quality.EnvironmentResolution != current.EnvironmentResolution;
 		// Screen-space reflections: the next frame that traces them makes the new mode's targets (none at Off).
 		const bool reflections = quality.Reflections != current.Reflections;
+		// Reflection probes: their cubes are made again at the new size, and the next frame converts every capture in view.
+		const bool probes = quality.ReflectionProbeResolution != current.ReflectionProbeResolution;
+		if (probes)
+		{
+			ReleaseReflectionProbes();
+			m_ReflectionProbesConvertAll = true;
+		}
 		std::vector<nvrhi::ResourceHandle> released;
 		if (reflections)
 			ReleaseScreenReflections(released);
@@ -1928,7 +1935,7 @@ namespace Strata
 		}
 		if (environment && m_Atmosphere)
 			ReleaseAtmosphereEnvironment();
-		if (!cascades && !atlas && !environment && !reflections)
+		if (!cascades && !atlas && !environment && !reflections && !probes)
 			return false;
 		ResetHistory();
 		return true;

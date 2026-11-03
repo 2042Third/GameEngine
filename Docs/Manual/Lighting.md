@@ -189,7 +189,10 @@ They cost more than the sun's shadows, so use them where they show:
 Shiny surfaces reflect the sky everywhere unless something tells them what is around them: in a room, a courtyard or
 a cave, add a **Reflection Probe** (Add Component, Rendering) where a viewer would stand. Its **Capture** is a picture of
 the scene all around the probe (an HDR texture); inside its box (**Extents**, the half size along the entity's axes),
-surfaces reflect that picture and take their ambient light from it instead of from the sky.
+surfaces reflect that picture and take their ambient light from it instead of from the sky. How sharp the reflected picture
+is follows Graphics Quality: 256 texels per face at High and Ultra (polished metal shows nearby things sharply), 128 at Low
+and Medium; a probe's picture is prepared over a frame or two when it first comes into view. No bake needs repeating for
+it.
 
 **Bake**, in the probe's section of the Inspector (or **Bake Reflection Probes** in the Sky section, with nothing
 selected, for all of them; agents use `lighting.bakeProbes`), takes the picture: the editor renders what the probe sees, saves it as

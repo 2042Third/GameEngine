@@ -3872,12 +3872,14 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | `EnvironmentResolution` (prefiltered sky per face) | 256 | 256 | 512 | 512 |
 | `Reflections` (screen-space reflections a scene asks for) | Off | Checkerboard (TAA only) | Spatial | SpatialHigh |
 | `MotionBlurQuality` (samples, for scenes with motion blur) | Off | 8 | 12 | 16 |
+| `ReflectionProbeResolution` (reflection probes' cubes per face) | 128 | 128 | 256 | 256 |
 | `AntiAliasing`, `MotionBlur`, `DepthOfField`, `FilmGrain`, `ChromaticAberration` (players' rows, under every preset: they only turn off what a scene uses) | Scene | Scene | Scene | Scene |
 | Cascades' memory per view (D32) | 12 MiB | 64 MiB | 64 MiB, 256 MiB from 1440 rows | 256 MiB, 1 GiB from 1440 rows |
 | Atlas memory per view | 16 MiB | 64 MiB | 64 MiB | 256 MiB |
 | Prefiltered sky per set of maps (RGBA16F, six levels; the atmosphere keeps two sets) | 4 MiB | 4 MiB | 16 MiB | 16 MiB |
 | Screen-space reflections' targets per view (scenes that ask for them; "Reflections") | none | 20 MiB, 79 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows |
 | Motion blur's targets per view (scenes with motion blur) | none | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows |
+| Reflection probes per view (16 slots, scenes with probes) | 17 MiB | 17 MiB | 68 MiB | 68 MiB |
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
   High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for rows that cost at every
@@ -5324,10 +5326,11 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   `Priority`, then the smaller box (the more specific place), then the entity. `Scene/Forward.frag` walks that list
   (`Include/ReflectionProbes.slang`: at most 16 box tests per pixel, opaque and transparent surfaces alike) and blends the
   first two whose boxes hold the pixel: the stronger takes its weight, the weaker its weight of the rest.
-- **The probe cache**: a renderer's cube array (RGBA16F, 128 texels across, six levels for roughness 0 to 1 as the sky's
-  prefiltered map, a cube per slot of `MaxReflectionProbes`: about 1 MiB a slot, 16 MiB at 16, with a 0.5 MiB scratch
-  cube; made with the first probe in view, released with the viewport, `SetViewportSize(0, 0)`, or once the scene has no
-  probe, kept across resizes) holds each capture in a slot, given to another capture only when the frame does not use it,
+- **The probe cache**: a renderer's cube array (RGBA16F, `RendererQualitySettings::ReflectionProbeResolution` texels
+  across: 128 at Low and Medium, 256 at High and Ultra; six levels for roughness 0 to 1 as the sky's prefiltered map, a cube
+  per slot of `MaxReflectionProbes`: about 1 MiB a slot at 128 and 4 MiB at 256, 17 and 68 MiB at 16 with the scratch cube
+  of the whole chain, `RenderData::GetReflectionProbeMipChain`; made with the first probe in view, released with the
+  viewport, `SetViewportSize(0, 0)`, or once the scene has no probe, kept across resizes, made again at a new resolution) holds each capture in a slot, given to another capture only when the frame does not use it,
   least recently used first. A capture is requested through the frame's `AssetResolveCache` (High) and held whole in the texture
   streamer (`TextureStreamer::Hold`: nothing draws it, so nothing else raises its levels) until it is converted, then
   released, so it drops to its tail while the slot keeps lighting; a reload of the texture converts it again. A hold
@@ -5335,10 +5338,17 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   ending with one view: the streamer raises levels between frames, and a renderer drawing several views per frame (a
   probe bake's six) would otherwise end in its last view the holds its first ones placed. A
   conversion (`GPU.Reflections`, between `GPU.AO` and `GPU.Opaque`): `IBL/EquirectToCube.comp` into a scratch cube of
-  128 with its levels, `IBL/Prefilter.comp` into the slot's six levels, `IBL/ProbeIrradiance.comp` (one work group over
-  the cube's 32-texel level) into the slot's coefficients in the probe buffer. With `SpreadLightingUpdates`
-  (`c_ReflectionProbeConversionsPerFrame`, 2) at most two captures convert per frame and a probe waiting for its capture
-  lights nothing meanwhile; without it (captures, thumbnails, the bake) every loaded one converts in the frame.
+  the row's size with its levels (the capture's level 0 for 256 faces of a 1024x512 capture, level 1 for 128: no re-bake),
+  `IBL/Prefilter.comp` into the slot's six levels (`RendererQuality::GetProbePrefilterSamples`: 256 samples, 128 for levels
+  1 and 2 at 256, so a conversion at 256 filters 2.1 times the samples of one at 128, not 4), `IBL/ProbeIrradiance.comp`
+  (one work group over the cube's 32-texel level: 2 at 128, 3 at 256) into the slot's coefficients in the probe buffer.
+  With `SpreadLightingUpdates` (`c_ReflectionProbeConversionsPerFrame`, 2) at most two captures convert per frame and a
+  probe waiting for its capture lights nothing meanwhile; without it (captures, thumbnails, the bake) every loaded one
+  converts in the frame, and so does the first frame after `SetQuality` changed the resolution (the cubes are made again;
+  the boxes never fall to the sky). Two conversions take at most 0.45 ms of `GPU.Reflections` at 128 and 0.39 ms at 256
+  on the reference machine's temporary memory (`PerfGPU.Renderer.ProbeConversion128MaxStageGPU`, `...256MaxStageGPU`,
+  target 2 ms; the 128 case runs first, which may explain its higher reading), so conversions are spread by count, not split
+  by work.
   `SceneRendererStats::ReflectionProbes` (shaded with), `ReflectionProbeConversions` and `ReflectionProbesPending`
   (kept in view, waiting for their capture to load or convert: captures and the project's picture wait for them; a
   capture that is not on its way, an unknown or failed handle or another type of asset, takes no slot and is not waited for).
