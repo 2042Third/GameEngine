@@ -8,10 +8,12 @@
 #include "Strata/Renderer/MeshFactory.h"
 #include "Strata/Renderer/VoxelClipmap.h"
 
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <cstring>
+#include <random>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -147,6 +149,58 @@ namespace
 	SceneCamera YardCamera(const glm::vec3& offset, float aspect = 1.0f)
 	{
 		return LookAt(glm::vec3(-3.5f, 1.7f, -9.5f) + offset, glm::vec3(2.5f, 1.0f, -0.5f) + offset, aspect);
+	}
+
+	// A seeded walk around the yard of `steps` steps after its first camera: it turns at random and mixes moves within a voxel,
+	// moves of several scroll steps on all three axes at once (slabs of every face together), moves back, and jumps of 14 to 30 m
+	// on one axis (past level 0's window, 12.8 m wide, and at times level 1's, 25.6 m), at least one. It takes its numbers straight
+	// from mt19937's output, which the standard fixes (its distributions it does not), so every platform walks the same path. It
+	// stays within 60 m of the yard, well within a level's anchor distance (1 km), where voxels do not depend on the camera.
+	std::vector<SceneCamera> RandomYardPath(uint32_t seed, uint32_t steps)
+	{
+		std::mt19937 random(seed);
+		// Every number is drawn in its own statement: the order a call's arguments are evaluated in differs between compilers.
+		const auto uniform = [&random](float low, float high)
+		{
+			return low + (high - low) * static_cast<float>(static_cast<double>(random()) / 4294967296.0);
+		};
+		const auto uniformVector = [&uniform](const glm::vec3& extent)
+		{
+			glm::vec3 value;
+			for (int axis = 0; axis < 3; axis++)
+				value[axis] = uniform(-extent[axis], extent[axis]);
+			return value;
+		};
+		const auto cameraAt = [](const glm::vec3& offset, float yaw)
+		{
+			const glm::vec3 position = glm::vec3(-3.5f, 1.7f, -9.5f) + offset;
+			return LookAt(position, position + glm::vec3(glm::sin(yaw), -0.15f, glm::cos(yaw)));
+		};
+		std::vector<SceneCamera> path = { cameraAt(glm::vec3(0.0f), 0.0f) };
+		glm::vec3 offset(0.0f);
+		uint32_t jumps = 0;
+		for (uint32_t step = 1; step <= steps; step++)
+		{
+			const uint32_t kind = random() % 8;
+			// The last step jumps if none did.
+			if (kind == 7 || (step == steps && jumps == 0))
+			{
+				const uint32_t axis = random() % 3;
+				const float direction = random() % 2 == 0 ? 1.0f : -1.0f;
+				const float distance = uniform(14.0f, 30.0f);
+				offset[axis] += direction * distance;
+				jumps++;
+			}
+			else
+			{
+				offset += uniformVector(kind < 4 ? glm::vec3(0.35f) : glm::vec3(4.0f, 2.0f, 4.0f));
+			}
+			offset = glm::clamp(offset, glm::vec3(-60.0f, -3.0f, -60.0f), glm::vec3(60.0f, 30.0f, 60.0f));
+			const float yaw = uniform(-glm::pi<float>(), glm::pi<float>());
+			path.push_back(cameraAt(offset, yaw));
+		}
+		MESSAGE("the walk (seed ", seed, ") jumps ", jumps, " times");
+		return path;
 	}
 
 	bool Contains(const std::vector<glm::i64vec3>& sorted, const glm::i64vec3& voxel)
@@ -673,6 +727,73 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		CHECK(renderer->GetStats().GIWaitingProxies == 0);
 		RenderUntilSettled(*renderer, scene, turned);
 		CHECK(ReadLevel(*renderer, 0).GetMaterial(glm::i64vec3(10, 5, -60)).a == 255);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A random camera path keeps the voxels")
+	{
+		// Any camera path (RandomYardPath): after every step every level holds what a renderer made for that camera alone holds,
+		// bit for bit.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		BuildYard(scene, assets);
+		const std::vector<SceneCamera> path = RandomYardPath(20261103u, 40);
+		Scope<SceneRenderer> renderer = CreateVoxelRenderer(ExactSpecification(), 64, 64);
+		RenderUntilSettled(*renderer, scene, path[0]);
+		size_t differing = 0;
+		for (size_t step = 1; step < path.size(); step++)
+		{
+			REQUIRE(renderer->Render(scene, path[step], nullptr, VoxelView()));
+			CHECK_FALSE(renderer->GetStats().GlobalIlluminationPending);
+			const size_t differences = CountDifferences(ReadLevels(*renderer), ReadFreshVoxels(scene, path[0], path[step]));
+			if (differences > 0)
+			{
+				MESSAGE("step ", step, ": ", differences, " voxels differ");
+				differing++;
+			}
+		}
+		CHECK(differing == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A random camera path under a small budget settles to the same voxels")
+	{
+		// The same kind of walk at 2,000 triangles a frame: the camera moves on every frame while regions are still queued (slabs,
+		// whole windows after jumps), so queued boxes are cut to windows that moved again before they were done. Every 8 steps the
+		// camera rests until the clipmap settles: then every level holds what a renderer made for that camera alone holds.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		BuildYard(scene, assets);
+		const std::vector<SceneCamera> path = RandomYardPath(7u, 40);
+		SceneRendererSpecification specification = ExactSpecification();
+		specification.GlobalIllumination.VoxelizeTrianglesPerFrame = 2000;
+		specification.GlobalIllumination.VoxelizeTrianglesOnCut = 2000;
+		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(specification);
+		renderer->SetViewportSize(64, 64);
+		RenderUntilSettled(*renderer, scene, path[0]);
+		uint32_t unsettledFrames = 0;
+		size_t differing = 0;
+		for (size_t step = 1; step < path.size(); step++)
+		{
+			REQUIRE(renderer->Render(scene, path[step], nullptr, VoxelView()));
+			unsettledFrames += renderer->GetStats().GlobalIlluminationSettled ? 0 : 1;
+			if (step % 8 != 0 && step + 1 != path.size())
+				continue;
+			RenderUntilSettled(*renderer, scene, path[step]);
+			const size_t differences = CountDifferences(ReadLevels(*renderer), ReadFreshVoxels(scene, path[0], path[step]));
+			if (differences > 0)
+			{
+				MESSAGE("step ", step, ": ", differences, " voxels differ");
+				differing++;
+			}
+		}
+		MESSAGE(unsettledFrames, " of the walk's frames left regions queued");
+		CHECK(unsettledFrames > 10);
+		CHECK(differing == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

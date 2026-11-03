@@ -4804,9 +4804,14 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   values from one capture to the next) and the screen-space reflections (`Effects/ScreenSpaceReflections*.comp`,
   `ReflectionResolve.comp`; the Specular scene: up to 700 pixels, and an exposure 3e-5 EV apart that TAA spreads over
   0.4 M pixels). The C++ struct, the buffer's size and a 256-byte stride, and every other pass, each tried alone, do
-  not; main's compile of those two passes repeats exactly. GTAO reads only targets the frame clears and writes, so the
-  likely cause is an input that differs between consecutive captures by less than main's compile shows; it is found
-  before the fields are added, with the `ao` view's repeats as the check.
+  not; main's compile of those two passes repeats exactly. GTAO's inputs are not the cause: with main's constants,
+  consecutive captures of every ThirdPerson shot give the same bits of the rasterized depth, the interpolated normals and
+  the AO the forward pass reads (temporary `ao` views that showed those bits); synchronization validation
+  (`VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true` with the layer forced on the Release editor) finds no hazard on the AO,
+  normal or constant resources; and GTAO's SPIR-V reads the constants by access chains only, so declaring the fields
+  changes only the struct's type. What differs arises in the recompiled pipelines themselves; it is found before the
+  fields are added (next: run the recompiled GTAO twice over one frame in a test and compare its raw target bit for bit),
+  with the `ao` view's repeats as the check.
 - **Sampling** (`Include/GlobalIllumination.slang`): a point reads the finest level whose valid box holds it with
   `c_GILevelGuardVoxels` to spare, blended into the next over `c_GILevelBlendVoxels` by its distance from the camera (not
   from the snapped window), so no sample switches level in a step as windows scroll.
@@ -4824,8 +4829,9 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   `GITileOverflow` (frames late). Tests and tools read a level's textures with `ReadGlobalIlluminationVoxels` (blocking).
 - **Tests:** `Renderer.GlobalIlluminationLayout`, `Renderer.VoxelClipmap` (a render scene with residency and assets a test
   gives), `Renderer.Mesh` ("Closed meshes are found"), `GPU.SceneRenderer.GlobalIllumination` (voxels against the CPU's
-  reference of the same test, `Tests::ReferenceVoxels` in `GIScenes`; scrolls, moves, jumps and budgets against a renderer
-  made for the camera alone, bit for bit; 20 km out; nothing made without GI) and `GPU.SceneRenderer.GPUDriven`'s "The
+  reference of the same test, `Tests::ReferenceVoxels` in `GIScenes`; scrolls, moves, jumps, budgets and two seeded random
+  walks, one at 2,000 triangles a frame that moves the camera while regions are queued, against a renderer made for the
+  camera alone, bit for bit; 20 km out; nothing made without GI) and `GPU.SceneRenderer.GPUDriven`'s "The
   GI's voxels" (both paths give the same voxels).
 - **What it cannot do** (so far): walls thinner than two voxels go two-sided (dark from both sides), thin props blur into
   blobs of whole voxels, characters and moving objects are not in the voxels until they rest, textured albedo and emission
