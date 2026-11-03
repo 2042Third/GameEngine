@@ -1531,6 +1531,9 @@ LIVE_CROPS = {2: ("highlight", (0.42, 0.40, 0.58, 0.60)), 3: ("streak", (0.30, 0
               4: ("glint", (0.48, 0.55, 0.62, 0.75)), 6: ("lantern", (0.34, 0.38, 0.46, 0.54))}
 STREAK_CROP = (0.30, 0.15, 0.42, 0.80)
 BESIDE_STREAK_CROP = (0.50, 0.15, 0.66, 0.75)
+# Shot 6's fuel tank: the end that faces the fire (Shots.json's tank crop), and how much brighter the fire makes it.
+TANK_END_CROP = (0.60, 0.38, 0.65, 0.54)
+FIRELIGHT_CODES = 2.0
 LIVE_MODES = ("", ".fxaa", ".off")
 SHIMMER_LIMITS = (1.0, 3.0)  # Mean and 99th percentile of the second differences (percent of full scale)
 
@@ -2063,7 +2066,8 @@ def image_bounds(points):
 
 
 def check_stills(world, directory):
-    """Shots 2 and 3 at 1920 x 1080 with TAA: the highlight and the streak where the mirror condition puts them."""
+    """Shots 2 and 3 at 1920 x 1080 with TAA: the highlight and the streak where the mirror condition puts them, the yard's
+    probe in the tank; shot 6: the metal catching the firelight."""
     results = []
     report = {shot["shot"]: shot for shot in shots(world)}
     surfaces = world.surfaces()
@@ -2126,6 +2130,16 @@ def check_stills(world, directory):
             beside = crop_mean(image, BESIDE_STREAK_CROP) - crop_mean(noprobe, BESIDE_STREAK_CROP)
             results.append(("shot 3 probe", abs(beside) >= 8.0, "the shell beside the streak differs by %.1f codes with and without "
                             "Probe.Golden.Yard (at least 8), the streak crop by %.1f" % (beside, streak)))
+    held = read_capture(directory, "showcase.shot6.held-1920x1080-taa.png")
+    nofire = read_capture(directory, "showcase.shot6.nofire-1920x1080-taa.png")
+    if held is None or nofire is None:
+        results.append(("shot 6 firelight", False, "showcase.shot6.held and .nofire were not captured at 1920 x 1080 with TAA"))
+    else:
+        # Both at one manual exposure: automatic exposure meters the fire's own light and darkens the frame by it, which
+        # hides the light the fire adds. The crop is the tank's end that faces the fire; its body faces away.
+        added = crop_mean(held, TANK_END_CROP) - crop_mean(nofire, TANK_END_CROP)
+        results.append(("shot 6 firelight", added >= FIRELIGHT_CODES, "the fuel tank's end facing the fire is %.1f codes brighter with "
+                        "Fire than without it, at one exposure (at least %.0f)" % (added, FIRELIGHT_CODES)))
     return results
 
 

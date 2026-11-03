@@ -667,11 +667,13 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     again); `run.json` reports the time each project took to make and open apart from the captures.
   - The `Showcase` project ([The showcase](#the-showcase)) holds the `showcase.*` shots: the six shots and the rock macro
     at their times of day (their `Setup` is `GenerateShowcaseTerrain.py setup --format lookdev`), debug views, shot 3
-    without the yard's probe, the measurement views of the hut's darkness, and twelve live shots of shots 2, 3, 4 and 6
-    in TAA, FXAA and off (`showcase.live.*`: the tour started at the shot, exposure held, four frames 600 steps in).
-    `GenerateShowcaseTerrain.py checkshots --capture <output>` checks a capture: shot 2's highlight on the letterboard
-    within 40 px of the computed mirror point, shot 3's streak within 30 px, the yard's probe changing the shell beside
-    the streak by 8 codes; with `--live`, the highlights' shimmer: the second differences of 32 px block means of the
+    without the yard's probe, shot 6 at one manual exposure with and without `Fire` (`.held`, `.nofire`: automatic
+    exposure would meter the fire's own light and hide what it adds), the measurement views of the hut's darkness, and
+    twelve live shots of shots 2, 3, 4 and 6 in TAA, FXAA and off (`showcase.live.*`: the tour started at the shot,
+    exposure adapting at once, four frames 600 steps in). `GenerateShowcaseTerrain.py checkshots --capture <output>`
+    checks a capture: shot 2's highlight on the letterboard within 40 px of the computed mirror point, shot 3's streak
+    within 30 px, the yard's probe changing the shell beside the streak by 8 codes, the fire making the fuel tank's end
+    that faces it 2 codes brighter; with `--live`, the highlights' shimmer: the second differences of 32 px block means of the
     encoded luma over the four frames, mean at most 1% and 99th percentile at most 3% (a steady dolly cancels out).
   - Outputs (`--output`, default `<temp>/StrataLookDev/<date>-<label>`, never inside the tracked tree: build trees and
     `.worktrees` are allowed): `shots/<shot>-<W>x<H>-<aa>.png` (the first repeat), `crops/` (each shot's regions of
