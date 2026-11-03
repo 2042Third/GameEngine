@@ -3,6 +3,7 @@
 
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/JobSystem.h"
+#include "Strata/Math/Math.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/ProjectCollisionLayers.h"
@@ -1659,14 +1660,14 @@ namespace Strata
 				if (slot != c_NoInterpolationSlot)
 				{
 					const glm::mat4 previous = world;
-					world = node.Parent == entt::null ? local : worlds.get(node.Parent).Matrix * local;
+					world = node.Parent == entt::null ? local : Math::ComposeWorldTransform(worlds.get(node.Parent).Matrix, local);
 					ApplyPerFrameRule(slot, handle, previous, ownChange, ancestorMoved);
 					setRecomputed.store(true, std::memory_order_relaxed);
 					return;
 				}
 			}
-			// The same association as GetWorldTransform, so both produce identical matrices.
-			world = node.Parent == entt::null ? local : worlds.get(node.Parent).Matrix * local;
+			// The same association and function as GetWorldTransform, so both produce identical matrices.
+			world = node.Parent == entt::null ? local : Math::ComposeWorldTransform(worlds.get(node.Parent).Matrix, local);
 		};
 
 		std::vector<entt::entity>& changes = m_ChangeScratch;
@@ -1778,9 +1779,10 @@ namespace Strata
 		// Top-down like UpdateWorldTransforms, so that the result equals what the cache will hold.
 		const entt::entity above = GetHierarchy(path[topmost]).Parent;
 		const glm::mat4 topLocal = m_Registry.get<TransformComponent>(path[topmost]).GetTransform();
-		glm::mat4 result = above == entt::null ? topLocal : m_Registry.get<WorldTransformComponent>(above).Matrix * topLocal;
+		glm::mat4 result = above == entt::null ? topLocal
+			: Math::ComposeWorldTransform(m_Registry.get<WorldTransformComponent>(above).Matrix, topLocal);
 		for (size_t index = topmost; index-- > 0;)
-			result = result * m_Registry.get<TransformComponent>(path[index]).GetTransform();
+			result = Math::ComposeWorldTransform(result, m_Registry.get<TransformComponent>(path[index]).GetTransform());
 		return result;
 	}
 
@@ -1860,7 +1862,7 @@ namespace Strata
 				return fail(current.Handle, fmt::format("cached ActiveInHierarchy is {}, the hierarchy says {}", world.ActiveInHierarchy, active));
 
 			const glm::mat4 local = m_Registry.get<TransformComponent>(current.Handle).GetTransform();
-			const glm::mat4 expected = current.HasParent ? current.ParentMatrix * local : local;
+			const glm::mat4 expected = current.HasParent ? Math::ComposeWorldTransform(current.ParentMatrix, local) : local;
 			const bool stale = current.ParentStale || node.TransformDirty;
 			if (!stale && !IsNearlyEqualMatrix(world.Matrix, expected))
 			{

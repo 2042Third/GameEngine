@@ -63,6 +63,11 @@ namespace Strata::Math
 		return result;
 	}
 
+	glm::mat4 ComposeWorldTransform(const glm::mat4& parentWorld, const glm::mat4& local)
+	{
+		return parentWorld * local;
+	}
+
 	glm::mat4 PerspectiveReverseZ(float verticalFov, float aspectRatio, float nearClip, float farClip)
 	{
 		// A standard [0, 1] depth projection with near and far swapped maps near -> 1 and far -> 0.

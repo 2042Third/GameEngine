@@ -14,6 +14,11 @@ namespace Strata::Math
 	// degenerate or non-finite matrices.
 	bool DecomposeTransform(const glm::mat4& transform, glm::vec3& outTranslation, glm::quat& outRotation, glm::vec3& outScale);
 	glm::mat4 ComposeTransform(const glm::vec3& translation, const glm::quat& rotation, const glm::vec3& scale);
+	// `parentWorld * local`: the world matrix of a child whose local transform is `local`. Compiled once, here, and used by
+	// every path whose world matrices must agree bit for bit (the scene's cached transforms, their recomputation and the
+	// validation, drawn transforms composed under a parent): a compiler that fuses multiply-adds (GCC with -mfma does so
+	// across statements by default) may round the same product differently where it is inlined into different callers.
+	glm::mat4 ComposeWorldTransform(const glm::mat4& parentWorld, const glm::mat4& local);
 
 	// Reversed-Z perspective projection. verticalFov is in radians.
 	glm::mat4 PerspectiveReverseZ(float verticalFov, float aspectRatio, float nearClip, float farClip);

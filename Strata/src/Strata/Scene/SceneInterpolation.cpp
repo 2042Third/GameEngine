@@ -445,7 +445,8 @@ namespace Strata
 			if (entry.ParentSlot == c_NoInterpolationSlot || !registry.valid(m_InterpolatedEntities[entry.ParentSlot]))
 				m_DrawnMatrices[slot] = registry.get<WorldTransformComponent>(entity).Matrix;
 			else
-				m_DrawnMatrices[slot] = m_DrawnMatrices[entry.ParentSlot] * registry.get<TransformComponent>(entity).GetTransform();
+				m_DrawnMatrices[slot] = Math::ComposeWorldTransform(m_DrawnMatrices[entry.ParentSlot],
+					registry.get<TransformComponent>(entity).GetTransform());
 		}
 		m_DrawnAlpha = alpha;
 		m_DrawnStale = false;
@@ -490,7 +491,8 @@ namespace Strata
 			// The next update makes a reparented entry Exact.
 			if (entry.ParentSlot == c_NoInterpolationSlot || m_InterpolatedEntities[entry.ParentSlot] != node.Parent)
 				return GetWorldTransform(entity);
-			return ComputeDrawnTransform(entry.ParentSlot) * registry.get<TransformComponent>(handle).GetTransform();
+			return Math::ComposeWorldTransform(ComputeDrawnTransform(entry.ParentSlot),
+				registry.get<TransformComponent>(handle).GetTransform());
 		}
 
 		if (alpha >= 1.0f)
