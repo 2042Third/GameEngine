@@ -27,8 +27,9 @@ what each one costs:
 | Screen-space reflections (scenes that use them) | Off | Half resolution, TAA only | Every pixel | Every pixel, longer rays |
 | Motion blur samples (scenes with motion blur) | Off | 8 | 12 | 16 |
 | Reflection probe resolution (per face) | 128 | 128 | 256 | 256 |
-| Memory of one view, 1920 x 1080 (see below) | 48 MiB | 192 MiB | 294 MiB | 678 MiB |
-| Memory of one view, 3840 x 2160 | 48 MiB | 325 MiB | 732 MiB | 1.65 GiB |
+| Global illumination (experimental; scenes that use it) | Off | Off | High | High |
+| Memory of one view, 1920 x 1080 (see below) | 48 MiB | 192 MiB | 405 MiB | 789 MiB |
+| Memory of one view, 3840 x 2160 | 48 MiB | 325 MiB | 844 MiB | 1.76 GiB |
 
 - **Medium** keeps Strata 0.6.0's shadow map sizes and sample counts. **High**, the default, adds smoother wide sun
   penumbrae at every size, and sharper sun shadows from 1440 rows on.
@@ -54,6 +55,11 @@ what each one costs:
   steps), for GPU time in the `GPU.Reflections` stage and memory: 20 MiB at 1920 x 1080 and 79 MiB at 3840 x 2160 at
   Medium, 58 MiB and 232 MiB at High and Ultra. Low turns them off. With them, a scene's look changes with the preset:
   the reflections it asks for show at full resolution from High on, and not at all at Low.
+- **Global illumination** (experimental) applies only to scenes whose Post Process turns it on (it is off by default, and
+  in the template and the samples). The Low and Medium presets draw none; set to Low, it traces a coarser, shorter field for
+  about 18 MiB of GPU memory per view, High a finer one for about 111 MiB and several milliseconds of GPU time at 3840 x
+  2160 (the `GPU.RadianceCascades` stage). High's cost was measured on one Windows machine with an NVIDIA GPU only: on
+  integrated and Apple GPUs choose Low until measured there.
 - **Motion blur samples** apply only to scenes whose Post Process turns motion blur on (it is off by default, and in the
   template and the samples): more samples show less streak noise where things move fast, for GPU time in the
   `GPU.MotionBlur` stage. Its targets take 12 bytes a pixel (24 MiB at 1920 x 1080, 97 MiB at 3840 x 2160), which the
@@ -66,10 +72,10 @@ what each one costs:
 - **Custom** sets each value yourself: the table's Custom column is editable. Choosing a preset keeps your Custom values
   for later, and the column keeps showing them. Editing it while a preset is chosen switches to Custom, starting from
   the values the column shows: your earlier Custom values, or that preset's when you have none (its tooltip says which).
-- The memory is that of one view, the shadow maps and atlas, the sky's reflection map and the screen-space reflections'
-  and motion blur's targets: each renderer holds its own (the editor's Scene and Game views and its captures, the
+- The memory is that of one view, the shadow maps and atlas, the sky's reflection map, the screen-space reflections'
+  and motion blur's targets and global illumination's field: each renderer holds its own (the editor's Scene and Game views and its captures, the
   exported game one); shadow maps exist only while a light casts shadows, the sky's map only with a sky, the reflections'
-  and motion blur's targets only while a scene uses them.
+  and motion blur's targets and global illumination only while a scene uses them.
 - The page also shows how long the Scene view's shadows and meshes take on the GPU now, so you can see a change's cost.
 
 ## Where quality is chosen

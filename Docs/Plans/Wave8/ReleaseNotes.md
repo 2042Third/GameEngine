@@ -173,6 +173,21 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   `debugView.globalIllumination` adds the probes' spacing, grid, cascades, directions and live and dead counts, and
   `"gi"` and `"open"` captures report `debugView.lighting` as the other lighting views do.
 
+**Global illumination (stage 3: in the lit image; experimental).**
+
+- Scenes: the Post Process's **Global Illumination** (off by default) puts the bounce light into the image: a sunlit floor
+  lights the walls and the ceiling, a red floor turns them red (in the sun room test the walls' red-to-green ratio rises
+  by 108% of a one-bounce reference's rise, none with it off), glowing surfaces light their surroundings and closed rooms
+  stay dark, also for alpha-blended and glass surfaces. **Global Illumination Intensity** (1, 0-4) scales it. Scenes that
+  do not turn it on, and every sample and the showcase, look exactly as before.
+- Graphics Quality: a new row **Global illumination** (Off, Low, High; Off at Low and Medium, High at High and Ultra): 18
+  MiB of GPU memory per view at Low, 111 MiB at High, only in scenes that turn it on; the Graphics Quality page's memory
+  rows count it as they count the reflections' (High at 1920 x 1080: 405 MiB, was 294). The `Renderer.Quality` section's
+  version is 6.
+- Captures and the project's picture wait for global illumination to settle.
+- AI agents: `component.set` on `PostProcess` takes `GlobalIllumination` and `GlobalIlluminationIntensity`;
+  `project.setSettings` and the players' graphics options take `Renderer.Quality.GlobalIllumination`.
+
 **Occlusion culling (cull fix)**
 
 - Fixed: occlusion culling hid objects in plain view. Its depth pyramid was built a texel or more off where a level's
@@ -234,6 +249,21 @@ projects, the template and scenes or projects without the value get.
 | Directional Light **Shadow Softness** | In the Shadows section, inactive without shadows | **Angular Diameter**, with the light's own settings, active with and without shadows; stored, scripted and set by commands as `ShadowSoftness` | Nothing to do |
 
 ## Known issues
+
+**Global illumination (experimental)**
+
+The spec's gate for the light (Gate W) is not fully met; measured against a one-bounce reference in the sun room at High:
+
+- The east wall high and the ceiling's east side get 0.63 and 0.49 of their bounce (8 of 10 wall and ceiling points within
+  30%; mean error 20%), one floor-wall junction misses, and two points behind the camera 2 m up get 0.62-0.66.
+- Low is too dark: 0.2-0.5 of the reference.
+- Open ground under the sky reads 3.2% off at 6 m, and a white sphere under a uniform sky 2% dark at its center and 5% at
+  its rim (each probe's light is an ambient cube, exact for axis-aligned surfaces only).
+- A camera strafe along the fence crawls in the GI view: 0.147% of blocks change against the 0.10% aimed at, the 99th
+  percentile 6.07% against 1.0%.
+- It costs 3.8-4.7 ms of GPU time at 3840 x 2160 at High in the sun room (`GPU.RadianceCascades`; 1-2 ms aimed at).
+- Its light ends at the probe field's edge around the camera (High: full within 7.5 m horizontally, 5.5 m up and down,
+  faded to the light without it over 2 m): outdoors the edge of a bubble can show. One bounce only.
 
 **Reflections (R1)**
 

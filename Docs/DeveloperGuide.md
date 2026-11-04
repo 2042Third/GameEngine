@@ -4023,6 +4023,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | `Reflections` (screen-space reflections a scene asks for) | Off | Checkerboard (TAA only) | Spatial | SpatialHigh |
 | `MotionBlurQuality` (samples, for scenes with motion blur) | Off | 8 | 12 | 16 |
 | `ReflectionProbeResolution` (reflection probes' cubes per face) | 128 | 128 | 256 | 256 |
+| `GlobalIllumination` (experimental: the layout for scenes whose Post Process asks for it; "Global illumination") | Off | Off | High | High |
 | `AntiAliasing`, `MotionBlur`, `DepthOfField`, `FilmGrain`, `ChromaticAberration` (players' rows, under every preset: they only turn off what a scene uses) | Scene | Scene | Scene | Scene |
 | Cascades' memory per view (D32) | 12 MiB | 64 MiB | 64 MiB, 256 MiB from 1440 rows | 256 MiB, 1 GiB from 1440 rows |
 | Atlas memory per view | 16 MiB | 64 MiB | 64 MiB | 256 MiB |
@@ -4030,11 +4031,12 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | Screen-space reflections' targets per view (scenes that ask for them; "Reflections") | none | 20 MiB, 79 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows |
 | Motion blur's targets per view (scenes with motion blur) | none | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows |
 | Reflection probes per view (16 slots, scenes with probes) | 17 MiB | 17 MiB | 68 MiB | 68 MiB |
+| Global illumination per view (scenes that ask for it; Low's layout 18.2 MiB) | none | none | 111.2 MiB | 111.2 MiB |
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
   High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for rows that cost at every
   size (`ShadowFilterQuality`, `AmbientOcclusionQuality`, `EnvironmentResolution`, `Reflections`, and
-  `MotionBlurQuality` for scenes with motion blur; `Renderer.Quality` checks it).
+  `MotionBlurQuality` and `GlobalIllumination` for scenes that use them; `Renderer.Quality` checks it).
   Custom is the section's fields (High's values by default). `RendererQuality::Clamp` keeps every knob in its range.
 - **Auto by rows:** `RendererQuality::ResolveShadowMapSize` resolves Auto and AutoFine for the renderer's viewport rows
   (its output: the Scene and Game views' panel pixels, the window's back buffer, a capture's image), limited to
@@ -4054,7 +4056,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
   dropped to its tail once the environment was computed. The atmosphere's maps and its spare and refreshing sets are
   released instead (`ReleaseAtmosphereEnvironment`): its next frame computes its environment at once at the new size. A
   new `Reflections` mode releases the screen-space reflections' resources (`ReleaseScreenReflections`); the next frame
-  that traces makes the new mode's. Rows that turn the motion blur off (`MotionBlurQuality` Off, the players'
+  that traces makes the new mode's; a new `GlobalIllumination` releases the GI (`ReleaseGlobalIllumination`), whose next
+  frame that wants it starts the clipmap over. Rows that turn the motion blur off (`MotionBlurQuality` Off, the players'
   `MotionBlur` Off) release its targets and sets (`ReleaseMotionBlurTargets`), and the players' `DepthOfField` Off the
   depth of field's (`ReleaseDepthOfFieldTargets`, with the motion blur's gather of its output), so the memory the rows'
   estimates no longer count is free at once; the next frame that blurs or focuses makes them again. It returns whether
@@ -4934,18 +4937,27 @@ the screen shows. No light comes from the screen (no depth-buffer tracing, no pr
 blended over frames: the light is a function of world data, so camera motion cannot flicker it. Built in stages from
 `Docs/Plans/Wave8/specs/radiance-cascades-world.md` (its review corrections win over its body); the sources are the
 radiance-cascades lab (Daniel Quevedo, MIT: the triangle-box test, the winding steps and the column fill, the emission's
-coverage), Akenine-Moller's triangle-box test and, as ideas, Split RC, EggyStudio and creikey's voxel cascades. What
-stage 1 holds: the voxels and their view; the probes, the light and the join to shading follow.
+coverage), Akenine-Moller's triangle-box test and, as ideas, Split RC, EggyStudio and creikey's voxel cascades.
+**Experimental** (stages 1-3): the voxels, the light, the debug views and the join to shading are built; one bounce only,
+one probe field around the camera, and the misses `Docs/Plans/Wave8/ReleaseNotes.md`'s Known issues list with their numbers
+(Gate W of the spec is not fully met). Multi-bounce and nested probe-field levels follow.
+
+- **The scene's ask and the row:** `PostProcessComponent::GlobalIllumination` (off) and `GlobalIlluminationIntensity` (1,
+  0-4; inactive reason "Global Illumination is off"), section "Global illumination"; the quality row
+  `Renderer.Quality.GlobalIllumination` (Off, Low, High; Off at Low and Medium, High at High and Ultra; traits line
+  `GPU.RadianceCascades`, the layout's `GetMemoryBytes`). GI runs where a scene asks at a row other than Off, or a GI view
+  shows (at the row's layout; at Off the views show High's). Without that, nothing is made (no memory, no stage, the dummy
+  SRVs) and the image is Strata 0.7.0's bit for bit; `ForThumbnails()` and `ForBake()` take Medium's row, so no GI there.
+  High's cost is measured on the reference machine only (Windows, NVIDIA): Low is the level for integrated and Apple GPUs
+  until measured there, and CI's Mac runs no GPU test.
 
 - **Layout** (`R/GlobalIlluminationLayout.h`, `Renderer.GlobalIlluminationLayout`): per quality level the voxel levels
   (High four of 128 x 64 x 128 voxels from 10 cm, Low three of 64 x 32 x 64 from 20 cm, each level twice the voxel size of
   the one before) and the probe cascades (High four from 0.5 m, 16 to 1,024 directions; Low three from 1 m). Memory per view
-  that runs GI (`GetMemory`, the same at every output size, with the probes' resources of the later stages): 111.0 MiB at
-  High, 18.0 MiB at Low; stage 1 makes the voxel levels without their radiance, the scratch (14 words a voxel) and the work
-  buffers (`SceneRenderer::GetGlobalIlluminationMemoryBytes`: about 58 MiB at High). A frame wants GI while a GI view shows (later: when a
-  scene asks), at `SceneRendererSpecification::GlobalIllumination.Level` (High; tests and tools choose Low until the quality
-  row does); a frame that wants none releases everything (`ReleaseGlobalIllumination`), and so does the
-  render targets' release (`SetQuality` does not touch GI until the quality row chooses the level).
+  that runs GI (`GetMemory`, the same at every output size, the frame's work and region lists included): 111.2 MiB at
+  High, 18.2 MiB at Low; `SceneRenderer::GetGlobalIlluminationMemoryBytes` adds the scene's material table (4 KiB for
+  256 materials, doubling as it grows). A frame that wants none releases everything (`ReleaseGlobalIllumination`), and so
+  do the render targets' release and a `SetQuality` that changes the row.
 - **The clipmap** (`R/VoxelClipmap.h`, CPU, main thread, `Renderer.VoxelClipmap`): per level a window centered on the
   camera, snapped to steps of `c_GIScrollVoxels` (4) voxels, stored toroidally (world voxel `w` at texel `w mod
   dimensions`: a scroll rewrites only the slabs that entered), with a queue of regions and the box of valid voxels. Regions
@@ -5074,7 +5086,17 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   six RGBA16F faces per cascade-0 probe, irradiance over pi and the sky share, normalized by the directions' cosine sum;
   cascade 0 has no atlas). A 16-direction cascade 0 reduced apart gated four of cascade 1's directions with one ray and put
   an emissive wall's light at its directions' centres' cosines, 1.34-1.42 times the form factor.
-- **The field in the forward pass** (`Include/GIField.slang`, the `gi` and `open` views; stage 3 joins it to shading):
+- **The join** (`Scene/Forward.frag.slang`'s `ShadeLitSurface`, `Include/IndirectLight.slang`'s `GatherIndirectField`):
+  where the scene asked and the frame's field is used (ran, not pending), `FrameConstants::ReflectionParams.y` is 1 and `.z`
+  the intensity (clamped to [0, 4], non-finite 1). Every variant (opaque, alpha-blended, glass: no screen data is read)
+  samples the field, and the diffuse indirect light becomes today's (box probes, the sky or the constant ambient) times
+  `1 - FieldWeight` plus the field's times `FieldWeight`: its irradiance over pi on the diffuse albedo, leaving what the
+  specular gather takes (but in the constant ambient's form, which has no specular), under the diffuse occlusion without the
+  multi-bounce fit (the field's bounce is real; today's share keeps the fit), scattered by glass's diffuse weight. It already
+  holds the sky's intensity. Specular is untouched. With `ReflectionParams.y` 0 the code is the old expression, so a frame
+  without GI, or pending, is 0.7.0's to the bit; with a field weight of 0 the joined form is too (`x * 1`, `+ 0`).
+  `viewport.capture` and the project picture (`ProjectThumbnail`, `c_MaxGIFrames`) wait for `GlobalIlluminationSettled`.
+- **The field in the forward pass** (`Include/GIField.slang`, the `gi` and `open` views and the join):
   the eight cascade-0 probes around the point moved `c_GIGatherNormalBias` spacings along its geometric normal, each by its
   trilinear weight, validity, whether it lies in front of the surface's plane and its visibility (a march through levels
   0-2 from `c_GIGatherStartVoxels` off the surface; with none visible, again from up to two voxels down the occupancy's
@@ -5112,13 +5134,20 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   reference of the same test, `Tests::ReferenceVoxels` in `GIScenes`; scrolls, moves, jumps, budgets and two seeded random
   walks, one at 2,000 triangles a frame that moves the camera while regions are queued, against a renderer made for the
   camera alone, bit for bit; 20 km out; nothing made without GI) and `GPU.SceneRenderer.GPUDriven`'s "The
-  GI's voxels" (both paths give the same voxels).
+  GI's voxels" (both paths give the same voxels); `GPU.SceneRenderer.GlobalIlluminationJoin` (not asked, or the row Off:
+  nothing made and the same image; a pending frame is today's light to the bit; the owner's red floor tints the lit
+  image's walls by at least 0.7 of the one-bounce reference's change of R/G, and not at all without GI; the intensity scales
+  the field; the field's share takes no multi-bounce; the row follows `SetQuality`; both paths give the same lit image);
+  `PerfGPU.Renderer`'s "Global illumination's cost at 3840x2160" (sun room and yard, provisional).
 - **What it cannot do** (so far): walls thinner than two voxels go two-sided (dark from both sides), thin props blur into
   blobs of whole voxels, characters and moving objects are not in the voxels until they rest, textured albedo and emission
   count by their maps' means (models colored from one shared palette map, as the ThirdPerson sample's Kenney models are,
   take the palette's mean everywhere: one mauve for grass, wood and rock), double-sided materials' voxels have no facing
   (the voxels view shades them flat), glowing values above 65,408 nits clamp, and an editor top view far above a scene
-  shows its coarse levels only.
+  shows its coarse levels only. The field is an ambient cube per probe, exact for axis-aligned normals only: a white sphere
+  under a uniform sky reads 2% dark at its center and 5% at its rim (its probes see the sphere behind the point's own
+  horizon). Its light ends at the field's edge around the camera (High: full within 7.5 m horizontally and 5.5 m up and
+  down, faded to today's light over the next 2 m), which can show outdoors as the edge of a bubble.
 
 ### Light units and exposure
 

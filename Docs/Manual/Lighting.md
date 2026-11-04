@@ -313,6 +313,22 @@ without TAA.
 - Its cost follows the **Graphics Quality**'s ambient occlusion quality (Low, Medium, High, Ultra: more samples per pixel).
   The occlusion only sees what is on screen: things behind others or outside the view do not occlude.
 
+## Global illumination (experimental)
+
+The **Post Process**'s **Global Illumination** (off by default) adds bounce light traced in the world around the camera: a
+sunlit floor lights the walls and the ceiling, a red floor tints them, glowing surfaces light their surroundings, and a
+closed room stays dark, whether the source is on screen or not. The engine keeps a voxel copy of the scene around the
+camera, lights it with the sun every frame and gathers it in probes; moving the sun moves the bounce in the same frame,
+and nothing in it is blended over frames, so it does not smear or crawl as the camera moves.
+
+- **Global Illumination Intensity** (1): how much of the traced light shades surfaces; 1 as traced.
+- It runs at the **Graphics Quality**'s Global illumination level: High at High and Ultra, none at Low and Medium (see
+  Graphics). Without it, the image is exactly what it was before.
+- It is experimental: one bounce only (rooms lit by a patch of sun stay darker than in life), the east wall and the ceiling
+  of a sunlit room get about half of their bounce, Low is too dark, its light ends about 7.5 m to 9.5 m from the camera
+  (outdoors the edge can show), round objects read a few percent dark at their sides, and it costs about 4 ms of GPU time
+  at 3840 x 2160 at High. Use it for interiors and look at them with the **GI** debug view.
+
 ## Debug views
 
 The **debug view** chip on the viewport's toolbar has five views that show the scene's light instead of its image, each

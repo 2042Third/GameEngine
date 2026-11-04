@@ -402,6 +402,8 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - Light keeps its energy and needs no history: specular is compensated for multiple scattering (`GetSpecularEnergy`)
   and screen-space lighting denoises within the frame; check lighting changes with the debug views and the white-furnace
   test ([Lighting](Docs/DeveloperGuide.md#lighting)).
+- Global illumination (experimental) traces world data only, never the screen; a frame without it (not asked, the row Off,
+  pending) keeps the indirect light's old expression, bit for bit ([GI](Docs/DeveloperGuide.md#global-illumination)).
 - Screen-space reflections march fixed steps, keep only validated crossings, fade only where rays leave the screen; F0
   comes from the IOR (1.5 stays 0.04); a light's size widens only its highlight
   ([Reflections](Docs/DeveloperGuide.md#reflections)).
