@@ -261,8 +261,12 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   its rim (each probe's light is an ambient cube, exact for axis-aligned surfaces only).
 - A camera strafe along the fence crawls in the GI view: 0.147% of blocks change against the 0.10% aimed at, the 99th
   percentile 6.07% against 1.0%.
-- It costs 3.8-4.7 ms of GPU time at 3840 x 2160 at High in the sun room (`GPU.RadianceCascades`; 1-2 ms aimed at), and
-  the forward pass's gather adds 0.3-0.8 ms to `GPU.Opaque` (look-dev: the sun room, the yard and ThirdPerson's course).
+- It costs 3.8-4.9 ms of GPU time at 3840 x 2160 at High in the sun room (`GPU.RadianceCascades`; 1-2 ms aimed at; the
+  perf case `PerfGPU.Renderer.GlobalIllumination4K*`: 4.9 ms in the sun room, 4.0 ms in the yard), and the forward pass's
+  gather adds 0.3-0.8 ms to `GPU.Opaque` (look-dev: the sun room, the yard and ThirdPerson's course).
+- Off, it is not quite free: at Medium with TAA at 3840 x 2160, the samples' `??.scene` shots (three interleaved pairs
+  against main without global illumination) spend 0.010-0.013 ms more in `GPU.Opaque` (4-5.5%; the base's own spread is
+  0.001-0.011 ms), the forward shader's gather being compiled in although it does not run. Images are unchanged.
 - In the lit image: thin ground ledges (ThirdPerson's course, under two voxels thick) turn nearly black instead of
   sky-lit; a floor-wall junction under the sun room's window shows a dark band about 0.3 m high; with the sun high, the
   bounce on the window wall ends in sharp vertical edges either side of the patch's light.
