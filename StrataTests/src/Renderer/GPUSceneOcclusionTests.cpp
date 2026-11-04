@@ -1,8 +1,13 @@
 #include "Renderer/SceneRendererTestUtils.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
+#include <map>
+#include <string>
+#include <utility>
 #include <vector>
 
 // Occlusion culling on the GPU-driven path (SceneRendererSpecification::OcclusionCulling): what the view saw in the previous
@@ -181,6 +186,96 @@ namespace
 		return consecutive == 3;
 	}
 
+	// The global illumination's sun room (LookDevScene.json's room, as the radiance cascades' GIScenes.cpp builds it): a 6.4 m
+	// room of plaster boxes on a 60 x 60 m ground under the look-dev sun, its south wall open in a 2 x 1.3 m window (or sealed
+	// by a box) above a 2 x 0.9 x 0.2 m box. From inside, looking at the window, the box stands in front of the ground outside
+	// (or the seal): nothing hides it.
+	struct SunRoomScene
+	{
+		Scene World;
+		Entity Below; // The box below the window
+
+		SunRoomScene(SceneTestAssets& assets, bool sealed)
+		{
+			AddNeutralPostProcess(World);
+			MaterialProperties groundProperties;
+			groundProperties.BaseColor = glm::vec4(0.35f, 0.35f, 0.35f, 1.0f);
+			groundProperties.Roughness = 0.85f;
+			const AssetHandle ground = assets.AddMaterial(groundProperties);
+			MaterialProperties plasterProperties;
+			plasterProperties.BaseColor = glm::vec4(0.58f, 0.58f, 0.58f, 1.0f);
+			plasterProperties.Roughness = 0.9f;
+			const AssetHandle plaster = assets.AddMaterial(plasterProperties);
+			AddMesh(World, BuiltinAssets::PlaneMesh, ground, glm::vec3(0.0f), "Ground").GetComponent<TransformComponent>().Scale = glm::vec3(60.0f, 1.0f, 60.0f);
+			struct Part
+			{
+				glm::vec3 Center;
+				glm::vec3 Size;
+				const char* Name;
+			};
+			const Part parts[] = {
+				{ { -10.0f, 0.05f, -2.0f }, { 6.4f, 0.1f, 6.4f }, "Floor" },
+				{ { -10.0f, 3.1f, -2.0f }, { 6.4f, 0.2f, 6.4f }, "Ceiling" },
+				{ { -13.1f, 1.5f, -2.0f }, { 0.2f, 3.0f, 6.4f }, "West Wall" },
+				{ { -6.9f, 1.5f, -2.0f }, { 0.2f, 3.0f, 6.4f }, "East Wall" },
+				{ { -10.0f, 1.5f, -5.1f }, { 6.4f, 3.0f, 0.2f }, "North Wall" },
+				{ { -12.1f, 1.5f, 1.1f }, { 2.2f, 3.0f, 0.2f }, "Left Of Window" },
+				{ { -7.9f, 1.5f, 1.1f }, { 2.2f, 3.0f, 0.2f }, "Right Of Window" },
+				{ { -10.0f, 0.45f, 1.1f }, { 2.0f, 0.9f, 0.2f }, "Below Window" },
+				{ { -10.0f, 2.6f, 1.1f }, { 2.0f, 0.8f, 0.2f }, "Above Window" },
+				{ { -10.0f, 1.55f, 1.1f }, { 2.0f, 1.3f, 0.2f }, "Window Seal" }
+			};
+			for (const Part& part : parts)
+			{
+				const bool seal = std::strcmp(part.Name, "Window Seal") == 0;
+				if (seal && !sealed)
+					continue;
+				Entity entity = AddMesh(World, BuiltinAssets::CubeMesh, plaster, part.Center, part.Name);
+				entity.GetComponent<TransformComponent>().Scale = part.Size;
+				if (std::strcmp(part.Name, "Below Window") == 0)
+					Below = entity;
+			}
+			// The look-dev sun, rotated by (-40, 30, 0) degrees, at 100,000 lux.
+			AddSun(World, glm::normalize(Math::EulerDegreesToQuat(glm::vec3(-40.0f, 30.0f, 0.0f)) * glm::vec3(0.0f, 0.0f, -1.0f)), 100000.0f);
+		}
+	};
+
+	// The GI's room camera: from `position` toward the window at (-10, 1.2, 1), 70 degrees.
+	SceneCamera SunRoomCamera(const glm::vec3& position, glm::uvec2 size)
+	{
+		const float aspectRatio = static_cast<float>(size.x) / static_cast<float>(size.y);
+		SceneCamera camera = LookAt(position, glm::vec3(-10.0f, 1.2f, 1.0f), aspectRatio);
+		camera.Projection = Math::PerspectiveReverseZ(glm::radians(70.0f), aspectRatio, 0.05f, 1000.0f);
+		camera.Near = 0.05f;
+		camera.Far = 1000.0f;
+		camera.VerticalFOV = glm::radians(70.0f);
+		return camera;
+	}
+
+	// The pixels of each entity in the renderer's entity-ID buffer, by identifier (entity + 1; 0 where nothing was drawn).
+	std::map<uint32_t, uint32_t> CountEntityIDs(SceneRenderer& renderer)
+	{
+		ReadbackImage ids;
+		REQUIRE(Renderer::ReadTexture(renderer.GetEntityIDTexture(), ids));
+		std::map<uint32_t, uint32_t> counts;
+		for (size_t offset = 0; offset + sizeof(uint32_t) <= ids.Pixels.size(); offset += sizeof(uint32_t))
+		{
+			uint32_t id = 0;
+			std::memcpy(&id, ids.Pixels.data() + offset, sizeof(id));
+			counts[id]++;
+		}
+		return counts;
+	}
+
+	// The R32 values of a readback (the depth buffer's D32, or a level of the depth pyramid), row by row.
+	std::vector<float> ReadFloats(const ReadbackImage& image)
+	{
+		REQUIRE(image.Pixels.size() == static_cast<size_t>(image.Width) * image.Height * sizeof(float));
+		std::vector<float> values(static_cast<size_t>(image.Width) * image.Height);
+		std::memcpy(values.data(), image.Pixels.data(), image.Pixels.size());
+		return values;
+	}
+
 }
 
 TEST_SUITE("GPU.SceneRenderer.Occlusion")
@@ -315,6 +410,131 @@ TEST_SUITE("GPU.SceneRenderer.Occlusion")
 		CHECK(RenderUntilCascadesCulled(gpu, culled, unculled, scene.World, camera));
 		CHECK(culled.GetGPUStats().OccludedCasters >= 1);
 		CHECK(culled.GetGPUStats().ShadowInstances + culled.GetGPUStats().OccludedCasters == unculled.GetGPUStats().ShadowInstances);
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A box in plain view below a window is drawn from cameras about the window's axis, at odd and even sizes")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!DeviceDrawsGPUDriven())
+			return;
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
+		SceneRendererSpecification everything = ExactSpecification();
+		everything.OcclusionCulling = false;
+		// The window open, and sealed: then everything around the box (the seal, the walls, the floor) is as near as its
+		// nearest point or nearer, and only the box's own pixels show what is farther (the ground behind it, in the depth of a
+		// phase that did not draw it). A pyramid read off those pixels by a texel hides it.
+		for (const bool sealed : { false, true })
+		{
+			SunRoomScene scene(assets, sealed);
+			const uint32_t below = static_cast<uint32_t>(scene.Below.GetHandle()) + 1;
+			// 960 x 540 (the GI stream's) halves to 135 rows at the pyramid's level 1, and the others to odd rows or columns at
+			// other levels; 1280 x 720 halves evenly down to level 3.
+			for (const glm::uvec2 size : { glm::uvec2(960, 540), glm::uvec2(961, 541), glm::uvec2(1280, 720), glm::uvec2(1001, 563) })
+			{
+				SceneRenderer culled(ExactSpecification());
+				culled.SetViewportSize(size.x, size.y);
+				SceneRenderer unculled(everything);
+				unculled.SetViewportSize(size.x, size.y);
+				// The GI stream's camera at (-10, 1.6, -4), those within 0.3 m of it where the box went missing, and beyond.
+				// The camera moves on without a cut, so each position starts from the previous one's visibility.
+				for (const float x : { -10.4f, -10.3f, -10.15f, -10.001f, -10.0f, -9.99f, -9.85f, -9.7f, -9.0f })
+				{
+					INFO(std::string(sealed ? "sealed" : "open") << ", " << size.x << " x " << size.y << ", the camera at x " << x);
+					const SceneCamera camera = SunRoomCamera(glm::vec3(x, 1.6f, -4.0f), size);
+					for (int frame = 0; frame < 3; frame++)
+						Frame(gpu, culled, scene.World, camera);
+					Frame(gpu, unculled, scene.World, camera);
+					// Nothing in the room is hidden from inside it, and everything the unculled renderer shows the culled one
+					// shows.
+					CHECK(culled.GetGPUStats().OccludedProxies == 0);
+					const std::map<uint32_t, uint32_t> expected = CountEntityIDs(unculled);
+					const std::map<uint32_t, uint32_t> actual = CountEntityIDs(culled);
+					REQUIRE(expected.count(below) == 1);
+					CHECK(actual.count(below) == 1);
+					for (const std::pair<const uint32_t, uint32_t>& entry : expected)
+					{
+						INFO("entity " << entry.first - 1 << " (" << entry.second << " pixels unculled)");
+						CHECK((entry.first == 0 || actual.count(entry.first) == 1));
+					}
+				}
+			}
+		}
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Each depth pyramid texel holds the farthest depth of the pixels it covers, a level's last row and column those past it too")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!DeviceDrawsGPUDriven())
+			return;
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
+		SunRoomScene scene(assets, false);
+		// Even and odd rows and columns at every level: 960 x 540 has 135 rows at level 1, 961 x 541 an odd level 0, and 37 x 5
+		// a level of 3 rows that halves to 1 and levels of one row that stay one.
+		for (const glm::uvec2 size : { glm::uvec2(960, 540), glm::uvec2(961, 541), glm::uvec2(37, 5) })
+		{
+			INFO(size.x << " x " << size.y);
+			SceneRenderer renderer(ExactSpecification());
+			renderer.SetViewportSize(size.x, size.y);
+			const SceneCamera camera = SunRoomCamera(glm::vec3(-10.0f, 1.6f, -4.0f), size);
+			// Settled frames: the first phase draws everything in view, so the final depth is the one the pyramid reduces.
+			for (int frame = 0; frame < 3; frame++)
+				Frame(gpu, renderer, scene.World, camera);
+			nvrhi::ITexture* pyramid = renderer.GetDepthPyramid();
+			REQUIRE(pyramid != nullptr);
+			ReadbackImage depthImage;
+			REQUIRE(Renderer::ReadTexture(renderer.GetDepthTexture(), depthImage));
+			REQUIRE(depthImage.Width == size.x);
+			REQUIRE(depthImage.Height == size.y);
+			const std::vector<float> depth = ReadFloats(depthImage);
+
+			// Level 0 is half the depth buffer, rounded up; each level below it half the one above, rounded down (the
+			// texture's own mip sizes), down to one texel.
+			const glm::uvec2 levelZero = (size + 1u) / 2u;
+			const uint32_t levels = pyramid->getDesc().mipLevels;
+			CHECK((std::max(levelZero.x, levelZero.y) >> (levels - 1)) == 1u);
+			for (uint32_t level = 0; level < levels; level++)
+			{
+				INFO("level " << level);
+				const glm::uvec2 levelSize = glm::max(levelZero >> level, glm::uvec2(1));
+				ReadbackImage image;
+				REQUIRE(Renderer::ReadTexture(pyramid, image, level));
+				REQUIRE(image.Width == levelSize.x);
+				REQUIRE(image.Height == levelSize.y);
+				const std::vector<float> values = ReadFloats(image);
+				// Pixel p belongs to texel p >> (level + 1), the last row and column also to those past them: Cull.comp reads
+				// that texel for it.
+				std::vector<float> expected(values.size(), std::numeric_limits<float>::infinity());
+				for (uint32_t y = 0; y < size.y; y++)
+				{
+					const uint32_t row = std::min(y >> (level + 1), levelSize.y - 1);
+					for (uint32_t x = 0; x < size.x; x++)
+					{
+						const uint32_t column = std::min(x >> (level + 1), levelSize.x - 1);
+						float& farthest = expected[static_cast<size_t>(row) * levelSize.x + column];
+						farthest = std::min(farthest, depth[static_cast<size_t>(y) * size.x + x]);
+					}
+				}
+				uint32_t wrong = 0;
+				uint32_t nearer = 0; // Not conservative: nearer than a pixel it covers, which can hide what that pixel shows
+				for (size_t texel = 0; texel < values.size(); texel++)
+				{
+					wrong += values[texel] != expected[texel] ? 1u : 0u;
+					nearer += values[texel] > expected[texel] ? 1u : 0u;
+				}
+				CHECK(nearer == 0u);
+				CHECK(wrong == 0u);
+			}
+		}
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

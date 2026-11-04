@@ -54,11 +54,20 @@ namespace Strata
 		// Scene/HZBBuild.comp's push constants.
 		struct DepthPyramidParameters
 		{
-			glm::uvec2 SourceSize = glm::uvec2(0);
-			glm::uvec2 DestinationSize = glm::uvec2(0);
+			glm::uvec2 SourceSize = glm::uvec2(0); // The source's own size: the depth's, or the level above's mip
+			glm::uvec2 DestinationSize = glm::uvec2(0); // The level's mip
 			uint32_t UseMinimumSampler = 0;
 			uint32_t Reduction = 2; // Source texels per destination texel each way
 		};
+
+		// The size of a depth pyramid's level: its texture's mip, half the level above rounded down, at least a texel. The
+		// build reads and writes each level at exactly this size (a minimum sampler's coordinates are normalized by it), and
+		// Cull.comp clamps footprints to its last row and column (Include/Culling.slang's GetPyramidFootprint).
+		glm::uvec2 GetPyramidLevelSize(glm::uvec2 levelZero, uint32_t level)
+		{
+			return glm::max(glm::uvec2(levelZero.x >> level, levelZero.y >> level), glm::uvec2(1));
+		}
+
 		// Shadow casters are drawn into a cascade only while they span at least this many of its texels (as the CPU path,
 		// SceneRendererExtraction.cpp).
 		constexpr float c_MinCasterTexels = 1.0f;
@@ -799,7 +808,8 @@ namespace Strata
 	{
 		if (!m_CullViewPipeline)
 			return true; // No GPU-driven path: nothing to cull with it
-		// Level 0 is half the depth buffer (rounded up), down to one texel.
+		// Level 0 is half the depth buffer (rounded up), and the levels below it the texture's mips (GetPyramidLevelSize), down
+		// to one texel.
 		m_DepthPyramidSize = glm::uvec2((m_ViewportSize.x + 1) / 2, (m_ViewportSize.y + 1) / 2);
 		uint32_t levels = 1;
 		while ((std::max(m_DepthPyramidSize.x, m_DepthPyramidSize.y) >> levels) > 0)
@@ -1019,20 +1029,16 @@ namespace Strata
 		// The depth pyramid of the first phase's depth, level by level.
 		nvrhi::ComputeState pyramidState;
 		pyramidState.pipeline = m_DepthPyramidPipeline;
-		glm::uvec2 source = m_ViewportSize;
-		glm::uvec2 destination = m_DepthPyramidSize;
 		for (uint32_t level = 0; level < m_DepthPyramidLevels; level++)
 		{
 			pyramidState.bindings = { m_DepthPyramidSets[level] };
 			commandList->setComputeState(pyramidState);
 			DepthPyramidParameters parameters;
-			parameters.SourceSize = source;
-			parameters.DestinationSize = destination;
+			parameters.SourceSize = level == 0 ? m_ViewportSize : GetPyramidLevelSize(m_DepthPyramidSize, level - 1);
+			parameters.DestinationSize = GetPyramidLevelSize(m_DepthPyramidSize, level);
 			parameters.UseMinimumSampler = Renderer::GetGraphicsDevice().GetInfo().SupportsSamplerMinMax ? 1u : 0u;
 			commandList->setPushConstants(&parameters, sizeof(parameters));
-			commandList->dispatch((destination.x + 7) / 8, (destination.y + 7) / 8, 1);
-			source = destination;
-			destination = glm::max((destination + 1u) / 2u, glm::uvec2(1));
+			commandList->dispatch((parameters.DestinationSize.x + 7) / 8, (parameters.DestinationSize.y + 7) / 8, 1);
 		}
 
 		// The second phase: every proxy's visibility against the pyramid, and the draws of those the first phase did not draw.
@@ -1109,21 +1115,18 @@ namespace Strata
 		const bool minimumSampler = Renderer::GetGraphicsDevice().GetInfo().SupportsSamplerMinMax;
 		nvrhi::ComputeState pyramidState;
 		pyramidState.pipeline = m_ShadowPyramidPipeline;
-		glm::uvec2 source(m_ShadowMapSize);
-		glm::uvec2 destination(m_ShadowPyramidSize);
+		const glm::uvec2 levelZero(m_ShadowPyramidSize);
 		for (uint32_t level = 0; level < m_ShadowPyramidLevels; level++)
 		{
 			pyramidState.bindings = { m_ShadowPyramidSets[level] };
 			commandList->setComputeState(pyramidState);
 			DepthPyramidParameters parameters;
-			parameters.SourceSize = source;
-			parameters.DestinationSize = destination;
+			parameters.SourceSize = level == 0 ? glm::uvec2(m_ShadowMapSize) : GetPyramidLevelSize(levelZero, level - 1);
+			parameters.DestinationSize = GetPyramidLevelSize(levelZero, level);
 			parameters.UseMinimumSampler = minimumSampler ? 1u : 0u;
 			parameters.Reduction = level == 0 ? c_ShadowPyramidReduction : 2u;
 			commandList->setPushConstants(&parameters, sizeof(parameters));
-			commandList->dispatch((destination.x + 7) / 8, (destination.y + 7) / 8, m_CascadeCount);
-			source = destination;
-			destination = glm::max((destination + 1u) / 2u, glm::uvec2(1));
+			commandList->dispatch((parameters.DestinationSize.x + 7) / 8, (parameters.DestinationSize.y + 7) / 8, m_CascadeCount);
 		}
 
 		// The second phase: every caster's visibility in each cascade against its pyramid, and the draws the first phase did

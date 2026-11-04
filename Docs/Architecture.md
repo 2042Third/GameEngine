@@ -2502,9 +2502,13 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
 - **Occlusion culling** (`SceneRendererSpecification::OcclusionCulling`, on by default; `Cull.comp`'s second phase,
   `Scene/HZBBuild.comp`, `RunOcclusionPhase`). The view is culled in two phases. The first draws, of the proxies that pass
   the frustum and size tests, those the view saw in the previous frame into the depth prepass. A depth pyramid of that
-  depth follows: level 0 is half the depth buffer, each texel the farthest (smallest, reversed-Z) depth of the 2x2 below
-  it, odd edges left out, so a texel of level m covers exactly the pixels p with p >> (m + 1) equal to it; one sample of a
-  minimum-filtering sampler where the device has `samplerFilterMinmax`, four loads otherwise (MoltenVK). The second phase
+  depth follows: level 0 is half the depth buffer (rounded up) and each level below it half the one above (rounded down:
+  the texture's mips), each texel the farthest (smallest, reversed-Z) depth of the 2x2 above it, and a level's last row
+  and column also of the odd row and column past them, so the texel of level m that covers pixel p is p >> (m + 1),
+  clamped to the level's last row and column (the cascades' pyramids below their level 0 alike); one sample of a
+  minimum-filtering sampler per 2x2 where the device has `samplerFilterMinmax`, four loads otherwise (MoltenVK). The
+  build reads and writes each level at its mip's own size: a minimum sampler's coordinates normalized by another size
+  move the footprints off the texels they cover, which hid visible objects (wave 8). The second phase
   tests every proxy in the frustum against the pyramid (its box's screen rectangle at the finest level it spans in at most
   2x2 texels, against the box's nearest depth; boxes reaching the camera's plane are visible), records whether it is
   visible, and draws into the prepass those visible now that the first did not draw: something that comes into view is

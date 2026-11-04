@@ -151,6 +151,13 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - Samples: a showcase may hold six screenshots in 8 MB (the others three in 3 MB).
 - Manual, Lighting: "Times of day with baked probes".
 
+**Occlusion culling (cull fix)**
+
+- Fixed: occlusion culling hid objects in plain view. Its depth pyramid was built a texel or more off where a level's
+  size halves to an odd number (960 x 540, 1920 x 1080 and 3840 x 2160 among the sizes it happened at), so a box below a
+  sealed window, seen straight on, vanished and showed the ground behind it. Each level now covers exactly the pixels the
+  culling reads it for, its last row and column included.
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and

@@ -209,10 +209,11 @@ RWStructuredBuffer<uint> u_Visibility : register(u11);
 // writing passes.
 RWStructuredBuffer<uint2> u_LODFades : register(u12);
 // The depth pyramid of the first phase's depth (Scene/HZBBuild.comp): each texel the farthest (smallest, reversed-Z)
-// depth of the pixels it covers; level m's texel covers pixels p with p >> (m + 1) equal to it.
+// depth of the pixels it covers; level m's texel covers pixels p with p >> (m + 1) equal to it, its last row and column
+// also those past them (GetPyramidFootprint).
 Texture2D<float4> u_DepthPyramid : register(t8);
 // Per cascade (a layer each) the depth pyramid of its first phase's shadow map: level m's texel covers texels t with
-// t >> (m + 2) equal to it.
+// t >> (m + 2) equal to it, its last row and column also those past them.
 Texture2DArray<float4> u_ShadowPyramid : register(t9);
 // The cascades' projections (Scene/CascadeFit.comp), fitted after the counting pass.
 StructuredBuffer<CullCascade> u_CullCascades : register(t10);
@@ -250,17 +251,25 @@ float GetScreenFraction(float3 center, float radius)
 }
 
 // The texels of a depth pyramid's level that cover a rectangle of pixels [minPixel, maxPixel] of a target of `size` pixels,
-// clamped to it: the finest level at which it spans at most two texels each way (corners `low` and `high`). Level m's texel
-// covers the pixels p with p >> (m + shift) equal to it.
+// clamped to it: the finest level at which it spans at most two texels each way (corners `low` and `high`). Level 0 is the
+// target's size divided by 1 << shift, rounded up, and every other level half the one above, rounded down
+// (Scene/HZBBuild.comp): level m's texel covers the pixels p with p >> (m + shift) equal to it, and its last row and column
+// also those past them, so a pixel's texel is clamped to them.
 int GetPyramidFootprint(float2 minPixel, float2 maxPixel, float2 size, int levels, int shift, out int2 low, out int2 high)
 {
-	low = int2(clamp(floor(minPixel), float2(0.0), size - 1.0));
-	high = int2(clamp(floor(maxPixel), float2(0.0), size - 1.0));
+	int2 lowPixel = int2(clamp(floor(minPixel), float2(0.0), size - 1.0));
+	int2 highPixel = int2(clamp(floor(maxPixel), float2(0.0), size - 1.0));
+	int2 levelZero = (int2(size) + (1 << shift) - 1) >> shift;
 	int level = 0;
-	while (level + 1 < levels && (((high.x >> (level + shift)) - (low.x >> (level + shift))) > 1 || ((high.y >> (level + shift)) - (low.y >> (level + shift))) > 1))
+	low = lowPixel >> shift;
+	high = highPixel >> shift;
+	while (level + 1 < levels && any((high - low) > 1))
+	{
 		level++;
-	low = low >> (level + shift);
-	high = high >> (level + shift);
+		int2 last = max(levelZero >> level, int2(1)) - 1;
+		low = min(lowPixel >> (level + shift), last);
+		high = min(highPixel >> (level + shift), last);
+	}
 	return level;
 }
 

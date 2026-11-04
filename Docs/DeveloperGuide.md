@@ -4271,7 +4271,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   A mesh can therefore take two draws (one per phase) in the frame its new instances appear, and something hidden is
   left out only from the frame after the one that found it hidden; tests that count draws or instances render a frame
   more first, or turn occlusion culling off. Anything new that reads the view's depth runs after the second phase's
-  prepass.
+  prepass. The culling must stay conservative (drawn needlessly, never hidden wrongly): the pyramids' levels are their
+  textures' mips (`GetPyramidLevelSize`, rounded down), a level's last row and column also cover what lies past them, and
+  `Include/Culling.slang`'s `GetPyramidFootprint` clamps to them; a change to how a pyramid is built or read keeps
+  `GPU.SceneRenderer.Occlusion`'s texel-by-texel case (odd sizes, last rows and columns) and its window sweep passing.
 - The shadow cascades are occlusion culled alike, each against a pyramid of its own first-phase shadow map, with the same
   switch, while it pays (`SceneRendererStats::ShadowOcclusionCulled` says whether a frame did). Tests that count shadow
   casters or shadow draws expect at most the CPU path's counts once `SceneRendererGPUStats::OccludedCasters` is not 0 (each
