@@ -61,7 +61,9 @@ namespace Strata
 		// room's floor under a ceiling probe whose near parents sit in the ceiling. Its light ends the ray, so nothing counts
 		// twice.
 		float Overlap = 0.0f;
-		uint32_t MinimumLevel = 0;      // The finest voxel level its samples read: max(0, k - 1)
+		// The finest voxel level its samples read: 0 for cascades 0 and 1, 1 above (no coarser: a 0.2 m wall in level 2's 0.4 m
+		// voxels lets a sealed hall's top-cascade rays through; the top cascade has few rays, so the finer steps cost little).
+		uint32_t MinimumLevel = 0;
 		// Each direction is the mean of SubRays x SubRays rays spread over its texel (CascadeMarch.comp): 2 for the cascades between
 		// cascade 0 and the top, whose texels are as wide as a room's sunlit patch seen across the room; 1 for cascade 0 (64
 		// directions within a metre) and the top (outside, 1024).

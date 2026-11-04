@@ -102,7 +102,7 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 			{ 0.5f, { 48, 40, 48 }, 64, 0.0f, 0.5f, 0.0f, 0.5f, 0, 1 },
 			{ 1.0f, { 24, 20, 24 }, 64, 0.5f, 2.0f, 0.5f, 1.0f, 0, 2 },
 			{ 2.0f, { 12, 10, 12 }, 256, 2.0f, 8.0f, 2.0f, 2.0f, 1, 2 },
-			{ 4.0f, { 6, 5, 6 }, 1024, 8.0f, c_Infinity, 8.0f, 0.0f, 2, 1 },
+			{ 4.0f, { 6, 5, 6 }, 1024, 8.0f, c_Infinity, 8.0f, 0.0f, 1, 1 },
 		});
 		CHECK(high.FieldExtent == glm::vec3(24.0f, 20.0f, 24.0f));
 		CHECK(high.FieldSnap == 4.0f);

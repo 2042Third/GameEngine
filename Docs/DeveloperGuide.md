@@ -5035,7 +5035,9 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   (cascades from the top down to 1, a thread per texel, fixed directions, each texel the mean of
   `ProbeCascadeLayout::SubRays` squared rays spread over it: 2 x 2 for the cascades between 0 and the top, whose texels are as
   wide as a room's sunlit patch seen across the room, which one ray caught whole or missed; light front to back with
-  transmittance through `Include/GIMarch.slang`; for every cascade but the first an occlusion-only lead-in from the probe
+  transmittance through `Include/GIMarch.slang`, from voxel level 0 for cascades 0 and 1 and level 1 above
+  (`ProbeCascadeLayout::MinimumLevel`: the top cascade's rays crossed a sealed 16 m hall's 0.2 m walls in level 2's 0.4 m
+  voxels and let up to 0.056 of the open hall's light in); for every cascade but the first an occlusion-only lead-in from the probe
   that absorbs only voxels at least `c_GILeadInOccupancy` full, and every cascade but the top marches
   `ProbeCascadeLayout::Overlap` (a spacing) past its interval's end, so a surface just past a child's end, which lies in
   its parents' lead-ins, is taken on the child's own line; gathering light in the lead-in instead took surfaces beside the

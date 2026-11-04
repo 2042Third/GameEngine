@@ -135,6 +135,25 @@ namespace Strata::Tests
 			{
 				return RoomBox { center + offset - 0.5 * size, center + offset + 0.5 * size, albedo };
 			};
+			if (options.Hall)
+			{
+				// A 16 x 2.9 x 16 m hall (inside x -18 to -2, z -15 to 1) with the room's 0.2 m walls, ceiling and window.
+				std::vector<RoomBox> hall = {
+					RoomBox { { -30.0, -1.0, -30.0 }, { 30.0, 0.0, 30.0 }, glm::vec3(0.35f), true },
+					part({ -10.0, 0.05, -7.0 }, { 16.4, 0.1, 16.4 }, options.FloorAlbedo), // Floor
+					part({ -10.0, 3.1, -7.0 }, { 16.4, 0.2, 16.4 }, plaster),              // Ceiling
+					part({ -18.1, 1.5, -7.0 }, { 0.2, 3.0, 16.4 }, plaster),               // West wall
+					part({ -1.9, 1.5, -7.0 }, { 0.2, 3.0, 16.4 }, plaster),                // East wall
+					part({ -10.0, 1.5, -15.1 }, { 16.4, 3.0, 0.2 }, plaster),              // North wall
+					part({ -14.6, 1.5, 1.1 }, { 7.2, 3.0, 0.2 }, plaster),                 // South wall, left of the window
+					part({ -5.4, 1.5, 1.1 }, { 7.2, 3.0, 0.2 }, plaster),                  // Right of it
+					part({ -10.0, 0.45, 1.1 }, { 2.0, 0.9, 0.2 }, plaster),                // Below it
+					part({ -10.0, 2.6, 1.1 }, { 2.0, 0.8, 0.2 }, plaster)                  // Above it
+				};
+				if (options.SealWindow)
+					hall.push_back(part({ -10.0, 1.55, 1.1 }, { 2.0, 1.3, 0.2 }, plaster));
+				return hall;
+			}
 			std::vector<RoomBox> boxes = {
 				RoomBox { { -30.0, -1.0, -30.0 }, { 30.0, 0.0, 30.0 }, glm::vec3(0.35f), true },
 				part({ -10.0, 0.05, -2.0 }, { 6.4, 0.1, 6.4 }, options.FloorAlbedo), // Floor

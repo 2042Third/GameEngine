@@ -167,7 +167,7 @@ namespace Strata
 				cascade.IntervalEnd = k + 1 == cascadeCount ? std::numeric_limits<float>::infinity() : firstSpacing * static_cast<float>(1u << (2 * k));
 				cascade.LeadIn = cascade.IntervalStart;
 				cascade.Overlap = k + 1 == cascadeCount ? 0.0f : cascade.Spacing;
-				cascade.MinimumLevel = k == 0 ? 0 : k - 1;
+				cascade.MinimumLevel = k == 0 ? 0 : std::min(k - 1, 1u);
 				cascade.SubRays = k > 0 && k + 1 < cascadeCount ? 2u : 1u;
 				layout.Cascades.push_back(cascade);
 			}

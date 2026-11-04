@@ -3,6 +3,7 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Math/Math.h"
+#include "Strata/Renderer/DeferredReleaseQueue.h"
 #include "Strata/Renderer/GlobalIlluminationLayout.h"
 
 #include <glm/gtc/constants.hpp>
@@ -283,6 +284,64 @@ namespace
 		uint16_t value[4];
 		std::memcpy(value, field.data() + texel * 8, sizeof(value));
 		return Luminance(glm::vec3(glm::unpackHalf1x16(value[0]), glm::unpackHalf1x16(value[1]), glm::unpackHalf1x16(value[2]))) / RenderData::c_GIRadianceScale;
+	}
+
+	// A table of the field's luminance at the points against the reference's, for MESSAGE; adds the points' absolute errors of
+	// the ratio (field over reference, minus 1) to `error`.
+	std::string FormatTable(const std::string& title, const std::vector<RoomPoint>& points, const std::vector<glm::vec3>& measured,
+		const std::vector<glm::vec3>& references, float& error)
+	{
+		std::string table = title;
+		for (size_t index = 0; index < points.size(); index++)
+		{
+			const float value = Luminance(measured[index]);
+			const float reference = Luminance(references[index]);
+			const float ratio = value / std::max(reference, 1e-6f);
+			error += std::abs(ratio - 1.0f);
+			table += fmt::format("\n  {:<34} field {:10.3f}  reference {:10.3f}  ratio {:7.3f}", points[index].Name, value, reference, ratio);
+		}
+		return table;
+	}
+
+	// The cascades' first spacing at a level.
+	float FirstSpacing(GlobalIlluminationLevel level)
+	{
+		return GlobalIllumination::ComputeLayout(level)->Cascades.front().Spacing;
+	}
+
+	// Frees what released renderers left in the deferred release queue (nothing pumps it in a test): the GI's resources are
+	// 116 MiB a renderer at High.
+	void CollectReleases()
+	{
+		Renderer::GetDeferredReleases().Collect();
+	}
+
+	// The 16 m hall's camera, toward its window from 5 m inside, and the points it reads: the south wall around the window, the
+	// floor before it and the ceiling.
+	SceneCamera HallCamera(const glm::vec3& offset)
+	{
+		return MakeCamera(glm::vec3(-10.0f, 1.6f, -4.0f) + offset, glm::vec3(-10.0f, 1.2f, 1.0f) + offset, 70.0f, c_RoomSize);
+	}
+
+	std::vector<RoomPoint> GetHallPoints(const glm::vec3& offset)
+	{
+		std::vector<RoomPoint> points = {
+			{ "south wall far west", { -13.5f, 1.0f, 1.0f }, c_North },
+			{ "south wall far east", { -6.5f, 1.0f, 1.0f }, c_North },
+			{ "south wall west", { -12.0f, 2.0f, 1.0f }, c_North },
+			{ "south wall east", { -8.0f, 2.0f, 1.0f }, c_North },
+			{ "below the window", { -10.0f, 0.5f, 1.0f }, c_North },
+			{ "floor west", { -12.0f, 0.1f, -1.0f }, c_Up },
+			{ "floor middle", { -10.0f, 0.1f, -1.0f }, c_Up },
+			{ "floor east", { -8.0f, 0.1f, -1.0f }, c_Up },
+			{ "floor by the window west", { -11.0f, 0.1f, 0.4f }, c_Up },
+			{ "floor by the window east", { -9.0f, 0.1f, 0.4f }, c_Up },
+			{ "ceiling west", { -11.0f, 3.0f, -1.0f }, c_Down },
+			{ "ceiling east", { -9.0f, 3.0f, -1.0f }, c_Down },
+		};
+		for (RoomPoint& point : points)
+			point.Point += offset;
+		return points;
 	}
 
 }
@@ -597,6 +656,45 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 			INFO(points[index].Name << ": camera A " << a << ", camera B " << b);
 			CHECK(a > 0.0f);
 			CHECK(std::abs(b - a) <= 0.1f * a);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A sealed hall stays dark")
+	{
+		// Correction 2: a 16 m hall, whose cascade-2 probes' 8 m rays end inside it, merges its parents' sunlit outside through the
+		// wall unless the lead-in reaches back to the probe; and the top cascade's rays must cross its 0.2 m walls in voxels that
+		// hold them (level 2's 0.4 m voxels let 0.0031 to 0.056 of the open hall's light in). The sealed hall's twelve points at
+		// most 0.0017 of the same hall's with its 2 x 1.3 m window, at High, with the hall moved as the sealed room is.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const float spacing = FirstSpacing(GlobalIlluminationLevel::High);
+		for (float share : { 0.0f, 0.25f, 0.5f })
+		{
+			const glm::vec3 offset(share * spacing, 0.0f, share * spacing);
+			CAPTURE(offset.x);
+			SunRoomOptions open = DefaultRoom();
+			open.Hall = true;
+			open.Offset = offset;
+			SunRoomOptions sealed = open;
+			sealed.SealWindow = true;
+			const std::vector<RoomPoint> points = GetHallPoints(offset);
+			std::vector<glm::vec3> openValues;
+			std::vector<glm::vec3> sealedValues;
+			{
+				RoomRender openRender(open, c_RoomSize, RoomSpecification());
+				openValues = openRender.Measure(HallCamera(offset), points);
+				RoomRender sealedRender(sealed, c_RoomSize, RoomSpecification());
+				sealedValues = sealedRender.Measure(HallCamera(offset), points);
+			}
+			CollectReleases();
+			float error = 0.0f;
+			const std::string table = FormatTable(fmt::format("The open hall, offset {} m, against the reference:", offset.x), points, openValues,
+				References(open, points), error);
+			MESSAGE(table << "\n  open mean " << MeanLuminance(openValues) << ", sealed mean " << MeanLuminance(sealedValues) << " ("
+				<< MeanLuminance(sealedValues) / MeanLuminance(openValues) << ")");
+			CHECK(MeanLuminance(openValues) > 0.0f);
+			CHECK(MeanLuminance(sealedValues) <= c_SealedBound * MeanLuminance(openValues));
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

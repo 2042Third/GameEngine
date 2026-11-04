@@ -43,6 +43,7 @@ namespace Strata::Tests
 		bool SealWindow = false;                               // A 0.2 m plaster box fills the window
 		glm::vec3 Offset = glm::vec3(0.0f);                    // Moves the room (not the ground): probe planes cut its walls elsewhere
 		bool PairedRoom = false;                               // A sealed room B east of it, sharing its east wall
+		bool Hall = false;                                     // A 16 x 16 m hall with the room's walls and window instead (no room B)
 		glm::vec3 AmbientColor = glm::vec3(0.0f);              // A constant sky of this luminance (nits) when not zero
 	};
 
