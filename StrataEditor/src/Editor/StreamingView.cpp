@@ -133,7 +133,6 @@ namespace Strata
 	}
 
 	std::string GetLightingLegendNote(ViewportDebugView view, const std::optional<LightingViewStats>& stats)
-
 	{
 		if (!stats)
 			return "Measuring...";

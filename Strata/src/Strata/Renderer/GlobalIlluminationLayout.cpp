@@ -208,7 +208,6 @@ namespace Strata
 		}
 
 		glm::vec3 GetFaceAxis(uint32_t face)
-
 		{
 			glm::vec3 axis(0.0f);
 			axis[static_cast<int>(std::min(face, 5u) / 2)] = (face % 2) == 0 ? 1.0f : -1.0f;

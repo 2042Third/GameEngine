@@ -365,7 +365,6 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 							const uint8_t expected = inside || Contains(solid, voxel) ? 255 : onSurface ? c_Touch : 0;
 							if (material.a != expected)
 								wrongOccupancy++;
-
 							if (onSurface)
 							{
 								surfaceCount++;

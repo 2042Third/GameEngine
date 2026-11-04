@@ -5,7 +5,8 @@
 // in sync (std140 for the constant buffer, std430 for storage buffers, 16-byte aligned members).
 
 // The scene layout's slots (SceneRenderer::CreateResources): SRV 0-21, 27, 28, 29 (the aerial perspective volume), 32, 33, 35
-// and 37-40, samplers 0-5 (materials), 8, 9 and 10, CBV 0.
+// and 37-40, samplers 0-5 (materials), 8, 9 and 10, CBV 0 and 3 (the GI field's constants, Include/GIField.slang): pipelines
+// pairing this layout with push constants or a constant buffer of their own give them neither slot.
 // SRV 22-26 belong to the compute layouts of temporal anti-aliasing and screen-space reflections, never to this one.
 // Assigned in wave 7: SRV 28 the sun's screen-space shadow mask, 32 the cascades' depth ranges and 33 the shadows'
 // blue-noise tile; 29 the aerial perspective volume. Assigned for wave 8: 30 and 31 the irradiance volume (radiance-cascades,

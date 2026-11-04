@@ -799,7 +799,6 @@ namespace Strata
 			note = GetVoxelLegendNote(renderer->GetSceneRenderer().GetVoxelClipmap());
 		else if (settings.DebugView == ViewportDebugView::Probes)
 			note = GetProbeLegendNote(renderer->GetSceneRenderer().GetGPUStats(), renderer->GetSceneRenderer().GetGlobalIlluminationLayout());
-
 		else if (GetLightingView(settings.DebugView) != SceneLightingView::None)
 			note = GetLightingLegendNote(settings.DebugView, lighting); // The sun to sky ratio on flat ground (a clear day's is 6 to 10)
 

@@ -5016,7 +5016,6 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   (`RenderData::GIFieldConstants`: the field's origin, size and fade, levels 0-2's windows and valid boxes; zero without
   GI) at b3, a buffer of their own written every frame, not `FrameConstants` fields (Roadmap, open items). Declaring
   fields in `FrameConstants`, though no shader read them, recompiled every shader that includes
-
   `Include/Scene.slang`, and two passes then make look-dev's repeats of an unchanged view differ: GTAO
   (`Effects/GTAO.comp`; ThirdPerson: a few pixels by one code, and the `ao` view flips the same pixels between two
   values from one capture to the next) and the screen-space reflections (`Effects/ScreenSpaceReflections*.comp`,

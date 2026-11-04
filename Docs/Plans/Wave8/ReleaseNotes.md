@@ -167,11 +167,11 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - Editor: the Scene view's debug views **GI** (the bounce light on white surfaces), **Open** (the share of the sky each surface
   sees) and **Probes** (the light probes, dead ones red) show world-space radiance cascades: the sun lights the voxel copy
   of the scene every frame, and probes in the world gather it, so a sunlit floor lights the walls whether or not it is on
-  screen, and moving the sun moves the bounce in the same frame. The lit image does not use it yet (stage 3).
+  screen, and moving the sun moves the bounce in the same frame. The lit image does not use it yet (stage 3). The
+  **Voxels** view now shows the light each voxel holds: the sunlit patch bright, surfaces no light reaches dimmed.
 - AI agents: `viewport.capture` and `viewport.setSettings` take `debugView` `"gi"`, `"open"` and `"probes"`; the capture's
-  `debugView.globalIllumination` adds the probes' spacing, grid, cascades, directions and live and dead counts.
-- A sealed room stays dark at Low wherever its walls stand: walls thinner than the coarser voxels, standing off their grid,
-  let the sunlit outside into the room (it read a sixth of the open room's light).
+  `debugView.globalIllumination` adds the probes' spacing, grid, cascades, directions and live and dead counts, and
+  `"gi"` and `"open"` captures report `debugView.lighting` as the other lighting views do.
 
 **Occlusion culling (cull fix)**
 

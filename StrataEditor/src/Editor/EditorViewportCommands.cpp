@@ -1313,7 +1313,6 @@ namespace Strata
 					if (!request.DebugView && arguments.IsValid())
 						arguments.SetError("Parameter 'debugView' must be \"none\", \"streaming\", \"lod\", \"mip\", \"motion\", \"shadows\", \"lighting\", "
 							"\"ao\", \"indirect\", \"luminance\", \"albedo\", \"voxels\", \"gi\", \"open\" or \"probes\"");
-
 				}
 				if (arguments.Has("quality"))
 				{
