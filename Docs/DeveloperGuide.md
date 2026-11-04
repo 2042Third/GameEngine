@@ -5048,7 +5048,9 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   faces from behind (`IsVoxelSolidFor`, inset `c_GISolidInsetVoxels`): a box's edge that only touches a voxel from outside
   leaves it in the lit layer (marking those solid closed every opening on the grid by a voxel at its edges). The probe
   cascades (D10-D12 of the spec) then run top down: `ProbeValidity` (dead probes inside solids; a probe of cascades 1 and
-  up that a surface covers moves off it along the surface's normal by up to `c_GIProbeMoveVoxels` voxels, stored in its
+  up that a surface covers moves off it along the surface's normal by up to `c_GIProbeMoveVoxels` voxels of its cascade's
+  minimum level (the same from every camera: voxels of the finest level holding it doubled the move as the camera went
+  away, and the probe's light stepped), stored in its
   validity texel's gba: probe planes on a room's faces otherwise died, and their children took one surviving parent's view
   from metres away, three times the patch's light on one side of the sun room and a fifth on the other), `ProbeWeights` (the
   eight parents' trilinear weights times their validity and the transmittance between the moved probes), `CascadeMarch`

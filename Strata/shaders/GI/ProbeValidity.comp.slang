@@ -7,7 +7,9 @@
 // not marched, and no gather or merge takes it. Continuous, so a probe a surface comes near fades rather than switching. Counts
 // cascade 0's dead probes (counter 2).
 // A probe of cascades 1 and up that a surface covers moves off it along the surface's normal, by ST_GI_PROBE_MOVE_VOXELS voxels
-// times the share the surface covers (continuous too), and takes the validity where it lands: probe planes lying on a room's
+// of the cascade's minimum level (the same from every camera: voxels of the finest level holding the probe doubled the move
+// as the camera went away, and the probe's light stepped) times the share the surface covers (continuous too), and takes the
+// validity where it lands: probe planes lying on a room's
 // faces would otherwise all die, and the children beside them take one surviving parent's view from metres away (the sun room's
 // walls read three times their light on one side and a fifth on the other). Inside a solid no surface faces the probe (no
 // normal): it stays dead. Cascade 0's probes stay where they are (the forward gather reads them at their grid positions). The
@@ -38,7 +40,7 @@ void main(uint3 globalID : SV_DispatchThreadID, uint localIndex : SV_GroupIndex)
 			if (normalLength > 1e-3)
 			{
 				float covered = saturate(occupancy * ST_GI_OCCUPANCY_GAIN);
-				float3 candidate = (normal / normalLength) * (ST_GI_PROBE_MOVE_VOXELS * u_GI.Levels[finest].Origin.w * covered);
+				float3 candidate = (normal / normalLength) * (ST_GI_PROBE_MOVE_VOXELS * u_GI.Levels[u_Pass.MinimumLevel].Origin.w * covered);
 				candidate = DecodeProbeMove(float4(0.0, EncodeProbeMove(candidate, spacing)), spacing); // As the passes will read it
 				uint candidateFinest;
 				float candidateOccupancy = SampleOccupancy(position + candidate, u_Pass.MinimumLevel, candidateFinest);

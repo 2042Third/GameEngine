@@ -758,6 +758,43 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A probe's move off a wall does not depend on the camera's distance")
+	{
+		// The move was c_GIProbeMoveVoxels voxels of the finest level holding the probe: a camera risen far enough above the room
+		// that level 1 no longer holds the west wall's probe doubled it, from 0.3 m to 0.6 m (the probe's light and its
+		// children's stepped in one frame). It is that many voxels of the cascade's minimum level from every camera.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		RoomRender render(DefaultRoom(), c_RoomSize, RoomSpecification());
+		render.Measure(RoomCamera(), {});
+		const GlobalIlluminationLayout* layout = render.Renderer->GetGlobalIlluminationLayout();
+		REQUIRE(layout);
+		REQUIRE(layout->Cascades[2].MinimumLevel == 1);
+		const float spacing = layout->Cascades[2].Spacing;
+		const glm::ivec3 grid(layout->Cascades[2].Grid);
+		const float move = RenderData::c_GIProbeMoveVoxels * layout->Levels[1].VoxelSize;
+		const glm::vec3 probePosition(-13.0f, 1.0f, -3.0f);
+		// The room camera, and one 6 m above the probe: beyond level 1's weight (its window reaches 6.4 m up, less its scroll and
+		// guard voxels), well within level 2's.
+		const SceneCamera cameras[] = { RoomCamera(), LookAt(glm::vec3(-10.0f, 7.0f, -2.0f), glm::vec3(-10.5f, 0.0f, -2.5f), 16.0f / 9.0f) };
+		for (const SceneCamera& camera : cameras)
+		{
+			CAPTURE(camera.Position.y);
+			render.Measure(camera, {});
+			const glm::vec3 relative = probePosition - camera.Position;
+			MESSAGE("level 1's weight at the probe: " << GlobalIllumination::GetLevelWeight(layout->Levels[1], relative));
+			std::vector<uint8_t> validity;
+			REQUIRE(render.Renderer->ReadGlobalIlluminationValidity(2, validity));
+			const glm::ivec3 probe = FindProbe(*render.Renderer, camera, 2, probePosition);
+			const uint8_t* texel = validity.data() + (static_cast<size_t>(probe.x) + grid.x * (static_cast<size_t>(probe.y) + static_cast<size_t>(grid.y) * probe.z)) * 4;
+			const glm::vec3 decoded = (glm::vec3(texel[1], texel[2], texel[3]) - 128.0f) / 127.0f * (0.5f * spacing);
+			MESSAGE("validity " << texel[0] / 255.0f << ", moved " << decoded.x << ", " << decoded.y << ", " << decoded.z);
+			CHECK(glm::length(decoded - glm::vec3(move, 0.0f, 0.0f)) <= 0.02f);
+		}
+		CHECK(GlobalIllumination::GetLevelWeight(layout->Levels[1], probePosition - cameras[1].Position) == 0.0f);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A sunlit floor's light is continuous across the voxel levels' blends")
 	{
 		// The sun's walk from a voxel where its level blends into the next (weight below one half) read the coarser level from
