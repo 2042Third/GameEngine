@@ -643,6 +643,112 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A sunlit slope and a ball under a low sun light themselves fully")
+	{
+		// The sun's walk from a solid surface voxel starts c_GIShadowOffsetVoxels along its normal from the voxel's center. On a
+		// slope the voxels the plane crosses stand out of it as a staircase (up to 1.4 voxels at 45 degrees), and a walk toward a
+		// sun low over the slope may cross them and read the surface's own shadow. Every voxel of an unshadowed 45-degree slope
+		// facing it holds albedo * E * cos / pi, and a ball's lit side nearly so (where the sun is more than grazing). Starting
+		// one voxel off at every tilt, the slope held 0.33-0.53 of its light with the sun 20 degrees over it (levels 0-3) and the
+		// ball 0.66-0.79; c_GIShadowTiltVoxels gives the slope 0.998-1.000 with no voxel dark, the ball 0.94-0.98 with at most
+		// 5.8% dark (at level 0, near the terminator).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		MaterialProperties white;
+		white.BaseColor = glm::vec4(0.8f, 0.8f, 0.8f, 1.0f);
+		const AssetHandle material = assets.AddMaterial(white);
+		const AssetHandle cube = assets.Add(MeshFactory::CreateCube(), "Cube");
+		const glm::quat tilt = glm::angleAxis(glm::radians(45.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		const glm::vec3 slopeCenter(3.0f, 1.0f, 6.0f);
+		Entity slope = AddMesh(scene, cube, material, slopeCenter, "Slope");
+		slope.GetComponent<TransformComponent>().Rotation = tilt;
+		slope.GetComponent<TransformComponent>().Scale = glm::vec3(10.0f, 1.0f, 10.0f);
+		const glm::vec3 ballCenter(-5.0f, 3.0f, 6.0f);
+		const AssetHandle sphere = assets.Add(MeshFactory::CreateSphere(2.0f), "Sphere");
+		AddMesh(scene, sphere, material, ballCenter, "Ball");
+		const glm::vec3 normal = tilt * glm::vec3(0.0f, 1.0f, 0.0f);
+		const glm::vec3 upSlope = tilt * glm::vec3(1.0f, 0.0f, 0.0f);
+		const glm::vec3 across(0.0f, 0.0f, 1.0f);
+		Scope<SceneRenderer> renderer = CreateVoxelRenderer(ExactSpecification(), 64, 64);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(0.0f, 2.0f, 8.0f));
+		Entity sun;
+		for (const float above : { 20.0f, 35.0f })
+		{
+			CAPTURE(above);
+			// The sun `above` degrees over the slope's plane, across its fall line; the ball's sun then stands low over the ground.
+			const glm::vec3 toSun = glm::normalize(std::cos(glm::radians(above)) * glm::normalize(0.8f * upSlope + 0.6f * across)
+				+ std::sin(glm::radians(above)) * normal);
+			if (sun)
+				scene.DestroyEntity(sun);
+			sun = AddSun(scene, -toSun, 10.0f, false);
+			RenderUntilSettled(*renderer, scene, camera);
+			for (uint32_t level = 0; level < 4; level++)
+			{
+				CAPTURE(level);
+				const VoxelLevel voxels = ReadLevel(*renderer, level);
+				std::vector<uint8_t> radiance;
+				REQUIRE(renderer->ReadGlobalIlluminationVoxels(level, SceneRenderer::GlobalIlluminationTexture::Radiance, radiance));
+				const VoxelClipmap* clipmap = renderer->GetVoxelClipmap();
+				const float voxel = clipmap->GetLayout().Levels[level].VoxelSize;
+				const VoxelBox& valid = clipmap->GetLevel(level).Valid;
+				double measured[2] = {};
+				double expected[2] = {};
+				uint32_t counted[2] = {};
+				uint32_t dark[2] = {};
+				for (int64_t z = valid.Minimum.z; z < valid.Maximum.z; z++)
+				{
+					for (int64_t y = valid.Minimum.y; y < valid.Maximum.y; y++)
+					{
+						for (int64_t x = valid.Minimum.x; x < valid.Maximum.x; x++)
+						{
+							const glm::i64vec3 index(x, y, z);
+							const glm::vec4 stored = voxels.GetNormal(index);
+							if (stored.w != 1.0f)
+								continue;
+							const glm::vec3 center = (glm::vec3(index) + 0.5f) * voxel;
+							// Only voxels samples read (weight above 0: beyond it a walk takes the next level from its start).
+							if (GlobalIllumination::GetLevelWeight(clipmap->GetLayout().Levels[level], center - camera.Position) <= 0.0f)
+								continue;
+							const glm::vec3 local = glm::inverse(tilt) * (center - slopeCenter);
+							// The slope's top away from its edges, or the ball's side the sun reaches more than grazing.
+							const glm::vec3 voxelNormal = glm::normalize(glm::vec3(stored));
+							int part = -1;
+							if (std::abs(local.x) < 4.0f && std::abs(local.z) < 4.0f && local.y > 0.0f && glm::dot(voxelNormal, normal) > 0.95f)
+								part = 0;
+							else if (glm::length(center - ballCenter) < 2.0f + 2.0f * voxel && glm::dot(voxelNormal, toSun) > 0.3f)
+								part = 1;
+							if (part < 0)
+								continue;
+							uint16_t value[4];
+							std::memcpy(value, radiance.data() + voxels.GetIndex(index) * 8, sizeof(value));
+							// rgb / a: coarser levels hold the finer ones' light times the share they cover.
+							const float alpha = glm::unpackHalf1x16(value[3]);
+							const float light = alpha > 0.0f ? glm::unpackHalf1x16(value[1]) / alpha / RenderData::c_GIRadianceScale : 0.0f;
+							const float reference = (204.0f / 255.0f) * 10.0f * std::max(glm::dot(voxelNormal, toSun), 0.0f) / glm::pi<float>();
+							measured[part] += light;
+							expected[part] += reference;
+							counted[part]++;
+							dark[part] += light < 0.5f * reference ? 1u : 0u;
+						}
+					}
+				}
+				for (int part = 0; part < 2; part++)
+				{
+					CAPTURE(part);
+					MESSAGE("sun " << above << " degrees over the slope, level " << level << ", " << (part == 0 ? std::string("slope") : std::string("ball")) << ": " << counted[part]
+						<< " voxels, " << dark[part] << " in their own shadow, power " << measured[part] / std::max(expected[part], 1e-9));
+					REQUIRE(counted[part] > 0u);
+					CHECK(dark[part] <= (part == 0 ? 0u : counted[part] * 8u / 100u));
+					CHECK(measured[part] >= (part == 0 ? 0.98 : 0.92) * expected[part]);
+				}
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Normals face out")
 	{
 		GPUContext gpu;

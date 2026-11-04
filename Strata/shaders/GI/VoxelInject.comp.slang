@@ -132,11 +132,14 @@ void main(uint3 globalID : SV_DispatchThreadID, uint localIndex : SV_GroupIndex)
 					float3 center = data.Origin.xyz + (float3(local) + 0.5) * voxel;
 					// A voxel holding only a face on its boundary (the layer in front of a face on the grid) is free: the walk starts on
 					// the face, half a voxel behind the center (the shadow's edges stay where the geometry puts them). A solid one holds
-					// the surface somewhere inside: the walk starts ST_GI_SHADOW_OFFSET_VOXELS along the normal from its center, off the
-					// surface's own voxels, and never skips a solid voxel (the floor runs on under a wall: the wall's voxels at the
+					// the surface somewhere inside: the walk starts ST_GI_SHADOW_OFFSET_VOXELS along the normal from its center, plus
+					// ST_GI_SHADOW_TILT_VOXELS times how far the normal leans off the axes (|n.x| + |n.y| + |n.z| - 1: a tilted
+					// surface's voxels stand out of it as a staircase, up to 1.4 voxels at 45 degrees, and a walk toward a sun low
+					// over a slope crossed them: half the slope's light was lost 20 degrees over it), off the surface's own voxels, and never skips a solid voxel (the floor runs on under a wall: the wall's voxels at the
 					// floor's height hold the floor's face, and skipping them let the sun into a sealed room).
 					bool touch = LoadGIMaterial(level, texel).a <= ST_GI_TOUCH_OCCUPANCY + 0.5 / 255.0;
-					float3 start = touch ? center - n * (0.49 * voxel) : center + n * (ST_GI_SHADOW_OFFSET_VOXELS * voxel);
+					float offset = ST_GI_SHADOW_OFFSET_VOXELS + ST_GI_SHADOW_TILT_VOXELS * (abs(n.x) + abs(n.y) + abs(n.z) - 1.0);
+					float3 start = touch ? center - n * (0.49 * voxel) : center + n * (offset * voxel);
 					float transmittance = GetSunTransmittance(start, toSun, n, level);
 					light += albedo * u_Frame.DirectionalLightColor.rgb * (cosine * transmittance / PI);
 				}

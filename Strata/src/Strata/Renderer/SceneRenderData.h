@@ -753,6 +753,9 @@ namespace Strata
 		// the reference on average, these reads 0.23; deeper ones (0.25 full) let the sealed room B of the paired rooms take light.
 		constexpr float c_GIRefreshOccupancy = 0.1f;
 		constexpr float c_GIShadowOffsetVoxels = 1.0f;   // A solid surface voxel's sun walk starts this far from its center along its normal
+		// ... plus this times how far the normal leans off the axes (|x| + |y| + |z| - 1, 0.41 at 45 degrees): a tilted surface's voxels
+		// stand out of it as a staircase, which a walk toward a sun low over it crossed.
+		constexpr float c_GIShadowTiltVoxels = 1.5f;
 		// The sun's walk from a voxel reads the voxel's own level until it rose this many of its voxels off its start along the
 		// normal (a voxel of the next level: none of that level's voxels holds the surface beyond), whatever the level's weight.
 		constexpr float c_GISunOwnLevelVoxels = 2.0f;

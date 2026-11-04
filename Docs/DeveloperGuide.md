@@ -5036,7 +5036,9 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   still holds the surface there: walks from where their level's weight was below one half went dark, a ring on sunlit
   floors at each level's edge that moved with the camera), then switching level where the next one's weight passes one
   half; plus its emission; radiance times `c_GIRadianceScale`, alpha 1; two-sided voxels a dark surface). A voxel of
-  the lit layer starts the walk on its face; a solid one `c_GIShadowOffsetVoxels` along its normal from its center, and no
+  the lit layer starts the walk on its face; a solid one `c_GIShadowOffsetVoxels` along its normal from its center, plus `c_GIShadowTiltVoxels` (1.5) times how far
+  the normal leans off the axes (`|n.x| + |n.y| + |n.z| - 1`: a slope's voxels stand out of it as a staircase that a walk
+  toward a sun low over it crossed, and half its light was lost 20 degrees over it), and no
   solid voxel is ever skipped (a floor runs on under its walls: skipping the floor's own voxels let the sun into a sealed
   room). Solid voxels stop the light, the lit layer passes it, alpha-masked ones attenuate it. A trilinear march with the
   occupancy's gain thickened every edge by a fraction of a voxel: the sun room's patch had 48% of its power; the walk gives
