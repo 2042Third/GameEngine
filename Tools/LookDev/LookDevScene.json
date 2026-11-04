@@ -236,7 +236,7 @@
 	{"command": "scene.new", "parameters": {"name": "SunRoom"}},
 	{"command": "entity.create", "parameters": {"name": "Main Camera", "components": {"Transform": {"Translation": [-9, 1.5, -4.5], "Rotation": [-3, 169.9, 0]}, "Camera": {"Primary": true, "PerspectiveFOV": 70}}}},
 	{"command": "entity.create", "parameters": {"name": "Sun", "components": {"Transform": {"Rotation": [-40, 30, 0]}, "DirectionalLight": {"Intensity": 100000, "CastShadows": true}}}},
-	{"command": "entity.create", "parameters": {"name": "Post Process", "components": {"PostProcess": {}}}},
+	{"command": "entity.create", "parameters": {"name": "Post Process", "components": {"PostProcess": {"AmbientOcclusion": false}}}},
 	{"command": "entity.create", "parameters": {"name": "Ground", "components": {"Transform": {"Scale": [60, 1, 60]}, "MeshRenderer": {"Mesh": "0000000000000003", "Material": "Materials/Ground.stmat"}}}},
 	{"command": "entity.create", "parameters": {"name": "Room Floor", "components": {"Transform": {"Translation": [-10, 0.05, -2], "Scale": [6.4, 0.1, 6.4]}, "MeshRenderer": {"Mesh": "0000000000000001", "Material": "Materials/Plaster.stmat"}}}},
 	{"command": "entity.create", "parameters": {"name": "Room Ceiling", "components": {"Transform": {"Translation": [-10, 3.1, -2], "Scale": [6.4, 0.2, 6.4]}, "MeshRenderer": {"Mesh": "0000000000000001", "Material": "Materials/Plaster.stmat"}}}},

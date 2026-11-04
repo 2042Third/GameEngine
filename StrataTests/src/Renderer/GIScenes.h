@@ -32,7 +32,9 @@ namespace Strata::Tests
 
 	// The look-dev room's shell lit by the sun alone, for bounce light measured against a reference: the Room Floor, Ceiling and
 	// Wall entities of LookDevScene.json on its ground (its box, ball and lamp left out; Tools/LookDev/LookDevScene.json's scenes
-	// SunRoom and SealedRoom mirror it: change both), under a sun whose light enters through the south window and lights a patch
+	// SunRoom and SealedRoom mirror it: change both; they keep the default tone mapping and exposure to be looked at, and turn
+	// ambient occlusion off as AddNeutralPostProcess does, so the gi view shows the field alone), under a sun whose light enters
+	// through the south window and lights a patch
 	// of the floor, and no sky. Every light on the room's surfaces then comes from that patch, the window's sunlit sill and
 	// reveals and the sunlit ground the window shows, which SunRoomReference integrates exactly.
 	struct SunRoomOptions
