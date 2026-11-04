@@ -218,6 +218,84 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 		}
 	}
 
+	TEST_CASE("The field's faces read a uniform radiance exactly")
+	{
+		// The reduce (GI/FieldReduce.comp) weighs each direction by its solid angle (the octahedron's Jacobian times
+		// GetSolidAngleNormalization, which the GPU receives) and the face's cosine, and divides by GetFaceCosineSum (correction 7a):
+		// a uniform radiance gives every face exactly that radiance, with cascade 0's 64 directions as with others.
+		for (uint32_t a : { 4u, 8u, 16u })
+		{
+			CAPTURE(a);
+			const float normalization = GlobalIllumination::GetSolidAngleNormalization(a);
+			CHECK(normalization > 0.0f);
+			for (uint32_t v = 0; v < a; v++)
+			{
+				for (uint32_t u = 0; u < a; u++)
+				{
+					// The octahedron's point for the texel: |p.x| + |p.y| + |p.z| = 1 along the direction.
+					const glm::vec3 direction = GlobalIllumination::GetDirection(u, v, a);
+					const glm::vec3 point = direction / (std::abs(direction.x) + std::abs(direction.y) + std::abs(direction.z));
+					const float length = glm::length(point);
+					CHECK(GlobalIllumination::GetSolidAngle(u, v, a) == doctest::Approx(normalization / (length * length * length)).epsilon(1e-5));
+				}
+			}
+			float sums[6] = {};
+			for (uint32_t face = 0; face < 6; face++)
+			{
+				CAPTURE(face);
+				sums[face] = GlobalIllumination::GetFaceCosineSum(face, a);
+				// Near pi (a cosine-weighted hemisphere), within the octahedral tile's unevenness.
+				CHECK(sums[face] > 0.9f * glm::pi<float>());
+				CHECK(sums[face] < 1.2f * glm::pi<float>());
+				const glm::vec3 axis = GlobalIllumination::GetFaceAxis(face);
+				const float weight = 1.0f / sums[face]; // As GlobalIlluminationConstants::FaceWeights carries it
+				double reduced = 0.0;
+				for (uint32_t v = 0; v < a; v++)
+				{
+					for (uint32_t u = 0; u < a; u++)
+						reduced += static_cast<double>(std::max(glm::dot(GlobalIllumination::GetDirection(u, v, a), axis), 0.0f)) * GlobalIllumination::GetSolidAngle(u, v, a) * weight;
+				}
+				CHECK(reduced == doctest::Approx(1.0).epsilon(1e-5));
+			}
+			// Opposite faces are mirror images.
+			CHECK(sums[0] == doctest::Approx(sums[1]).epsilon(1e-5));
+			CHECK(sums[2] == doctest::Approx(sums[3]).epsilon(1e-5));
+			CHECK(sums[4] == doctest::Approx(sums[5]).epsilon(1e-5));
+		}
+	}
+
+	TEST_CASE("The field stays centred on the camera")
+	{
+		// Correction 1: the field's minimum corner is the nearest step of FieldSnap to the camera less half the extent, so the
+		// camera stays within half a step of the field's center on every axis (floor() let it drift a whole step off, and the
+		// field's fade then had no probes on one side).
+		for (const GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
+		{
+			const GlobalIlluminationLayout layout = GetLayout(level);
+			const double snap = static_cast<double>(layout.FieldSnap);
+			REQUIRE(snap > 0.0);
+			for (int axis = 0; axis < 3; axis++)
+			{
+				CAPTURE(axis);
+				// Across two steps on each side of the origin, and far out, in steps of a twentieth.
+				for (const double base : { 0.0, -1234.0, 9876.0 })
+				{
+					for (int step = -40; step <= 40; step++)
+					{
+						glm::dvec3 camera(0.3, -0.7, 1.1);
+						camera[axis] = base + snap * static_cast<double>(step) / 20.0;
+						CAPTURE(camera[axis]);
+						const glm::dvec3 minimum = GlobalIllumination::GetFieldMinimum(layout, camera);
+						const glm::dvec3 center = minimum + glm::dvec3(layout.FieldExtent) * 0.5;
+						CHECK(std::abs(camera[axis] - center[axis]) <= 0.5 * snap + 1e-9);
+						// On the snap's grid.
+						CHECK(std::abs(minimum[axis] / snap - std::round(minimum[axis] / snap)) < 1e-9);
+					}
+				}
+			}
+		}
+	}
+
 	TEST_CASE("Windows snap and follow")
 	{
 		for (GlobalIlluminationLevel quality : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
