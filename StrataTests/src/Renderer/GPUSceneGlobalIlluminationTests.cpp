@@ -509,6 +509,140 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Curved and rough surfaces stay one-sided, a thin wall on the ground two-sided")
+	{
+		// A voxel is two-sided where its triangles face each other along an axis: both faces of a wall thinner than the voxel. A
+		// tessellated sphere's pole (48 triangles leaning 3.75 degrees around it) and a rough heightfield (dozens of triangles a
+		// voxel, each leaning up to 30 degrees) lean only a little each way, however many triangles add: one-sided at every
+		// level. A 5 cm wall standing on finely tessellated ground stays two-sided at every level, its foot too, where the
+		// ground's triangles outnumber the wall's.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		MaterialProperties white;
+		const AssetHandle material = assets.AddMaterial(white);
+		const AssetHandle sphere = assets.Add(MeshFactory::CreateSphere(3.0f), "Sphere");
+		AddMesh(scene, sphere, material, glm::vec3(-5.05f, 2.45f, 6.05f), "Sphere"); // Its pole in the middle of a level-0 voxel
+		// A 5 m heightfield of 5 cm cells, every vertex moved up or down by up to 1.5 cm (taken straight from mt19937's output,
+		// which the standard fixes).
+		const Ref<Mesh> flat = MeshFactory::CreatePlane(5.0f, 100);
+		std::vector<glm::vec3> positions = flat->GetPositions();
+		std::mt19937 random(7);
+		for (glm::vec3& position : positions)
+			position.y = 0.03f * static_cast<float>(static_cast<double>(random()) / 4294967296.0) - 0.015f;
+		std::string error;
+		const Ref<Mesh> roughMesh = Mesh::Create(positions, flat->GetAttributes(), flat->GetIndices(), flat->GetSubmeshes(), &error);
+		REQUIRE_MESSAGE(roughMesh, error);
+		const AssetHandle rough = assets.Add(roughMesh, "Rough");
+		AddMesh(scene, rough, material, glm::vec3(3.0f, 0.37f, 5.0f), "Rough");
+		// The wall (x -2.975 to -2.925, within one voxel of every level) on 3 m of ground in 5 cm cells, its top at y 0.
+		const AssetHandle ground = assets.Add(MeshFactory::CreatePlane(3.0f, 60), "Ground");
+		AddMesh(scene, ground, material, glm::vec3(-3.0f, 0.0f, -3.0f), "Ground");
+		const AssetHandle cube = assets.Add(MeshFactory::CreateCube(), "Cube");
+		AddMesh(scene, cube, material, glm::vec3(-2.95f, 0.5f, -3.0f), "Wall").GetComponent<TransformComponent>().Scale = glm::vec3(0.05f, 1.0f, 2.0f);
+		Scope<SceneRenderer> renderer = CreateVoxelRenderer();
+		RenderUntilSettled(*renderer, scene, LookAt(glm::vec3(0.0f, 2.5f, 0.0f), glm::vec3(0.0f, 2.0f, 8.0f), c_Aspect));
+		const VoxelClipmap* clipmap = renderer->GetVoxelClipmap();
+		REQUIRE(clipmap);
+		const std::vector<VoxelLevel> levels = ReadLevels(*renderer);
+		REQUIRE(levels.size() == 4);
+		for (uint32_t level = 0; level < levels.size(); level++)
+		{
+			CAPTURE(level);
+			const float voxel = clipmap->GetLayout().Levels[level].VoxelSize;
+			const VoxelBox& valid = clipmap->GetLevel(level).Valid;
+			// The surface voxels of a box (world coordinates) inside the level's valid box.
+			const auto countSides = [&](const glm::vec3& minimum, const glm::vec3& maximum, uint32_t& oneSided, uint32_t& twoSided)
+			{
+				oneSided = 0;
+				twoSided = 0;
+				const glm::i64vec3 first = glm::max(glm::i64vec3(glm::floor(minimum / voxel)), valid.Minimum);
+				const glm::i64vec3 last = glm::min(glm::i64vec3(glm::floor(maximum / voxel)), valid.Maximum - int64_t(1));
+				for (int64_t z = first.z; z <= last.z; z++)
+				{
+					for (int64_t y = first.y; y <= last.y; y++)
+					{
+						for (int64_t x = first.x; x <= last.x; x++)
+						{
+							const float w = levels[level].GetNormal(glm::i64vec3(x, y, z)).w;
+							oneSided += w == 1.0f ? 1 : 0;
+							twoSided += w == -1.0f ? 1 : 0;
+						}
+					}
+				}
+			};
+			uint32_t oneSided = 0;
+			uint32_t twoSided = 0;
+			countSides(glm::vec3(-8.1f, -0.6f, 3.0f), glm::vec3(-2.0f, 5.5f, 9.1f), oneSided, twoSided);
+			MESSAGE("level " << level << ", the sphere: " << oneSided << " one-sided voxels, " << twoSided << " two-sided");
+			CHECK(oneSided > 0);
+			CHECK(twoSided == 0);
+			countSides(glm::vec3(0.5f, 0.355f, 2.5f), glm::vec3(5.5f, 0.385f, 7.5f), oneSided, twoSided);
+			MESSAGE("level " << level << ", the heightfield: " << oneSided << " one-sided voxels, " << twoSided << " two-sided");
+			CHECK(oneSided > 0);
+			CHECK(twoSided == 0);
+			// The wall's voxels halfway up and at its foot (the ground's top lies on every level's grid: the foot's voxels hold the
+			// wall's faces and the ground's).
+			for (const float height : { 0.5f * voxel, 0.55f })
+			{
+				CAPTURE(height);
+				const glm::i64vec3 wall = glm::i64vec3(glm::floor(glm::vec3(-2.95f, height, -3.0f) / voxel));
+				REQUIRE(valid.Contains(VoxelBox { wall, wall + int64_t(1) }));
+				CHECK(levels[level].GetNormal(wall).w == -1.0f);
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The voxels view shows the voxels' light")
+	{
+		// From stage 2 the view shows each surface's radiance (rgb / a) through the frame's exposure and x / (1 + x), and its
+		// albedo times 0.03 where no light arrives (D15): a sunlit floor reads bright, the same floor in a box's shadow dark but not
+		// black. The albedo the view showed before shaded both alike.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		MaterialProperties white;
+		white.BaseColor = glm::vec4(0.8f, 0.8f, 0.8f, 1.0f);
+		const AssetHandle material = assets.AddMaterial(white);
+		const AssetHandle cube = assets.Add(MeshFactory::CreateCube(), "Cube");
+		AddMesh(scene, cube, material, glm::vec3(0.0f, -0.4f, 0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(60.0f, 1.0f, 60.0f);
+		// Out of the camera's view, its shadow on the floor around (0, 0.1, 3.8).
+		AddMesh(scene, cube, material, glm::vec3(-1.2f, 4.0f, 3.0f), "Occluder").GetComponent<TransformComponent>().Scale = glm::vec3(2.0f, 0.4f, 2.0f);
+		const glm::vec3 toSun = -glm::normalize(glm::vec3(0.3f, -1.0f, 0.2f));
+		AddSun(scene, -toSun, 10.0f, false);
+		Scope<SceneRenderer> renderer = CreateVoxelRenderer(ExactSpecification(), 256, 256);
+		SceneRenderOptions options = VoxelView();
+		options.PreExposure = 1.0f;
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 2.0f, -1.0f), glm::vec3(0.0f, 0.1f, 4.0f));
+		RenderUntilSettled(*renderer, scene, camera, options);
+		ReadbackImage image;
+		REQUIRE(Renderer::ReadTexture(renderer->GetOutputTexture(), image));
+		const auto read = [&](const glm::vec3& point)
+		{
+			const glm::uvec2 pixel = ProjectToPixel(camera, point, image.Width, image.Height);
+			REQUIRE(pixel.x < image.Width);
+			REQUIRE(pixel.y < image.Height);
+			return GetPixelRGBA8(image, pixel.x, pixel.y);
+		};
+		const glm::u8vec4 lit = read(glm::vec3(1.8f, 0.1f, 2.0f));
+		const glm::u8vec4 shadowed = read(glm::vec3(0.0f, 0.1f, 3.8f));
+		// The sunlit floor: 0.8 * 10 lux * cos / pi, about 2.4 nits at a pre-exposure of 1, shows at x / (1 + x), about 0.7 (sRGB
+		// 0.86). The shadowed floor: no light (one bounce, none from the sky), 0.8 * 0.03 (sRGB 0.17).
+		const auto encode = [](float linear) { return (linear <= 0.0031308f ? 12.92f * linear : 1.055f * std::pow(linear, 1.0f / 2.4f) - 0.055f) * 255.0f; };
+		const float radiance = 0.8f * 10.0f * toSun.y / glm::pi<float>();
+		const float expectedLit = encode(radiance / (1.0f + radiance));
+		const float expectedShadowed = encode(0.8f * 0.03f);
+		MESSAGE("lit " << int(lit.g) << " (expected " << expectedLit << "), shadowed " << int(shadowed.g) << " (expected " << expectedShadowed << ")");
+		CHECK(std::abs(float(lit.g) - expectedLit) <= 6.0f);
+		CHECK(std::abs(float(shadowed.g) - expectedShadowed) <= 6.0f);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Normals face out")
 	{
 		GPUContext gpu;

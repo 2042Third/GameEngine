@@ -7,11 +7,12 @@
 // - Emission: the brightest of the voxel's glowing triangles times their coverage together, at most 1.
 // - Normal: with triangles, their summed unit normals normalized, w 1; where the sum's length is below ST_GI_TWO_SIDED_SUM times
 //   the triangles that added (they face against each other), w -1 (two-sided: both faces of a wall thinner than the voxel; it
-//   gets no light rather than let one side's into the other). Also two-sided: triangles whose normals reach at least
-//   ST_GI_OPPOSED_COMPONENT both ways along an axis, whatever else adds (the inside and outside of a wall thinner than a coarse
-//   level's voxel, with the sunlit ground beside its foot, summed to a normal facing the room and lit it through the wall). A
-//   face's triangles count by how many touch the voxel (one near its
-//   middle, both on its diagonal), so a plain sum would not cancel. Faces add only to voxels not wholly behind them (WriteVoxel):
+//   gets no light rather than let one side's into the other). Also two-sided: triangles facing both ways along an axis (each
+//   within ST_GI_OPPOSED_FACING of it), the fewer side at least ST_GI_OPPOSED_SHARE of the more, whatever else adds (the inside
+//   and outside of a wall thinner than a coarse level's voxel, with the sunlit ground beside its foot, summed to a normal facing
+//   the room and lit it through the wall). Counts, not sums of components: a sphere's pole or a rough surface leans a little
+//   each way in many triangles, and summed components made those two-sided (dark). A face's triangles count by how many touch
+//   the voxel (one near its middle, both on its diagonal), so a plain sum would not cancel. Faces add only to voxels not wholly behind them (WriteVoxel):
 //   a voxel faces touch only from behind (inside a box on the grid, under a floor's top) has none, w 0. A double-sided
 //   material's w 0.5 (lit from either side). Interior and empty voxels: 0.
 
@@ -60,11 +61,15 @@ void main(uint3 globalID : SV_DispatchThreadID)
 		float3 summed = float3(sum) / ST_GI_NORMAL_FIXED_POINT;
 		float summedLength = sqrt(dot(summed, summed));
 		uint added = u_Scratch.Load(GetScratchAddress(ST_SCRATCH_NORMAL_COUNT, voxel));
-		float3 spread = float3(u_Scratch.Load(GetScratchAddress(ST_SCRATCH_NORMAL_SPREAD + 0u, voxel)), u_Scratch.Load(GetScratchAddress(ST_SCRATCH_NORMAL_SPREAD + 1u, voxel)),
-			u_Scratch.Load(GetScratchAddress(ST_SCRATCH_NORMAL_SPREAD + 2u, voxel))) / ST_GI_NORMAL_FIXED_POINT;
-		// Per axis, how far the normals reach the other way: (|n| sum - signed sum) / 2 one way, (|n| sum + signed sum) / 2 the other.
-		float3 opposed = min(spread - summed, spread + summed) * 0.5;
-		bool opposing = any(opposed >= ST_GI_OPPOSED_COMPONENT);
+		bool opposing = false;
+		[unroll]
+		for (uint axis = 0u; axis < 3u; axis++)
+		{
+			uint positive = u_Scratch.Load(GetScratchAddress(ST_SCRATCH_FACING_POSITIVE + axis, voxel));
+			uint negative = u_Scratch.Load(GetScratchAddress(ST_SCRATCH_FACING_NEGATIVE + axis, voxel));
+			uint fewer = min(positive, negative);
+			opposing = opposing || (fewer > 0u && float(fewer) >= ST_GI_OPPOSED_SHARE * float(max(positive, negative)));
+		}
 		if ((key & ST_VOXEL_KEY_DOUBLE_SIDED) != 0u)
 			normal = float4(summedLength > 0.0 ? summed / summedLength : float3(0.0, 0.0, 0.0), 0.5);
 		else if (added == 0u)

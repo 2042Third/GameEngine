@@ -4939,8 +4939,8 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
 - **Layout** (`R/GlobalIlluminationLayout.h`, `Renderer.GlobalIlluminationLayout`): per quality level the voxel levels
   (High four of 128 x 64 x 128 voxels from 10 cm, Low three of 64 x 32 x 64 from 20 cm, each level twice the voxel size of
   the one before) and the probe cascades (High four from 0.5 m, 16 to 1,024 directions; Low three from 1 m). Memory per view
-  that runs GI (`GetMemory`, the same at every output size, with the probes' resources of the later stages): 116.3 MiB at
-  High, 16.4 MiB at Low; stage 1 makes the voxel levels without their radiance, the scratch (8 words a voxel) and the work
+  that runs GI (`GetMemory`, the same at every output size, with the probes' resources of the later stages): 111.0 MiB at
+  High, 18.0 MiB at Low; stage 1 makes the voxel levels without their radiance, the scratch (14 words a voxel) and the work
   buffers (`SceneRenderer::GetGlobalIlluminationMemoryBytes`: about 58 MiB at High). A frame wants GI while a GI view shows (later: when a
   scene asks), at `SceneRendererSpecification::GlobalIllumination.Level` (High; tests and tools choose Low until the quality
   row does); a frame that wants none releases everything (`ReleaseGlobalIllumination`), and so does the
@@ -5001,10 +5001,12 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   alpha-masked voxels; `Emission<l>` R32_UINT: RGB9E5 nits; `Normal<l>` RGBA8_SNORM: the summed normal, w 1; w -1 where
   the sum is shorter than `c_GITwoSidedSum` times the triangles that added (they face against each other: the scratch
   counts them, since a face's triangles touch a voxel once or twice), a **two-sided** voxel holding both faces of a wall
-  thinner than it: it will get no light rather than let one side's into the other; also two-sided where the normals reach
-  `c_GIOpposedComponent` (0.5) both ways along an axis, whatever else adds (a wall's inside and outside in one coarse voxel,
-  with the sunlit ground at its foot, summed to a normal facing the room; the scratch keeps each axis's sum of magnitudes,
-  `c_GIScratchWords` words a voxel); a face's normal goes only to voxels it covers part of or lies on (`FacesVoxel`), never
+  thinner than it: it will get no light rather than let one side's into the other; also two-sided where triangles face both
+  ways along an axis, each within `c_GIOpposedFacing` (0.75) of it, the fewer side at least `c_GIOpposedShare` (a quarter)
+  of the more, whatever else adds (a wall's inside and outside in one coarse voxel, with the sunlit ground at its foot,
+  summed to a normal facing the room; the scratch counts each axis's triangles facing each way, `c_GIScratchWords` words a
+  voxel; summing the normals' components instead made a tessellated sphere's pole and rough ground two-sided, dark, at
+  every level); a face's normal goes only to voxels it covers part of or lies on (`FacesVoxel`), never
   to one it touches along an edge (a wall's top edge under a ceiling on the grid turned the ceiling's sunlit top toward the
   room); w 0 where every face touching the
   voxel has it behind (the layer inside a box's faces on the grid); w 0.5 for double-sided materials, whose triangles

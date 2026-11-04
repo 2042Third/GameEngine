@@ -87,7 +87,10 @@ RWByteAddressBuffer u_Counters : register(u6);
 #define ST_SCRATCH_NORMALS 3u
 #define ST_SCRATCH_COVERAGE 6u
 #define ST_SCRATCH_NORMAL_COUNT 7u
-#define ST_SCRATCH_NORMAL_SPREAD 8u // Three words: per axis, the sum of the triangles' normal components' magnitudes (c_GIScratchWords: 11)
+// Three words each: per axis, how many of the voxel's triangles face its + way and its - way within ST_GI_OPPOSED_FACING
+// (c_GIScratchWords: 14).
+#define ST_SCRATCH_FACING_POSITIVE 8u
+#define ST_SCRATCH_FACING_NEGATIVE 11u
 #define ST_GI_COVERAGE_FIXED_POINT 65536.0 // A whole voxel face's coverage
 #define ST_GI_COUNTER_TILES 0u
 #define ST_GI_COUNTER_TILE_OVERFLOW 4u
@@ -332,10 +335,17 @@ void WriteVoxel(VoxelTriangle triangle, int3 local, uint emission, uint coverage
 		u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_NORMALS + 0u, voxel), uint(triangle.Normal.x), previous);
 		u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_NORMALS + 1u, voxel), uint(triangle.Normal.y), previous);
 		u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_NORMALS + 2u, voxel), uint(triangle.Normal.z), previous);
-		u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_NORMAL_SPREAD + 0u, voxel), uint(abs(triangle.Normal.x)), previous);
-		u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_NORMAL_SPREAD + 1u, voxel), uint(abs(triangle.Normal.y)), previous);
-		u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_NORMAL_SPREAD + 2u, voxel), uint(abs(triangle.Normal.z)), previous);
 		u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_NORMAL_COUNT, voxel), 1u, previous);
+		// The way along an axis the triangle faces, where it faces it closely (a unit normal has at most one such component).
+		int facing = int(ST_GI_OPPOSED_FACING * ST_GI_NORMAL_FIXED_POINT);
+		[unroll]
+		for (uint axis = 0u; axis < 3u; axis++)
+		{
+			if (triangle.Normal[axis] >= facing)
+				u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_FACING_POSITIVE + axis, voxel), 1u, previous);
+			else if (triangle.Normal[axis] <= -facing)
+				u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_FACING_NEGATIVE + axis, voxel), 1u, previous);
+		}
 	}
 }
 
