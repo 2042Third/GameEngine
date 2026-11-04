@@ -2,8 +2,10 @@
 
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Math/Math.h"
+#include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/GlobalIlluminationLayout.h"
 #include "Strata/Renderer/Mesh.h"
+#include "Strata/Renderer/Renderer.h"
 
 #include <glm/gtc/constants.hpp>
 
@@ -555,6 +557,28 @@ namespace Strata::Tests
 	{
 		const glm::vec3 offset(0.01f * static_cast<float>(frame), 0.0f, 0.0f);
 		return StrafeCamera(glm::vec3(-9.0f, 1.5f, -4.5f) + offset, glm::vec3(-10.0f, 1.2f, 1.1f) + offset, 70.0f, aspectRatio);
+	}
+
+	bool RenderGIFrame(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options)
+	{
+		GPUProfiler& profiler = Renderer::GetGPUProfiler();
+		profiler.BeginFrame();
+		if (!renderer.Render(scene, camera, nullptr, options))
+			return false;
+		if (!profiler.IsEnabled())
+			return true;
+		renderer.ResolveGPUStats(true);
+		const SceneRendererGPUStats& gpu = renderer.GetGPUStats();
+		CHECK(gpu.HasTimes);
+		float stageMs = 0.0f;
+		for (const GPUStageTime& stage : gpu.StageMs)
+		{
+			if (stage.Stage == RendererGPUStages::Get().RadianceCascades)
+				stageMs += stage.Milliseconds;
+		}
+		INFO("frame " << renderer.GetRenderCount() << " of its renderer: GPU.RadianceCascades " << stageMs << " ms, the frame " << gpu.BusyMs << " ms");
+		CHECK(stageMs <= c_MaxGIFrameMilliseconds);
+		return true;
 	}
 
 }

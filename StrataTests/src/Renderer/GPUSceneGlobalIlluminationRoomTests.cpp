@@ -172,7 +172,7 @@ namespace
 		std::vector<glm::vec3> Measure(const SceneCamera& camera, const std::vector<RoomPoint>& points, uint32_t frames = 3)
 		{
 			for (uint32_t frame = 0; frame < frames; frame++)
-				REQUIRE(Renderer->Render(SceneData, camera, nullptr, GIViewOptions()));
+				REQUIRE(RenderGIFrame(*Renderer, SceneData, camera, GIViewOptions()));
 			REQUIRE(Renderer->GetStats().GlobalIllumination);
 			REQUIRE_FALSE(Renderer->GetStats().GlobalIlluminationPending);
 			return ReadPoints(*Renderer, camera, points);

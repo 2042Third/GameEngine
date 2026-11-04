@@ -54,7 +54,7 @@ namespace
 	{
 		for (uint32_t frame = 0; frame < 100; frame++)
 		{
-			REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			REQUIRE(RenderGIFrame(renderer, scene, camera, options));
 			const SceneRendererStats& stats = renderer.GetStats();
 			REQUIRE(stats.GlobalIllumination);
 			if (stats.GlobalIlluminationSettled && stats.GIWaitingProxies == 0 && stats.PendingAssets == 0)
@@ -275,8 +275,8 @@ namespace
 	SceneRendererGPUStats VoxelizeAllAtOnce(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera)
 	{
 		for (uint32_t frame = 0; frame < 100 && (frame < 2 || renderer.GetStats().PendingAssets > 0 || renderer.GetStats().DeferredProxies > 0); frame++)
-			REQUIRE(renderer.Render(scene, camera, nullptr, SceneRenderOptions {}));
-		REQUIRE(renderer.Render(scene, camera, nullptr, VoxelView()));
+			REQUIRE(RenderGIFrame(renderer, scene, camera, SceneRenderOptions {}));
+		REQUIRE(RenderGIFrame(renderer, scene, camera, VoxelView()));
 		CHECK(renderer.GetStats().GlobalIlluminationSettled);
 		renderer.ResolveGPUStats(true);
 		const SceneRendererGPUStats& counts = renderer.GetGPUStats();
@@ -706,7 +706,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		size_t differing = 0;
 		for (uint32_t frame = 1; frame <= 140; frame++)
 		{
-			REQUIRE(renderer->Render(scene, path(frame), nullptr, VoxelView()));
+			REQUIRE(RenderGIFrame(*renderer, scene, path(frame), VoxelView()));
 			CHECK(renderer->GetStats().GlobalIlluminationSettled);
 			const size_t differences = CountDifferences(ReadLevels(*renderer), ReadFreshVoxels(scene, path(0), path(frame)));
 			if (differences > 0)
@@ -738,13 +738,13 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 
 		box.GetComponent<TransformComponent>().Translation = glm::vec3(2.0f, 0.5f, 2.0f);
 		box.MarkModified<TransformComponent>();
-		REQUIRE(renderer->Render(scene, camera, nullptr, VoxelView()));
+		REQUIRE(RenderGIFrame(*renderer, scene, camera, VoxelView()));
 		CHECK(renderer->GetStats().GIMovingProxies == 1);
 		const VoxelLevel moving = ReadLevel(*renderer, 0);
 		CHECK(moving.GetMaterial(glm::i64vec3(10, 5, 20)).a == 0);
 		CHECK(moving.GetMaterial(glm::i64vec3(20, 5, 20)).a == 0);
 		for (uint32_t frame = 1; frame <= RenderData::c_GIMovingFrames; frame++)
-			REQUIRE(renderer->Render(scene, camera, nullptr, VoxelView()));
+			REQUIRE(RenderGIFrame(*renderer, scene, camera, VoxelView()));
 		CHECK(renderer->GetStats().GIMovingProxies == 0);
 		CHECK(ReadLevel(*renderer, 0).GetMaterial(glm::i64vec3(20, 5, 20)).a == 255);
 		CHECK(CountDifferences(ReadLevels(*renderer), ReadFreshVoxels(scene, camera, camera)) == 0);
@@ -765,9 +765,9 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 			Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(ExactSpecification());
 			renderer->SetViewportSize(64, 64);
 			RenderUntilSettled(*renderer, scene, home);
-			REQUIRE(renderer->Render(scene, away, nullptr, VoxelView()));
+			REQUIRE(RenderGIFrame(*renderer, scene, away, VoxelView()));
 			CHECK_FALSE(renderer->GetStats().GlobalIlluminationPending);
-			REQUIRE(renderer->Render(scene, home, nullptr, VoxelView()));
+			REQUIRE(RenderGIFrame(*renderer, scene, home, VoxelView()));
 			CHECK_FALSE(renderer->GetStats().GlobalIlluminationPending);
 			CHECK(renderer->GetStats().GIQueuedRegions == 0);
 			CHECK(CountDifferences(ReadLevels(*renderer), ReadFreshVoxels(scene, home, home)) == 0);
@@ -781,12 +781,12 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 			renderer->SetViewportSize(64, 64);
 			// The scene's assets first, so the GI's first frame finds every proxy.
 			for (uint32_t frame = 0; frame < 100 && (frame < 2 || renderer->GetStats().PendingAssets > 0 || renderer->GetStats().DeferredProxies > 0); frame++)
-				REQUIRE(renderer->Render(scene, home, nullptr, SceneRenderOptions {}));
+				REQUIRE(RenderGIFrame(*renderer, scene, home, SceneRenderOptions {}));
 			uint32_t pendingFrames = 0;
 			uint32_t queued = UINT32_MAX;
 			for (uint32_t frame = 0; frame < 200; frame++)
 			{
-				REQUIRE(renderer->Render(scene, home, nullptr, VoxelView()));
+				REQUIRE(RenderGIFrame(*renderer, scene, home, VoxelView()));
 				const SceneRendererStats& stats = renderer->GetStats();
 				CHECK(stats.GIQueuedRegions <= queued);
 				queued = stats.GIQueuedRegions;
@@ -824,12 +824,12 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		RenderUntilSettled(*renderer, scene, camera);
 		// A turn of 90 degrees in one frame (a camera cut for the other passes): no voxel work, not pending.
 		SceneCamera turned = LookAt(glm::vec3(-3.5f, 1.7f, -9.5f), glm::vec3(-3.5f, 1.7f, -9.5f) + glm::vec3(1.0f, -0.1f, 0.0f));
-		REQUIRE(renderer->Render(scene, turned, nullptr, VoxelView()));
+		REQUIRE(RenderGIFrame(*renderer, scene, turned, VoxelView()));
 		CHECK(renderer->GetStats().GIVoxelizedTriangles == 0);
 		CHECK_FALSE(renderer->GetStats().GlobalIlluminationPending);
 		// A reset of the history (a view switch, a quality change) leaves the voxels alone.
 		renderer->ResetHistory();
-		REQUIRE(renderer->Render(scene, turned, nullptr, VoxelView()));
+		REQUIRE(RenderGIFrame(*renderer, scene, turned, VoxelView()));
 		CHECK(renderer->GetStats().GIVoxelizedTriangles == 0);
 		CHECK_FALSE(renderer->GetStats().GlobalIlluminationPending);
 
@@ -845,7 +845,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		{
 			REQUIRE(gpu.GetDevice().BeginFrame());
 			Renderer::BeginFrame();
-			REQUIRE(renderer->Render(scene, turned, nullptr, VoxelView()));
+			REQUIRE(RenderGIFrame(*renderer, scene, turned, VoxelView()));
 			gpu.GetDevice().EndFrame();
 			waited = waited || renderer->GetStats().GIWaitingProxies > 0;
 			CHECK_FALSE(renderer->GetStats().GlobalIlluminationPending);
@@ -874,7 +874,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		size_t differing = 0;
 		for (size_t step = 1; step < path.size(); step++)
 		{
-			REQUIRE(renderer->Render(scene, path[step], nullptr, VoxelView()));
+			REQUIRE(RenderGIFrame(*renderer, scene, path[step], VoxelView()));
 			CHECK_FALSE(renderer->GetStats().GlobalIlluminationPending);
 			const size_t differences = CountDifferences(ReadLevels(*renderer), ReadFreshVoxels(scene, path[0], path[step]));
 			if (differences > 0)
@@ -908,7 +908,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		size_t differing = 0;
 		for (size_t step = 1; step < path.size(); step++)
 		{
-			REQUIRE(renderer->Render(scene, path[step], nullptr, VoxelView()));
+			REQUIRE(RenderGIFrame(*renderer, scene, path[step], VoxelView()));
 			unsettledFrames += renderer->GetStats().GlobalIlluminationSettled ? 0 : 1;
 			if (step % 8 != 0 && step + 1 != path.size())
 				continue;
@@ -1021,7 +1021,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		Scope<SceneRenderer> renderer = CreateVoxelRenderer(specification, 64, 64);
 		// Resident first, so the GI's frames have work.
 		for (uint32_t frame = 0; frame < 100 && (frame < 2 || renderer->GetStats().PendingAssets > 0 || renderer->GetStats().DeferredProxies > 0); frame++)
-			REQUIRE(renderer->Render(scene, camera, nullptr, SceneRenderOptions {}));
+			REQUIRE(RenderGIFrame(*renderer, scene, camera, SceneRenderOptions {}));
 		GeometryPool& pool = *Renderer::GetGeometryPool();
 		size_t reports = 0;
 		{
@@ -1029,7 +1029,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 			pool.SetTablesUnavailable(true);
 			for (uint32_t frame = 0; frame < 4; frame++)
 			{
-				REQUIRE(renderer->Render(scene, camera, nullptr, VoxelView()));
+				REQUIRE(RenderGIFrame(*renderer, scene, camera, VoxelView()));
 				CHECK(renderer->GetStats().GlobalIllumination);
 				CHECK_FALSE(renderer->GetStats().GlobalIlluminationSettled);
 			}
@@ -1058,7 +1058,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		Scope<SceneRenderer> plain = CreateScope<SceneRenderer>(ExactSpecification());
 		plain->SetViewportSize(c_Width, c_Height);
 		for (uint32_t frame = 0; frame < 8; frame++)
-			REQUIRE(plain->Render(scene, camera, nullptr, SceneRenderOptions {}));
+			REQUIRE(RenderGIFrame(*plain, scene, camera, SceneRenderOptions {}));
 		CHECK_FALSE(plain->GetStats().GlobalIllumination);
 		CHECK(plain->GetStats().GlobalIlluminationSettled);
 		CHECK(plain->GetGlobalIlluminationMemoryBytes() == 0);
@@ -1073,11 +1073,11 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		Scope<SceneRenderer> shown = CreateScope<SceneRenderer>(ExactSpecification());
 		shown->SetViewportSize(c_Width, c_Height);
 		for (uint32_t frame = 0; frame < 4; frame++)
-			REQUIRE(shown->Render(scene, camera, nullptr, VoxelView()));
+			REQUIRE(RenderGIFrame(*shown, scene, camera, VoxelView()));
 		CHECK(shown->GetStats().GlobalIllumination);
 		CHECK(shown->GetGlobalIlluminationMemoryBytes() > 0);
 		for (uint32_t frame = 0; frame < 4; frame++)
-			REQUIRE(shown->Render(scene, camera, nullptr, SceneRenderOptions {}));
+			REQUIRE(RenderGIFrame(*shown, scene, camera, SceneRenderOptions {}));
 		CHECK_FALSE(shown->GetStats().GlobalIllumination);
 		CHECK(shown->GetGlobalIlluminationMemoryBytes() == 0);
 		ReadbackImage shownImage;
@@ -1109,7 +1109,7 @@ TEST_SUITE("GPU.SceneRenderer.GPUDriven")
 			specification.OcclusionCulling = true;
 			Scope<SceneRenderer> renderer = CreateVoxelRenderer(specification, 256, 256);
 			for (uint32_t frame = 0; frame < 4; frame++)
-				REQUIRE(renderer->Render(scene, YardCamera(glm::vec3(0.0f)), nullptr, VoxelView()));
+				REQUIRE(RenderGIFrame(*renderer, scene, YardCamera(glm::vec3(0.0f)), VoxelView()));
 			RenderUntilSettled(*renderer, scene, YardCamera(glm::vec3(0.0f)));
 			CHECK(renderer->GetStats().GPUDriven == (path == 1));
 			levels[path] = ReadLevels(*renderer);

@@ -78,4 +78,12 @@ namespace Strata::Tests
 	// Include/Voxelize.slang's triangle-box test (Akenine-Moller's, touching included), on the CPU.
 	bool TriangleBoxOverlap(const glm::vec3& center, const glm::vec3& halfSize, const glm::vec3& a, const glm::vec3& b, const glm::vec3& c);
 
+	// The longest the GPU may spend on one frame's global illumination (GPU.RadianceCascades): GPU work that holds the GPU this
+	// long starves the desktop and every windowed program beside it, so a frame over it is a defect, whatever the scene.
+	constexpr float c_MaxGIFrameMilliseconds = 250.0f;
+
+	// Renders a frame of the GI's cases: opens a GPU profiler frame for it (tests call no Renderer::BeginFrame), renders, waits
+	// for the GPU and checks that the frame's GPU.RadianceCascades took at most c_MaxGIFrameMilliseconds. Render's result.
+	bool RenderGIFrame(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options);
+
 }
