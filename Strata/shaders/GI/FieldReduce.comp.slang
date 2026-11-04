@@ -1,22 +1,27 @@
 #include "Include/Common.slang"
 
-#include "Include/GIProbes.slang"
+#include "Include/GIMarch.slang"
 
-// The irradiance field (Docs/DeveloperGuide.md, "Global illumination"): a thread per cascade-0 probe reduces its light to an
-// ambient cube, six faces (+X, -X, +Y, -Y, +Z, -Z) at (3x + f % 3, 2y + f / 3, z): rgb irradiance over pi (the radiance of a white
-// Lambertian surface facing the face's axis), a the share of the sky the face sees. Cascade 0's 16 rays hold their own near
-// light and transmittance (unmerged); what lies beyond them comes from cascade 1, merged here in each of its 64 directions (the
-// probe's weights over its eight parents, as CascadeMarch merges), so the cosine weighs the far light at cascade 1's angular
-// resolution: 16 directions alone put a 2 m wall's light at their centers' cosines, up to twice its form factor. Each part is
-// normalized by its own directions' cosine sum (C_f: a uniform radiance gives every face exactly that radiance). A dead probe
-// writes zero.
+// Cascade 0 and the irradiance field (Docs/DeveloperGuide.md, "Global illumination"): a group per cascade-0 probe, a thread per
+// direction of its tile (cascade 1's directions: the layout gives cascade 0 as many). Each thread marches its own ray over cascade
+// 0's interval (GI/CascadeMarch.comp's march), continues it into cascade 1's merged ray of the same direction (the probe's
+// weights over its eight parents, as CascadeMarch merges) and adds the result, times the direction's solid angle and its cosine
+// to each face's axis, to the probe's ambient cube; the group sums the faces. Six faces (+X, -X, +Y, -Y, +Z, -Z) at
+// (3x + f % 3, 2y + f / 3, z): rgb irradiance over pi (the radiance of a white Lambertian surface facing the face's axis), a the
+// share of the sky the face sees, each normalized by its directions' cosine sum (C_f: a uniform radiance gives every face exactly
+// that radiance). Every direction is gated by its own ray: a separate reduce of a 16-direction cascade 0 gated four of cascade
+// 1's directions at once by one coarse ray (a wall beside the probe hid light its other directions reach, about a fifth of a
+// room's bounce). A dead probe writes zero.
 
 Texture3D<float4> u_Validity : register(t57);
 Texture3D<float4> u_WeightsA : register(t58);
 Texture3D<float4> u_WeightsB : register(t59);
-Texture3D<float4> u_Atlas : register(t60);
-Texture3D<float4> u_ParentAtlas : register(t61);
+Texture3D<float4> u_ParentAtlas : register(t60);
 [vk::image_format("rgba16f")] RWTexture3D<float4> o_Field : register(u0);
+
+#define ST_GI_REDUCE_GROUP 64u
+
+groupshared float4 s_Faces[ST_GI_REDUCE_GROUP][6];
 
 // A tile texel's solid angle (GlobalIllumination::GetSolidAngle): the octahedron's Jacobian 1 / |p|^3 at its center times the
 // tile's normalization.
@@ -31,68 +36,74 @@ float GetTileSolidAngle(uint2 texel, uint a, float normalization)
 	return normalization / length3;
 }
 
-void AddToFaces(inout float4 faces[6], float3 direction, float4 value)
+// Cascade 1's merged light along cascade 0's texel: the parents' rays of the texel's directions (one, or the mean of the 2 x 2 a
+// finer parent tile holds), weighted.
+float4 MergeParents(uint3 probe, uint2 texel, uint a)
 {
-	faces[0] += value * max(direction.x, 0.0);
-	faces[1] += value * max(-direction.x, 0.0);
-	faces[2] += value * max(direction.y, 0.0);
-	faces[3] += value * max(-direction.y, 0.0);
-	faces[4] += value * max(direction.z, 0.0);
-	faces[5] += value * max(-direction.z, 0.0);
+	float4 weightsA = u_WeightsA.Load(int4(int3(probe), 0));
+	float4 weightsB = u_WeightsB.Load(int4(int3(probe), 0));
+	int3 base = int3(floor((float3(probe) - 0.5) * 0.5));
+	uint parentDirections = u_Pass.ParentGrid.w;
+	uint children = max(parentDirections / a, 1u);
+	float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+	float total = 0.0;
+	[loop]
+	for (uint corner = 0u; corner < 8u; corner++)
+	{
+		float weight = corner < 4u ? weightsA[corner] : weightsB[corner - 4u];
+		if (weight <= 0.0)
+			continue;
+		int3 parent = base + int3(int(corner & 1u), int((corner >> 1) & 1u), int((corner >> 2) & 1u));
+		int2 first = parent.xy * int(parentDirections) + int2(texel * children);
+		float4 rays = float4(0.0, 0.0, 0.0, 0.0);
+		for (uint child = 0u; child < children * children; child++)
+			rays += u_ParentAtlas.Load(int4(first + int2(int(child % children), int(child / children)), parent.z, 0));
+		sum += weight * rays / float(children * children);
+		total += weight;
+	}
+	return total < 1e-4 ? float4(0.0, 0.0, 0.0, 0.0) : sum / total;
 }
 
-[numthreads(4, 4, 4)]
-void main(uint3 globalID : SV_DispatchThreadID)
+[numthreads(ST_GI_REDUCE_GROUP, 1, 1)]
+void main(uint3 groupID : SV_GroupID, uint index : SV_GroupIndex)
 {
-	if (any(globalID >= u_Pass.Grid.xyz))
-		return;
-	float4 near[6];
-	float4 far[6];
+	uint3 probe = groupID;
+	float4 faces[6];
 	[unroll]
 	for (uint face = 0u; face < 6u; face++)
+		faces[face] = float4(0.0, 0.0, 0.0, 0.0);
+	float4 validity = u_Validity.Load(int4(int3(probe), 0));
+	uint a = u_Pass.DirectionsPerAxis;
+	if (all(probe < u_Pass.Grid.xyz) && validity.r > 0.0)
 	{
-		near[face] = float4(0.0, 0.0, 0.0, 0.0);
-		far[face] = float4(0.0, 0.0, 0.0, 0.0);
-	}
-	if (u_Validity.Load(int4(int3(globalID), 0)).r > 0.0)
-	{
-		// The parents and their weights (ProbeWeights.comp's corners).
-		float4 weightsA = u_WeightsA.Load(int4(int3(globalID), 0));
-		float4 weightsB = u_WeightsB.Load(int4(int3(globalID), 0));
-		int3 base = int3(floor((float3(globalID) - 0.5) * 0.5));
-		float total = dot(weightsA, float4(1.0, 1.0, 1.0, 1.0)) + dot(weightsB, float4(1.0, 1.0, 1.0, 1.0));
-		uint parentDirections = u_Pass.ParentGrid.w;
+		float3 origin = GetProbePosition(probe, u_Pass.Interval.x);
+		bool hasParents = u_Pass.ParentGrid.w > 0u;
 		[loop]
-		for (uint index = 0u; index < 16u; index++)
+		for (uint direction = index; direction < a * a; direction += ST_GI_REDUCE_GROUP)
 		{
-			uint2 texel = uint2(index & 3u, index >> 2);
-			float4 ray = u_Atlas.Load(int4(int2(globalID.xy * 4u + texel), int(globalID.z), 0));
-			AddToFaces(near, GetTileDirection(texel, 4u), float4(ray.rgb, 0.0) * GetTileSolidAngle(texel, 4u, u_GI.SolidAngleNorms.x));
-			if (ray.a <= 0.0 || total < 1e-4)
-				continue;
-			// The four cascade-1 directions this one covers, each merged over the parents.
-			[loop]
-			for (uint child = 0u; child < 4u; child++)
-			{
-				uint2 subTexel = texel * 2u + uint2(child & 1u, child >> 1);
-				float4 merged = float4(0.0, 0.0, 0.0, 0.0);
-				[loop]
-				for (uint corner = 0u; corner < 8u; corner++)
-				{
-					float weight = corner < 4u ? weightsA[corner] : weightsB[corner - 4u];
-					if (weight <= 0.0)
-						continue;
-					int3 parent = base + int3(int(corner & 1u), int((corner >> 1) & 1u), int((corner >> 2) & 1u));
-					merged += weight * u_ParentAtlas.Load(int4(parent.xy * int(parentDirections) + int2(subTexel), parent.z, 0));
-				}
-				AddToFaces(far, GetTileDirection(subTexel, parentDirections), merged * (ray.a / total * GetTileSolidAngle(subTexel, parentDirections, u_GI.SolidAngleNorms.y)));
-			}
+			uint2 texel = uint2(direction % a, direction / a);
+			float3 d = GetTileDirection(texel, a);
+			bool left;
+			float4 ray = MarchRay(origin, d, u_Pass.Interval.y, u_Pass.Interval.z, false, u_Pass.MinimumLevel, left);
+			float4 rest = ray.a > 0.0 && hasParents ? MergeParents(probe, texel, a) : float4(0.0, 0.0, 0.0, 0.0);
+			float4 value = float4(ray.rgb + ray.a * rest.rgb, ray.a * rest.a) * GetTileSolidAngle(texel, a, u_GI.SolidAngleNorms.x);
+			faces[0] += value * max(d.x, 0.0);
+			faces[1] += value * max(-d.x, 0.0);
+			faces[2] += value * max(d.y, 0.0);
+			faces[3] += value * max(-d.y, 0.0);
+			faces[4] += value * max(d.z, 0.0);
+			faces[5] += value * max(-d.z, 0.0);
 		}
 	}
 	[unroll]
 	for (uint face = 0u; face < 6u; face++)
+		s_Faces[index][face] = faces[face];
+	GroupMemoryBarrierWithGroupSync();
+	if (index < 6u && all(probe < u_Pass.Grid.xyz))
 	{
-		float4 value = near[face] * u_GI.FaceWeights[face >> 2][face & 3u] + far[face] * u_GI.FaceWeightsFar[face >> 2][face & 3u];
-		o_Field[uint3(globalID.x * 3u + face % 3u, globalID.y * 2u + face / 3u, globalID.z)] = value;
+		float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+		for (uint thread = 0u; thread < ST_GI_REDUCE_GROUP; thread++)
+			sum += s_Faces[thread][index];
+		o_Field[uint3(probe.x * 3u + index % 3u, probe.y * 2u + index / 3u, probe.z)] = sum * u_GI.FaceWeights[index >> 2][index & 3u];
 	}
 }

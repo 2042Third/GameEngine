@@ -1077,8 +1077,9 @@ namespace Strata
 		};
 		bool ReadGlobalIlluminationVoxels(uint32_t level, GlobalIlluminationTexture texture, std::vector<uint8_t>& outTexels) const;
 		// The probes' textures as the GPU holds them (tests and tools only, waiting for the GPU), texels in rows of x, then y, then z:
-		// a cascade's validity (RGBA8, r the validity), the field (RGBA16F, (3 x, 2 y, z) per cascade-0 probe: faces +X, -X, +Y in
-		// the first row, -Y, +Z, -Z in the second; rgb irradiance over pi times c_GIRadianceScale, a the face's sky share).
+		// a cascade's validity (RGBA8, r the validity, gba the probe's move off a surface: GI/ProbeValidity.comp), the field
+		// (RGBA16F, (3 x, 2 y, z) per cascade-0 probe: faces +X, -X, +Y in the first row, -Y, +Z, -Z in the second; rgb
+		// irradiance over pi times c_GIRadianceScale, a the face's sky share).
 		bool ReadGlobalIlluminationValidity(uint32_t cascade, std::vector<uint8_t>& outTexels) const;
 		bool ReadGlobalIlluminationField(std::vector<uint8_t>& outTexels) const;
 		// The forward pass's GI constants of the latest frame (zero without GI).

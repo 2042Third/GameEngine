@@ -44,12 +44,12 @@ namespace Strata
 	};
 
 	// A cascade of probes: all cascades cover the same field around the camera; each has half the probes per axis of the one
-	// before, four times the directions and an interval four times as long.
+	// before, four times the directions (cascade 0 as many as cascade 1) and an interval four times as long.
 	struct ProbeCascadeLayout
 	{
 		float Spacing = 0.0f;           // Meters: the first cascade's spacing times 2^k
 		glm::uvec3 Grid{ 0 };           // Probes per axis: the first cascade's grid / 2^k
-		uint32_t DirectionsPerAxis = 0; // The side of its octahedral tile: 4 * 2^k (its square directions per probe)
+		uint32_t DirectionsPerAxis = 0; // The side of its octahedral tile (its square directions per probe): 8 for cascades 0 and 1, then 4 * 2^k
 		float IntervalStart = 0.0f;     // Meters along the ray
 		float IntervalEnd = 0.0f;       // Infinity for the top cascade: it marches until it leaves the clipmap
 		// Meters of occlusion-only march before IntervalStart: the whole way from the probe for every cascade but the first, so
@@ -62,6 +62,10 @@ namespace Strata
 		// twice.
 		float Overlap = 0.0f;
 		uint32_t MinimumLevel = 0;      // The finest voxel level its samples read: max(0, k - 1)
+		// Each direction is the mean of SubRays x SubRays rays spread over its texel (CascadeMarch.comp): 2 for the cascades between
+		// cascade 0 and the top, whose texels are as wide as a room's sunlit patch seen across the room; 1 for cascade 0 (64
+		// directions within a metre) and the top (outside, 1024).
+		uint32_t SubRays = 1;
 	};
 
 	// The bytes of each resource a layout makes, as the renderer makes them.

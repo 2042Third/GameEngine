@@ -297,21 +297,18 @@ namespace Strata
 				textures.WeightsA = createTexture(nvrhi::Format::RGBA8_UNORM, cascade.Grid, name + "WeightsA" + index);
 				textures.WeightsB = createTexture(nvrhi::Format::RGBA8_UNORM, cascade.Grid, name + "WeightsB" + index);
 			}
+			// Cascade 0's rays go straight into the field (FieldReduce.comp): no atlas.
 			const uint32_t a = cascade.DirectionsPerAxis;
-			textures.Atlas = createTexture(nvrhi::Format::RGBA16_FLOAT, glm::uvec3(cascade.Grid.x * a, cascade.Grid.y * a, cascade.Grid.z), name + "Atlas" + index);
+			if (k > 0)
+				textures.Atlas = createTexture(nvrhi::Format::RGBA16_FLOAT, glm::uvec3(cascade.Grid.x * a, cascade.Grid.y * a, cascade.Grid.z), name + "Atlas" + index);
 			gi->Cascades.push_back(textures);
 		}
 		const ProbeCascadeLayout& firstCascade = layout.Cascades.front();
 		gi->Field = createTexture(nvrhi::Format::RGBA16_FLOAT, glm::uvec3(3 * firstCascade.Grid.x, 2 * firstCascade.Grid.y, firstCascade.Grid.z), name + "Field");
-		// The solid angles' normalizations and the faces' cosine sums of cascades 0 and 1, the same every frame.
-		const uint32_t farDirections = layout.Cascades.size() > 1 ? layout.Cascades[1].DirectionsPerAxis : firstCascade.DirectionsPerAxis;
-		gi->SolidAngleNorms = glm::vec4(GlobalIllumination::GetSolidAngleNormalization(firstCascade.DirectionsPerAxis),
-			GlobalIllumination::GetSolidAngleNormalization(farDirections), 0.0f, 0.0f);
+		// Cascade 0's solid angle normalization and its faces' cosine sums, the same every frame.
+		gi->SolidAngleNorms = glm::vec4(GlobalIllumination::GetSolidAngleNormalization(firstCascade.DirectionsPerAxis), 0.0f, 0.0f, 0.0f);
 		for (uint32_t face = 0; face < RenderData::c_GIFieldFaces; face++)
-		{
 			gi->FaceWeights[face / 4][face % 4] = 1.0f / GlobalIllumination::GetFaceCosineSum(face, firstCascade.DirectionsPerAxis);
-			gi->FaceWeightsFar[face / 4][face % 4] = 1.0f / GlobalIllumination::GetFaceCosineSum(face, farDirections);
-		}
 
 		// Buffers the voxelizer writes start and stay in UnorderedAccess; what the CPU writes is read as ShaderResource.
 		const auto createBuffer = [&](uint64_t byteSize, uint32_t stride, bool raw, bool unorderedAccess, const char* debugName)
@@ -527,10 +524,7 @@ namespace Strata
 		constants.FieldGrid = glm::uvec4(firstCascade.Grid, static_cast<uint32_t>(gi.Layout.Cascades.size()));
 		constants.SolidAngleNorms = gi.SolidAngleNorms;
 		for (size_t index = 0; index < gi.FaceWeights.size(); index++)
-		{
 			constants.FaceWeights[index] = gi.FaceWeights[index];
-			constants.FaceWeightsFar[index] = gi.FaceWeightsFar[index];
-		}
 
 		const VoxelFrame& work = gi.Frame;
 		// What the forward pass reads: the field (used unless the frame is pending) and voxel levels 0-2.
@@ -849,11 +843,14 @@ namespace Strata
 				if (!top)
 				{
 					nvrhi::BindingSetDesc weights = common(false);
+					add3D(weights, 56, cascade.Validity);
 					add3D(weights, 57, gi.Cascades[k + 1].Validity);
 					addUAV(weights, 0, cascade.WeightsA);
 					addUAV(weights, 1, cascade.WeightsB);
 					makeSet(gi.Weights, weights, "GI/ProbeWeights.comp");
 				}
+				if (k == 0)
+					continue; // FieldReduce marches cascade 0
 				nvrhi::BindingSetDesc march = common(true);
 				add3D(march, 57, cascade.Validity);
 				add3D(march, 58, top ? nullptr : cascade.WeightsA.Get());
@@ -862,13 +859,12 @@ namespace Strata
 				addUAV(march, 0, cascade.Atlas);
 				makeSet(gi.March, march, "GI/CascadeMarch.comp");
 			}
-			nvrhi::BindingSetDesc reduce = common(false);
+			nvrhi::BindingSetDesc reduce = common(true);
 			const bool single = cascades == 1;
 			add3D(reduce, 57, gi.Cascades.front().Validity);
 			add3D(reduce, 58, single ? nullptr : gi.Cascades.front().WeightsA.Get());
 			add3D(reduce, 59, single ? nullptr : gi.Cascades.front().WeightsB.Get());
-			add3D(reduce, 60, gi.Cascades.front().Atlas);
-			add3D(reduce, 61, single ? nullptr : gi.Cascades[1].Atlas.Get());
+			add3D(reduce, 60, single ? nullptr : gi.Cascades[1].Atlas.Get());
 			addUAV(reduce, 0, gi.Field);
 			makeSet(gi.Reduce, reduce, "GI/FieldReduce.comp");
 			gi.LightBound = created;
@@ -891,6 +887,7 @@ namespace Strata
 			pass.Interval = glm::vec4(cascade.Spacing, cascade.IntervalStart, top ? -1.0f : cascade.IntervalEnd + cascade.Overlap, cascade.LeadIn);
 			pass.DirectionsPerAxis = cascade.DirectionsPerAxis;
 			pass.MinimumLevel = cascade.MinimumLevel;
+			pass.SubRays = cascade.SubRays;
 			return pass;
 		};
 		const auto dispatch = [&](const GlobalIlluminationResources::Pass& pass, size_t set, const RenderData::GIProbePassParameters& constants,
@@ -931,15 +928,15 @@ namespace Strata
 			const glm::uvec3 grid = layout.Cascades[k].Grid;
 			dispatch(gi.Weights, k, parameters(k), DivideUp(grid.x, c_LightGroupSize), DivideUp(grid.y, c_LightGroupSize), DivideUp(grid.z, c_LightGroupSize));
 		}
-		// The rays, top down: each cascade merges the one above it.
-		for (uint32_t k = cascades; k-- > 0;)
+		// The rays, top down: each cascade merges the one above it; cascade 0's go straight into the field, a group per probe.
+		for (uint32_t k = cascades; k-- > 1;)
 		{
 			const ProbeCascadeLayout& cascade = layout.Cascades[k];
 			const uint32_t a = cascade.DirectionsPerAxis;
-			dispatch(gi.March, k, parameters(k), DivideUp(cascade.Grid.x * a, c_MarchGroupSize), DivideUp(cascade.Grid.y * a, c_MarchGroupSize), cascade.Grid.z);
+			dispatch(gi.March, k - 1, parameters(k), DivideUp(cascade.Grid.x * a, c_MarchGroupSize), DivideUp(cascade.Grid.y * a, c_MarchGroupSize), cascade.Grid.z);
 		}
 		const glm::uvec3 grid = layout.Cascades.front().Grid;
-		dispatch(gi.Reduce, 0, parameters(0), DivideUp(grid.x, c_LightGroupSize), DivideUp(grid.y, c_LightGroupSize), DivideUp(grid.z, c_LightGroupSize));
+		dispatch(gi.Reduce, 0, parameters(0), grid.x, grid.y, grid.z);
 
 		// The counters into the next free readback (a copy still under way leaves the frame unread).
 		GlobalIlluminationResources::CounterReadback& readback = gi.Readbacks[gi.ReadbackIndex];

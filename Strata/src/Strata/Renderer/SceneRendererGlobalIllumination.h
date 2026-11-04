@@ -77,7 +77,6 @@ namespace Strata
 		nvrhi::TextureHandle Field;
 		glm::vec4 SolidAngleNorms { 0.0f };        // RenderData::GlobalIlluminationConstants::SolidAngleNorms
 		std::array<glm::vec4, 2> FaceWeights = {}; // ...FaceWeights
-		std::array<glm::vec4, 2> FaceWeightsFar = {}; // ...and FaceWeightsFar
 		struct Pass
 		{
 			nvrhi::BindingLayoutHandle Layout;

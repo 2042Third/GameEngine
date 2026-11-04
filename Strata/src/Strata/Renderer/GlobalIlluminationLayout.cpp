@@ -91,7 +91,8 @@ namespace Strata
 		{
 			const ProbeCascadeLayout& cascade = Cascades[k];
 			const uint64_t probes = static_cast<uint64_t>(cascade.Grid.x) * cascade.Grid.y * cascade.Grid.z;
-			memory.Atlases += probes * cascade.DirectionsPerAxis * cascade.DirectionsPerAxis * c_RayBytes;
+			if (k > 0) // Cascade 0's rays go straight into the field
+				memory.Atlases += probes * cascade.DirectionsPerAxis * cascade.DirectionsPerAxis * c_RayBytes;
 			if (k + 1 < Cascades.size())
 				memory.Weights += probes * c_WeightBytes;
 			memory.Validity += probes * c_ValidityBytes;
@@ -107,7 +108,8 @@ namespace Strata
 	{
 		uint64_t rays = 0;
 		for (const ProbeCascadeLayout& cascade : Cascades)
-			rays += static_cast<uint64_t>(cascade.Grid.x) * cascade.Grid.y * cascade.Grid.z * cascade.DirectionsPerAxis * cascade.DirectionsPerAxis;
+			rays += static_cast<uint64_t>(cascade.Grid.x) * cascade.Grid.y * cascade.Grid.z * cascade.DirectionsPerAxis * cascade.DirectionsPerAxis
+				* cascade.SubRays * cascade.SubRays;
 		return rays;
 	}
 
@@ -157,13 +159,16 @@ namespace Strata
 				ProbeCascadeLayout cascade;
 				cascade.Spacing = firstSpacing * static_cast<float>(1u << k);
 				cascade.Grid = firstGrid / (1u << k);
-				cascade.DirectionsPerAxis = 4u << k;
+				// Directions four times as many per cascade from cascade 1's 64; cascade 0 marches cascade 1's directions (its rays go
+				// straight into the field, each continued by cascade 1's merged ray of the same direction: FieldReduce.comp).
+				cascade.DirectionsPerAxis = 4u << std::max(k, 1u);
 				// Intervals four times as long per cascade: [0, s0], [s0, 4 s0], [4 s0, 16 s0]..., the top one without an end.
 				cascade.IntervalStart = k == 0 ? 0.0f : firstSpacing * static_cast<float>(1u << (2 * (k - 1)));
 				cascade.IntervalEnd = k + 1 == cascadeCount ? std::numeric_limits<float>::infinity() : firstSpacing * static_cast<float>(1u << (2 * k));
 				cascade.LeadIn = cascade.IntervalStart;
 				cascade.Overlap = k + 1 == cascadeCount ? 0.0f : cascade.Spacing;
 				cascade.MinimumLevel = k == 0 ? 0 : k - 1;
+				cascade.SubRays = k > 0 && k + 1 < cascadeCount ? 2u : 1u;
 				layout.Cascades.push_back(cascade);
 			}
 			layout.BatchVoxels = std::min(RenderData::c_GIMaxRegionVoxels * RenderData::c_GIMaxRegionVoxels * RenderData::c_GIMaxRegionVoxels,

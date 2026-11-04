@@ -35,7 +35,7 @@ struct GIProbePassParameters
 	uint DirectionsPerAxis;
 	uint MinimumLevel;
 	uint Level;
-	uint Padding;
+	uint SubRays;        // CascadeMarch: each texel is the mean of SubRays x SubRays rays spread over it
 };
 [[vk::push_constant]] ConstantBuffer<GIProbePassParameters> u_Pass;
 
@@ -141,10 +141,39 @@ float3 SampleSurfaceRadiance(float3 position, uint minimumLevel, float3 directio
 	return radiance.rgb / radiance.a * lerp(facing, 1.0, doubleSided);
 }
 
+// The surfaces' normal around a camera-relative point, blended as the occupancy is (unnormalized: zero where no surface faces
+// it, inside solids and between two-sided faces).
+float3 SampleSurfaceNormal(float3 position, uint minimumLevel)
+{
+	float3 normal = float3(0.0, 0.0, 0.0);
+	float remaining = 1.0;
+	for (uint level = minimumLevel; level < u_GI.Dimensions.w && remaining > 0.0; level++)
+	{
+		float weight = GetLevelWeight(level, position);
+		if (weight <= 0.0)
+			continue;
+		normal += remaining * weight * SampleGINormal(level, GetVoxelTextureCoordinate(level, position)).xyz;
+		remaining *= 1.0 - weight;
+	}
+	return normal;
+}
+
 // A probe's position, camera-relative: the field's minimum corner plus (index + 0.5) spacings.
 float3 GetProbePosition(uint3 index, float spacing)
 {
 	return u_GI.FieldOrigin.xyz + (float3(index) + 0.5) * spacing;
+}
+
+// A probe's move off the surface it sits on (ProbeValidity.comp), stored in its validity texel's gba (RGBA8) as 128 + round(127 o)
+// over 255, o the move over half a spacing (so no move is stored exactly), and read back in meters.
+float3 EncodeProbeMove(float3 move, float spacing)
+{
+	return (128.0 + round(127.0 * clamp(move / (0.5 * spacing), -1.0, 1.0))) / 255.0;
+}
+
+float3 DecodeProbeMove(float4 validity, float spacing)
+{
+	return (round(validity.gba * 255.0) - 128.0) / 127.0 * (0.5 * spacing);
 }
 
 // What the sky sends along a direction a ray leaves the clipmap by (scaled luminance): the environment cube's level about a

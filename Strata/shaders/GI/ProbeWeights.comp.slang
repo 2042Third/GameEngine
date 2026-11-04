@@ -8,6 +8,7 @@
 // level sampled a step): a wall between a child and a parent zeroes that parent. Parents outside the grid weigh 0. Stored once per
 // probe (corners 0-3 and 4-7, corner c's offset (c & 1, c >> 1 & 1, c >> 2)); every ray of the probe shares them.
 
+Texture3D<float4> u_Validity : register(t56);
 Texture3D<float4> u_ParentValidity : register(t57);
 [vk::image_format("rgba8")] RWTexture3D<float4> o_WeightsA : register(u0);
 [vk::image_format("rgba8")] RWTexture3D<float4> o_WeightsB : register(u1);
@@ -42,7 +43,8 @@ void main(uint3 globalID : SV_DispatchThreadID)
 	if (any(globalID >= u_Pass.Grid.xyz))
 		return;
 	float spacing = u_Pass.Interval.x;
-	float3 child = GetProbePosition(globalID, spacing);
+	// Between the probes as ProbeValidity.comp moved them off the surfaces they sat on.
+	float3 child = GetProbePosition(globalID, spacing) + DecodeProbeMove(u_Validity.Load(int4(int3(globalID), 0)), spacing);
 	// The child's center in the parent grid's probe coordinates: ((i + 0.5) s - 0.5 (2 s)) / (2 s).
 	float3 parentCoordinate = (float3(globalID) - 0.5) * 0.5;
 	int3 base = int3(floor(parentCoordinate));
@@ -57,10 +59,12 @@ void main(uint3 globalID : SV_DispatchThreadID)
 		if (any(parent < int3(0, 0, 0)) || any(parent >= int3(u_Pass.ParentGrid.xyz)))
 			continue;
 		float3 trilinear3 = select(offset != int3(0, 0, 0), fraction, 1.0 - fraction);
-		float weight = trilinear3.x * trilinear3.y * trilinear3.z * u_ParentValidity.Load(int4(parent, 0)).r;
+		float4 parentValidity = u_ParentValidity.Load(int4(parent, 0));
+		float weight = trilinear3.x * trilinear3.y * trilinear3.z * parentValidity.r;
 		if (weight <= 0.0)
 			continue;
-		weights[corner] = weight * GetTransmittance(child, GetProbePosition(uint3(parent), 2.0 * spacing), u_Pass.MinimumLevel);
+		float3 parentPosition = GetProbePosition(uint3(parent), 2.0 * spacing) + DecodeProbeMove(parentValidity, 2.0 * spacing);
+		weights[corner] = weight * GetTransmittance(child, parentPosition, u_Pass.MinimumLevel);
 	}
 	o_WeightsA[globalID] = float4(weights[0], weights[1], weights[2], weights[3]);
 	o_WeightsB[globalID] = float4(weights[4], weights[5], weights[6], weights[7]);

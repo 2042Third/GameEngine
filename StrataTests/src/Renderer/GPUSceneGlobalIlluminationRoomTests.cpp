@@ -1,11 +1,16 @@
 #include "Renderer/GIScenes.h"
 #include "Renderer/SceneRendererTestUtils.h"
+#include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Math/Math.h"
 #include "Strata/Renderer/GlobalIlluminationLayout.h"
 
+#include <glm/gtc/constants.hpp>
+#include <spdlog/fmt/fmt.h>
+
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -157,7 +162,9 @@ namespace
 		return values;
 	}
 
-	// A sun room seen by a camera: renders until the GI settles (at most 8 frames) and reads the points.
+	// A sun room seen by a camera: renders until the GI settles (at most 8 frames) and reads the points. The renderer resolves
+	// assets through the active asset manager: each render activates its own room's, so cases that hold several rooms at once read
+	// each with its own materials (the last one made is active, and the others' materials would resolve to the default white).
 	struct RoomRender
 	{
 		SceneTestAssets Assets;
@@ -175,6 +182,7 @@ namespace
 
 		std::vector<glm::vec3> Measure(const SceneCamera& camera, const std::vector<RoomPoint>& points, uint32_t frames = 3)
 		{
+			AssetManager::SetActive(Assets.Manager);
 			for (uint32_t frame = 0; frame < frames; frame++)
 				REQUIRE(RenderGIFrame(*Renderer, SceneData, camera, GIViewOptions()));
 			REQUIRE(Renderer->GetStats().GlobalIllumination);
@@ -244,6 +252,37 @@ namespace
 		SunRoomOptions room;
 		room.SunDirection = SunRoomDirection(-40.0f, 30.0f);
 		return room;
+	}
+
+	// The index of a cascade's probe at a world position (the field's probes sit at its minimum corner plus (index + 0.5)
+	// spacings), for a renderer whose last frame was seen from `camera`.
+	glm::ivec3 FindProbe(const SceneRenderer& renderer, const SceneCamera& camera, uint32_t cascade, const glm::vec3& position)
+	{
+		const GlobalIlluminationLayout* layout = renderer.GetGlobalIlluminationLayout();
+		REQUIRE(layout);
+		REQUIRE(cascade < layout->Cascades.size());
+		const ProbeCascadeLayout& probes = layout->Cascades[cascade];
+		const glm::vec3 origin = camera.Position + glm::vec3(renderer.GetGlobalIlluminationFieldConstants().FieldOrigin);
+		const glm::ivec3 index = glm::ivec3(glm::round((position - origin) / probes.Spacing - 0.5f));
+		INFO("probe at " << position.x << ", " << position.y << ", " << position.z);
+		REQUIRE(glm::all(glm::greaterThanEqual(index, glm::ivec3(0))));
+		REQUIRE(glm::all(glm::lessThan(index, glm::ivec3(probes.Grid))));
+		return index;
+	}
+
+	// A cascade-0 probe's ambient cube face (+X, -X, +Y, -Y, +Z, -Z) as the field holds it: the luminance of a white Lambertian
+	// surface facing the face's axis there (nits).
+	float ReadFieldFace(const SceneRenderer& renderer, const SceneCamera& camera, const std::vector<uint8_t>& field, const glm::vec3& position, uint32_t face)
+	{
+		const glm::ivec3 probe = FindProbe(renderer, camera, 0, position);
+		const glm::ivec3 grid(renderer.GetGlobalIlluminationLayout()->Cascades.front().Grid);
+		const size_t x = static_cast<size_t>(probe.x) * 3 + face % 3;
+		const size_t y = static_cast<size_t>(probe.y) * 2 + face / 3;
+		const size_t texel = x + static_cast<size_t>(3 * grid.x) * (y + static_cast<size_t>(2 * grid.y) * static_cast<size_t>(probe.z));
+		REQUIRE((texel + 1) * 8 <= field.size());
+		uint16_t value[4];
+		std::memcpy(value, field.data() + texel * 8, sizeof(value));
+		return Luminance(glm::vec3(glm::unpackHalf1x16(value[0]), glm::unpackHalf1x16(value[1]), glm::unpackHalf1x16(value[2]))) / RenderData::c_GIRadianceScale;
 	}
 
 }
@@ -455,5 +494,171 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("Probes on a wall's face move off it")
+	{
+		// The room's inner faces lie on cascade 2's probe planes (odd meters): those probes would die, half inside the walls, and
+		// their children took one surviving parent's view from metres away (the north wall's probes read three times the patch's
+		// light on the west and a fifth of it on the east). They move along the surface's normal by c_GIProbeMoveVoxels voxels of
+		// level 1 and live; a probe in open air stays where it is.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		RoomRender render(DefaultRoom(), c_RoomSize, RoomSpecification());
+		const SceneCamera camera = RoomCamera();
+		render.Measure(camera, {});
+		const GlobalIlluminationLayout* layout = render.Renderer->GetGlobalIlluminationLayout();
+		REQUIRE(layout);
+		const float spacing = layout->Cascades[2].Spacing;
+		const glm::ivec3 grid(layout->Cascades[2].Grid);
+		const float move = RenderData::c_GIProbeMoveVoxels * layout->Levels[1].VoxelSize;
+		std::vector<uint8_t> validity;
+		REQUIRE(render.Renderer->ReadGlobalIlluminationValidity(2, validity));
+		struct Expected
+		{
+			const char* Name;
+			glm::vec3 Position;
+			glm::vec3 Move;
+		};
+		const Expected expectations[] = {
+			{ "on the west wall", { -13.0f, 1.0f, -3.0f }, { move, 0.0f, 0.0f } },
+			{ "on the east wall", { -7.0f, 1.0f, -3.0f }, { -move, 0.0f, 0.0f } },
+			{ "on the north wall", { -11.0f, 1.0f, -5.0f }, { 0.0f, 0.0f, move } },
+			{ "on the ceiling", { -11.0f, 3.0f, -3.0f }, { 0.0f, -move, 0.0f } },
+			{ "in the open", { -11.0f, 1.0f, -3.0f }, { 0.0f, 0.0f, 0.0f } },
+		};
+		for (const Expected& expected : expectations)
+		{
+			INFO(expected.Name);
+			const glm::ivec3 probe = FindProbe(*render.Renderer, camera, 2, expected.Position);
+			const uint8_t* texel = validity.data() + (static_cast<size_t>(probe.x) + grid.x * (static_cast<size_t>(probe.y) + static_cast<size_t>(grid.y) * probe.z)) * 4;
+			const glm::vec3 decoded = (glm::vec3(texel[1], texel[2], texel[3]) - 128.0f) / 127.0f * (0.5f * spacing);
+			MESSAGE(expected.Name << ": validity " << texel[0] / 255.0f << ", moved " << decoded.x << ", " << decoded.y << ", " << decoded.z);
+			CHECK(texel[0] == 255);
+			CHECK(glm::length(decoded - expected.Move) <= 0.02f);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The probes beside the north wall see the patch's light")
+	{
+		// The twelve cascade-0 probes 0.25 m from the north wall, 1.25 m up: their +Z faces (toward the sunlit floor patch 4-5 m
+		// away and the window) against the reference. The patch is half a texel of cascade 2 seen from there: one ray a texel caught
+		// it whole for some probes and missed it for others (2-3 times the reference on the west, 0.14-0.4 on the east), and the
+		// probes beside a wall took the view of one parent metres away. A guard against that defect, within half the reference
+		// either way (measured 0.60-0.88: the voxels' floor layer, read up to a tenth full, lies above the floor and makes the patch
+		// look smaller from this low; Gate W's bound is on the walls' light, 6.2 case 1).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const SunRoomOptions room = DefaultRoom();
+		RoomRender render(room, c_RoomSize, RoomSpecification());
+		const SceneCamera camera = RoomCamera();
+		render.Measure(camera, {});
+		std::vector<uint8_t> field;
+		REQUIRE(render.Renderer->ReadGlobalIlluminationField(field));
+		std::string table = "+Z faces 0.25 m from the north wall (field / reference):";
+		for (float x = -12.75f; x < -7.0f; x += 0.5f)
+		{
+			const glm::vec3 position(x, 1.25f, -4.75f);
+			const float value = ReadFieldFace(*render.Renderer, camera, field, position, 4);
+			const float reference = Luminance(SunRoomReference(room, position, glm::vec3(0.0f, 0.0f, 1.0f)));
+			table += fmt::format("\n  x {:6.2f}: {:6.1f} / {:6.1f} ({:.2f})", x, value, reference, value / reference);
+			INFO("x " << x << ": " << value << " against " << reference);
+			CHECK(value >= 0.5f * reference);
+			CHECK(value <= 1.5f * reference);
+		}
+		MESSAGE(table);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The north wall's light does not depend on the camera")
+	{
+		// Correction 14a: camera A sees the floor's sunlit patch and the north wall, camera B (2 m from that wall) has the patch behind
+		// it; the wall's light comes from world data either way, within 10% between the two (they read the clipmap's levels with
+		// other weights). Both rooms are held at once: each render activates its own room's assets (RoomRender::Measure), else the
+		// first read the second's and took the default white for its plaster (1.75 times the light).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const SunRoomOptions room = DefaultRoom();
+		std::vector<RoomPoint> points;
+		for (float x : { -12.0f, -10.0f, -8.0f })
+		{
+			for (float y : { 1.0f, 2.0f })
+				points.push_back({ fmt::format("north wall x {} y {}", x, y), { x, y, -5.0f }, -c_North });
+		}
+		const glm::vec3 target(-10.0f, 1.6f, -5.1f);
+		RoomRender renderA(room, c_RoomSize, RoomSpecification());
+		RoomRender renderB(room, c_RoomSize, RoomSpecification());
+		const std::vector<glm::vec3> valuesA = renderA.Measure(MakeCamera(glm::vec3(-10.0f, 1.6f, 0.8f), target, 70.0f, c_RoomSize), points);
+		const std::vector<glm::vec3> valuesB = renderB.Measure(MakeCamera(glm::vec3(-10.0f, 1.6f, -3.0f), target, 70.0f, c_RoomSize), points);
+		for (size_t index = 0; index < points.size(); index++)
+		{
+			const float a = Luminance(valuesA[index]);
+			const float b = Luminance(valuesB[index]);
+			INFO(points[index].Name << ": camera A " << a << ", camera B " << b);
+			CHECK(a > 0.0f);
+			CHECK(std::abs(b - a) <= 0.1f * a);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }
 
+TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
+{
+	TEST_CASE("An emissive wall lights the floor")
+	{
+		// A 2 x 2 m wall of luminance 4 standing on a gray floor in the dark: the floor 0.5, 1 and 2 m in front of its foot within 20%
+		// of L F, F the rectangle's form factor there.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		MaterialProperties gray;
+		gray.BaseColor = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f);
+		gray.Roughness = 1.0f;
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(gray), glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(20.0f, 1.0f, 20.0f);
+		constexpr float c_WallLuminance = 4.0f;
+		AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(Emitting(c_WallLuminance)), glm::vec3(0.0f, 1.0f, -0.05f), "Wall")
+			.GetComponent<TransformComponent>().Scale = glm::vec3(2.0f, 2.0f, 0.1f);
+		const SceneCamera camera = MakeCamera(glm::vec3(0.0f, 1.6f, 4.5f), glm::vec3(0.0f, 0.4f, 0.0f), 60.0f, c_RoomSize);
+		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification());
+		renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+		SceneRenderOptions options = GIViewOptions();
+		options.PreExposure = 1.0f;
+		for (uint32_t frame = 0; frame < 3; frame++)
+			REQUIRE(RenderGIFrame(*renderer, scene, camera, options));
+		REQUIRE_FALSE(renderer->GetStats().GlobalIlluminationPending);
+		ReadbackImage image;
+		REQUIRE(Renderer::ReadTexture(renderer->GetHDRTexture(), image));
+		REQUIRE(image.Format == nvrhi::Format::RGBA16_FLOAT);
+		for (float distance : { 0.5f, 1.0f, 2.0f })
+		{
+			CAPTURE(distance);
+			// The form factor of the rectangle at the floor point on its axis (cosines at both ends over r^2, over pi).
+			constexpr int c_Steps = 400;
+			double sum = 0.0;
+			for (int i = 0; i < c_Steps; i++)
+			{
+				const double x = 2.0 * ((i + 0.5) / c_Steps - 0.5);
+				for (int j = 0; j < c_Steps; j++)
+				{
+					const double y = 2.0 * (j + 0.5) / c_Steps;
+					const double r2 = x * x + y * y + static_cast<double>(distance) * distance;
+					sum += y * distance / (r2 * r2);
+				}
+			}
+			const double expected = c_WallLuminance * sum * (2.0 / c_Steps) * (2.0 / c_Steps) / glm::pi<double>();
+			const glm::uvec2 pixel = ProjectToPixel(camera, glm::vec3(0.0f, 0.01f, distance), image.Width, image.Height);
+			glm::vec3 value(0.0f);
+			for (int dy = -1; dy <= 1; dy++)
+			{
+				for (int dx = -1; dx <= 1; dx++)
+					value += glm::vec3(ReadHalfTexel(image, pixel.x + dx, pixel.y + dy)) / 9.0f;
+			}
+			MESSAGE("the floor " << distance << " m from the wall: " << Luminance(value) << " against L F = " << expected << " ("
+				<< Luminance(value) / expected << ")");
+			CHECK(std::abs(static_cast<double>(Luminance(value)) / expected - 1.0) <= 0.2);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+}

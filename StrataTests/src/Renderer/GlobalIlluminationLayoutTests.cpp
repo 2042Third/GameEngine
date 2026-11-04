@@ -46,6 +46,7 @@ namespace
 		float LeadIn;
 		float Overlap;
 		uint32_t MinimumLevel;
+		uint32_t SubRays;
 	};
 
 	void CheckCascades(const GlobalIlluminationLayout& layout, const std::vector<ExpectedCascade>& expected)
@@ -63,6 +64,7 @@ namespace
 			CHECK(cascade.LeadIn == expected[k].LeadIn);
 			CHECK(cascade.Overlap == expected[k].Overlap);
 			CHECK(cascade.MinimumLevel == expected[k].MinimumLevel);
+			CHECK(cascade.SubRays == expected[k].SubRays);
 			// Every cascade covers the same field.
 			CHECK(glm::vec3(cascade.Grid) * cascade.Spacing == layout.FieldExtent);
 		}
@@ -97,17 +99,17 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 			CHECK(extent.z == doctest::Approx(12.8f * static_cast<float>(1u << index)));
 		}
 		CheckCascades(high, {
-			{ 0.5f, { 48, 40, 48 }, 16, 0.0f, 0.5f, 0.0f, 0.5f, 0 },
-			{ 1.0f, { 24, 20, 24 }, 64, 0.5f, 2.0f, 0.5f, 1.0f, 0 },
-			{ 2.0f, { 12, 10, 12 }, 256, 2.0f, 8.0f, 2.0f, 2.0f, 1 },
-			{ 4.0f, { 6, 5, 6 }, 1024, 8.0f, c_Infinity, 8.0f, 0.0f, 2 },
+			{ 0.5f, { 48, 40, 48 }, 64, 0.0f, 0.5f, 0.0f, 0.5f, 0, 1 },
+			{ 1.0f, { 24, 20, 24 }, 64, 0.5f, 2.0f, 0.5f, 1.0f, 0, 2 },
+			{ 2.0f, { 12, 10, 12 }, 256, 2.0f, 8.0f, 2.0f, 2.0f, 1, 2 },
+			{ 4.0f, { 6, 5, 6 }, 1024, 8.0f, c_Infinity, 8.0f, 0.0f, 2, 1 },
 		});
 		CHECK(high.FieldExtent == glm::vec3(24.0f, 20.0f, 24.0f));
 		CHECK(high.FieldSnap == 4.0f);
 		CHECK(high.FieldFullExtent == glm::vec2(7.5f, 5.5f));
 		CHECK(high.FieldFade == 2.0f);
 		CHECK(high.BatchVoxels == 262144);
-		CHECK(high.GetRaysPerFrame() == 2764800);
+		CHECK(high.GetRaysPerFrame() == 10506240);
 
 		const GlobalIlluminationLayout low = GetLayout(GlobalIlluminationLevel::Low);
 		REQUIRE(low.Levels.size() == 3);
@@ -122,9 +124,9 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 			CHECK(extent.y == doctest::Approx(6.4f * static_cast<float>(1u << index)));
 		}
 		CheckCascades(low, {
-			{ 1.0f, { 24, 20, 24 }, 16, 0.0f, 1.0f, 0.0f, 1.0f, 0 },
-			{ 2.0f, { 12, 10, 12 }, 64, 1.0f, 4.0f, 1.0f, 2.0f, 0 },
-			{ 4.0f, { 6, 5, 6 }, 256, 4.0f, c_Infinity, 4.0f, 0.0f, 1 },
+			{ 1.0f, { 24, 20, 24 }, 64, 0.0f, 1.0f, 0.0f, 1.0f, 0, 1 },
+			{ 2.0f, { 12, 10, 12 }, 64, 1.0f, 4.0f, 1.0f, 2.0f, 0, 2 },
+			{ 4.0f, { 6, 5, 6 }, 256, 4.0f, c_Infinity, 4.0f, 0.0f, 1, 1 },
 		});
 		CHECK(low.FieldExtent == glm::vec3(24.0f, 20.0f, 24.0f));
 		CHECK(low.FieldSnap == 4.0f);
@@ -132,7 +134,7 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 		CHECK(low.FieldFade == 2.0f);
 		// Low's scratch is one level: a 64^3 batch would not fit its 64 x 32 x 64 levels' worth.
 		CHECK(low.BatchVoxels == 131072);
-		CHECK(low.GetRaysPerFrame() == 322560);
+		CHECK(low.GetRaysPerFrame() == 1152000);
 	}
 
 	TEST_CASE("Memory adds up")
@@ -140,25 +142,25 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 		const GlobalIlluminationMemory high = GetLayout(GlobalIlluminationLevel::High).GetMemory();
 		CHECK(high.VoxelLevels == 83886080);
 		CHECK(high.Scratch == 8388608);
-		CHECK(high.Atlases == 22118400);
+		CHECK(high.Atlases == 10321920); // Cascades 1-3: cascade 0's rays go straight into the field
 		CHECK(high.Weights == 840960);
 		CHECK(high.Validity == 421200);
 		CHECK(high.Field == 4423680);
 		CHECK(high.Tiles == 262144);
 		CHECK(high.WorkItems == 1572864);
-		CHECK(high.GetTotal() == 121913936);
-		CHECK(GetLayout(GlobalIlluminationLevel::High).GetMemoryBytes() == 121913936);
+		CHECK(high.GetTotal() == 110117456);
+		CHECK(GetLayout(GlobalIlluminationLevel::High).GetMemoryBytes() == 110117456);
 
 		const GlobalIlluminationMemory low = GetLayout(GlobalIlluminationLevel::Low).GetMemory();
 		CHECK(low.VoxelLevels == 7864320);
 		CHECK(low.Scratch == 4194304);
-		CHECK(low.Atlases == 2580480);
+		CHECK(low.Atlases == 1105920);
 		CHECK(low.Weights == 103680);
 		CHECK(low.Validity == 52560);
 		CHECK(low.Field == 552960);
 		CHECK(low.Tiles == 262144);
 		CHECK(low.WorkItems == 1572864);
-		CHECK(low.GetTotal() == 17183312);
+		CHECK(low.GetTotal() == 15708752);
 	}
 
 	TEST_CASE("Directions and solid angles")

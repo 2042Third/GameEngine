@@ -737,6 +737,14 @@ namespace Strata
 		// The light (GI/VoxelInject.comp, GI/CascadeMarch.comp, GI/FieldReduce.comp, Include/GIField.slang).
 		constexpr float c_GIOccupancyGain = 2.5f;        // A sample absorbs saturate(occupancy * this): a wall two voxels thick is opaque
 		constexpr float c_GILeadInOccupancy = 0.3f;      // The lead-in absorbs only voxels at least this full (correction 2: not masked ones twice)
+		// A probe of cascades 1 and up that a surface covers moves along the surface's normal by up to this many voxels of its
+		// cascade's minimum level (ProbeValidity.comp): a probe plane on a wall's face would otherwise die, leaving its children
+		// one parent metres away whose view they take.
+		constexpr float c_GIProbeMoveVoxels = 1.5f;
+		// A march reads the light again at every sample of a run of occupied samples up to this full (Include/GIMarch.slang): the
+		// layer in front of the surface it entered. Reading only the run's first sample put the sun room's ten wall points 0.35 off
+		// the reference on average, these reads 0.23; deeper ones (0.25 full) let the sealed room B of the paired rooms take light.
+		constexpr float c_GIRefreshOccupancy = 0.1f;
 		constexpr float c_GIShadowOffsetVoxels = 1.0f;   // A solid surface voxel's sun walk starts this far from its center along its normal
 		constexpr float c_GITransmittanceCutoff = 1e-4f; // Below it a ray is opaque
 		constexpr float c_GIRadianceScale = 1.0f / 16.0f; // Stored radiance is luminance (nits) times this (half floats)
@@ -815,15 +823,13 @@ namespace Strata
 			glm::vec4 FieldOrigin; // xyz: the probe field's minimum corner, camera-relative (m); w: cascade 0's spacing (m)
 			glm::uvec4 FieldGrid;  // xyz: cascade 0's probes per axis; w: the cascade count
 			// A tile texel's solid angle is this over |p|^3, p its point on the octahedron (GlobalIllumination::
-			// GetSolidAngleNormalization): x for cascade 0's 4 x 4 tiles, y for cascade 1's 8 x 8; zw unused.
+			// GetSolidAngleNormalization): x for cascade 0's tiles; yzw unused.
 			glm::vec4 SolidAngleNorms;
-			// 1 / C_f per face (+X, -X, +Y, -Y, +Z, -Z; [1].zw unused): C_f the sum of a tile's directions' cosines to the face
-			// times their solid angles, so a uniform radiance reduces to itself on every face (GetFaceCosineSum): over cascade 0's
-			// 16 directions (its own near light) and cascade 1's 64 (the far light the reduce merges).
+			// 1 / C_f per face (+X, -X, +Y, -Y, +Z, -Z; [1].zw unused): C_f the sum of cascade 0's directions' cosines to the face
+			// times their solid angles, so a uniform radiance reduces to itself on every face (GetFaceCosineSum).
 			glm::vec4 FaceWeights[2];
-			glm::vec4 FaceWeightsFar[2];
 		};
-		static_assert(sizeof(GlobalIlluminationConstants) == c_GIMaxVoxelLevels * 80 + 32 + 32 + 16 + 64);
+		static_assert(sizeof(GlobalIlluminationConstants) == c_GIMaxVoxelLevels * 80 + 32 + 32 + 16 + 32);
 
 		// The probe passes' push constants (b2; Include/GIProbes.slang): the cascade a dispatch works on.
 		struct GIProbePassParameters
@@ -834,7 +840,7 @@ namespace Strata
 			uint32_t DirectionsPerAxis;
 			uint32_t MinimumLevel;    // The finest voxel level its samples read
 			uint32_t Level;           // VoxelInject: the level it lights
-			uint32_t Padding;
+			uint32_t SubRays;         // CascadeMarch: each texel is the mean of SubRays x SubRays rays spread over it
 		};
 		static_assert(sizeof(GIProbePassParameters) == 64);
 

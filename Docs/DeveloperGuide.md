@@ -5027,17 +5027,27 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   openings on the grid keep their size); a voxel is solid only where a face reaches into it or covers part of one of its
   faces from behind (`IsVoxelSolidFor`, inset `c_GISolidInsetVoxels`): a box's edge that only touches a voxel from outside
   leaves it in the lit layer (marking those solid closed every opening on the grid by a voxel at its edges). The probe
-  cascades (D10-D12 of the spec) then run top down: `ProbeValidity` (dead probes inside solids), `ProbeWeights` (the eight
-  parents' trilinear weights times their validity and the transmittance between the probes), `CascadeMarch` (one ray a
-  thread, fixed directions, light front to back with transmittance; for every cascade but the first an occlusion-only
-  lead-in from the probe that absorbs only voxels at least `c_GILeadInOccupancy` full, and every cascade but the top marches
+  cascades (D10-D12 of the spec) then run top down: `ProbeValidity` (dead probes inside solids; a probe of cascades 1 and
+  up that a surface covers moves off it along the surface's normal by up to `c_GIProbeMoveVoxels` voxels, stored in its
+  validity texel's gba: probe planes on a room's faces otherwise died, and their children took one surviving parent's view
+  from metres away, three times the patch's light on one side of the sun room and a fifth on the other), `ProbeWeights` (the
+  eight parents' trilinear weights times their validity and the transmittance between the moved probes), `CascadeMarch`
+  (cascades from the top down to 1, a thread per texel, fixed directions, each texel the mean of
+  `ProbeCascadeLayout::SubRays` squared rays spread over it: 2 x 2 for the cascades between 0 and the top, whose texels are as
+  wide as a room's sunlit patch seen across the room, which one ray caught whole or missed; light front to back with
+  transmittance through `Include/GIMarch.slang`; for every cascade but the first an occlusion-only lead-in from the probe
+  that absorbs only voxels at least `c_GILeadInOccupancy` full, and every cascade but the top marches
   `ProbeCascadeLayout::Overlap` (a spacing) past its interval's end, so a surface just past a child's end, which lies in
   its parents' lead-ins, is taken on the child's own line; gathering light in the lead-in instead took surfaces beside the
-  parent that the child never meets, up to 4.8 times the reference on the sun room's ceiling; the run's first sample's light
-  and normal for the whole run; the miss rule: an unabsorbed ray continues into the parents' merged rays, only the top
-  cascade, leaving the clipmap, reads the sky); cascade 0 keeps its own light, and `FieldReduce` merges cascade 1 in each
-  of its 64 directions into the field's ambient cube (six RGBA16F faces per cascade-0 probe: irradiance over pi and the sky
-  share, each part normalized by its directions' cosine sum).
+  parent that the child never meets, up to 4.8 times the reference on the sun room's ceiling; a run of occupied samples reads
+  the light at its first sample and again at every sample up to `c_GIRefreshOccupancy` full, the layer in front of the
+  surface it entered, never deeper, so a thin wall's far face sends nothing through its near one; the miss rule: an
+  unabsorbed ray continues into the parents' merged rays, only the top cascade, leaving the clipmap, reads the sky), and
+  `FieldReduce` (a group per cascade-0 probe, a thread per direction: cascade 0 marches cascade 1's 64 directions, each
+  continued by cascade 1's merged ray of the same direction and gated by its own transmittance, into the field's ambient cube:
+  six RGBA16F faces per cascade-0 probe, irradiance over pi and the sky share, normalized by the directions' cosine sum;
+  cascade 0 has no atlas). A 16-direction cascade 0 reduced apart gated four of cascade 1's directions with one ray and put
+  an emissive wall's light at its directions' centres' cosines, 1.34-1.42 times the form factor.
 - **The field in the forward pass** (`Include/GIField.slang`, the `gi` and `open` views; stage 3 joins it to shading):
   the eight cascade-0 probes around the point moved `c_GIGatherNormalBias` spacings along its geometric normal, each by its
   trilinear weight, validity, whether it lies in front of the surface's plane and its visibility (a march through levels

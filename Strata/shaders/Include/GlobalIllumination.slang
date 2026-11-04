@@ -24,6 +24,8 @@
 #define ST_GI_STEP_VOXELS 0.75            // c_GIStepVoxels
 #define ST_GI_OCCUPANCY_GAIN 2.5          // c_GIOccupancyGain
 #define ST_GI_LEAD_IN_OCCUPANCY 0.3       // c_GILeadInOccupancy
+#define ST_GI_PROBE_MOVE_VOXELS 1.5       // c_GIProbeMoveVoxels
+#define ST_GI_REFRESH_OCCUPANCY 0.1       // c_GIRefreshOccupancy
 #define ST_GI_SHADOW_OFFSET_VOXELS 1.0    // c_GIShadowOffsetVoxels
 #define ST_GI_TRANSMITTANCE_CUTOFF 1e-4   // c_GITransmittanceCutoff
 #define ST_GI_RADIANCE_SCALE (1.0 / 16.0) // c_GIRadianceScale
@@ -84,9 +86,8 @@ struct GlobalIlluminationConstants
 	uint4 Batch;        // x: the voxels a batch's scratch holds (GlobalIlluminationLayout::BatchVoxels)
 	float4 FieldOrigin; // xyz: the probe field's minimum corner, camera-relative (m); w: cascade 0's spacing (m)
 	uint4 FieldGrid;    // xyz: cascade 0's probes per axis; w: the cascade count
-	float4 SolidAngleNorms; // The solid angle of a tile texel is this over |p|^3 (p its octahedron point): x 4 x 4 tiles, y 8 x 8
-	float4 FaceWeights[2];  // 1 / C_f per face (+X, -X, +Y, -Y, +Z, -Z) over cascade 0's 16 directions
-	float4 FaceWeightsFar[2]; // ...and over cascade 1's 64
+	float4 SolidAngleNorms; // The solid angle of a tile texel is this over |p|^3 (p its octahedron point): x cascade 0's tiles
+	float4 FaceWeights[2];  // 1 / C_f per face (+X, -X, +Y, -Y, +Z, -Z) over cascade 0's directions
 };
 
 ConstantBuffer<GlobalIlluminationConstants> u_GI : register(b1);
