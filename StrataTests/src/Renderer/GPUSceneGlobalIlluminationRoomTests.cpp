@@ -129,10 +129,6 @@ namespace
 		SceneRendererSpecification specification = ExactSpecification();
 		specification.GlobalIllumination.Level = level;
 		specification.GlobalIllumination.VoxelizeTrianglesOnCut = 0; // The first frame is complete
-		// These cases measure the field on the surfaces drawn. GPU-driven occlusion culling hides the room's box below the window
-		// from cameras within about 0.3 m of x = -10 (Docs/Roadmap.md's open items), and the views then show the sunlit ground
-		// behind it: the field would be read on the wrong surface.
-		specification.OcclusionCulling = false;
 		return specification;
 	}
 

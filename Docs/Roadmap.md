@@ -668,14 +668,6 @@ Open items and deferrals later waves own:
   frame in a GPU test and compare its raw target. The GI takes its own constant buffer instead (`GIFieldConstants`, b3 of
   the scene layout) and `FrameConstants` stays as it was; a pass that needs new frame constants checks the look-dev
   repeats of `tp.lut`'s ao view and `lookdev.sheet` first.
-- GPU-driven occlusion culling hides a visible box (wave 8, found by `radiance-cascades` world stage 2, unresolved): in the
-  GI's sun room (`GIScenes.cpp`'s `BuildSunRoom`, window sealed or not), a camera at (-10, 1.6, -4) looking at
-  (-10, 1.2, 1), 960 x 540, 70 degrees, culls the 2 x 0.9 x 0.2 m box below the window (`OccludedProxies` 1) in every
-  frame, though nothing hides it: the image shows the sunlit ground behind it (the Lighting view reads 20,432 nits there,
-  the ground under the sun). Cameras at x -10.001 to -9.99 do the same, x -9 and -10.3 do not, and with
-  `SceneRendererSpecification::OcclusionCulling` off it is drawn from all of them. `Cull.comp`'s `IsOccluded` and
-  `HZBBuild.comp` read as conservative, so the cause is elsewhere (the proxy's bounds or the phases' bookkeeping). The GI's
-  room cases turn occlusion culling off until it is fixed.
 - GPU-driven rendering (wave 4's `gpu-driven-rendering`): skinning still runs per draw (compute skinning once per
   frame, measured by a GPU-time metric, is later work); the shadow cascade cache follows the GPU-driven path only (the
   CPU path redraws every layer each frame); render scenes are copied whole at play start, not shared by copy-on-write
