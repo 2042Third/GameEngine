@@ -5,6 +5,7 @@
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/ProjectSettings.h"
 #include "Strata/Core/SettingsRegistry.h"
+#include "Strata/Renderer/GlobalIlluminationLayout.h"
 #include "Strata/Renderer/PostProcessData.h"
 #include "Strata/Renderer/SceneRenderData.h"
 
@@ -48,6 +49,7 @@ namespace Strata
 		constexpr PresetRow<uint32_t> c_EnvironmentResolutionRow = { 256, 256, 512, 512 };
 		constexpr PresetRow<ReflectionsQuality> c_ReflectionsRow = { ReflectionsQuality::Off, ReflectionsQuality::Checkerboard, ReflectionsQuality::Spatial, ReflectionsQuality::SpatialHigh };
 		constexpr PresetRow<MotionBlurSamples> c_MotionBlurQualityRow = { MotionBlurSamples::Off, MotionBlurSamples::Samples8, MotionBlurSamples::Samples12, MotionBlurSamples::Samples16 };
+		constexpr PresetRow<GlobalIlluminationLevel> c_GlobalIlluminationRow = { GlobalIlluminationLevel::Off, GlobalIlluminationLevel::Off, GlobalIlluminationLevel::High, GlobalIlluminationLevel::High };
 		constexpr PresetRow<uint32_t> c_ReflectionProbeResolutionRow = { 128, 128, 256, 256 };
 
 		// GPU memory of the rows that allocate (RowTraits::MemoryBytes), as the renderer makes the resources.
@@ -141,6 +143,14 @@ namespace Strata
 			return pixels * (8 + 4) + 2 * tiles * 8;
 		}
 
+		uint64_t GlobalIlluminationBytes(const RendererQualitySettings& settings, glm::uvec2)
+		{
+			// For a scene whose Post Process asks for global illumination (SceneRenderer::EnsureGlobalIlluminationResources): the
+			// layout's voxel clipmap, probe cascades and field, the same at every output size. None at Off.
+			const std::optional<GlobalIlluminationLayout> layout = GlobalIllumination::ComputeLayout(settings.GlobalIllumination);
+			return layout ? layout->GetMemoryBytes() : 0;
+		}
+
 		// What graphics options know of each field but Preset, in field order: one line per row, beside its PresetRow line.
 		constexpr RendererQuality::RowTraits c_RowTraits[] = {
 			{ "ShadowResolution", true, "GPU.Shadows", &CascadeBytes },
@@ -157,6 +167,7 @@ namespace Strata
 			{ "Reflections", true, "GPU.Reflections", &ReflectionsBytes },
 			{ "MotionBlurQuality", true, "GPU.MotionBlur", &MotionBlurBytes },
 			{ "ReflectionProbeResolution", true, "GPU.Reflections", &ReflectionProbeBytes }, // Conversions run in the reflections' stage
+			{ "GlobalIllumination", true, "GPU.RadianceCascades", &GlobalIlluminationBytes },
 			// The players' rows: comfort and preference, not cost.
 			{ "AntiAliasing", false, "", nullptr },                 // Its cost is the chosen method's (GPU.TAA or GPU.Post)
 			{ "MotionBlur", false, "GPU.MotionBlur", nullptr },     // Counted with MotionBlurQuality
@@ -220,6 +231,7 @@ namespace Strata
 		constexpr uint32_t c_MotionBlurSampleCounts[] = { 0, 8, 12, 16 };
 		constexpr const char* c_AntiAliasingChoiceNames[] = { "Scene", "Off", "FXAA", "TAA", "Morphological" };
 		constexpr const char* c_SceneEffectChoiceNames[] = { "Scene", "Off" };
+		constexpr const char* c_GlobalIlluminationNames[] = { "Off", "Low", "High" };
 
 		template<typename T, size_t N>
 		const char* EnumToString(T value, const char* const (&names)[N])
@@ -449,6 +461,7 @@ namespace Strata
 					settings.Reflections = c_ReflectionsRow[index];
 					settings.MotionBlurQuality = c_MotionBlurQualityRow[index];
 					settings.ReflectionProbeResolution = c_ReflectionProbeResolutionRow[index];
+					settings.GlobalIllumination = c_GlobalIlluminationRow[index];
 				}
 				return presets;
 			}();
@@ -487,6 +500,8 @@ namespace Strata
 				clamped.Reflections = medium.Reflections;
 			if (static_cast<size_t>(clamped.MotionBlurQuality) >= std::size(c_MotionBlurSamplesNames))
 				clamped.MotionBlurQuality = medium.MotionBlurQuality;
+			if (static_cast<size_t>(clamped.GlobalIllumination) >= std::size(c_GlobalIlluminationNames))
+				clamped.GlobalIllumination = medium.GlobalIllumination;
 			clamped.ReflectionProbeResolution = clamped.ReflectionProbeResolution == 256 ? 256 : 128;
 			if (static_cast<size_t>(clamped.AntiAliasing) >= std::size(c_AntiAliasingChoiceNames))
 				clamped.AntiAliasing = AntiAliasingChoice::Scene;
@@ -566,6 +581,16 @@ namespace Strata
 		std::optional<MotionBlurSamples> MotionBlurSamplesFromString(std::string_view name)
 		{
 			return EnumFromString<MotionBlurSamples>(name, c_MotionBlurSamplesNames);
+		}
+
+		const char* GlobalIlluminationLevelToString(GlobalIlluminationLevel level)
+		{
+			return EnumToString(level, c_GlobalIlluminationNames);
+		}
+
+		std::optional<GlobalIlluminationLevel> GlobalIlluminationLevelFromString(std::string_view name)
+		{
+			return EnumFromString<GlobalIlluminationLevel>(name, c_GlobalIlluminationNames);
 		}
 
 		uint32_t GetMotionBlurSampleCount(MotionBlurSamples samples)
@@ -755,6 +780,11 @@ namespace Strata
 				"reflection probes' pictures: 256 keeps polished metal's reflections of nearby things sharp, for about 51 MiB more GPU memory per "
 				"view that shows a probe (17 MiB at 128, 68 MiB at 256 for 16 probes) and more GPU time when a probe's picture is prepared.",
 				{ "128", "256" }, std::to_string(high.ReflectionProbeResolution)));
+			section.Fields.push_back(EnumField("GlobalIllumination", "Global illumination", "Experimental. Bounce light and sky occlusion "
+				"traced in the world around the camera, for scenes that turn it on: sunlit floors light the walls and colored surfaces tint "
+				"their neighbors. Low traces a coarser, shorter field for about 18 MiB of GPU memory per view, High a finer one for about 111 "
+				"MiB and several milliseconds of GPU time at 3840x2160; Off draws none.", EnumOptions(c_GlobalIlluminationNames),
+				GlobalIlluminationLevelToString(high.GlobalIllumination)));
 			// The players' rows: read under every preset.
 			section.Fields.push_back(EnumField("AntiAliasing", "Anti-aliasing", "How jagged edges are smoothed: Scene uses the game's own method; "
 				"Off is the sharpest and costs nothing; FXAA and Morphological smooth each frame on its own (Morphological keeps more texture "
@@ -801,6 +831,7 @@ namespace Strata
 				ReadField(*value, "Reflections", settings.Reflections);
 				ReadEnumField(*value, "MotionBlurQuality", c_MotionBlurSamplesNames, settings.MotionBlurQuality);
 				ReadField(*value, "ReflectionProbeResolution", settings.ReflectionProbeResolution);
+				ReadEnumField(*value, "GlobalIllumination", c_GlobalIlluminationNames, settings.GlobalIllumination);
 			}
 			// Knobs read under every preset (players' comfort rows) follow here, one line each.
 			if (value)
@@ -832,6 +863,7 @@ namespace Strata
 				{ "Reflections", ReflectionsQualityToString(settings.Reflections) },
 				{ "MotionBlurQuality", MotionBlurSamplesToString(settings.MotionBlurQuality) },
 				{ "ReflectionProbeResolution", std::to_string(settings.ReflectionProbeResolution) },
+				{ "GlobalIllumination", GlobalIlluminationLevelToString(settings.GlobalIllumination) },
 				{ "AntiAliasing", AntiAliasingChoiceToString(settings.AntiAliasing) },
 				{ "MotionBlur", SceneEffectChoiceToString(settings.MotionBlur) },
 				{ "DepthOfField", SceneEffectChoiceToString(settings.DepthOfField) },

@@ -30,6 +30,12 @@ struct IndirectInputs
 	float3 SkyRadiance;           // The sky's prefiltered radiance along Reflected at the surface's roughness (0 without)
 	float DiffuseWeight;          // The share of its diffuse light the surface scatters (glass: 1 - transmission)
 	float ScreenReflectionOcclusion; // From the material's occlusion alone (Lagarde): what screen-space reflections keep
+	// Global illumination joined (ReflectionParams.y; Include/GIField.slang): the field's weight at the surface (0 outside it, in
+	// its fade between, and while it is pending or not joined), its irradiance over pi along the shading normal (absolute
+	// luminance, the scene's intensity applied) and the share of the sky the surface sees (1 when not joined).
+	float FieldWeight;
+	float3 FieldIrradiance;
+	float FieldOpen;
 };
 
 // The share of its diffuse light a surface scatters: transmissive surfaces pass the rest through (the glass variant). The other
@@ -98,6 +104,17 @@ float3 GatherIndirectSpecular(IndirectInputs inputs)
 			* inputs.SpecularColor;
 	}
 	return fallback * inputs.SpecularColor * inputs.SpecularOcclusion;
+}
+
+// The field's diffuse light (global illumination joined; Docs/DeveloperGuide.md, "Global illumination"): its irradiance over pi
+// on the surface's diffuse albedo, leaving what the specular gather takes in every form but the constant ambient's (which has no
+// specular), scattered and under the diffuse occlusion without the multi-bounce fit (the field's bounce is the real one). It
+// already holds the sky's intensity. The caller weighs it by FieldWeight and today's diffuse light by the rest.
+float3 GatherIndirectField(IndirectInputs inputs, SurfaceData surface)
+{
+	float3 unreflected = inputs.Form == ST_INDIRECT_AMBIENT ? float3(1.0) : 1.0 - inputs.SpecularColor;
+	float3 diffuse = inputs.FieldIrradiance * surface.Albedo * (1.0 - surface.Metallic) * unreflected;
+	return ScatterDiffuse(diffuse, inputs.DiffuseWeight) * inputs.DiffuseOcclusion;
 }
 
 // The base's indirect light from the two gathers, each form's scale where 0.7.0 applied it (the sky's intensity on the sum of

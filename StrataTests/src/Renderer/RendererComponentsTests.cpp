@@ -166,7 +166,7 @@ TEST_SUITE("Renderer.Components")
 		}
 	}
 
-	TEST_CASE("Post Process' sections are Tone and color, Exposure, Bloom, Ambient occlusion, Anti-aliasing, Reflections, Lens, Motion, in that order")
+	TEST_CASE("Post Process' sections are Tone and color, Exposure, Bloom, Ambient occlusion, Global illumination, Anti-aliasing, Reflections, Lens, Motion, in that order")
 	{
 		const auto sectionsOf = [](const char* component)
 		{
@@ -182,8 +182,8 @@ TEST_SUITE("Renderer.Components")
 			}
 			return sections;
 		};
-		CHECK(sectionsOf("PostProcess") == std::vector<std::string> { "Tone and color", "Exposure", "Bloom", "Ambient occlusion", "Anti-aliasing",
-			"Reflections", "Lens", "Motion" });
+		CHECK(sectionsOf("PostProcess") == std::vector<std::string> { "Tone and color", "Exposure", "Bloom", "Ambient occlusion",
+			"Global illumination", "Anti-aliasing", "Reflections", "Lens", "Motion" });
 		CHECK(sectionsOf("DirectionalLight") == std::vector<std::string> { "Light", "Shadows" });
 		// Properties registered after the groups' first ones (registration order never changes) join their groups.
 		const ComponentInfo* postProcess = ComponentRegistry::Find("PostProcess");

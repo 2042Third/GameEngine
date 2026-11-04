@@ -164,6 +164,9 @@ IndirectInputs GetIndirectInputs(SurfaceData surface, float3 f0, float2 dfg, flo
 		* GetHorizonFade(inputs.Reflected, geometricNormal);
 	// The same on the material's occlusion alone, for what screen-space reflections found (exactly 1 without an occlusion map).
 	inputs.ScreenReflectionOcclusion = clamp(pow(NoV + surface.Occlusion, exp2(-16.0 * surface.Roughness - 1.0)) - 1.0 + surface.Occlusion, 0.0, 1.0);
+	inputs.FieldWeight = 0.0;
+	inputs.FieldIrradiance = float3(0.0);
+	inputs.FieldOpen = 1.0;
 	return inputs;
 }
 
@@ -297,7 +300,22 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 	IndirectInputs indirectInputs = GetIndirectInputs(surface, f0, dfg, NoV, surfaceGeometricNormal, st_FragCoord.xy, diffuseOcclusion,
 		diffuseOcclusionColor, diffuseWeight);
 	// The base's image-based light (or constant ambient), which the clear coat covers below.
-	float3 indirect = ComposeIndirect(indirectInputs, GatherIndirectDiffuse(indirectInputs, surface), GatherIndirectSpecular(indirectInputs));
+	float3 indirect;
+	if (u_Frame.ReflectionParams.y > 0.0)
+	{
+		// Global illumination joined (the scene asked, the field is used; .z the intensity): inside the field its diffuse light
+		// replaces today's (box probes, the sky or the constant ambient), blended over the field's fade; specular stays today's.
+		// Where the field's weight is 0 this is today's light exactly (x * 1 and + 0).
+		float openShare;
+		float4 field = SampleIrradianceField(u_Samplers[0], surface.Position, surfaceGeometricNormal, surface.Normal, openShare);
+		indirectInputs.FieldWeight = field.a;
+		indirectInputs.FieldIrradiance = field.rgb * (u_Frame.ReflectionParams.z / ST_GI_RADIANCE_SCALE);
+		indirectInputs.FieldOpen = openShare;
+		indirect = ComposeIndirect(indirectInputs, GatherIndirectDiffuse(indirectInputs, surface) * (1.0 - indirectInputs.FieldWeight),
+			GatherIndirectSpecular(indirectInputs)) + GatherIndirectField(indirectInputs, surface) * indirectInputs.FieldWeight;
+	}
+	else
+		indirect = ComposeIndirect(indirectInputs, GatherIndirectDiffuse(indirectInputs, surface), GatherIndirectSpecular(indirectInputs));
 
 	float3 emitted = lightingView == ST_LIGHTING_VIEW_INDIRECT ? float3(0.0) : surface.Emissive;
 	if (coat.Strength > 0.0)

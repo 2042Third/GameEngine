@@ -938,7 +938,7 @@ TEST_SUITE("Editor.Commands")
 		const nlohmann::json post = harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } });
 		CHECK(post["inactive"] == WithTemporalRows({ { "BloomIntensity", "Bloom is off" }, { "BloomThreshold", "Bloom is off" }, { "BloomRadius", "Bloom is off" },
 			{ "MotionBlurShutterAngle", "Motion Blur is off" }, { "MotionBlurMaxLength", "Motion Blur is off" },
-			{ "ColorLookupIntensity", "No Color Lookup is set" } }, c_OnlyTAA));
+			{ "ColorLookupIntensity", "No Color Lookup is set" }, { "GlobalIlluminationIntensity", "Global Illumination is off" } }, c_OnlyTAA));
 		CHECK(harness.Run("entity.get", { { "entity", c } })["inactive"] == nlohmann::json { { "PostProcess", post["inactive"] } });
 		harness.Run("component.remove", { { "entity", c }, { "component", "PostProcess" } });
 		CHECK_FALSE(harness.Run("entity.get", { { "entity", c } }).contains("inactive"));
@@ -956,7 +956,8 @@ TEST_SUITE("Editor.Commands")
 		harness.Run("component.set", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "AntiAliasing", false } } } });
 		CHECK(harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } })["inactive"]
 			== WithTemporalRows({ { "AntiAliasingMethod", "Anti Aliasing is off" }, { "MotionBlurShutterAngle", "Motion Blur is off" },
-				{ "MotionBlurMaxLength", "Motion Blur is off" }, { "ColorLookupIntensity", "No Color Lookup is set" } }, "Anti Aliasing is off"));
+				{ "MotionBlurMaxLength", "Motion Blur is off" }, { "ColorLookupIntensity", "No Color Lookup is set" },
+				{ "GlobalIlluminationIntensity", "Global Illumination is off" } }, "Anti Aliasing is off"));
 		harness.Run("component.remove", { { "entity", c }, { "component", "PostProcess" } });
 
 		// The TAA's preset and tunables: Custom with tunables in one step, undone in one; out-of-range values refused without
@@ -981,7 +982,8 @@ TEST_SUITE("Editor.Commands")
 		CHECK(postInactive() == nlohmann::json { { "TAAClipWidth", "Only Tight clipping uses it (TAA History Clamp is Range)" },
 			{ "TAADisocclusionThreshold", "TAA Disocclusion Rejection is off" }, { "ScreenSpaceReflectionsIntensity", "Screen Space Reflections is off" },
 			{ "ScreenSpaceReflectionsMaxRoughness", "Screen Space Reflections is off" }, { "MotionBlurShutterAngle", "Motion Blur is off" },
-			{ "MotionBlurMaxLength", "Motion Blur is off" }, { "ColorLookupIntensity", "No Color Lookup is set" } });
+			{ "MotionBlurMaxLength", "Motion Blur is off" }, { "ColorLookupIntensity", "No Color Lookup is set" },
+			{ "GlobalIlluminationIntensity", "Global Illumination is off" } });
 		for (const auto& [property, value] : { std::pair<const char*, nlohmann::json> { "TAAHistoryFrames", 40 }, { "TAAHistoryFrames", 1 },
 				 { "TAAMotionResponse", 0.5 }, { "TAAClipWidth", 0.25 }, { "TAADisocclusionThreshold", 0.6 }, { "TAASharpening", 1.5 }, { "TAAHistoryClamp", "Box" },
 				 { "TAAPreset", "Blurry" }, { "ScreenSpaceReflectionsIntensity", 1.5 }, { "ScreenSpaceReflectionsMaxRoughness", -0.1 } })

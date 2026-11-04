@@ -162,6 +162,11 @@ namespace Strata
 			return post.AmbientOcclusion ? std::string() : "Ambient Occlusion is off";
 		}
 
+		std::string WithGlobalIllumination(const PostProcessComponent& post)
+		{
+			return post.GlobalIllumination ? std::string() : "Global Illumination is off";
+		}
+
 		std::string WithAntiAliasing(const PostProcessComponent& post)
 		{
 			return post.AntiAliasing ? std::string() : "Anti Aliasing is off";
@@ -475,6 +480,12 @@ namespace Strata
 			.Property("AmbientOcclusionMultiBounce", &PostProcessComponent::AmbientOcclusionMultiBounce, WithTooltip({},
 				"Occluded corners of bright surfaces keep the light their walls reflect into them: white plaster stays light in its creases, "
 				"dark soil darkens fully"))
+			.Section("Global illumination")
+			.Property("GlobalIllumination", &PostProcessComponent::GlobalIllumination, WithTooltip({}, "Experimental. Bounce light and sky "
+				"occlusion traced in the world around the camera: sunlit floors light the walls, colored surfaces tint their neighbors, closed "
+				"rooms stay dark, whether the source is on screen or not. Graphics Quality High and Ultra; off at Low and Medium"))
+			.Property("GlobalIlluminationIntensity", &PostProcessComponent::GlobalIlluminationIntensity, WithTooltip(Range(0.0f, 4.0f, 0.01f),
+				"How much of the traced indirect light shades surfaces: 1 as traced"))
 			.Section("Anti-aliasing")
 			.Property("AntiAliasing", &PostProcessComponent::AntiAliasing, WithTooltip({}, "Smooths jagged edges, by the method below"))
 			.EnumProperty("AntiAliasingMethod", &PostProcessComponent::AntiAliasingMethod, { { "FXAA", 0 }, { "TAA", 1 }, { "Morphological", 2 } },
@@ -612,6 +623,7 @@ namespace Strata
 		SetInactiveReasons<PostProcessComponent>({ "Shoulder" }, &WithFilmicShoulder);
 		SetInactiveReasons<PostProcessComponent>({ "AmbientOcclusionRadius", "AmbientOcclusionIntensity", "AmbientOcclusionMultiBounce" },
 			&WithAmbientOcclusion);
+		SetInactiveReasons<PostProcessComponent>({ "GlobalIlluminationIntensity" }, &WithGlobalIllumination);
 		SetInactiveReasons<PostProcessComponent>({ "AntiAliasingMethod" }, &WithAntiAliasing);
 		SetInactiveReasons<PostProcessComponent>({ "TAAPreset" }, &WithTemporalAntiAliasing);
 		SetInactiveReasons<PostProcessComponent>({ "TAAHistoryFrames" }, &WithCustomTunable<uint32_t, &TemporalAntiAliasingSettings::HistoryFrames>);

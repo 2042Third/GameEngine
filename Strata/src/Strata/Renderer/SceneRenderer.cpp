@@ -1955,6 +1955,9 @@ namespace Strata
 			ReleaseMotionBlurTargets(released);
 		if (quality.DepthOfField == SceneEffectChoice::Off)
 			ReleaseDepthOfFieldTargets(released);
+		// Global illumination: released at once on a new layout (or Off); the next frame that wants it starts the clipmap over.
+		if (quality.GlobalIllumination != current.GlobalIllumination && m_GI)
+			ReleaseGlobalIllumination(released);
 		Renderer::ReleaseDeferred(std::move(released));
 
 		current = quality;
@@ -3066,15 +3069,17 @@ namespace Strata
 		m_Stats.ScreenSpaceReflections = m_ReflectionFrame;
 		m_Stats.ScreenSpaceReflectionsPending = m_ReflectionCopyFrame && !m_ReflectionFrame;
 
-		// Global illumination runs for its views (at the specification's layout, High by default); a frame that wants none
-		// releases it, so nothing is kept.
-		const bool giWanted = IsGlobalIlluminationView(options.LightingView);
+		// Global illumination (experimental) runs where the scene's Post Process asks for it at a quality row other than Off, and
+		// for its views (at the row's layout; a view at Off shows what High gives); a frame that wants none releases it, so
+		// nothing is kept.
+		const GlobalIlluminationLevel giLevel = m_Specification.Quality.GlobalIllumination;
+		const bool giAsked = postProcess.GlobalIllumination && giLevel != GlobalIlluminationLevel::Off;
+		const bool giWanted = giAsked || IsGlobalIlluminationView(options.LightingView);
 		bool giFailed = false;
 		m_GIFrame = false;
 		m_GIFieldConstants = {};
 		if (giWanted)
 		{
-			const GlobalIlluminationLevel giLevel = m_Specification.GlobalIllumination.Level;
 			const std::optional<GlobalIlluminationLayout> giLayout = GlobalIllumination::ComputeLayout(giLevel != GlobalIlluminationLevel::Off ? giLevel
 				: GlobalIlluminationLevel::High);
 			m_GIFrame = giLayout && EnsureGlobalIlluminationResources(*giLayout);
@@ -3315,6 +3320,15 @@ namespace Strata
 			return false;
 		}
 
+		// The forward pass joins the field into the lit image (Include/IndirectLight.slang's GatherIndirectField) where the scene
+		// asked for GI and the frame's field is used (ran, not pending): ReflectionParams.y 1 and .z the intensity, clamped to
+		// [0, 4]. Otherwise the indirect light is Strata 0.7.0's, bit for bit (the views read the field without the join).
+		if (giAsked && m_GIFrame && m_GIFieldConstants.FieldSize.w > 0.0f)
+		{
+			frame.ReflectionParams.y = 1.0f;
+			frame.ReflectionParams.z = std::isfinite(postProcess.GlobalIlluminationIntensity)
+				? std::clamp(postProcess.GlobalIlluminationIntensity, 0.0f, 4.0f) : 1.0f;
+		}
 		WriteFrameConstants(commandList, frame);
 		commandList->writeBuffer(m_GIFieldConstantBuffer, &m_GIFieldConstants, sizeof(m_GIFieldConstants));
 		UploadSceneData(commandList, drawListsRecreated);

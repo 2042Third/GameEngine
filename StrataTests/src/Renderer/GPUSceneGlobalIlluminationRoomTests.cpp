@@ -4,7 +4,9 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Math/Math.h"
 #include "Strata/Renderer/DeferredReleaseQueue.h"
+#include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/GlobalIlluminationLayout.h"
+#include "Strata/Renderer/RendererQuality.h"
 
 #include <glm/gtc/constants.hpp>
 #include <spdlog/fmt/fmt.h>
@@ -13,6 +15,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -128,7 +131,7 @@ namespace
 	SceneRendererSpecification RoomSpecification(GlobalIlluminationLevel level = GlobalIlluminationLevel::High)
 	{
 		SceneRendererSpecification specification = ExactSpecification();
-		specification.GlobalIllumination.Level = level;
+		specification.Quality.GlobalIllumination = level;
 		specification.GlobalIllumination.VoxelizeTrianglesOnCut = 0; // The first frame is complete
 		return specification;
 	}
@@ -1179,6 +1182,277 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 				<< Luminance(value) / expected << ")");
 			CHECK(std::abs(static_cast<double>(Luminance(value)) / expected - 1.0) <= 0.2);
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+}
+
+namespace
+{
+	// Asks for global illumination in the scene's Post Process (AddNeutralPostProcess's), at an intensity.
+	void SetGlobalIllumination(Scene& scene, bool asked, float intensity = 1.0f)
+	{
+		auto view = scene.GetRegistry().view<PostProcessComponent>();
+		REQUIRE(view.size() == 1);
+		scene.GetRegistry().patch<PostProcessComponent>(view.front(), [&](PostProcessComponent& postProcess)
+		{
+			postProcess.GlobalIllumination = asked;
+			postProcess.GlobalIlluminationIntensity = intensity;
+		});
+	}
+
+	ReadbackImage ReadImage(nvrhi::ITexture* texture)
+	{
+		ReadbackImage image;
+		REQUIRE(Renderer::ReadTexture(texture, image));
+		return image;
+	}
+
+	// What a renderer made of global illumination: nothing at all, or a layout's resources.
+	void CheckNoGlobalIllumination(SceneRenderer& renderer)
+	{
+		CHECK_FALSE(renderer.GetStats().GlobalIllumination);
+		CHECK(renderer.GetStats().GlobalIlluminationSettled);
+		CHECK(renderer.GetGlobalIlluminationMemoryBytes() == 0);
+		CHECK(renderer.GetGlobalIlluminationLayout() == nullptr);
+		renderer.ResolveGPUStats(true);
+		for (const GPUStageTime& stage : renderer.GetGPUStats().StageMs)
+			CHECK(stage.Stage != RendererGPUStages::Get().RadianceCascades);
+	}
+
+	// What a renderer holds of global illumination at a level (0 at Off): its layout's resources (the quality row's estimate) and
+	// the scene's material table (its first 256 entries, all these scenes use).
+	uint64_t LayoutBytes(GlobalIlluminationLevel level)
+	{
+		const std::optional<GlobalIlluminationLayout> layout = GlobalIllumination::ComputeLayout(level);
+		return layout ? layout->GetMemoryBytes() + 256 * sizeof(RenderData::GIMaterial) : 0;
+	}
+
+	// The sun room's lit image, only its indirect light (the Indirect view), read at the points after three frames.
+	std::vector<glm::vec3> MeasureIndirect(RoomRender& render, const std::vector<RoomPoint>& points, bool joined)
+	{
+		AssetManager::SetActive(render.Assets.Manager);
+		for (uint32_t frame = 0; frame < 3; frame++)
+			REQUIRE(RenderGIFrame(*render.Renderer, render.SceneData, RoomCamera(), GIViewOptions(SceneLightingView::Indirect)));
+		CHECK(render.Renderer->GetStats().GlobalIllumination == joined);
+		CHECK_FALSE(render.Renderer->GetStats().GlobalIlluminationPending);
+		return ReadPoints(*render.Renderer, RoomCamera(), points);
+	}
+
+	float RedOverGreen(const glm::vec3& color)
+	{
+		return color.r / std::max(color.g, 1e-6f);
+	}
+}
+
+TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationJoin")
+{
+	TEST_CASE("Without GI asked, or at the row Off, nothing is made and the image is the same")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		BuildYard(scene, assets);
+		const SceneCamera camera = YardStrafe(0, 0.0f, static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y));
+		const auto render = [&](const SceneRendererSpecification& specification, bool asked, uint64_t expectedBytes)
+		{
+			SetGlobalIllumination(scene, asked);
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+			for (uint32_t frame = 0; frame < 4; frame++)
+				REQUIRE(RenderGIFrame(renderer, scene, camera, SceneRenderOptions {}));
+			if (expectedBytes == 0)
+				CheckNoGlobalIllumination(renderer);
+			else
+				CHECK(renderer.GetGlobalIlluminationMemoryBytes() == expectedBytes);
+			return ReadImage(renderer.GetOutputTexture());
+		};
+		// Not asked at High; asked at Off; neither (Medium's row is Off): the same image, and nothing of the GI.
+		const ReadbackImage notAsked = render(RoomSpecification(GlobalIlluminationLevel::High), false, 0);
+		const ReadbackImage rowOff = render(RoomSpecification(GlobalIlluminationLevel::Off), true, 0);
+		const ReadbackImage plain = render(ExactSpecification(), false, 0);
+		CHECK(rowOff.Pixels == notAsked.Pixels);
+		CHECK(plain.Pixels == notAsked.Pixels);
+		// Asked at High: the field lights the yard.
+		const ReadbackImage joined = render(RoomSpecification(GlobalIlluminationLevel::High), true, LayoutBytes(GlobalIlluminationLevel::High));
+		CHECK(joined.Pixels != notAsked.Pixels);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A pending frame is today's light")
+	{
+		// The first frame of a rebuild voxelizes one region (VoxelizeTrianglesOnCut 1): the field is not used, and the image is
+		// the one without GI to the bit (the join is skipped, not weighted by 0).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		BuildYard(scene, assets);
+		const SceneCamera camera = YardStrafe(0, 0.0f, static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y));
+		SceneRendererSpecification specification = RoomSpecification(GlobalIlluminationLevel::High);
+		specification.GlobalIllumination.VoxelizeTrianglesOnCut = 1;
+		SceneRenderer off(specification);
+		off.SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+		REQUIRE(RenderGIFrame(off, scene, camera, SceneRenderOptions {}));
+		const ReadbackImage offImage = ReadImage(off.GetOutputTexture());
+
+		SetGlobalIllumination(scene, true);
+		SceneRenderer pending(specification);
+		pending.SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+		REQUIRE(RenderGIFrame(pending, scene, camera, SceneRenderOptions {}));
+		CHECK(pending.GetStats().GlobalIllumination);
+		CHECK(pending.GetStats().GlobalIlluminationPending);
+		CHECK(ReadImage(pending.GetOutputTexture()).Pixels == offImage.Pixels);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The owner's experiment in the lit image: a red floor tints the walls")
+	{
+		// The sun room's walls in the lit image's indirect light, with a red floor against a white one: redder by at least 0.7 of
+		// the one-bounce reference's change of R/G with GI asked at High, and not at all without it (the room has no sky: its
+		// walls' indirect light is then 0 with either floor, to the bit).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const SunRoomOptions white = DefaultRoom();
+		SunRoomOptions red = white;
+		red.FloorAlbedo = glm::vec3(0.62f, 0.09f, 0.07f);
+		std::vector<RoomPoint> walls = GetWallPoints();
+		walls.resize(7);
+		const std::vector<glm::vec3> whiteReferences = References(white, walls);
+		const std::vector<glm::vec3> redReferences = References(red, walls);
+		float referenceChange = 0.0f;
+		for (size_t index = 0; index < walls.size(); index++)
+			referenceChange += RedOverGreen(redReferences[index]) - RedOverGreen(whiteReferences[index]);
+		referenceChange /= static_cast<float>(walls.size());
+		CHECK(referenceChange > 0.0f);
+
+		for (const bool asked : { true, false })
+		{
+			CAPTURE(asked);
+			RoomRender whiteRender(white, c_RoomSize, RoomSpecification());
+			RoomRender redRender(red, c_RoomSize, RoomSpecification());
+			SetGlobalIllumination(whiteRender.SceneData, asked);
+			SetGlobalIllumination(redRender.SceneData, asked);
+			const std::vector<glm::vec3> whiteMeasured = MeasureIndirect(whiteRender, walls, asked);
+			const std::vector<glm::vec3> redMeasured = MeasureIndirect(redRender, walls, asked);
+			if (!asked)
+			{
+				for (size_t index = 0; index < walls.size(); index++)
+				{
+					CAPTURE(walls[index].Name);
+					CHECK(redMeasured[index] == whiteMeasured[index]);
+				}
+				continue;
+			}
+			float change = 0.0f;
+			for (size_t index = 0; index < walls.size(); index++)
+			{
+				CAPTURE(walls[index].Name);
+				CHECK(Luminance(whiteMeasured[index]) > 0.0f);
+				change += RedOverGreen(redMeasured[index]) - RedOverGreen(whiteMeasured[index]);
+			}
+			change /= static_cast<float>(walls.size());
+			MESSAGE("The lit image's walls, mean R/G change with the red floor: " << change << " (reference " << referenceChange << "); R/G at the "
+				<< walls[0].Name << ": white floor " << RedOverGreen(whiteMeasured[0]) << ", red floor " << RedOverGreen(redMeasured[0]));
+			CHECK(change >= 0.7f * referenceChange);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Intensity scales the field")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		std::vector<RoomPoint> walls = GetWallPoints();
+		walls.resize(7);
+		RoomRender render(DefaultRoom(), c_RoomSize, RoomSpecification());
+		SetGlobalIllumination(render.SceneData, true, 1.0f);
+		const std::vector<glm::vec3> single = MeasureIndirect(render, walls, true);
+		SetGlobalIllumination(render.SceneData, true, 2.0f);
+		const std::vector<glm::vec3> twice = MeasureIndirect(render, walls, true);
+		SetGlobalIllumination(render.SceneData, true, 0.0f);
+		const std::vector<glm::vec3> none = MeasureIndirect(render, walls, true);
+		for (size_t index = 0; index < walls.size(); index++)
+		{
+			CAPTURE(walls[index].Name);
+			REQUIRE(Luminance(single[index]) > 0.0f);
+			CHECK(std::abs(Luminance(twice[index]) / (2.0f * Luminance(single[index])) - 1.0f) <= 0.01f);
+			CHECK(none[index] == glm::vec3(0.0f));
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The field's share takes no multi-bounce")
+	{
+		// Real bounce replaces the ambient occlusion's multi-bounce fit inside the field: with ambient occlusion on, the sun
+		// room's indirect light inside the full field (all the field's there) is the same to the bit with the fit on and off, at
+		// open walls and in the corners the occlusion darkens.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		RoomRender render(DefaultRoom(), c_RoomSize, RoomSpecification());
+		SetGlobalIllumination(render.SceneData, true);
+		GetPostProcess(render.SceneData).AmbientOcclusion = true;
+		std::vector<RoomPoint> points = GetWallPoints();
+		points.push_back({ "south wall by the floor", { -11.0f, 0.12f, 1.0f }, c_North });
+		points.push_back({ "east wall by the south wall", { -7.0f, 1.5f, 0.9f }, -c_East });
+		const std::vector<glm::vec3> with = MeasureIndirect(render, points, true);
+		GetPostProcess(render.SceneData).AmbientOcclusionMultiBounce = false;
+		const std::vector<glm::vec3> without = MeasureIndirect(render, points, true);
+		for (size_t index = 0; index < points.size(); index++)
+		{
+			CAPTURE(points[index].Name);
+			CHECK(Luminance(with[index]) > 0.0f);
+			CHECK(with[index] == without[index]);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The row follows SetQuality")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		RoomRender render(DefaultRoom(), c_RoomSize, RoomSpecification(GlobalIlluminationLevel::Off));
+		SetGlobalIllumination(render.SceneData, true);
+		AssetManager::SetActive(render.Assets.Manager);
+		RendererQualitySettings quality = render.Renderer->GetSpecification().Quality;
+		for (const GlobalIlluminationLevel level : { GlobalIlluminationLevel::Off, GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low,
+			GlobalIlluminationLevel::Off })
+		{
+			CAPTURE(RendererQuality::GlobalIlluminationLevelToString(level));
+			quality.GlobalIllumination = level;
+			render.Renderer->SetQuality(quality);
+			// Released at once when the row changes, before any frame.
+			CHECK(render.Renderer->GetGlobalIlluminationMemoryBytes() == 0);
+			REQUIRE(RenderGIFrame(*render.Renderer, render.SceneData, RoomCamera(), SceneRenderOptions {}));
+			CHECK(render.Renderer->GetStats().GlobalIllumination == (level != GlobalIlluminationLevel::Off));
+			CHECK(render.Renderer->GetGlobalIlluminationMemoryBytes() == LayoutBytes(level));
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Paths are equal in the lit image")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!gpu.GetDevice().GetInfo().SupportsDrawIndirectFirstInstance)
+			return;
+		const auto render = [](GPUDrivenMode mode)
+		{
+			RoomRender room(DefaultRoom(), c_RoomSize, [mode]()
+			{
+				SceneRendererSpecification specification = RoomSpecification();
+				specification.GPUDriven = mode;
+				return specification;
+			}());
+			SetGlobalIllumination(room.SceneData, true);
+			AssetManager::SetActive(room.Assets.Manager);
+			for (uint32_t frame = 0; frame < 3; frame++)
+				REQUIRE(RenderGIFrame(*room.Renderer, room.SceneData, RoomCamera(), GIViewOptions(SceneLightingView::None)));
+			CHECK(room.Renderer->GetStats().GlobalIllumination);
+			CHECK(room.Renderer->GetStats().GPUDriven == (mode == GPUDrivenMode::Auto));
+			return ReadImage(room.Renderer->GetHDRTexture());
+		};
+		CHECK(render(GPUDrivenMode::Auto).Pixels == render(GPUDrivenMode::Off).Pixels);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

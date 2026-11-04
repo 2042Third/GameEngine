@@ -289,6 +289,11 @@ namespace Strata
 		// Occluded corners of bright surfaces keep the light their walls reflect into them (the forward pass's AOMultiBounce): also
 		// for materials' occlusion maps, with or without AmbientOcclusion.
 		bool AmbientOcclusionMultiBounce = true;
+		// Global illumination (experimental; world-space radiance cascades, Docs/DeveloperGuide.md "Global illumination"): bounce
+		// light and sky occlusion from a voxel copy of the scene around the camera, lit by the sun and glowing surfaces every frame,
+		// also from what is off screen; the quality's GlobalIllumination row scales it (off at Low and Medium).
+		bool GlobalIllumination = false;
+		float GlobalIlluminationIntensity = 1.0f; // The field's diffuse light, 0 to 4; 1 as traced
 		bool AntiAliasing = true;
 		AntiAliasingMode AntiAliasingMethod = AntiAliasingMode::FXAA;
 		// The TAA's look: a preset, or the tunables below under Custom. The preset and the tunables are independent: choosing

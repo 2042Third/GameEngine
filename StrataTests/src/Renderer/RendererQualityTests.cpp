@@ -44,6 +44,8 @@ namespace
 	constexpr std::array<MotionBlurSamples, 4> c_MotionBlurQuality = { MotionBlurSamples::Off, MotionBlurSamples::Samples8, MotionBlurSamples::Samples12,
 		MotionBlurSamples::Samples16 };
 	constexpr std::array<uint32_t, 4> c_ReflectionProbeResolution = { 128, 128, 256, 256 };
+	constexpr std::array<GlobalIlluminationLevel, 4> c_GlobalIllumination = { GlobalIlluminationLevel::Off, GlobalIlluminationLevel::Off,
+		GlobalIlluminationLevel::High, GlobalIlluminationLevel::High };
 
 	void CheckColumn(const RendererQualitySettings& settings, size_t column)
 	{
@@ -62,6 +64,7 @@ namespace
 		CHECK(settings.Reflections == c_Reflections[column]);
 		CHECK(settings.MotionBlurQuality == c_MotionBlurQuality[column]);
 		CHECK(settings.ReflectionProbeResolution == c_ReflectionProbeResolution[column]);
+		CHECK(settings.GlobalIllumination == c_GlobalIllumination[column]);
 		// The players' rows follow no preset.
 		CHECK(settings.AntiAliasing == AntiAliasingChoice::Scene);
 		CHECK(settings.MotionBlur == SceneEffectChoice::Scene);
@@ -201,6 +204,13 @@ TEST_SUITE("Renderer.Quality")
 				 ShadowMapResolution::Size2048, ShadowMapResolution::Size4096, ShadowMapResolution::Size8192 })
 			CHECK(RendererQuality::ShadowResolutionFromString(RendererQuality::ShadowResolutionToString(resolution)) == resolution);
 		CHECK_FALSE(RendererQuality::ShadowResolutionFromString("3000").has_value());
+		CHECK(static_cast<int>(GlobalIlluminationLevel::Off) == 0);
+		CHECK(static_cast<int>(GlobalIlluminationLevel::Low) == 1);
+		CHECK(static_cast<int>(GlobalIlluminationLevel::High) == 2);
+		for (const GlobalIlluminationLevel level : { GlobalIlluminationLevel::Off, GlobalIlluminationLevel::Low, GlobalIlluminationLevel::High })
+			CHECK(RendererQuality::GlobalIlluminationLevelFromString(RendererQuality::GlobalIlluminationLevelToString(level)) == level);
+		CHECK(std::string(RendererQuality::GlobalIlluminationLevelToString(GlobalIlluminationLevel::Low)) == "Low");
+		CHECK_FALSE(RendererQuality::GlobalIlluminationLevelFromString("Ultra").has_value());
 	}
 
 	TEST_CASE("Auto resolves by output rows")
@@ -252,6 +262,10 @@ TEST_SUITE("Renderer.Quality")
 			// High's reflection probes are 256 texels per face at every size.
 			CHECK(resolved.ReflectionProbeResolution == 256);
 			resolved.ReflectionProbeResolution = medium.ReflectionProbeResolution;
+			// High runs global illumination's High layout for scenes that ask, at every size; Medium runs none.
+			CHECK(resolved.GlobalIllumination == GlobalIlluminationLevel::High);
+			CHECK(medium.GlobalIllumination == GlobalIlluminationLevel::Off);
+			resolved.GlobalIllumination = medium.GlobalIllumination;
 			CHECK(resolved.HasSameKnobs(medium));
 		}
 		CHECK(RendererQuality::ResolveShadowMapSize(high.ShadowResolution, 1440) != RendererQuality::ResolveShadowMapSize(medium.ShadowResolution, 1440));
@@ -496,7 +510,9 @@ TEST_SUITE("Renderer.Quality")
 		wild.MaxShadowedLocalLights = 1'000;
 		wild.LODErrorPixels = std::numeric_limits<float>::quiet_NaN();
 		wild.MinProjectedPixels = -1.0f;
+		wild.GlobalIllumination = static_cast<GlobalIlluminationLevel>(7);
 		RendererQualitySettings clamped = RendererQuality::Clamp(wild);
+		CHECK(clamped.GlobalIllumination == GlobalIlluminationLevel::Off); // Medium's
 		CHECK(clamped.ShadowCascades == 1);
 		CHECK(clamped.LocalShadowAtlasSize == 8192);
 		CHECK(clamped.LocalShadowMaxTile == 2048);
@@ -781,12 +797,21 @@ TEST_SUITE("Renderer.Quality")
 		RendererQualitySettings oddProbes = high;
 		oddProbes.ReflectionProbeResolution = 512;
 		CHECK(MemoryBytes(oddProbes, { 3840, 2160 }, "ReflectionProbeResolution") == 17821680); // Clamped to 128
+		// Global illumination, for a scene that asks for it: its layout's voxel clipmap, cascades and field, the same at every
+		// output size (GlobalIlluminationLayout::GetMemoryBytes, checked in Renderer.GlobalIlluminationLayout); none at Off.
+		CHECK(MemoryBytes(high, { 3840, 2160 }, "GlobalIllumination") == 116605552);
+		CHECK(MemoryBytes(ultra, { 1280, 720 }, "GlobalIllumination") == 116605552);
+		RendererQualitySettings lowGI = medium;
+		lowGI.GlobalIllumination = GlobalIlluminationLevel::Low;
+		CHECK(MemoryBytes(lowGI, { 3840, 2160 }, "GlobalIllumination") == 19051120);
+		CHECK(MemoryBytes(medium, { 3840, 2160 }, "GlobalIllumination") == 0);
 		// The rows that allocate nothing of their own have no estimate.
 		for (const RendererQuality::RowTraits& row : RendererQuality::GetRowTraits())
 		{
 			CAPTURE(std::string(row.Field));
 			CHECK((row.MemoryBytes != nullptr) == (row.Field == "ShadowResolution" || row.Field == "LocalShadowAtlasSize" || row.Field == "EnvironmentResolution"
-				|| row.Field == "Reflections" || row.Field == "MotionBlurQuality" || row.Field == "ReflectionProbeResolution"));
+				|| row.Field == "Reflections" || row.Field == "MotionBlurQuality" || row.Field == "ReflectionProbeResolution"
+				|| row.Field == "GlobalIllumination"));
 		}
 	}
 }

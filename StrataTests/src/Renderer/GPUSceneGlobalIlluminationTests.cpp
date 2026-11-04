@@ -323,7 +323,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 			const glm::vec3 position = glm::vec3(1.0f, 0.5f, 2.0f) + offset;
 			AddMesh(scene, mesh, assets.AddMaterial(properties), position, "Box").GetComponent<TransformComponent>().Scale = placement.Scale;
 			SceneRendererSpecification specification = ExactSpecification();
-			specification.GlobalIllumination.Level = placement.Level;
+			specification.Quality.GlobalIllumination = placement.Level;
 			Scope<SceneRenderer> renderer = CreateVoxelRenderer(specification);
 			RenderUntilSettled(*renderer, scene, LookAt(glm::vec3(-1.0f, 1.5f, -1.0f), position, c_Aspect));
 			const VoxelClipmap* clipmap = renderer->GetVoxelClipmap();

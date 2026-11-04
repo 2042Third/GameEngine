@@ -65,7 +65,7 @@ namespace Strata
 
 	uint64_t GlobalIlluminationMemory::GetTotal() const
 	{
-		return VoxelLevels + Scratch + Atlases + Weights + Validity + Field + Tiles + WorkItems;
+		return VoxelLevels + Scratch + Atlases + Weights + Validity + Field + Tiles + WorkItems + Regions;
 	}
 
 	GlobalIlluminationMemory GlobalIlluminationLayout::GetMemory() const
@@ -101,6 +101,7 @@ namespace Strata
 		}
 		memory.Tiles = c_MaxTiles * c_TileBytes;
 		memory.WorkItems = c_MaxWorkItems * c_WorkItemBytes;
+		memory.Regions = static_cast<uint64_t>(RenderData::c_GIMaxRegions) * sizeof(RenderData::VoxelRegion) + RenderData::c_GICounterWords * sizeof(uint32_t);
 		return memory;
 	}
 

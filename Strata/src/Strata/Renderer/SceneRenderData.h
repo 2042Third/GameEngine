@@ -101,10 +101,10 @@ namespace Strata
 			// w its angular radius (0: no disk); rgb its illuminance at the ground in lux, through the atmosphere.
 			glm::vec4 SunDiskDirection;
 			glm::vec4 SunDiskColor;
-			// x: 1 when the frame traced screen-space reflections (SRV 18 holds them); y: 1 when the frame's indirect light
-			// comes from the radiance cascades (SRV 35), z: their intensity (radiance-cascades); w: the alpha^2 the directional
-			// light's disk adds to its highlight's lobe (GetSunLobeAlpha2; 0 without a directional light). y and z are written 0
-			// until that stream uses them.
+			// x: 1 when the frame traced screen-space reflections (SRV 18 holds them); y: 1 when the forward pass joins global
+			// illumination's field into the diffuse indirect light (the scene asked, the field is used: b3 and SRV 35), z: the
+			// scene's GI intensity (0 to 4); w: the alpha^2 the directional light's disk adds to its highlight's lobe
+			// (GetSunLobeAlpha2; 0 without a directional light).
 			glm::vec4 ReflectionParams;
 		};
 		static_assert(sizeof(FrameConstants) == 8 * 64 + 26 * 16);
@@ -717,6 +717,7 @@ namespace Strata
 		constexpr uint32_t c_GIMaxTriangleGroups = 65536;          // Groups of c_GIGroupTriangles triangles a frame (VoxelBatch)
 		constexpr uint32_t c_GIGroupTriangles = 64;
 		constexpr uint32_t c_GIMaxRegions = 4096;                  // Regions a frame
+		constexpr uint32_t c_GICounterWords = 8;                   // The GI's counters (SceneRendererGlobalIllumination.cpp)
 		constexpr uint32_t c_GISmallTriangleVoxels = 64; // A triangle whose whole bounds hold more voxels goes to tiles
 		constexpr uint32_t c_GITileVoxels = 8;           // A tile is 8^3 voxels, a group of 64 threads with 8 voxels each
 		constexpr uint32_t c_GIMaxTiles = 32768;         // Tiles per batch; beyond them a triangle walks its tiles itself (counted)

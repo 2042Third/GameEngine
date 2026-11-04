@@ -5,6 +5,7 @@
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Strata/Animation/AnimationPreview.h"
 #include "Strata/Core/FrameProfiler.h"
+#include "Strata/Renderer/GlobalIlluminationLayout.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/RendererQuality.h"
 #include "Strata/Renderer/SceneRenderer.h"
@@ -59,6 +60,7 @@ TEST_SUITE("GPU.FeatureTest")
 		CHECK(quality.MinProjectedPixels == 0.75f);
 		CHECK(quality.AmbientOcclusionQuality == AmbientOcclusionLevel::Low);
 		CHECK(quality.EnvironmentResolution == 256);
+		CHECK(quality.GlobalIllumination == GlobalIlluminationLevel::Low);
 
 		SceneRenderer renderer;
 		renderer.SetViewportSize(c_Width, c_Height);
@@ -71,7 +73,14 @@ TEST_SUITE("GPU.FeatureTest")
 			REQUIRE(renderer.Render(*scene, camera));
 			CHECK(renderer.GetStats().TemporalAntiAliasing);
 			CHECK(renderer.GetStats().TemporalFrames == frame + 1);
+			// The Post Process asks for global illumination and the project's row runs Low's layout: the field is joined from the
+			// first frame (everything is loaded, and a cut voxelizes the whole scene).
+			CHECK(renderer.GetStats().GlobalIllumination);
+			CHECK_FALSE(renderer.GetStats().GlobalIlluminationPending);
 		}
+		// Low's layout, and the scene's material table (its first 256 entries).
+		CHECK(renderer.GetGlobalIlluminationMemoryBytes() == GlobalIllumination::ComputeLayout(GlobalIlluminationLevel::Low)->GetMemoryBytes()
+			+ 256 * sizeof(RenderData::GIMaterial));
 
 		const SceneRendererStats& stats = renderer.GetStats();
 		CHECK(stats.Rendered);

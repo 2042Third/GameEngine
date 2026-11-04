@@ -4,6 +4,7 @@
 #include "Perf/PerfUtils.h"
 #include "Perf/RendererPerfUtils.h"
 #include "Perf/SceneGenerators.h"
+#include "Renderer/GIScenes.h"
 #include "Renderer/TextureStreamingTestUtils.h"
 #include "Scene/InterpolationTestUtils.h"
 
@@ -168,6 +169,56 @@ namespace
 			const double stageMs = MedianGPUStageMs(stage);
 			MESSAGE(key, ": ", std::string(stage), " ", stageMs, " ms median, GPU ", measurement.GPU ? measurement.GPU->MedianMs : 0.0, " ms busy");
 			return Perf::MetricValues { { key, stageMs } };
+		});
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	// Global illumination asked at High (experimental) at 3840x2160 with the camera still, in the sun room (its sunlit patch and
+	// window) or the yard: the medians of GPU.RadianceCascades (the voxels' light, the probe cascades and the field) as `key`
+	// and of GPU.Opaque (the forward pass with the field's gather) as `key`.Opaque, on devices that write timestamps.
+	void MeasureGlobalIllumination4K(const std::string& key, bool yard)
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!Perf::MeasuresGPU())
+		{
+			MESSAGE(key, ": not measured, the device writes no timestamps");
+			return;
+		}
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+		constexpr uint32_t c_Width4K = 3840;
+		constexpr uint32_t c_Height4K = 2160;
+		constexpr float c_Aspect4K = static_cast<float>(c_Width4K) / static_cast<float>(c_Height4K);
+		Scene scene("GlobalIllumination4K");
+		SceneCamera camera;
+		if (yard)
+		{
+			BuildYard(scene, assets);
+			camera = YardStrafe(0, 0.0f, c_Aspect4K);
+		}
+		else
+		{
+			SunRoomOptions room;
+			room.SunDirection = SunRoomDirection(-40.0f, 30.0f);
+			BuildSunRoom(scene, assets, room);
+			camera = LookAt(glm::vec3(-9.0f, 1.5f, -4.5f), glm::vec3(-10.0f, 1.2f, 1.1f), c_Aspect4K);
+		}
+		GetPostProcess(scene).GlobalIllumination = true;
+		SceneRendererSpecification specification = Perf::MeasuredRendererSpecification();
+		specification.Quality = RendererQuality::GetPreset(RendererQualityPreset::High);
+		SceneRenderer renderer(specification);
+		renderer.SetViewportSize(c_Width4K, c_Height4K);
+		Perf::CheckBudgetsConfirmed({ key, key + ".Opaque" }, [&]
+		{
+			const Perf::FrameMeasurement measurement = Perf::MeasureFrames(gpu, c_WarmupFrames, c_MeasuredFrames, [&] { REQUIRE(renderer.Render(scene, camera)); });
+			CHECK(renderer.GetStats().GlobalIllumination);
+			CHECK_FALSE(renderer.GetStats().GlobalIlluminationPending);
+			const double giMs = MedianGPUStageMs("GPU.RadianceCascades");
+			const double opaqueMs = MedianGPUStageMs("GPU.Opaque");
+			MESSAGE(key, ": GPU.RadianceCascades ", giMs, " ms, GPU.Opaque ", opaqueMs, " ms median, GPU ", measurement.GPU ? measurement.GPU->MedianMs : 0.0,
+				" ms busy");
+			return Perf::MetricValues { { key, giMs }, { key + ".Opaque", opaqueMs } };
 		});
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
@@ -445,6 +496,14 @@ TEST_SUITE("PerfGPU.Renderer")
 		// GPU.Post with every post effect at its default and a grading, the camera still (provisional: the reference machine
 		// sets the budget).
 		MeasurePostStage4K("PerfGPU.Renderer.Post4K", "GPU.Post", false, 0.0f);
+	}
+
+	TEST_CASE("Global illumination's cost at 3840x2160")
+	{
+		// Experimental, asked at High: the GI's own stage and the forward pass with the field's gather, in the sun room and the
+		// yard (provisional: the reference machine sets the budgets).
+		MeasureGlobalIllumination4K("PerfGPU.Renderer.GlobalIllumination4KSunRoom", false);
+		MeasureGlobalIllumination4K("PerfGPU.Renderer.GlobalIllumination4KYard", true);
 	}
 
 	TEST_CASE("Motion blur's cost at 3840x2160")

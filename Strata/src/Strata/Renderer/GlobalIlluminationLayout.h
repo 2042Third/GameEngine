@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Strata/Renderer/RendererQuality.h"
 #include "Strata/Renderer/SceneRenderData.h"
 
 #include <glm/glm.hpp>
@@ -17,21 +18,12 @@
 namespace Strata
 {
 
-	// What a machine affords of global illumination (the quality row Renderer.Quality.GlobalIllumination).
-	enum class GlobalIlluminationLevel : uint8_t
-	{
-		Off = 0,
-		Low = 1,
-		High = 2
-	};
-
-	// Global illumination's tuning (SceneRendererSpecification::GlobalIllumination): the layout the GI runs at (High; Off runs High
-	// too: the GI's views show what High gives), and the triangles the voxel clipmap voxelizes per frame (at least one region a
-	// frame) and on a frame that rebuilds or jumps a window; 0 for no limit (renderers of single images, whose first frame is then
-	// complete).
+	// Global illumination's tuning (SceneRendererSpecification::GlobalIllumination; the layout is the quality's GlobalIllumination
+	// row, and the GI's views at Off show what High gives): the triangles the voxel clipmap voxelizes per frame (at least one
+	// region a frame) and on a frame that rebuilds or jumps a window; 0 for no limit (renderers of single images, whose first frame
+	// is then complete).
 	struct GlobalIlluminationSettings
 	{
-		GlobalIlluminationLevel Level = GlobalIlluminationLevel::High;
 		uint32_t VoxelizeTrianglesPerFrame = RenderData::c_GIVoxelizeTrianglesPerFrame;
 		uint32_t VoxelizeTrianglesOnCut = RenderData::c_GIVoxelizeTrianglesOnCut;
 	};
@@ -81,6 +73,7 @@ namespace Strata
 		uint64_t Field = 0;       // Six RGBA16F faces per probe of the first cascade
 		uint64_t Tiles = 0;       // The large triangles' tiles of a batch (8 bytes each)
 		uint64_t WorkItems = 0;   // The frame's work items (16 bytes) and triangle groups (8 bytes)
+		uint64_t Regions = 0;     // The frame's voxel regions (48 bytes each) and the GI's counters
 
 		uint64_t GetTotal() const;
 	};

@@ -109,9 +109,10 @@ struct FrameConstants
 	// The atmosphere's sun disk: xyz toward the sun, w its angular radius (0: none); rgb its illuminance at the ground (lux)
 	float4 SunDiskDirection;
 	float4 SunDiskColor;
-	// x: 1 when the frame traced screen-space reflections (Forward.frag's u_ScreenReflections, SRV 18); y: 1 when the frame's
-	// indirect light comes from the radiance cascades (SRV 35), z: their intensity (radiance-cascades); w: the alpha^2 the
-	// directional light's disk adds to its highlight's lobe (RenderData::GetSunLobeAlpha2; Include/PBR.slang).
+	// x: 1 when the frame traced screen-space reflections (Forward.frag's u_ScreenReflections, SRV 18); y: 1 when the forward pass
+	// joins global illumination's field into the diffuse indirect light (Include/GIField.slang, Include/IndirectLight.slang), z:
+	// the scene's GI intensity; w: the alpha^2 the directional light's disk adds to its highlight's lobe
+	// (RenderData::GetSunLobeAlpha2; Include/PBR.slang).
 	float4 ReflectionParams;
 };
 

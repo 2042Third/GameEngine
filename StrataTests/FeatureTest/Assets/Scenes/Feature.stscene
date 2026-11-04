@@ -305,6 +305,8 @@
 						"Contrast": 1.05,
 						"Exposure": 0.25,
 						"FilmGrain": 0.2,
+						"GlobalIllumination": true,
+						"GlobalIlluminationIntensity": 1.25,
 						"MotionBlur": true,
 						"MotionBlurMaxLength": 0.03,
 						"MotionBlurShutterAngle": 150,

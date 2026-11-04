@@ -148,8 +148,9 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 		CHECK(high.Field == 4423680);
 		CHECK(high.Tiles == 262144);
 		CHECK(high.WorkItems == 1572864);
-		CHECK(high.GetTotal() == 116408912);
-		CHECK(GetLayout(GlobalIlluminationLevel::High).GetMemoryBytes() == 116408912);
+		CHECK(high.Regions == 196640);
+		CHECK(high.GetTotal() == 116605552);
+		CHECK(GetLayout(GlobalIlluminationLevel::High).GetMemoryBytes() == 116605552);
 
 		const GlobalIlluminationMemory low = GetLayout(GlobalIlluminationLevel::Low).GetMemory();
 		CHECK(low.VoxelLevels == 7864320);
@@ -160,7 +161,8 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 		CHECK(low.Field == 552960);
 		CHECK(low.Tiles == 262144);
 		CHECK(low.WorkItems == 1572864);
-		CHECK(low.GetTotal() == 18854480);
+		CHECK(low.Regions == 196640);
+		CHECK(low.GetTotal() == 19051120);
 	}
 
 	TEST_CASE("Directions and solid angles")

@@ -39,7 +39,7 @@ namespace Strata
 		constexpr uint32_t c_MaxDispatchGroups = 65535;
 		// The counters' words: tiles made, tile list overflows (VoxelTriangles), cascade 0's dead probes (ProbeValidity), unused,
 		// surface voxels (VoxelInject), three unused.
-		constexpr uint32_t c_CounterWords = 8;
+		constexpr uint32_t c_CounterWords = RenderData::c_GICounterWords;
 		constexpr uint32_t c_LightGroupSize = 4; // Inject, validity, weights, reduce: 4 x 4 x 4 threads
 		constexpr uint32_t c_MarchGroupSize = 8; // CascadeMarch: 8 x 8 x 1 rays
 

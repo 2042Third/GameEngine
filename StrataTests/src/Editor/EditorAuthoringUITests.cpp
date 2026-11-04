@@ -1101,7 +1101,8 @@ TEST_SUITE("Editor.UI.Inspector")
 
 	TEST_CASE("Choosing Custom as TAA Preset starts from the look in effect in one undo step, and keeps a tuning")
 	{
-		AuthoringEditor editor({ ImVec2(1600.0f, 1600.0f), 1.0f });
+		// Tall enough that the preset's list opens in the window below its row (the Inspector shows every Post Process section).
+		AuthoringEditor editor({ ImVec2(1600.0f, 1800.0f), 1.0f });
 		const UUID post = editor.Create("Post", { { "components", { { "PostProcess", { { "AntiAliasingMethod", "TAA" }, { "TAAPreset", "Original" } } } } } });
 		editor.Context().Select(post);
 		editor.Frames(3);

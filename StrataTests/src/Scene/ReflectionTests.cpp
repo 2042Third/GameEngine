@@ -574,6 +574,9 @@ TEST_SUITE("Scene.InactiveProperties")
 		CHECK(reason("PostProcess", "BloomThreshold") == "Bloom is off");
 		CHECK(reason("PostProcess", "AmbientOcclusionRadius") == "Ambient Occlusion is off");
 		CHECK(reason("PostProcess", "AmbientOcclusionMultiBounce") == "Ambient Occlusion is off");
+		CHECK_FALSE(post.GlobalIllumination); // Off by default
+		CHECK(reason("PostProcess", "GlobalIlluminationIntensity") == "Global Illumination is off");
+		CHECK(reason("PostProcess", "GlobalIllumination").empty());
 		CHECK(reason("PostProcess", "Exposure").empty());
 		// The Filmic curve's look only with Filmic.
 		CHECK(reason("PostProcess", "Toe").empty());
@@ -588,8 +591,9 @@ TEST_SUITE("Scene.InactiveProperties")
 		post.Bloom = true;
 		post.AmbientOcclusion = true;
 		post.AntiAliasing = true;
+		post.GlobalIllumination = true;
 		for (const char* property : { "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed", "BloomIntensity", "BloomThreshold",
-			"AmbientOcclusionRadius", "AmbientOcclusionIntensity", "AmbientOcclusionMultiBounce", "AntiAliasingMethod" })
+			"AmbientOcclusionRadius", "AmbientOcclusionIntensity", "AmbientOcclusionMultiBounce", "AntiAliasingMethod", "GlobalIlluminationIntensity" })
 			CHECK_MESSAGE(reason("PostProcess", property).empty(), property);
 		// The bloom's radius only with bloom.
 		CHECK(reason("PostProcess", "BloomRadius").empty());

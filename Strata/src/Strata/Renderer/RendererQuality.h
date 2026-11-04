@@ -97,6 +97,16 @@ namespace Strata
 		SpatialHigh = 3
 	};
 
+	// What a machine affords of global illumination (the quality row Renderer.Quality.GlobalIllumination; experimental): Off, or
+	// the world-space radiance cascades' layout for scenes whose Post Process asks for them (GlobalIllumination::ComputeLayout).
+	// The values never change meaning (the section stores their names).
+	enum class GlobalIlluminationLevel : uint8_t
+	{
+		Off = 0,
+		Low = 1,
+		High = 2
+	};
+
 	// The march of a screen-space reflection ray (Effects/ScreenSpaceReflections.comp, ScreenSpaceReflectionsSpatial.comp):
 	// its steps along the ray and the bisection's refinements of a hit.
 	struct ScreenReflectionSteps
@@ -153,6 +163,10 @@ namespace Strata
 		// slots and a scratch cube: 17 MiB at 128, 68 MiB at 256, allocated only by renderers that show a probe. Captures are
 		// 1024x512 from 256-texel faces, so 256 needs no new bake.
 		uint32_t ReflectionProbeResolution = 128;
+		// The world-space global illumination's layout for scenes whose Post Process asks for it (experimental; Off at Low and
+		// Medium: none runs). 18 MiB at Low and 111 MiB at High per view that runs it, at any resolution
+		// (GlobalIlluminationLayout::GetMemoryBytes; DG "Global illumination").
+		GlobalIlluminationLevel GlobalIllumination = GlobalIlluminationLevel::Off;
 		// The players' rows, the same under every preset (comfort and preference, not cost): the anti-aliasing method (the
 		// scene's, or off, FXAA, TAA or the morphological anti-aliasing) and whether the scene's motion blur, its cameras' depth
 		// of field, its film grain and its chromatic aberration show.
@@ -172,7 +186,7 @@ namespace Strata
 	namespace RendererQuality
 	{
 		constexpr std::string_view c_SectionId = "Renderer.Quality";
-		constexpr uint32_t c_SectionVersion = 5; // Each landing of a row adds one (Docs/DeveloperGuide.md, "Quality settings")
+		constexpr uint32_t c_SectionVersion = 6; // Each landing of a row adds one (Docs/DeveloperGuide.md, "Quality settings")
 		constexpr uint32_t c_HighResolutionRows = 1440;
 		constexpr uint32_t c_MaxShadowMapSize = 8192; // The most texels each way of a cascade (SceneRenderer applies it)
 
@@ -196,6 +210,8 @@ namespace Strata
 		std::optional<AntiAliasingChoice> AntiAliasingChoiceFromString(std::string_view name);
 		const char* SceneEffectChoiceToString(SceneEffectChoice choice); // "Scene", "Off"
 		std::optional<SceneEffectChoice> SceneEffectChoiceFromString(std::string_view name);
+		const char* GlobalIlluminationLevelToString(GlobalIlluminationLevel level); // "Off", "Low", "High"
+		std::optional<GlobalIlluminationLevel> GlobalIlluminationLevelFromString(std::string_view name);
 		const char* AmbientOcclusionLevelToString(AmbientOcclusionLevel level); // "Low" ... "Ultra"
 		std::optional<AmbientOcclusionLevel> AmbientOcclusionLevelFromString(std::string_view name);
 		// Slices and steps per side of a level: { 1, 4 }, { 2, 6 }, { 3, 8 }, { 4, 12 }.

@@ -86,6 +86,7 @@ namespace Strata
 		m_TemporalFrames = 0;
 		m_ExposureFrames = 0;
 		m_ShadowFitFrames = 0;
+		m_GIFrames = 0;
 		m_ReflectionFrames = 0;
 		m_Rendered = false;
 		m_Readback.reset();
@@ -165,7 +166,8 @@ namespace Strata
 			const bool waiting = incomplete && ++m_Frames < c_MaxFrames;
 			const bool exposureWaiting = !stats.PreExposureSettled && ++m_ExposureFrames < c_MaxExposureFrames;
 			const bool shadowFitWaiting = !stats.ShadowFitSettled && ++m_ShadowFitFrames < c_MaxShadowFitFrames;
-			if (waiting || exposureWaiting || shadowFitWaiting)
+			const bool giWaiting = !stats.GlobalIlluminationSettled && ++m_GIFrames < c_MaxGIFrames;
+			if (waiting || exposureWaiting || shadowFitWaiting || giWaiting)
 			{
 				renderer->GetSceneRenderer().ResetHistory();
 				return;
@@ -203,6 +205,7 @@ namespace Strata
 		m_TemporalFrames = 0;
 		m_ExposureFrames = 0;
 		m_ShadowFitFrames = 0;
+		m_GIFrames = 0;
 		m_ReflectionFrames = 0;
 		m_Rendered = false;
 		m_Requested = m_RequestedAgain;
