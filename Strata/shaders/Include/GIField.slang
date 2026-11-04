@@ -88,12 +88,14 @@ float SampleFieldOccupancy(uint level, SamplerState repeat, float3 position)
 }
 
 // The transmittance from a start point to a probe through one level (FindFieldLevel's), one voxel a step; below
-// ST_GI_VISIBILITY_CUTOFF nothing is seen. Points no level holds see each other.
+// ST_GI_VISIBILITY_CUTOFF nothing is seen. Points no level holds both of are not seen: nothing tells whether a floor or a
+// ceiling lies between them (a valid box falls up to two scroll steps short while a scroll is voxelized: at Low, level 2's
+// ends 4.8 m above the camera, within the field's reach), and dark is never a leak.
 float GetFieldVisibility(SamplerState repeat, float3 start, float3 target)
 {
 	uint level = FindFieldLevel(start, target);
 	if (level >= 3u)
-		return 1.0;
+		return 0.0;
 	float voxel = u_GIField.VoxelOrigin[level].w;
 	float3 delta = target - start;
 	float distance = length(delta);
@@ -123,7 +125,7 @@ float GetFieldVoxelSize(float3 position)
 }
 
 // The field's irradiance over pi at a camera-relative surface point for a shading normal (luminance, times ST_GI_RADIANCE_SCALE),
-// .a the field's weight there (0 outside it or while pending). The eight cascade-0 probes around the point moved along its
+// .a the field's weight there (0 outside it, while pending or where no voxel level holds the point). The eight cascade-0 probes around the point moved along its
 // geometric normal, each weighted trilinearly, by its validity, by whether it lies in front of the surface's plane and by its
 // visibility from just off the surface (a march through the voxels). Where no probe is visible, the march starts again moved off
 // the solid (down the occupancy's gradient, a voxel at a time, at most two, while the start's occupancy reaches 0.3); a point that
@@ -132,7 +134,9 @@ float4 SampleIrradianceField(SamplerState repeat, float3 position, float3 geomet
 {
 	openShare = 1.0;
 	float fieldWeight = GetFieldWeight(position);
-	if (fieldWeight <= 0.0)
+	// A point no voxel level holds (beyond a valid box cut short by a scroll) cannot check what it sees: today's light, as
+	// outside the field.
+	if (fieldWeight <= 0.0 || FindFieldLevel(position, position) >= 3u)
 		return float4(0.0, 0.0, 0.0, 0.0);
 	float spacing = u_GIField.FieldOrigin.w;
 	int3 grid = int3(u_GIField.FieldSize.xyz);

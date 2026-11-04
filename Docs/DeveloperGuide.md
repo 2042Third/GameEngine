@@ -5076,7 +5076,9 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   the eight cascade-0 probes around the point moved `c_GIGatherNormalBias` spacings along its geometric normal, each by its
   trilinear weight, validity, whether it lies in front of the surface's plane and its visibility (a march through levels
   0-2 from `c_GIGatherStartVoxels` off the surface; with none visible, again from up to two voxels down the occupancy's
-  gradient; still none: no field light, never the sky), faded to today's light within 2 m of the field's edge.
+  gradient; still none: no field light, never the sky; a probe that no level holds together with the point is not
+  visible, and a point no level holds, beyond a valid box a scroll left short, takes today's light), faded to today's
+  light within 2 m of the field's edge.
   `SceneLightingView::GlobalIllumination` (`gi`) shades white and returns the diffuse indirect light (the field inside,
   today's beyond, under the diffuse occlusion), `OpenShare` (`open`) the share of the sky a surface sees, as gray;
   `Probes` (`probes`, `GI/ProbeView.frag` in `GPU.Overlays`) draws cascade 0's probes over the image, live ones lit by
