@@ -138,9 +138,13 @@ namespace Strata
 		if (!stats)
 			return "Measuring...";
 		std::string note = stats->SunToSkyRatio > 0.0f ? fmt::format("Sun : sky {:.1f} on flat ground", stats->SunToSkyRatio) : std::string("Sun : sky -");
+		// The value views name their value's median, the light views their surfaces' EV100.
 		if (view == ViewportDebugView::AmbientOcclusion && std::isfinite(stats->ValueMedian))
 			note += fmt::format(", AO median {:.2f}", stats->ValueMedian);
-		else if (view != ViewportDebugView::AmbientOcclusion && view != ViewportDebugView::Albedo && std::isfinite(stats->SurfaceEV100.y))
+		else if (view == ViewportDebugView::OpenShare && std::isfinite(stats->ValueMedian))
+			note += fmt::format(", open median {:.2f}", stats->ValueMedian);
+		else if (view != ViewportDebugView::AmbientOcclusion && view != ViewportDebugView::OpenShare && view != ViewportDebugView::Albedo
+			&& std::isfinite(stats->SurfaceEV100.y))
 			note += fmt::format(", EV100 median {:.1f}", stats->SurfaceEV100.y);
 		return note;
 	}

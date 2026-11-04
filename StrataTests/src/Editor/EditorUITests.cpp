@@ -1435,7 +1435,7 @@ TEST_SUITE("Editor.UI")
 		// The lighting views, named as in the menu; their marks are a note (Azurite: too dark) and an error (Cinnabar: too
 		// bright), the luminance bands ramp from the chrome's dark to the text's light, and empty pixels are the disabled text's.
 		const std::pair<const char*, const char*> lightingViews[] = { { "lighting", "Lighting" }, { "ao", "AO" }, { "indirect", "Indirect" },
-			{ "luminance", "Luminance" }, { "albedo", "Albedo" }, { "voxels", "Voxels" } };
+			{ "luminance", "Luminance" }, { "albedo", "Albedo" }, { "voxels", "Voxels" }, { "gi", "GI" }, { "open", "Open" }, { "probes", "Probes" } };
 		for (const auto& [view, label] : lightingViews)
 		{
 			CAPTURE(view);

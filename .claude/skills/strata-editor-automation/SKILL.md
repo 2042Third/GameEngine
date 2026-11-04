@@ -203,10 +203,13 @@ editor started with `--no-gpu` (use `--headless`):
   measures nothing):
   check `sunToSkyRatio` (lux from the sun over lux from the sky on flat ground: a clear day 6 to 10, hazy 3 to 5, overcast
   under 0.3) and `aboveRangeShare` (albedos too bright) instead of reading colors.
-- **Global illumination's voxels:** `"voxels"` shows the scene as the GI sees it (each surface its voxels' albedo, two-sided
-  voxels in the error color: walls thinner than two voxels, which will get no bounce). `viewport.capture` waits for the
-  voxels to settle and adds `debugView.globalIllumination: {ran, pending, settled, voxelLevels: [{voxelSize, dimensions,
-  valid}], memoryMiB, ...}`; `globalIlluminationSettled` is in every capture's result.
+- **Global illumination's views:** `"voxels"` shows the scene as the GI sees it (each surface the light its voxels hold,
+  dark ones their albedo dimmed; two-sided voxels in the error color: walls thinner than two voxels, which get no bounce),
+  `"gi"` the bounce light on white surfaces, `"open"` the share of the sky each surface sees (0 sealed, 1 open ground) and
+  `"probes"` the light probes (dead ones, inside solids, red). `viewport.capture` waits for the voxels to settle and adds
+  `debugView.globalIllumination: {ran, pending, settled, voxelLevels: [{voxelSize, dimensions, valid}], probeSpacing,
+  probeGrid, cascades, directions, liveProbes, deadProbes, memoryMiB, ...}`; `"gi"` and `"open"` also report
+  `debugView.lighting` (EV100; `open`'s `value.median`); `globalIlluminationSettled` is in every capture's result.
 - **Sun and sky presets:** `lighting.applySkyPreset {"preset": "Clear" | "Hazy" | "Overcast" | "GoldenHour", sky?, light?,
   sunElevation?, sunAzimuth?}` lights the scene with a real sky and sun in one undo step (creating "Sky" and "Sun" when
   missing, keeping the sun's azimuth unless given, turning a manual exposure automatic: `autoExposureTurnedOn`) and

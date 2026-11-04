@@ -2037,6 +2037,32 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gi["voxelLevels"][0]["dimensions"] == nlohmann::json::array({ 128, 64, 128 }));
 		for (const nlohmann::json& level : gi["voxelLevels"])
 			CHECK(level["valid"] == true);
+		// The probes view (an overlay too) adds the probes: High's 0.5 m spacing and 48 x 40 x 48 grid of cascade 0, four cascades
+		// and their directions.
+		harness.Capture(withView("probes"), &result);
+		CHECK(result["debugView"]["view"] == "probes");
+		CHECK_FALSE(result["debugView"].contains("lighting"));
+		const nlohmann::json& probes = result["debugView"]["globalIllumination"];
+		REQUIRE(probes.is_object());
+		CHECK(probes["probeSpacing"].get<float>() == doctest::Approx(0.5f));
+		CHECK(probes["probeGrid"] == nlohmann::json::array({ 48, 40, 48 }));
+		CHECK(probes["cascades"] == 4);
+		CHECK(probes["directions"] == nlohmann::json::array({ 64, 64, 256, 1024 }));
+		// The gi and open views are drawn by the forward pass: measured as the light and value views, with global illumination.
+		harness.Capture(withView("gi"), &result);
+		CHECK(result["debugView"]["view"] == "gi");
+		CHECK(result["debugView"]["globalIllumination"].is_object());
+		CHECK(result["debugView"]["lightingPending"] == false);
+		REQUIRE(result["debugView"]["lighting"].is_object());
+		CHECK(result["debugView"]["lighting"]["view"] == "gi");
+		CHECK(result["debugView"]["lighting"]["value"]["median"].is_null());
+		harness.Capture(withView("open"), &result);
+		CHECK(result["debugView"]["view"] == "open");
+		CHECK(result["debugView"]["globalIllumination"].is_object());
+		REQUIRE(result["debugView"]["lighting"].is_object());
+		CHECK(result["debugView"]["lighting"]["view"] == "open");
+		CHECK(result["debugView"]["lighting"]["value"]["median"].is_number());
+		CHECK(result["debugView"]["lighting"]["surfaceEv100"]["p50"].is_null());
 		// The tint views carry no lighting statistics, nor global illumination.
 		harness.Capture(withView("lod"), &result);
 		CHECK_FALSE(result["debugView"].contains("lighting"));

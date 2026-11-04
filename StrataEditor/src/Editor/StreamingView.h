@@ -112,8 +112,8 @@ namespace Strata
 	// (LightingViewColors): "EV 9"; the first takes what lies below ("EV <6"), the last what lies above ("EV 16+").
 	std::string GetLuminanceLegendName(size_t band, size_t bands, float firstEV100);
 
-	// The note under a lighting view's legend: the sun to sky ratio on flat ground and, for the occlusion view, the occlusion's
-	// median or, for the light views (not the albedo), the surfaces' EV100 median; "Measuring..." until statistics arrived.
+	// The note under a lighting view's legend: the sun to sky ratio on flat ground and, for the occlusion and open views, their
+	// value's median or, for the light views (not the albedo), the surfaces' EV100 median; "Measuring..." until statistics arrived.
 	std::string GetLightingLegendNote(ViewportDebugView view, const std::optional<LightingViewStats>& stats);
 
 	// The note under the voxels view's legend: the clipmap's levels, their voxel sizes and how many hold valid voxels, as

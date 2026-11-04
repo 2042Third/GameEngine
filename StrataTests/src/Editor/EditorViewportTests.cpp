@@ -699,7 +699,8 @@ TEST_SUITE("Editor.Viewport")
 			// The lighting views, saved under their names.
 			const std::pair<const char*, ViewportDebugView> lightingViews[] = { { "lighting", ViewportDebugView::Lighting },
 				{ "ao", ViewportDebugView::AmbientOcclusion }, { "indirect", ViewportDebugView::Indirect }, { "luminance", ViewportDebugView::Luminance },
-				{ "albedo", ViewportDebugView::Albedo }, { "voxels", ViewportDebugView::Voxels } };
+				{ "albedo", ViewportDebugView::Albedo }, { "voxels", ViewportDebugView::Voxels }, { "gi", ViewportDebugView::GlobalIllumination },
+				{ "open", ViewportDebugView::OpenShare }, { "probes", ViewportDebugView::Probes } };
 			for (const auto& [name, view] : lightingViews)
 			{
 				CAPTURE(name);
@@ -791,6 +792,8 @@ TEST_SUITE("Editor.Viewport")
 		CHECK(GetLightingLegendNote(ViewportDebugView::Lighting, stats) == "Sun : sky 8.0 on flat ground, EV100 median 13.3");
 		CHECK(GetLightingLegendNote(ViewportDebugView::AmbientOcclusion, stats) == "Sun : sky 8.0 on flat ground, AO median 0.73");
 		CHECK(GetLightingLegendNote(ViewportDebugView::Albedo, stats) == "Sun : sky 8.0 on flat ground");
+		CHECK(GetLightingLegendNote(ViewportDebugView::GlobalIllumination, stats) == "Sun : sky 8.0 on flat ground, EV100 median 13.3");
+		CHECK(GetLightingLegendNote(ViewportDebugView::OpenShare, stats) == "Sun : sky 8.0 on flat ground, open median 0.73");
 		// Without a sun or a sky the ratio is unknown; a view that measured no surface names no median.
 		stats.SunToSkyRatio = 0.0f;
 		stats.SurfaceEV100 = glm::vec3(std::numeric_limits<float>::quiet_NaN());
@@ -800,6 +803,16 @@ TEST_SUITE("Editor.Viewport")
 		CHECK(GetVoxelLegendNote(nullptr) == "No GI");
 		const VoxelClipmap clipmap(*GlobalIllumination::ComputeLayout(GlobalIlluminationLevel::High));
 		CHECK(GetVoxelLegendNote(&clipmap) == "levels 4, 10-80 cm, valid 0 of 4");
+
+		// The probes view's note: cascade 0's probes (live and dead once the GPU's counters arrived) and the field's size.
+		SceneRendererGPUStats counters;
+		CHECK(GetProbeLegendNote(counters, nullptr) == "No GI");
+		const GlobalIlluminationLayout high = *GlobalIllumination::ComputeLayout(GlobalIlluminationLevel::High);
+		CHECK(GetProbeLegendNote(counters, &high) == "probes 92160; field 24 x 20 x 24 m");
+		counters.HasGICounters = true;
+		counters.GILiveProbes = 87950;
+		counters.GIDeadProbes = 4210;
+		CHECK(GetProbeLegendNote(counters, &high) == "probes 92160, dead 4210 (red); field 24 x 20 x 24 m");
 	}
 
 	TEST_CASE("The Game view's image: the panel, the largest rectangle of an aspect ratio, or a fixed size scaled to fit")

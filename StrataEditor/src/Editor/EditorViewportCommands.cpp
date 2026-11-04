@@ -270,10 +270,10 @@ namespace Strata
 			if (shadows)
 				result["shadows"] = DescribeShadowView(*shadows, shadowsComplete);
 			if (SceneRenderer::IsGlobalIlluminationView(GetLightingView(view)))
-			{
 				result["globalIllumination"] = globalIllumination;
-			}
-			else if (GetLightingView(view) != SceneLightingView::None)
+			// The gi and open views are drawn by the forward pass and measured as the other lighting views; the voxels and probes
+			// views are overlays the renderer does not measure.
+			if (GetLightingView(view) != SceneLightingView::None && !SceneRenderer::IsGlobalIlluminationOverlayView(GetLightingView(view)))
 			{
 				result["lighting"] = lighting ? DescribeLightingViewStats(view, *lighting) : nlohmann::json(nullptr);
 				result["lightingPending"] = !lighting;
@@ -846,7 +846,7 @@ namespace Strata
 			// statistics of this frame come back with its image, read back with the targets' readbacks: they are released once
 			// those arrived (ContinueCapture), so the statistics describe the captured image, never an earlier frame.
 			progress.LightingStatsPending = progress.Readback && GetLightingView(progress.DebugView) != SceneLightingView::None
-				&& !SceneRenderer::IsGlobalIlluminationView(GetLightingView(progress.DebugView));
+				&& !SceneRenderer::IsGlobalIlluminationOverlayView(GetLightingView(progress.DebugView));
 			if (!progress.LightingStatsPending)
 				renderer->ReleaseTargets();
 			if (!progress.Readback)

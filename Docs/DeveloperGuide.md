@@ -3625,8 +3625,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   distance, fov, near, far, flySpeed}` (position + target looks from one at the other) and `camera.focus {entities?}`
   (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?,
   fov?, overlays?, debugView?: "none" | "streaming" | "lod" | "mip" | "motion" | "shadows" | "lighting" | "ao" | "indirect" |
-  "luminance" | "albedo" | "voxels" (global illumination's voxels, with `debugView.globalIllumination` and a wait for them to
-  settle: [Global illumination](#global-illumination)), quality?: "project" | "low" | "medium" |
+  "luminance" | "albedo" | "voxels" | "gi" | "open" | "probes" (global illumination's voxels, its bounce light on white
+  surfaces, the share of the sky surfaces see and its probes, with `debugView.globalIllumination` and a wait for the
+  voxels to settle: [Global illumination](#global-illumination)), quality?: "project" | "low" | "medium" |
   "high" | "ultra", waitForAssets?, path?, overwrite?}` renders on the
   next frame (again on the following frames, up to `c_MaxCaptureTextFrames`, while glyphs of the scene's text are still
   being rasterized, so text is never half drawn, up to `c_MaxCaptureExposureFrames` until its pre-exposure settled (the
@@ -5090,11 +5091,14 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   from the snapped window), so no sample switches level in a step as windows scroll.
 - **The voxels view** (`SceneLightingView::Voxels`, debug view `voxels`, `GI/VoxelView.frag` in `GPU.Overlays`): from the
   camera, a march through the levels (steps of 0.75 voxel of the level read) to the first sample of occupancy 0.5; the
-  surface is read where the run of occupied samples began, blended over the levels as the occupancy is, shaded `0.25 +
-  0.75 max(0, n . -view)`; two-sided voxels in the theme's error color, nothing hit in the background color. The legend
+  surface is read where the run of occupied samples began, blended over the levels as the occupancy is, showing its
+  radiance (`rgb / a`, levels' Radiance at t8-11) through the frame's pre-exposure and the curve `x / (1 + x)`, no darker
+  than its albedo times 0.03 (where no light arrives); two-sided voxels in the theme's error color, nothing hit in the background color. The legend
   names the two-sided color and the note the levels ("levels 4, 10-80 cm, valid 4 of 4"); `viewport.capture` adds
   `debugView.globalIllumination: {ran, pending, settled, voxelizedTriangles, queuedRegions, waitingProxies,
-  movingProxies, memoryMiB, voxelLevels: [{voxelSize, dimensions, valid}]}` and waits up to `c_MaxCaptureGIFrames` (16)
+  movingProxies, memoryMiB, voxelLevels: [{voxelSize, dimensions, valid}], probeSpacing, probeGrid, cascades,
+  directions, liveProbes, deadProbes}` (the probes' fields once a layout has cascades, the counts once the GPU's counters
+  arrived) for the four GI views, `gi` and `open` also the `lighting` statistics (EV100, and `open`'s value median), and waits up to `c_MaxCaptureGIFrames` (16)
   frames for it to settle (the capture renderer voxelizes without a budget); every capture's result has
   `globalIlluminationSettled`, `editor.perf`'s `renderStats` `globalIllumination: {ran, pending, settled}`.
 - **Statistics** (`SceneRendererStats`): `GlobalIllumination`, `GlobalIlluminationPending`, `GlobalIlluminationSettled`,
