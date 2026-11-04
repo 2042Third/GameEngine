@@ -4934,7 +4934,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
 Global illumination is world-space radiance cascades over a voxel clipmap of the geometry pool: probes in the world trace
 rays through a voxel copy of the scene around the camera, lit by the sun, the sky and glowing surfaces every frame, whatever
 the screen shows. No light comes from the screen (no depth-buffer tracing, no previous frame's image) and nothing is
-blended over frames: the light is a function of world data, so camera motion cannot flicker it. Built in stages from
+blended over frames: the light is meant to be a function of world data alone, which camera motion cannot flicker. It is not
+yet: in a camera strafe along a fence the fence's light still crawls (Gate W's flicker miss, `Docs/Plans/Wave8/ReleaseNotes.md`'s
+Known issues), so some input still follows the camera; it has not been found. Built in stages from
 `Docs/Plans/Wave8/specs/radiance-cascades-world.md` (its review corrections win over its body); the sources are the
 radiance-cascades lab (Daniel Quevedo, MIT: the triangle-box test, the winding steps and the column fill, the emission's
 coverage), Akenine-Moller's triangle-box test and, as ideas, Split RC, EggyStudio and creikey's voxel cascades.
@@ -5122,7 +5124,8 @@ one probe field around the camera, and the misses `Docs/Plans/Wave8/ReleaseNotes
   movingProxies, memoryMiB, voxelLevels: [{voxelSize, dimensions, valid}], probeSpacing, probeGrid, cascades,
   directions, liveProbes, deadProbes}` (the probes' fields once a layout has cascades, the counts once the GPU's counters
   arrived) for the four GI views, `gi` and `open` also the `lighting` statistics (EV100, and `open`'s value median), and waits up to `c_MaxCaptureGIFrames` (16)
-  frames for it to settle (the capture renderer voxelizes without a budget); every capture's result has
+  frames for it to settle (the capture renderer voxelizes without a budget, so only scenes past a frame's work items or
+  triangle groups wait; `waitedFrames` counts them); every capture's result has
   `globalIlluminationSettled`, `editor.perf`'s `renderStats` `globalIllumination: {ran, pending, settled}`.
 - **Statistics** (`SceneRendererStats`): `GlobalIllumination`, `GlobalIlluminationPending`, `GlobalIlluminationSettled`,
   `GIVoxelizedTriangles`, `GIQueuedRegions`, `GIWaitingProxies`, `GIMovingProxies`,
@@ -5142,7 +5145,9 @@ one probe field around the camera, and the misses `Docs/Plans/Wave8/ReleaseNotes
   field in the open room and stay dark in the sealed one; across the fade, from 5 to 12 m out over open ground, neighboring
   pixels differ by at most 2% for cameras every 0.5 m across a 4 m snap step on x and on y; beyond the field's reach every
   pixel of the yard is the same to the bit); `GPU.Editor.Viewport`'s "A capture with GI waits for it" and
-  `GPU.Editor.Thumbnails`' "A project picture waits for GI to settle" (the frame's field settled and joined);
+  `GPU.Editor.Thumbnails`' "A project picture waits for GI to settle" (scenes past the voxelizer's per-frame work items,
+  `Tests::AddVoxelizerBacklog`, with nothing else to wait for: the picture's frame has the field settled and joined);
+  `Renderer.GlobalIlluminationLayout`'s "The field reaches only where level 2 holds while a scroll is voxelized";
   `PerfGPU.Renderer`'s "Global illumination's cost at 3840x2160" (sun room and yard, provisional).
 - **What it cannot do** (so far): walls thinner than two voxels go two-sided (dark from both sides), thin props blur into
   blobs of whole voxels, characters and moving objects are not in the voxels until they rest, textured albedo and emission
@@ -5152,7 +5157,12 @@ one probe field around the camera, and the misses `Docs/Plans/Wave8/ReleaseNotes
   shows its coarse levels only. The field is an ambient cube per probe, exact for axis-aligned normals only: a white sphere
   under a uniform sky reads 2% dark at its center and 5% at its rim (its probes see the sphere behind the point's own
   horizon). Its light ends at the field's edge around the camera (High: full within 7.5 m horizontally and 5.5 m up and
-  down, faded to today's light over the next 2 m), which can show outdoors as the edge of a bubble.
+  down, Low within 7 m and 2.8 m, faded to today's light over the next 2 m), which can show outdoors as the edge of a
+  bubble. The reach stays where voxel level 2 holds every point while a scroll's slab waits to be voxelized and the camera
+  moves on up to a step (`ComputeLayout`; Low's level 2 holds 4.8 m up and down), since a point no level holds takes
+  today's light at once. A surface that sees none of its eight probes gets no field light (dark, never the sky): gaps,
+  recesses and ledges under about two voxels and wall bases beside bright patches go nearly black, outdoors too, where
+  they are darker than without GI (the yard's pool box, ThirdPerson's ledges and fence rails).
 
 ### Light units and exposure
 

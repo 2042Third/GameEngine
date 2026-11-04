@@ -265,13 +265,17 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   perf case `PerfGPU.Renderer.GlobalIllumination4K*`: 4.9 ms in the sun room, 4.0 ms in the yard), and the forward pass's
   gather adds 0.3-0.8 ms to `GPU.Opaque` (look-dev: the sun room, the yard and ThirdPerson's course).
 - Off, it is not quite free: at Medium with TAA at 3840 x 2160, the samples' `??.scene` shots (three interleaved pairs
-  against main without global illumination) spend 0.010-0.013 ms more in `GPU.Opaque` (4-5.5%; the base's own spread is
-  0.001-0.011 ms), the forward shader's gather being compiled in although it does not run. Images are unchanged.
-- In the lit image: thin ground ledges (ThirdPerson's course, under two voxels thick) turn nearly black instead of
-  sky-lit; a floor-wall junction under the sun room's window shows a dark band about 0.3 m high; with the sun high, the
-  bounce on the window wall ends in sharp vertical edges either side of the patch's light.
-- Its light ends at the probe field's edge around the camera (High: full within 7.5 m horizontally, 5.5 m up and down,
-  faded to the light without it over 2 m): outdoors the edge of a bubble can show. One bounce only.
+  against main without global illumination) spend 0.010-0.014 ms more in `GPU.Opaque` (3.9-5.1%; the base's own spread is
+  0.003-0.010 ms), the forward shader's gather being compiled in although it does not run. Sampling the field at one
+  place instead of two left the cost as it was. Images are unchanged.
+- In the lit image, a surface that sees none of the probes around it gets no indirect light at all, darker than without
+  global illumination: gaps, recesses and ledges thinner than about two voxels (20 cm at High, 40 cm at Low) and the bases
+  of walls beside bright patches can go nearly black. Outdoors this shows on ThirdPerson's ground ledges and fence rails
+  and in a strip along the base of the yard's pool box, sky-lit without it; indoors as a dark band about 0.3 m high where
+  the floor meets the wall under the sun room's window. With the sun high, the bounce on the window wall ends in sharp
+  vertical edges either side of the patch's light.
+- Its light ends at the probe field's edge around the camera (High: full within 7.5 m horizontally, 5.5 m up and down;
+  Low: 7 m and 2.8 m; faded to the light without it over 2 m): outdoors the edge of a bubble can show. One bounce only.
 
 **Reflections (R1)**
 

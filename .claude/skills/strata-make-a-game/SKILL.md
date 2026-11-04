@@ -339,6 +339,11 @@ you can go on with `{"wait": false}` and watch `editor.status`'s `saving` (the s
 - Reflections: with TAA, `"ScreenSpaceReflections": true` on the `PostProcess` makes smooth floors, water and metal
   reflect what the screen shows near them (only surfaces below `ScreenSpaceReflectionsMaxRoughness`, 0.5: matte kit
   materials at roughness 1 show none). For what the screen does not show, bake Reflection Probes (Docs/Manual/Lighting.md).
+- Bounce light (experimental): `"GlobalIllumination": true` on the `PostProcess` lights interiors from their sunlit
+  floors and glowing surfaces (`GlobalIlluminationIntensity`, 1). Ask for it only for interiors lit by a window or a lamp:
+  it runs only at Graphics Quality High and Ultra (Off at Low and Medium) and costs about 4 ms of GPU time at 3840 x 2160.
+  Give rooms walls at least 20 cm thick (40 cm for Low), or they are lit from both sides; gaps and ledges thinner than that
+  go dark, outdoors too. Check with `viewport.capture {"debugView": "gi"}` and `"open"` (Docs/Manual/Lighting.md).
 - HUD and menus: a canvas, so they keep their proportions on every screen. An entity with `UICanvas`
   (`"ScaleMode": "ScaleWithScreen"`, `"ReferenceResolution": [1280, 720]`, `"MatchWidthOrHeight": 1`, and
   `"ReceivesInput": false` for a HUD that must never block clicks) and children with `UIRect` (anchors and pivot 0..1 of
