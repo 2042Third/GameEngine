@@ -874,7 +874,9 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 	{
 		// A scene whose Post Process asks for global illumination, in a new project (High: its row runs it): the picture's frame
 		// has the field settled and joined. The capture renderer voxelizes the whole scene in its first frame, so the picture waits
-		// only for scenes past the voxelizer's per-frame limits (ProjectThumbnail::c_MaxGIFrames).
+		// only for scenes past the voxelizer's per-frame limits (ProjectThumbnail::c_MaxGIFrames): this one, with nothing else to
+		// wait for (no sun shadows, whose fit takes frames; no automatic exposure; nothing loading), so a picture that did not
+		// wait would show the field pending.
 		Tests::GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GPUThumbnailGlobalIllumination") / "Game";
@@ -911,17 +913,30 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		postProcess.AutoExposure = false;
 		postProcess.GlobalIllumination = true;
 		scene.GetRegistry().patch<PostProcessComponent>(postProcessEntity);
+		for (auto [entity, light] : scene.GetRegistry().view<DirectionalLightComponent>().each())
+		{
+			light.CastShadows = false;
+			scene.GetRegistry().patch<DirectionalLightComponent>(entity);
+		}
 		Tests::AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f), "Cube");
 		Tests::AddMesh(scene, BuiltinAssets::PlaneMesh, UUID::Null(), glm::vec3(0.0f, -0.5f, 0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(20.0f);
+		constexpr uint32_t c_Parts = RenderData::c_VoxelItemMaxSubmesh + 1;
+		AssetMetadata metadata;
+		metadata.Type = AssetType::Mesh;
+		metadata.Name = "Parts";
+		const AssetHandle parts = context.GetAssetManager()->AddMemoryAsset(Tests::CreateCubeOfParts(1.0f, c_Parts, BuiltinAssets::DefaultMaterial), metadata);
+		Tests::AddVoxelizerBacklog(scene, parts, c_Parts, glm::vec3(0.0f, 1.0f, 3.0f));
 		run("camera.set", { { "position", { 2.0, 1.5, 4.0 } }, { "target", { 0.0, 0.0, 0.0 } } });
 		run("scene.saveAs", { { "path", "Scenes/Main.stscene" } });
 		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
 		REQUIRE(FileSystem::Exists(ProjectThumbnail::GetFile(directory)));
 		ViewportRenderer* captureRenderer = context.GetViewport().GetCaptureRenderer();
 		REQUIRE(captureRenderer);
+		// The picture's frame is the capture renderer's last: settled, after the frames the voxelizer's limits took.
 		CHECK(captureRenderer->GetStats().GlobalIllumination);
 		CHECK_FALSE(captureRenderer->GetStats().GlobalIlluminationPending);
 		CHECK(captureRenderer->GetStats().GlobalIlluminationSettled);
+		CHECK(captureRenderer->GetStats().GIQueuedRegions == 0);
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

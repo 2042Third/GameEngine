@@ -311,6 +311,30 @@ namespace Strata::Tests
 		return entities;
 	}
 
+	// Mesh renderers of `mesh`, a mesh of `parts` submeshes (CreateCubeOfParts), on a 4 x 2 x 4 m grid around `center`, small and
+	// casting no shadows: enough that global illumination's voxelizer passes its per-frame limit of work items in its finest
+	// level alone (RenderData::c_GIMaxWorkItems; a submesh, of which it takes a mesh's first c_VoxelItemMaxSubmesh + 1, is an
+	// item in each region of each voxel level it reaches), so its first frame with them leaves work for later ones even without
+	// a triangle budget (the capture renderer's); High's four levels take a few frames. `center` lies within about 3 m of the camera
+	// on each axis (level 0 holds the grid). Spread out, so the regions halved to fit a frame part them.
+	inline std::vector<Entity> AddVoxelizerBacklog(Scene& scene, AssetHandle mesh, uint32_t parts, const glm::vec3& center)
+	{
+		REQUIRE(parts > 0);
+		const uint32_t voxelized = std::min(parts, RenderData::c_VoxelItemMaxSubmesh + 1);
+		const uint32_t count = RenderData::c_GIMaxWorkItems / voxelized + 1;
+		const uint32_t side = static_cast<uint32_t>(std::ceil(std::cbrt(static_cast<double>(count))));
+		std::vector<Entity> entities;
+		for (uint32_t index = 0; index < count; index++)
+		{
+			const glm::vec3 cell(static_cast<float>(index % side), static_cast<float>((index / side) % side), static_cast<float>(index / (side * side)));
+			const glm::vec3 position = center + (cell / static_cast<float>(side - 1) - 0.5f) * glm::vec3(4.0f, 2.0f, 4.0f);
+			entities.push_back(AddMesh(scene, mesh, UUID::Null(), position, "Voxel backlog"));
+			entities.back().GetComponent<TransformComponent>().Scale = glm::vec3(0.2f);
+			entities.back().GetComponent<MeshRendererComponent>().CastShadows = false;
+		}
+		return entities;
+	}
+
 	// A directional light travelling along `direction`.
 	inline Entity AddSun(Scene& scene, const glm::vec3& direction, float intensity, bool castShadows = true)
 	{

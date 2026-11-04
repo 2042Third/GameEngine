@@ -955,7 +955,7 @@ namespace Strata
 				{ "view", DescribeView(progress.View.Camera) },
 				{ "waitedFrames", std::max({ progress.TextFrames, progress.AssetFrames, progress.MipFrames, progress.PoseFrames, progress.InstanceFrames,
 					progress.MotionFrames, progress.TemporalFrames, progress.LightingFrames, progress.ExposureFrames, progress.ShadowFitFrames,
-					progress.ReflectionFrames }) },
+					progress.ReflectionFrames, progress.GIFrames }) },
 				{ "temporalFrames", progress.Stats.TemporalFrames },
 				{ "overlays", progress.Overlays },
 				{ "pendingAssets", progress.PendingAssets },

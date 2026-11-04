@@ -1969,14 +1969,24 @@ TEST_SUITE("GPU.Editor.Viewport")
 	{
 		// A scene whose Post Process asks for global illumination, captured at High (its row runs it): the capture's frame has the
 		// field settled and joined. The capture renderer voxelizes the whole scene in its first frame, so it waits only for scenes
-		// past the voxelizer's per-frame limits (EditorViewportCommands.cpp's c_MaxCaptureGIFrames).
+		// past the voxelizer's per-frame limits (EditorViewportCommands.cpp's c_MaxCaptureGIFrames): this one, with nothing else to
+		// wait for (no sun shadows, whose fit takes frames), so a capture that did not wait would show the field pending.
 		Tests::GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		ViewportGPUHarness harness;
 		harness.DeviceFrames = &gpu;
+		// A project, for the memory mesh's asset manager.
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(Tests::CreateTemporaryDirectory("ViewportCaptureGI") / "Game") }, { "name", "Game" } });
 		harness.AddScene();
+		harness.TurnOffSunShadows();
 		harness.Run("entity.create", { { "name", "Floor" }, { "components", { { "Transform", { { "Translation", { 0, -0.5, 0 } }, { "Scale", { 20, 1, 20 } } } },
 			{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::PlaneMesh) } } } } } });
+		constexpr uint32_t c_Parts = RenderData::c_VoxelItemMaxSubmesh + 1;
+		AssetMetadata metadata;
+		metadata.Type = AssetType::Mesh;
+		metadata.Name = "Parts";
+		const AssetHandle parts = harness.Context.GetAssetManager()->AddMemoryAsset(Tests::CreateCubeOfParts(1.0f, c_Parts, BuiltinAssets::DefaultMaterial), metadata);
+		Tests::AddVoxelizerBacklog(*harness.Context.GetEditScene(), parts, c_Parts, glm::vec3(0.0f, 1.0f, 1.0f));
 		harness.Run("camera.set", { { "position", { 2, 1.5, 4 } }, { "target", { 0, 0, 0 } } });
 		const nlohmann::json parameters = { { "width", 128 }, { "height", 72 }, { "overlays", false }, { "quality", "high" } };
 		nlohmann::json without;
@@ -1988,10 +1998,13 @@ TEST_SUITE("GPU.Editor.Viewport")
 		nlohmann::json with;
 		harness.Capture(parameters, &with);
 		CHECK(with["globalIlluminationSettled"] == true);
+		// Its first frame left voxels for later ones: the capture rendered again (waitedFrames counts the GI's frames too).
+		CHECK(with["waitedFrames"].get<int>() >= 1);
 		const SceneRendererStats& stats = harness.Context.GetViewport().GetCaptureRenderer()->GetStats();
 		CHECK(stats.GlobalIllumination);
 		CHECK_FALSE(stats.GlobalIlluminationPending);
 		CHECK(stats.GlobalIlluminationSettled);
+		CHECK(stats.GIQueuedRegions == 0);
 		CHECK(with["Image"]["Data"] != without["Image"]["Data"]);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
