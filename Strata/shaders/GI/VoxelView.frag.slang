@@ -7,9 +7,11 @@
 // finished image. From the camera, a march through the voxel levels (each point read from the finest level that holds it,
 // blended into the next by GetLevelWeight; steps of ST_GI_STEP_VOXELS voxels of the level read, at most 512) to the first
 // sample whose trilinear occupancy reaches 0.5. Its surface is read where the run of occupied samples began (less than a step
-// past the last empty voxel center: the layer the ray entered, never the one behind it): the albedo of the surface voxels around
-// that point weighted trilinearly in the levels it blends, shaded 0.25 + 0.75 max(0, n . -view); two-sided voxels in the two-sided
-// color, nothing hit in the background color (LightingViewColors, as push constants). sRGB display colors.
+// past the last empty voxel center: the layer the ray entered, never the one behind it): the radiance of the surface voxels
+// around that point (rgb / a) weighted trilinearly in the levels it blends, through the frame's exposure (its pre-exposure, as
+// the probes view) and the display curve x / (1 + x), and no darker than their albedo times c_DarkAlbedo (where no light
+// arrives, dark geometry stays legible); two-sided voxels in the two-sided color, nothing hit in the background color
+// (LightingViewColors, as push constants). sRGB display colors.
 
 Texture3D<float4> u_Material0 : register(t0);
 Texture3D<float4> u_Material1 : register(t1);
@@ -19,6 +21,10 @@ Texture3D<float4> u_Normal0 : register(t4);
 Texture3D<float4> u_Normal1 : register(t5);
 Texture3D<float4> u_Normal2 : register(t6);
 Texture3D<float4> u_Normal3 : register(t7);
+Texture3D<float4> u_Radiance0 : register(t8);
+Texture3D<float4> u_Radiance1 : register(t9);
+Texture3D<float4> u_Radiance2 : register(t10);
+Texture3D<float4> u_Radiance3 : register(t11);
 SamplerState u_Repeat : register(s0);
 
 // RenderData::VoxelViewParameters: display colors (sRGB, RGBA8 packed) of two-sided voxels and of nothing hit.
@@ -32,6 +38,7 @@ struct VoxelViewParameters
 [[vk::push_constant]] ConstantBuffer<VoxelViewParameters> u_View;
 
 static const uint c_MaxSteps = 512u;
+static const float c_DarkAlbedo = 0.03;
 
 float4 SampleMaterial(uint level, float3 coordinate)
 {
@@ -53,6 +60,17 @@ float4 LoadMaterial(uint level, int3 texel)
 	if (level == 2u)
 		return u_Material2.Load(int4(texel, 0));
 	return u_Material3.Load(int4(texel, 0));
+}
+
+float4 LoadRadiance(uint level, int3 texel)
+{
+	if (level == 0u)
+		return u_Radiance0.Load(int4(texel, 0));
+	if (level == 1u)
+		return u_Radiance1.Load(int4(texel, 0));
+	if (level == 2u)
+		return u_Radiance2.Load(int4(texel, 0));
+	return u_Radiance3.Load(int4(texel, 0));
 }
 
 float4 LoadNormal(uint level, int3 texel)
@@ -89,6 +107,7 @@ float SampleOccupancy(float3 position, out uint finest)
 struct VoxelSurface
 {
 	float3 Albedo;
+	float4 Radiance; // rgb weighted (luminance times ST_GI_RADIANCE_SCALE), a the weight of the voxels holding light
 	float3 Normal;
 	float TwoSided; // The share of the surface voxels' weight that is two-sided
 	float Weight;   // Of the surface voxels read (0: none)
@@ -113,6 +132,7 @@ VoxelSurface ReadSurface(uint level, float3 position)
 		if (normal.w == 0.0 || weight <= 0.0)
 			continue;
 		surface.Albedo += weight * LoadMaterial(level, texel).rgb;
+		surface.Radiance += weight * LoadRadiance(level, texel);
 		surface.Normal += weight * normal.xyz;
 		twoSided += normal.w < 0.0 ? weight : 0.0;
 		surface.Weight += weight;
@@ -142,6 +162,7 @@ VoxelSurface ReadBlendedSurface(float3 position)
 		VoxelSurface surface = ReadSurface(level, position);
 		float share = remaining * weight * surface.Weight;
 		blended.Albedo += share * surface.Albedo;
+		blended.Radiance += remaining * weight * surface.Radiance;
 		blended.Normal += share * surface.Normal;
 		twoSided += share * surface.TwoSided;
 		blended.Weight += share;
@@ -191,7 +212,9 @@ float4 main(float4 fragCoord : SV_Position) : SV_Target0
 					break; // Only interior voxels where the run began: no surface to show
 				if (surface.TwoSided > 0.5)
 					return float4(UnpackUnorm4x8(u_View.TwoSided).rgb, 1.0);
-				return float4(LinearToSRGB(surface.Albedo * (0.25 + 0.75 * max(0.0, dot(surface.Normal, -direction)))), 1.0);
+				float3 radiance = surface.Radiance.a > 0.0 ? max(surface.Radiance.rgb, float3(0.0, 0.0, 0.0)) / surface.Radiance.a : float3(0.0, 0.0, 0.0);
+				float3 exposed = radiance / ST_GI_RADIANCE_SCALE * u_Frame.TemporalParams.y;
+				return float4(LinearToSRGB(max(exposed / (1.0 + exposed), surface.Albedo * c_DarkAlbedo)), 1.0);
 			}
 		}
 		else

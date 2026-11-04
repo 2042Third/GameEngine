@@ -997,7 +997,8 @@ namespace Strata
 			layout.visibility = nvrhi::ShaderType::Pixel;
 			layout.bindings = { nvrhi::BindingLayoutItem::VolatileConstantBuffer(0), nvrhi::BindingLayoutItem::VolatileConstantBuffer(1),
 				nvrhi::BindingLayoutItem::PushConstants(2, sizeof(RenderData::VoxelViewParameters)), nvrhi::BindingLayoutItem::Sampler(0) };
-			for (uint32_t slot = 0; slot < 2 * RenderData::c_GIMaxVoxelLevels; slot++)
+			// Per level: the material at t0-3, the normal at t4-7, the radiance at t8-11.
+			for (uint32_t slot = 0; slot < 3 * RenderData::c_GIMaxVoxelLevels; slot++)
 				layout.bindings.push_back(nvrhi::BindingLayoutItem::Texture_SRV(slot));
 			gi.ViewLayout = m_Device->createBindingLayout(layout);
 			nvrhi::IShader* pixelShader = Renderer::GetShaderLibrary().Get("GI/VoxelView.frag");
@@ -1027,6 +1028,9 @@ namespace Strata
 					nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D));
 				desc.bindings.push_back(nvrhi::BindingSetItem::Texture_SRV(RenderData::c_GIMaxVoxelLevels + level,
 					present ? gi.Levels[level].Normal.Get() : Renderer::GetBlack3DTexture(), nvrhi::Format::UNKNOWN, nvrhi::AllSubresources,
+					nvrhi::TextureDimension::Texture3D));
+				desc.bindings.push_back(nvrhi::BindingSetItem::Texture_SRV(2 * RenderData::c_GIMaxVoxelLevels + level,
+					present ? gi.Levels[level].Radiance.Get() : Renderer::GetBlack3DTexture(), nvrhi::Format::UNKNOWN, nvrhi::AllSubresources,
 					nvrhi::TextureDimension::Texture3D));
 			}
 			gi.ViewSet = m_Device->createBindingSet(desc, gi.ViewLayout);
