@@ -1965,6 +1965,37 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A capture with GI waits for it")
+	{
+		// A scene whose Post Process asks for global illumination, captured at High (its row runs it): the capture's frame has the
+		// field settled and joined. The capture renderer voxelizes the whole scene in its first frame, so it waits only for scenes
+		// past the voxelizer's per-frame limits (EditorViewportCommands.cpp's c_MaxCaptureGIFrames).
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.AddScene();
+		harness.Run("entity.create", { { "name", "Floor" }, { "components", { { "Transform", { { "Translation", { 0, -0.5, 0 } }, { "Scale", { 20, 1, 20 } } } },
+			{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::PlaneMesh) } } } } } });
+		harness.Run("camera.set", { { "position", { 2, 1.5, 4 } }, { "target", { 0, 0, 0 } } });
+		const nlohmann::json parameters = { { "width", 128 }, { "height", 72 }, { "overlays", false }, { "quality", "high" } };
+		nlohmann::json without;
+		harness.Capture(parameters, &without);
+		CHECK_FALSE(harness.Context.GetViewport().GetCaptureRenderer()->GetStats().GlobalIllumination);
+
+		const UUID postProcess = harness.Context.GetEditScene()->FindEntityByName("PostProcess").GetUUID();
+		harness.Run("component.set", { { "entity", UUIDToJson(postProcess) }, { "component", "PostProcess" }, { "values", { { "GlobalIllumination", true } } } });
+		nlohmann::json with;
+		harness.Capture(parameters, &with);
+		CHECK(with["globalIlluminationSettled"] == true);
+		const SceneRendererStats& stats = harness.Context.GetViewport().GetCaptureRenderer()->GetStats();
+		CHECK(stats.GlobalIllumination);
+		CHECK_FALSE(stats.GlobalIlluminationPending);
+		CHECK(stats.GlobalIlluminationSettled);
+		CHECK(with["Image"]["Data"] != without["Image"]["Data"]);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("viewport.capture shows the lighting views with their statistics")
 	{
 		Tests::GPUContext gpu;

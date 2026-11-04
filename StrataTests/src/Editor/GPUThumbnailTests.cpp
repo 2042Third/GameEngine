@@ -870,6 +870,62 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A project picture waits for GI to settle")
+	{
+		// A scene whose Post Process asks for global illumination, in a new project (High: its row runs it): the picture's frame
+		// has the field settled and joined. The capture renderer voxelizes the whole scene in its first frame, so the picture waits
+		// only for scenes past the voxelizer's per-frame limits (ProjectThumbnail::c_MaxGIFrames).
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GPUThumbnailGlobalIllumination") / "Game";
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		const auto run = [&](std::string_view name, const nlohmann::json& parameters)
+		{
+			return Tests::RunCommandToCompletion(context, commands, name, parameters);
+		};
+		const auto frameUntil = [&](const std::function<bool()>& condition)
+		{
+			for (int frame = 0; frame < 3000 && !condition(); frame++)
+			{
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				context.Update(Timestep(1.0f / 60.0f));
+				gpu.GetDevice().EndFrame();
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			return condition();
+		};
+		run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
+
+		Scene& scene = *context.GetActiveScene();
+		Entity postProcessEntity = scene.FindEntityByName("Post Process");
+		if (!postProcessEntity)
+		{
+			postProcessEntity = scene.CreateEntity("Post Process");
+			postProcessEntity.AddComponent<PostProcessComponent>();
+		}
+		PostProcessComponent& postProcess = postProcessEntity.GetComponent<PostProcessComponent>();
+		postProcess.AntiAliasing = false;
+		postProcess.AutoExposure = false;
+		postProcess.GlobalIllumination = true;
+		scene.GetRegistry().patch<PostProcessComponent>(postProcessEntity);
+		Tests::AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f), "Cube");
+		Tests::AddMesh(scene, BuiltinAssets::PlaneMesh, UUID::Null(), glm::vec3(0.0f, -0.5f, 0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(20.0f);
+		run("camera.set", { { "position", { 2.0, 1.5, 4.0 } }, { "target", { 0.0, 0.0, 0.0 } } });
+		run("scene.saveAs", { { "path", "Scenes/Main.stscene" } });
+		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
+		REQUIRE(FileSystem::Exists(ProjectThumbnail::GetFile(directory)));
+		ViewportRenderer* captureRenderer = context.GetViewport().GetCaptureRenderer();
+		REQUIRE(captureRenderer);
+		CHECK(captureRenderer->GetStats().GlobalIllumination);
+		CHECK_FALSE(captureRenderer->GetStats().GlobalIlluminationPending);
+		CHECK(captureRenderer->GetStats().GlobalIlluminationSettled);
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The project's picture of a scene with FXAA shows its spatial screen-space reflections")
 	{
 		// At the project's High quality the reflections are Spatial: they read the previous frame's color, which the picture's

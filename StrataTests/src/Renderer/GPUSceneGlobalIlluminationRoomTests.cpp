@@ -1242,6 +1242,51 @@ namespace
 	{
 		return color.r / std::max(color.g, 1e-6f);
 	}
+
+	// Ground 60 x 60 m under the yard's procedural sky, with no sun: on open ground the field's light and today's (the sky's)
+	// differ by a few percent, which the field's fade blends over 2 m.
+	void BuildOpenGround(Scene& scene, SceneTestAssets& assets)
+	{
+		AddNeutralPostProcess(scene);
+		MaterialProperties properties;
+		properties.BaseColor = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f);
+		properties.Roughness = 0.9f;
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(properties), glm::vec3(0.0f), "Ground").GetComponent<TransformComponent>().Scale =
+			glm::vec3(60.0f, 1.0f, 60.0f);
+		SkyLightComponent& sky = scene.CreateEntity("Sky").AddComponent<SkyLightComponent>();
+		sky.Source = SkyLightSource::Procedural;
+		sky.ZenithColor = glm::vec3(0.30f, 0.50f, 1.0f);
+		sky.HorizonColor = glm::vec3(0.95f, 1.0f, 1.08f);
+		sky.GroundColor = glm::vec3(0.20f, 0.18f, 0.15f);
+		sky.SunIntensity = 0.0f;
+		sky.Intensity = 1.0f;
+	}
+
+	// Camera-relative positions of an image's pixels from its reversed-Z depth (no jitter: no temporal anti-aliasing); the sky
+	// (depth 0) gets no position.
+	std::vector<std::optional<glm::vec3>> ReadRelativePositions(SceneRenderer& renderer, const SceneCamera& camera)
+	{
+		ReadbackImage depth;
+		REQUIRE(Renderer::ReadTexture(renderer.GetDepthTexture(), depth));
+		REQUIRE(depth.Pixels.size() == static_cast<size_t>(depth.Width) * depth.Height * sizeof(float));
+		const glm::mat4 inverseViewProjection = glm::inverse(camera.Projection * glm::mat4(glm::mat3(camera.View)));
+		std::vector<std::optional<glm::vec3>> positions(static_cast<size_t>(depth.Width) * depth.Height);
+		for (uint32_t y = 0; y < depth.Height; y++)
+		{
+			for (uint32_t x = 0; x < depth.Width; x++)
+			{
+				float z = 0.0f; // Plain reads: Debug builds check no condition per pixel
+				std::memcpy(&z, depth.Pixels.data() + (static_cast<size_t>(y) * depth.Width + x) * sizeof(float), sizeof(float));
+				if (z <= 0.0f)
+					continue;
+				const glm::vec2 ndc((static_cast<float>(x) + 0.5f) / static_cast<float>(depth.Width) * 2.0f - 1.0f,
+					1.0f - (static_cast<float>(y) + 0.5f) / static_cast<float>(depth.Height) * 2.0f);
+				const glm::vec4 position = inverseViewProjection * glm::vec4(ndc, z, 1.0f);
+				positions[static_cast<size_t>(y) * depth.Width + x] = glm::vec3(position) / position.w;
+			}
+		}
+		return positions;
+	}
 }
 
 TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationJoin")
@@ -1453,6 +1498,187 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationJoin")
 			return ReadImage(room.Renderer->GetHDRTexture());
 		};
 		CHECK(render(GPUDrivenMode::Auto).Pixels == render(GPUDrivenMode::Off).Pixels);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Inside the field the diffuse is the field's")
+	{
+		// The sun room's walls and ceiling lie inside the full field, and the room has no sky: their indirect light is the field's
+		// alone, the gi view's (the field's light on a white surface) times the plaster's albedo.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const SunRoomOptions room = DefaultRoom();
+		const std::vector<RoomPoint> points = GetWallPoints();
+		RoomRender render(room, c_RoomSize, RoomSpecification());
+		SetGlobalIllumination(render.SceneData, true);
+		const std::vector<glm::vec3> field = render.Measure(RoomCamera(), points);
+		const std::vector<glm::vec3> indirect = MeasureIndirect(render, points, true);
+		for (size_t index = 0; index < points.size(); index++)
+		{
+			CAPTURE(points[index].Name);
+			REQUIRE(Luminance(field[index]) > 0.0f);
+			for (int channel = 0; channel < 3; channel++)
+				CHECK(indirect[index][channel] == doctest::Approx(field[index][channel] * room.FloorAlbedo[channel]).epsilon(0.01));
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Transparent surfaces take the field")
+	{
+		// A blended quad and a glass pane that scatters half its light lie flat under the sun room's ceiling, below a black box, so
+		// the camera sees their undersides, which face the sunlit patch of the floor, and their pixels hold their own light alone.
+		// In the open room the field lights them; in the sealed one they stay as dark as its walls (erhe's leak at most); without
+		// GI they keep today's light, of which the room has next to none (no sky).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::vector<RoomPoint> panes = {
+			{ "blended quad", { -10.8f, 2.5f, -0.6f }, c_Down },
+			{ "glass pane", { -9.4f, 2.5f, -0.6f }, c_Down },
+		};
+		const auto measure = [&](bool sealed, bool asked)
+		{
+			SunRoomOptions options = DefaultRoom();
+			options.SealWindow = sealed;
+			RoomRender render(options, c_RoomSize, RoomSpecification());
+			REQUIRE(render.Assets.Manager->LoadAssetSync(BuiltinAssets::QuadMesh));
+			MaterialProperties black;
+			black.BaseColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+			black.Roughness = 1.0f;
+			AddMesh(render.SceneData, BuiltinAssets::CubeMesh, render.Assets.AddMaterial(black), { -10.1f, 2.7f, -0.6f }, "Backdrop")
+				.GetComponent<TransformComponent>().Scale = glm::vec3(2.6f, 0.02f, 1.4f);
+			MaterialProperties blended;
+			blended.BaseColor = glm::vec4(1.0f, 1.0f, 1.0f, 0.75f);
+			blended.AlphaMode = MaterialAlphaMode::Blend;
+			blended.Roughness = 1.0f;
+			MaterialProperties glass;
+			glass.BaseColor = glm::vec4(1.0f);
+			glass.Roughness = 1.0f;
+			glass.Transmission = 0.5f;
+			for (size_t index = 0; index < panes.size(); index++)
+			{
+				const AssetHandle material = render.Assets.AddMaterial(index == 0 ? blended : glass);
+				TransformComponent& transform = AddMesh(render.SceneData, BuiltinAssets::QuadMesh, material, panes[index].Point, panes[index].Name)
+					.GetComponent<TransformComponent>();
+				transform.Rotation = glm::angleAxis(glm::half_pi<float>(), c_East); // The quad faces +z: turned to face down
+				transform.Scale = glm::vec3(0.6f, 1.0f, 1.0f);
+			}
+			SetGlobalIllumination(render.SceneData, asked);
+			return MeasureIndirect(render, panes, asked);
+		};
+		const std::vector<glm::vec3> open = measure(false, true);
+		const std::vector<glm::vec3> sealed = measure(true, true);
+		const std::vector<glm::vec3> off = measure(false, false);
+		for (size_t index = 0; index < panes.size(); index++)
+		{
+			CAPTURE(panes[index].Name);
+			MESSAGE(panes[index].Name << ": open room " << Luminance(open[index]) << ", sealed " << Luminance(sealed[index]) << ", without GI "
+				<< Luminance(off[index]));
+			CHECK(Luminance(open[index]) > 0.0f);
+			CHECK(Luminance(sealed[index]) <= c_SealedBound * Luminance(open[index]));
+			CHECK(Luminance(off[index]) <= c_SealedBound * Luminance(open[index]));
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The field meets today's light at its edge")
+	{
+		// Open ground under the sky, seen along +x: from 5 to 12 m out (across the fade, 7.5-9.5 m at High) neighboring pixels of the
+		// lit image differ by at most 2%. Cameras every 0.5 m across one 4 m step of the field's snap, on x and on y (correction
+		// 1): a fade without probes, or a field that ends before its fade does, shows as a dark band.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		BuildOpenGround(scene, assets);
+		SetGlobalIllumination(scene, true);
+		SceneRenderer renderer(RoomSpecification());
+		renderer.SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+		SceneRenderOptions options;
+		options.HDROutput = true;
+		options.PreExposure = 1.0f;
+		for (const int axis : { 0, 1 })
+		{
+			for (int step = 0; step < 8; step++)
+			{
+				glm::vec3 position(0.1f, 1.7f, 0.3f);
+				position[axis] += 0.5f * static_cast<float>(step);
+				CAPTURE(position);
+				const SceneCamera camera = MakeCamera(position, glm::vec3(position.x + 10.0f, 0.0f, position.z), 55.0f, c_RoomSize);
+				for (uint32_t frame = 0; frame < 2; frame++)
+					REQUIRE(RenderGIFrame(renderer, scene, camera, options));
+				REQUIRE(renderer.GetStats().GlobalIllumination);
+				REQUIRE_FALSE(renderer.GetStats().GlobalIlluminationPending);
+				ReadbackImage image;
+				REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
+				REQUIRE(image.Format == nvrhi::Format::RGBA16_FLOAT);
+				const glm::uvec2 closest = ProjectToPixel(camera, glm::vec3(position.x + 5.0f, 0.0f, position.z), image.Width, image.Height);
+				const glm::uvec2 farthest = ProjectToPixel(camera, glm::vec3(position.x + 12.0f, 0.0f, position.z), image.Width, image.Height);
+				REQUIRE(closest.y < image.Height);
+				REQUIRE(farthest.y < closest.y);
+				float largest = 0.0f;
+				float previous = Luminance(glm::vec3(ReadHalfTexel(image, farthest.x, farthest.y)));
+				for (uint32_t y = farthest.y + 1; y <= closest.y; y++)
+				{
+					const float value = Luminance(glm::vec3(ReadHalfTexel(image, farthest.x, y)));
+					REQUIRE(value > 0.0f);
+					largest = std::max(largest, std::abs(value - previous) / std::max(value, previous));
+					previous = value;
+				}
+				CHECK(largest <= 0.02f);
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Beyond the field the light is today's, bit for bit")
+	{
+		// The yard's ground and props: every pixel whose point lies beyond the field's reach on some axis (its weight 0), and the
+		// sky, is the same 8-bit value with GI asked as without (x * 1 and + 0 are exact); inside, the field changes the light.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		BuildYard(scene, assets);
+		const SceneCamera camera = YardStrafe(0, 0.0f, static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y));
+		SceneRenderer off(RoomSpecification());
+		off.SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+		SceneRenderer joined(RoomSpecification());
+		joined.SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+		for (uint32_t frame = 0; frame < 3; frame++)
+			REQUIRE(RenderGIFrame(off, scene, camera, SceneRenderOptions {}));
+		SetGlobalIllumination(scene, true);
+		for (uint32_t frame = 0; frame < 3; frame++)
+			REQUIRE(RenderGIFrame(joined, scene, camera, SceneRenderOptions {}));
+		REQUIRE(joined.GetStats().GlobalIllumination);
+		REQUIRE_FALSE(joined.GetStats().GlobalIlluminationPending);
+		const glm::vec3 reach(joined.GetGlobalIlluminationFieldConstants().FieldFade);
+		REQUIRE(reach.x > 0.0f);
+		const ReadbackImage offImage = ReadImage(off.GetOutputTexture());
+		const ReadbackImage joinedImage = ReadImage(joined.GetOutputTexture());
+		REQUIRE(offImage.Pixels.size() == joinedImage.Pixels.size());
+		const std::vector<std::optional<glm::vec3>> positions = ReadRelativePositions(joined, camera);
+		REQUIRE(positions.size() * 4 == joinedImage.Pixels.size());
+		uint32_t beyond = 0;
+		uint32_t beyondChanged = 0;
+		uint32_t insideChanged = 0;
+		for (size_t pixel = 0; pixel < positions.size(); pixel++)
+		{
+			const bool changed = std::memcmp(offImage.Pixels.data() + pixel * 4, joinedImage.Pixels.data() + pixel * 4, 4) != 0;
+			// A 5 cm margin keeps the depth's reconstruction off the reach's boundary.
+			const std::optional<glm::vec3>& position = positions[pixel];
+			if (!position || glm::any(glm::greaterThan(glm::abs(*position), reach + 0.05f)))
+			{
+				beyond++;
+				beyondChanged += changed ? 1 : 0;
+			}
+			else
+				insideChanged += changed ? 1 : 0;
+		}
+		MESSAGE("The yard: " << beyond << " of " << positions.size() << " pixels beyond the field, " << beyondChanged << " of them changed; "
+			<< insideChanged << " changed inside");
+		CHECK(beyond > positions.size() / 10);
+		CHECK(beyondChanged == 0);
+		CHECK(insideChanged > 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

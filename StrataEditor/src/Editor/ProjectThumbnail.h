@@ -19,8 +19,9 @@ namespace Strata
 	// share of the picture (until nothing is loading, its textures have the levels the view wants, at most c_MaxFrames, and
 	// its pre-exposure and global illumination settled, at most c_MaxExposureFrames and c_MaxGIFrames, then until spatial
 	// screen-space reflections read a previous frame's color, at most c_MaxReflectionFrames, and then, with temporal
-	// anti-aliasing, until its history settled, at most c_MaxTemporalFrames more), read back without stalling (TextureReadback), averaged down to c_Width x c_Height (Downscale) and written as PNG on an
-	// I/O job to <project>/.strata/Thumbnail.png (GetFile). Main thread; nothing happens without a GPU.
+	// anti-aliasing, until its history settled, at most c_MaxTemporalFrames more), read back without stalling
+	// (TextureReadback), averaged down to c_Width x c_Height (Downscale) and written as PNG on an I/O job to
+	// <project>/.strata/Thumbnail.png (GetFile). Main thread; nothing happens without a GPU.
 	class ProjectThumbnail
 	{
 	public:

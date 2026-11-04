@@ -5137,7 +5137,12 @@ one probe field around the camera, and the misses `Docs/Plans/Wave8/ReleaseNotes
   GI's voxels" (both paths give the same voxels); `GPU.SceneRenderer.GlobalIlluminationJoin` (not asked, or the row Off:
   nothing made and the same image; a pending frame is today's light to the bit; the owner's red floor tints the lit
   image's walls by at least 0.7 of the one-bounce reference's change of R/G, and not at all without GI; the intensity scales
-  the field; the field's share takes no multi-bounce; the row follows `SetQuality`; both paths give the same lit image);
+  the field; the field's share takes no multi-bounce; the row follows `SetQuality`; both paths give the same lit image;
+  inside the field the diffuse light is the gi view's times the albedo within 1%; a blended quad and a glass pane take the
+  field in the open room and stay dark in the sealed one; across the fade, from 5 to 12 m out over open ground, neighboring
+  pixels differ by at most 2% for cameras every 0.5 m across a 4 m snap step on x and on y; beyond the field's reach every
+  pixel of the yard is the same to the bit); `GPU.Editor.Viewport`'s "A capture with GI waits for it" and
+  `GPU.Editor.Thumbnails`' "A project picture waits for GI to settle" (the frame's field settled and joined);
   `PerfGPU.Renderer`'s "Global illumination's cost at 3840x2160" (sun room and yard, provisional).
 - **What it cannot do** (so far): walls thinner than two voxels go two-sided (dark from both sides), thin props blur into
   blobs of whole voxels, characters and moving objects are not in the voxels until they rest, textured albedo and emission
