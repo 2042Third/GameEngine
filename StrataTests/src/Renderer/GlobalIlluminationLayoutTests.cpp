@@ -130,7 +130,7 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 		});
 		CHECK(low.FieldExtent == glm::vec3(24.0f, 20.0f, 24.0f));
 		CHECK(low.FieldSnap == 4.0f);
-		CHECK(low.FieldFullExtent == glm::vec2(7.0f, 5.0f));
+		CHECK(low.FieldFullExtent == glm::vec2(7.0f, 2.8f));
 		CHECK(low.FieldFade == 2.0f);
 		// Low's scratch is one level: a 64^3 batch would not fit its 64 x 32 x 64 levels' worth.
 		CHECK(low.BatchVoxels == 131072);
@@ -323,6 +323,63 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 					}
 				}
 			}
+		}
+	}
+
+	TEST_CASE("The field reaches only where level 2 holds while a scroll is voxelized")
+	{
+		// The gather reads voxel levels 0-2, and a point none of them holds takes today's light at once (Include/GIField.slang):
+		// a seam that jumps. A scroll leaves a level's valid box a slab short on the side the camera moves toward (what the old
+		// and the new window share) until the slab is voxelized, and the camera may move on meanwhile, up to its next step; the
+		// gather keeps c_GILevelGuardVoxels from the box's faces. The field's reach must stay inside, on every axis, both ways.
+		for (const GlobalIlluminationLevel quality : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
+		{
+			const GlobalIlluminationLayout layout = GetLayout(quality);
+			REQUIRE(layout.Levels.size() >= 3);
+			const VoxelLevelLayout& level = layout.Levels[2];
+			const double voxel = static_cast<double>(level.VoxelSize);
+			const double guard = static_cast<double>(RenderData::c_GILevelGuardVoxels);
+			const glm::dvec3 reach(layout.FieldFullExtent.x + layout.FieldFade, layout.FieldFullExtent.y + layout.FieldFade,
+				layout.FieldFullExtent.x + layout.FieldFade);
+			const double step = voxel * static_cast<double>(RenderData::c_GIScrollVoxels);
+			double tightest = std::numeric_limits<double>::infinity();
+			for (int axis = 0; axis < 3; axis++)
+			{
+				for (const double direction : { 1.0, -1.0 })
+				{
+					// Starting points across a whole step, each moved on in steps of a hundredth of one until its window moved twice.
+					for (int start = 0; start < 20; start++)
+					{
+						glm::dvec3 camera(0.3, -0.7, 1.1);
+						camera[axis] = 1234.5 + step * static_cast<double>(start) / 20.0;
+						const VoxelBox first = GlobalIllumination::GetWindow(level, GlobalIllumination::GetWindowMinimum(level, camera));
+						VoxelBox moved = first;
+						for (int move = 0; move < 300; move++)
+						{
+							camera[axis] += direction * step / 100.0;
+							const VoxelBox window = GlobalIllumination::GetWindow(level, GlobalIllumination::GetWindowMinimum(level, camera));
+							if (window == first)
+								continue;
+							if (moved != first && window != moved)
+								break;
+							moved = window;
+							const VoxelBox valid = first.Intersection(window);
+							const double above = (static_cast<double>(valid.Maximum[axis]) - guard) * voxel - camera[axis];
+							const double below = camera[axis] - (static_cast<double>(valid.Minimum[axis]) + guard) * voxel;
+							const int qualityIndex = static_cast<int>(quality);
+							CAPTURE(qualityIndex);
+							CAPTURE(axis);
+							CAPTURE(direction);
+							CAPTURE(camera[axis]);
+							CHECK(above >= reach[axis]);
+							CHECK(below >= reach[axis]);
+							tightest = std::min({ tightest, above - reach[axis], below - reach[axis] });
+						}
+					}
+				}
+			}
+			// The walk met the box's nearest faces: the reach is not checked against a looser box than the gather's.
+			CHECK(tightest < step);
 		}
 	}
 

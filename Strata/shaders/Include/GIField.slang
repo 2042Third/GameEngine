@@ -89,8 +89,8 @@ float SampleFieldOccupancy(uint level, SamplerState repeat, float3 position)
 
 // The transmittance from a start point to a probe through one level (FindFieldLevel's), one voxel a step; below
 // ST_GI_VISIBILITY_CUTOFF nothing is seen. Points no level holds both of are not seen: nothing tells whether a floor or a
-// ceiling lies between them (a valid box falls up to two scroll steps short while a scroll is voxelized: at Low, level 2's
-// ends 4.8 m above the camera, within the field's reach), and dark is never a leak.
+// ceiling lies between them (a valid box falls up to two scroll steps short while a scroll is voxelized), and dark is never a
+// leak.
 float GetFieldVisibility(SamplerState repeat, float3 start, float3 target)
 {
 	uint level = FindFieldLevel(start, target);
@@ -134,8 +134,9 @@ float4 SampleIrradianceField(SamplerState repeat, float3 position, float3 geomet
 {
 	openShare = 1.0;
 	float fieldWeight = GetFieldWeight(position);
-	// A point no voxel level holds (beyond a valid box cut short by a scroll) cannot check what it sees: today's light, as
-	// outside the field.
+	// A point no voxel level holds cannot check what it sees: today's light, as outside the field. The field's reach stays
+	// where level 2 holds every point one scroll slab short (GlobalIllumination::ComputeLayout), so only a camera that moved on
+	// by more than a step before the slab was voxelized meets this.
 	if (fieldWeight <= 0.0 || FindFieldLevel(position, position) >= 3u)
 		return float4(0.0, 0.0, 0.0, 0.0);
 	float spacing = u_GIField.FieldOrigin.w;

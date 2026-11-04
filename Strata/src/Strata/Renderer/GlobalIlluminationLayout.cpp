@@ -176,7 +176,12 @@ namespace Strata
 				dimensions.x * dimensions.y * dimensions.z);
 			layout.FieldExtent = glm::vec3(firstGrid) * firstSpacing;
 			layout.FieldSnap = layout.Cascades.back().Spacing;
-			layout.FieldFullExtent = high ? glm::vec2(7.5f, 5.5f) : glm::vec2(7.0f, 5.0f);
+			// The field reaches only where voxel level 2, the coarsest the gather reads, holds every point while a scroll is
+			// voxelized: its valid box a slab short on the side the camera moves toward, the camera up to a step on, less
+			// c_GILevelGuardVoxels; a point no level holds takes today's light at once (Include/GIField.slang), a seam that would
+			// jump. Low's level 2 (32 voxels of 0.8 m up) holds (16 - 2 * 4 - 2) * 0.8 = 4.8 m up and down: 2.8 m at full weight
+			// and the fade. High's holds 8.8 m.
+			layout.FieldFullExtent = high ? glm::vec2(7.5f, 5.5f) : glm::vec2(7.0f, 2.8f);
 			layout.FieldFade = 2.0f;
 			return layout;
 		}
