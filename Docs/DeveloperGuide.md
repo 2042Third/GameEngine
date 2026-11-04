@@ -5031,8 +5031,11 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   frame constants a new pass needs check the `ao` view's repeats first.
 - **The light** (`GPU.RadianceCascades` after the voxels, every frame; `Include/GIProbes.slang`): `GI/VoxelInject` lights
   every surface voxel of every level (albedo times the sun's illuminance on its normal times a walk toward the sun through
-  the voxels the ray crosses, read unfiltered, from its own level up, switching level where the next one's weight passes
-  one half; plus its emission; radiance times `c_GIRadianceScale`, alpha 1; two-sided voxels a dark surface). A voxel of
+  the voxels the ray crosses, read unfiltered, from its own level up: its own level until the walk has risen
+  `c_GISunOwnLevelVoxels` (2) of its voxels off the start along the normal, whatever that level's weight (a coarser voxel
+  still holds the surface there: walks from where their level's weight was below one half went dark, a ring on sunlit
+  floors at each level's edge that moved with the camera), then switching level where the next one's weight passes one
+  half; plus its emission; radiance times `c_GIRadianceScale`, alpha 1; two-sided voxels a dark surface). A voxel of
   the lit layer starts the walk on its face; a solid one `c_GIShadowOffsetVoxels` along its normal from its center, and no
   solid voxel is ever skipped (a floor runs on under its walls: skipping the floor's own voxels let the sun into a sealed
   room). Solid voxels stop the light, the lit layer passes it, alpha-masked ones attenuate it. A trilinear march with the

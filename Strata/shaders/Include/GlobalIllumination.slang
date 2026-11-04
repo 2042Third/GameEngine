@@ -29,6 +29,7 @@
 #define ST_GI_PROBE_MOVE_VOXELS 1.5       // c_GIProbeMoveVoxels
 #define ST_GI_REFRESH_OCCUPANCY 0.1       // c_GIRefreshOccupancy
 #define ST_GI_SHADOW_OFFSET_VOXELS 1.0    // c_GIShadowOffsetVoxels
+#define ST_GI_SUN_OWN_LEVEL_VOXELS 2.0    // c_GISunOwnLevelVoxels
 #define ST_GI_TRANSMITTANCE_CUTOFF 1e-4   // c_GITransmittanceCutoff
 #define ST_GI_RADIANCE_SCALE (1.0 / 16.0) // c_GIRadianceScale
 #define ST_GI_MAX_RADIANCE 60000.0        // c_GIMaxRadiance

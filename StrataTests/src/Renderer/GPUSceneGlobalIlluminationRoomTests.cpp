@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -753,6 +754,86 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 			MESSAGE(expected.Name << ": validity " << texel[0] / 255.0f << ", moved " << decoded.x << ", " << decoded.y << ", " << decoded.z);
 			CHECK(texel[0] == 255);
 			CHECK(glm::length(decoded - expected.Move) <= 0.02f);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A sunlit floor's light is continuous across the voxel levels' blends")
+	{
+		// The sun's walk from a voxel where its level blends into the next (weight below one half) read the coarser level from
+		// its start, inside that level's voxel holding the floor: the floor's lit layer went dark in a ring at each level's edge
+		// (about 5.8 m and 11.6 m from the camera at High), and wholly under a camera 2.6 m above it. Every voxel a read takes
+		// (weight above 0) holds the sunlit floor's light.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		MaterialProperties white;
+		const AssetHandle material = assets.AddMaterial(white);
+		// A 60 m floor whose top (y 0.1) lies on level 0's grid, in the middle of level 1's voxels.
+		AddMesh(scene, BuiltinAssets::CubeMesh, material, glm::vec3(0.0f, -0.4f, 0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(60.0f, 1.0f, 60.0f);
+		AddSun(scene, glm::normalize(glm::vec3(0.3f, -1.0f, 0.2f)), 10.0f, false);
+		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification());
+		renderer->SetViewportSize(256, 256);
+		AssetManager::SetActive(assets.Manager);
+		for (const float height : { 1.7f, 2.7f })
+		{
+			CAPTURE(height);
+			const SceneCamera camera = LookAt(glm::vec3(0.3f, height, 0.2f), glm::vec3(0.3f, 0.0f, 8.0f));
+			bool settled = false;
+			for (uint32_t frame = 0; frame < 100 && !settled; frame++)
+			{
+				REQUIRE(RenderGIFrame(*renderer, scene, camera, GIViewOptions()));
+				settled = renderer->GetStats().GlobalIlluminationSettled;
+			}
+			REQUIRE(settled);
+			const GlobalIlluminationLayout* layout = renderer->GetGlobalIlluminationLayout();
+			REQUIRE(layout);
+			const RenderData::GIFieldConstants& field = renderer->GetGlobalIlluminationFieldConstants();
+			const glm::ivec3 dimensions(field.VoxelDimensions);
+			for (uint32_t level = 0; level < 2; level++)
+			{
+				CAPTURE(level);
+				std::vector<uint8_t> radiance;
+				REQUIRE(renderer->ReadGlobalIlluminationVoxels(level, SceneRenderer::GlobalIlluminationTexture::Radiance, radiance));
+				const float voxel = field.VoxelOrigin[level].w;
+				REQUIRE(voxel > 0.0f);
+				const glm::vec3 minimum = camera.Position + glm::vec3(field.VoxelOrigin[level]);
+				// The layer holding the floor's light: level 0's lit layer above the top (y 0.1-0.2), level 1's voxels holding it.
+				const int layer = static_cast<int>(std::floor((0.15f - minimum.y) / voxel));
+				REQUIRE(layer >= field.VoxelValidMinimum[level].y);
+				REQUIRE(layer < field.VoxelValidMaximum[level].y);
+				float lowest = std::numeric_limits<float>::max();
+				float highest = 0.0f;
+				uint32_t taken = 0;
+				uint32_t blended = 0;
+				for (int z = field.VoxelValidMinimum[level].z; z < field.VoxelValidMaximum[level].z; z++)
+				{
+					for (int x = field.VoxelValidMinimum[level].x; x < field.VoxelValidMaximum[level].x; x++)
+					{
+						const glm::vec3 center = minimum + (glm::vec3(x, layer, z) + 0.5f) * voxel;
+						const float weight = GlobalIllumination::GetLevelWeight(layout->Levels[level], center - camera.Position);
+						if (weight <= 0.0f)
+							continue;
+						taken++;
+						blended += weight < 0.5f ? 1u : 0u;
+						const glm::ivec3 texel = ((glm::ivec3(x, layer, z) + glm::ivec3(field.VoxelTexel[level])) % dimensions + dimensions) % dimensions;
+						uint16_t value[4];
+						std::memcpy(value, radiance.data() + (texel.x + dimensions.x * (texel.y + dimensions.y * texel.z)) * 8, sizeof(value));
+						const float alpha = glm::unpackHalf1x16(value[3]);
+						const float light = alpha > 0.0f
+							? Luminance(glm::vec3(glm::unpackHalf1x16(value[0]), glm::unpackHalf1x16(value[1]), glm::unpackHalf1x16(value[2])) / alpha) : 0.0f;
+						lowest = std::min(lowest, light);
+						highest = std::max(highest, light);
+					}
+				}
+				MESSAGE("height " << height << ", level " << level << ": " << taken << " voxels taken (" << blended << " below half weight), light "
+					<< lowest << " to " << highest);
+				CHECK(blended > 0u);
+				CHECK(highest > 0.0f);
+				CHECK(lowest >= 0.99f * highest);
+			}
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

@@ -753,6 +753,9 @@ namespace Strata
 		// the reference on average, these reads 0.23; deeper ones (0.25 full) let the sealed room B of the paired rooms take light.
 		constexpr float c_GIRefreshOccupancy = 0.1f;
 		constexpr float c_GIShadowOffsetVoxels = 1.0f;   // A solid surface voxel's sun walk starts this far from its center along its normal
+		// The sun's walk from a voxel reads the voxel's own level until it rose this many of its voxels off its start along the
+		// normal (a voxel of the next level: none of that level's voxels holds the surface beyond), whatever the level's weight.
+		constexpr float c_GISunOwnLevelVoxels = 2.0f;
 		constexpr float c_GITransmittanceCutoff = 1e-4f; // Below it a ray is opaque
 		constexpr float c_GIRadianceScale = 1.0f / 16.0f; // Stored radiance is luminance (nits) times this (half floats)
 		constexpr float c_GIMaxRadiance = 60000.0f;      // ...clamped to this

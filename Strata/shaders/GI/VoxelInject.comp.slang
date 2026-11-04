@@ -17,11 +17,26 @@ RWByteAddressBuffer o_Counters : register(u7);
 
 groupshared uint s_SurfaceVoxels;
 
-// The level the sun's march reads at a camera-relative point: the finest from `level` up whose weight there is at least one
-// half (GetLevelWeight: the switch sits in the middle of the level blend and moves with the camera, never with the windows'
-// scrolling); ST_GI_MAX_VOXEL_LEVELS where none holds it (the point left the clipmap).
-uint FindSunLevel(float3 position, uint level)
+// Whether a camera-relative point lies in a level's valid box, less ST_GI_LEVEL_GUARD_VOXELS (the level holds its voxels).
+bool IsInSunLevel(uint level, float3 position)
 {
+	GIVoxelLevel data = u_GI.Levels[level];
+	if (data.Texel.w == 0)
+		return false;
+	float3 local = (position - data.Origin.xyz) / data.Origin.w;
+	return all(local >= float3(data.ValidMinimum.xyz) + ST_GI_LEVEL_GUARD_VOXELS) && all(local <= float3(data.ValidMaximum.xyz) - ST_GI_LEVEL_GUARD_VOXELS);
+}
+
+// The level the sun's march reads at a camera-relative point: the voxel's own level (`level`) while the walk is still near
+// its surface (`nearSurface`) and the level holds the point, whatever its weight there; otherwise the finest from `level` up
+// whose weight there is at least one half (GetLevelWeight: the switch sits in the middle of the level blend and moves with the
+// camera, never with the windows' scrolling); ST_GI_MAX_VOXEL_LEVELS where none holds it (the point left the clipmap). Near
+// the surface a coarser level's voxel still holds the surface itself: a walk starting where its own level's weight is below
+// one half read the floor's solid voxel of the next level and went dark (a ring at each level's edge, moving with the camera).
+uint FindSunLevel(float3 position, uint level, bool nearSurface)
+{
+	if (nearSurface && IsInSunLevel(level, position))
+		return level;
 	[loop]
 	for (uint candidate = level; candidate < u_GI.Dimensions.w; candidate++)
 	{
@@ -35,9 +50,12 @@ uint FindSunLevel(float3 position, uint level)
 // as it is stored. A trilinear march with the occupancy's gain thickens every occluder by a fraction of a voxel on each side and
 // more at its edges (the sun room's 2 x 1.3 m window lit 48% of its patch's power that way). Solid voxels stop the light; voxels
 // holding only a face on their boundary (ST_GI_TOUCH_OCCUPANCY: their solid neighbor occludes) pass it; partial ones (alpha-
-// masked) attenuate it by their absorption over the share of a voxel crossed.
-float GetSunTransmittance(float3 start, float3 direction, uint level)
+// masked) attenuate it by their absorption over the share of a voxel crossed. The walk stays in the voxel's own level until it
+// has risen ST_GI_SUN_OWN_LEVEL_VOXELS of its voxels off the start along the surface's normal `normal` (FindSunLevel): a coarser
+// level's voxel no longer holds the surface there.
+float GetSunTransmittance(float3 start, float3 direction, float3 normal, uint level)
 {
+	float ownRise = ST_GI_SUN_OWN_LEVEL_VOXELS * u_GI.Levels[level].Origin.w;
 	float transmittance = 1.0;
 	float3 position = start;
 	// Axes the ray does not move along are never left.
@@ -47,7 +65,7 @@ float GetSunTransmittance(float3 start, float3 direction, uint level)
 	[loop]
 	for (uint step = 0u; step < ST_GI_MAX_MARCH_STEPS; step++)
 	{
-		uint current = FindSunLevel(position, level);
+		uint current = FindSunLevel(position, level, dot(position - start, normal) < ownRise);
 		if (current == ST_GI_MAX_VOXEL_LEVELS)
 			break; // Out of the clipmap: the rest of the way is open
 		GIVoxelLevel data = u_GI.Levels[current];
@@ -119,7 +137,7 @@ void main(uint3 globalID : SV_DispatchThreadID, uint localIndex : SV_GroupIndex)
 					// floor's height hold the floor's face, and skipping them let the sun into a sealed room).
 					bool touch = LoadGIMaterial(level, texel).a <= ST_GI_TOUCH_OCCUPANCY + 0.5 / 255.0;
 					float3 start = touch ? center - n * (0.49 * voxel) : center + n * (ST_GI_SHADOW_OFFSET_VOXELS * voxel);
-					float transmittance = GetSunTransmittance(start, toSun, level);
+					float transmittance = GetSunTransmittance(start, toSun, n, level);
 					light += albedo * u_Frame.DirectionalLightColor.rgb * (cosine * transmittance / PI);
 				}
 			}
