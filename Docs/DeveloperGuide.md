@@ -714,7 +714,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
     `stats/`); builds without it refuse the shot.
   - The look-dev project's `Scenes/Yard.stscene` and `Scenes/Grass.stscene` mirror the GI scenes of the tests
     (`StrataTests/src/Renderer/GIScenes.cpp`: a yard with a hut, a fence, boulders and lanterns, the grass cards in front of
-    the fence; change both). The script's macro step `lookdev.grassCards {count, seed, min, max, material}` stands for the
+    the fence; change both), and `Scenes/SunRoom.stscene` and `Scenes/SealedRoom.stscene` the sun room of the
+    `GlobalIlluminationRoom` cases (`BuildSunRoom`: the room's shell on its ground, the sun at (-40, 30), no sky; the sealed
+    one fills the window; change both), shot as `lookdev.sunroom*` and `lookdev.sealedroom.view.gi` (the sun at three places,
+    the red floor, the patch behind the camera). The script's macro step `lookdev.grassCards {count, seed, min, max, material}` stands for the
     `entity.create` steps of that many cards (the tool draws their texture, as `GIScenes.cpp` does). `ratio <capture>
     --numerator <stage> --denominator <stage>` gives per picture the ratio of two GPU stages in the same frames (medians over
     the repeats, `ratio.csv`): costs read beside other agents' work are ratios.
