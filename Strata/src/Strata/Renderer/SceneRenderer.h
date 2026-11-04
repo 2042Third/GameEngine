@@ -226,6 +226,10 @@ namespace Strata
 		// its own, so it runs while it pays: while the latest frame that culled the cascades found at least a sixteenth of
 		// their casters hidden, otherwise once every 16 frames to look again (SceneRendererStats::ShadowOcclusionCulled).
 		bool OcclusionCulling = true;
+		// The depth pyramids occlusion culling tests against are built with a minimum-filtering sampler where the device has
+		// one (GraphicsDeviceInfo::SupportsSamplerMinMax): one sample per 2x2 texels. False builds them with four loads per
+		// 2x2 on every device, as devices without one do: tests compare them.
+		bool MinimumSamplerPyramids = true;
 		// GPU-driven frames redraw a shadow cascade only when something that reaches it changed since the frame that drew it:
 		// the camera (any part of SceneCamera or the viewport), the light or the cascade's square, a caster whose bounds before or
 		// after its change reach the cascade (a caster's first change, the frames before which it was not followed, redraws
