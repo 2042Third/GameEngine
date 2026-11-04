@@ -4274,7 +4274,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   prepass. The culling must stay conservative (drawn needlessly, never hidden wrongly): the pyramids' levels are their
   textures' mips (`GetPyramidLevelSize`, rounded down), a level's last row and column also cover what lies past them, and
   `Include/Culling.slang`'s `GetPyramidFootprint` clamps to them; a change to how a pyramid is built or read keeps
-  `GPU.SceneRenderer.Occlusion`'s texel-by-texel case (odd sizes, last rows and columns) and its window sweep passing.
+  `GPU.SceneRenderer.Occlusion` passing: its texel-by-texel case checks what the build writes (odd sizes, last rows and
+  columns, with the minimum sampler and with four loads: `SceneRendererSpecification::MinimumSamplerPyramids`), its
+  case of a box reaching the view's last row and column checks the footprint's clamp at a coarse level, and its window
+  sweep a box in plain view.
 - The shadow cascades are occlusion culled alike, each against a pyramid of its own first-phase shadow map, with the same
   switch, while it pays (`SceneRendererStats::ShadowOcclusionCulled` says whether a frame did). Tests that count shadow
   casters or shadow draws expect at most the CPU path's counts once `SceneRendererGPUStats::OccludedCasters` is not 0 (each

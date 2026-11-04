@@ -1036,7 +1036,7 @@ namespace Strata
 			DepthPyramidParameters parameters;
 			parameters.SourceSize = level == 0 ? m_ViewportSize : GetPyramidLevelSize(m_DepthPyramidSize, level - 1);
 			parameters.DestinationSize = GetPyramidLevelSize(m_DepthPyramidSize, level);
-			parameters.UseMinimumSampler = Renderer::GetGraphicsDevice().GetInfo().SupportsSamplerMinMax ? 1u : 0u;
+			parameters.UseMinimumSampler = m_Specification.MinimumSamplerPyramids && Renderer::GetGraphicsDevice().GetInfo().SupportsSamplerMinMax ? 1u : 0u;
 			commandList->setPushConstants(&parameters, sizeof(parameters));
 			commandList->dispatch((parameters.DestinationSize.x + 7) / 8, (parameters.DestinationSize.y + 7) / 8, 1);
 		}
@@ -1112,7 +1112,7 @@ namespace Strata
 		ST_PROFILE_FUNCTION();
 		// The cascades' depth pyramids of their first phase's shadow maps, level by level, every cascade in one dispatch (few
 		// dispatches and state changes: MoltenVK's submission costs CPU time per dispatch).
-		const bool minimumSampler = Renderer::GetGraphicsDevice().GetInfo().SupportsSamplerMinMax;
+		const bool minimumSampler = m_Specification.MinimumSamplerPyramids && Renderer::GetGraphicsDevice().GetInfo().SupportsSamplerMinMax;
 		nvrhi::ComputeState pyramidState;
 		pyramidState.pipeline = m_ShadowPyramidPipeline;
 		const glm::uvec2 levelZero(m_ShadowPyramidSize);

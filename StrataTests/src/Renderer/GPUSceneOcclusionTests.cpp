@@ -297,6 +297,49 @@ TEST_SUITE("GPU.SceneRenderer.Occlusion")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A box behind a wall whose screen rectangle reaches the view's last row and column is left out, at odd and even sizes")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!DeviceDrawsGPUDriven())
+			return;
+		SceneTestAssets assets;
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		WallScene scene(assets);
+		// The wall covers the whole view; the box behind it reaches past the view's right and bottom edges, from about the
+		// middle: its footprint is chosen at a coarse level (7: 3 x 2 texels at both sizes) where the pixels of the view's last
+		// row and column, shifted, lie past the level's last texel. Read clamped, that texel holds the wall's depth; read past
+		// the mip, the result is undefined (on common drivers 0, the farthest depth, which keeps the box).
+		scene.Wall.GetComponent<TransformComponent>().Scale = glm::vec3(40.0f, 40.0f, 0.5f);
+		TransformComponent& box = scene.Box.GetComponent<TransformComponent>();
+		box.Translation = glm::vec3(8.5f, -4.5f, -10.0f);
+		box.Scale = glm::vec3(11.0f, 6.0f, 1.0f);
+		scene.Wall.MarkModified<TransformComponent>();
+		scene.Box.MarkModified<TransformComponent>();
+		for (const glm::uvec2 size : { glm::uvec2(960, 540), glm::uvec2(961, 541) })
+		{
+			INFO(size.x << " x " << size.y);
+			scene.Wall.SetActive(true);
+			const SceneCamera camera = LookAt(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -10.0f), static_cast<float>(size.x) / static_cast<float>(size.y));
+			SceneRenderer renderer(ExactSpecification());
+			renderer.SetViewportSize(size.x, size.y);
+			for (int frame = 0; frame < 3; frame++)
+				Frame(gpu, renderer, scene.World, camera);
+			CHECK(renderer.GetGPUStats().VisibleProxies == 2);
+			CHECK(renderer.GetGPUStats().OccludedProxies == 1);
+			CHECK(renderer.GetGPUStats().Instances == 1); // The wall alone
+			CHECK(CountEntityPixels(renderer, scene.Box) == 0);
+
+			// The box is in view: without the wall it shows.
+			scene.Wall.SetActive(false);
+			Frame(gpu, renderer, scene.World, camera);
+			CHECK(renderer.GetGPUStats().OccludedProxies == 0);
+			CHECK(CountEntityPixels(renderer, scene.Box) > 0);
+		}
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Orthographic views are occlusion culled alike")
 	{
 		GPUContext gpu;
@@ -479,60 +522,66 @@ TEST_SUITE("GPU.SceneRenderer.Occlusion")
 		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
 		SunRoomScene scene(assets, false);
 		// Even and odd rows and columns at every level: 960 x 540 has 135 rows at level 1, 961 x 541 an odd level 0, and 37 x 5
-		// a level of 3 rows that halves to 1 and levels of one row that stay one.
-		for (const glm::uvec2 size : { glm::uvec2(960, 540), glm::uvec2(961, 541), glm::uvec2(37, 5) })
+		// a level of 3 rows that halves to 1 and levels of one row that stay one. Built with the minimum sampler (where the
+		// device has one) and with four loads per 2x2 (as devices without one build it).
+		for (const bool minimumSampler : { true, false })
 		{
-			INFO(size.x << " x " << size.y);
-			SceneRenderer renderer(ExactSpecification());
-			renderer.SetViewportSize(size.x, size.y);
-			const SceneCamera camera = SunRoomCamera(glm::vec3(-10.0f, 1.6f, -4.0f), size);
-			// Settled frames: the first phase draws everything in view, so the final depth is the one the pyramid reduces.
-			for (int frame = 0; frame < 3; frame++)
-				Frame(gpu, renderer, scene.World, camera);
-			nvrhi::ITexture* pyramid = renderer.GetDepthPyramid();
-			REQUIRE(pyramid != nullptr);
-			ReadbackImage depthImage;
-			REQUIRE(Renderer::ReadTexture(renderer.GetDepthTexture(), depthImage));
-			REQUIRE(depthImage.Width == size.x);
-			REQUIRE(depthImage.Height == size.y);
-			const std::vector<float> depth = ReadFloats(depthImage);
-
-			// Level 0 is half the depth buffer, rounded up; each level below it half the one above, rounded down (the
-			// texture's own mip sizes), down to one texel.
-			const glm::uvec2 levelZero = (size + 1u) / 2u;
-			const uint32_t levels = pyramid->getDesc().mipLevels;
-			CHECK((std::max(levelZero.x, levelZero.y) >> (levels - 1)) == 1u);
-			for (uint32_t level = 0; level < levels; level++)
+			for (const glm::uvec2 size : { glm::uvec2(960, 540), glm::uvec2(961, 541), glm::uvec2(37, 5) })
 			{
-				INFO("level " << level);
-				const glm::uvec2 levelSize = glm::max(levelZero >> level, glm::uvec2(1));
-				ReadbackImage image;
-				REQUIRE(Renderer::ReadTexture(pyramid, image, level));
-				REQUIRE(image.Width == levelSize.x);
-				REQUIRE(image.Height == levelSize.y);
-				const std::vector<float> values = ReadFloats(image);
-				// Pixel p belongs to texel p >> (level + 1), the last row and column also to those past them: Cull.comp reads
-				// that texel for it.
-				std::vector<float> expected(values.size(), std::numeric_limits<float>::infinity());
-				for (uint32_t y = 0; y < size.y; y++)
+				INFO(size.x << " x " << size.y << (minimumSampler ? ", minimum sampler" : ", four loads"));
+				SceneRendererSpecification specification = ExactSpecification();
+				specification.MinimumSamplerPyramids = minimumSampler;
+				SceneRenderer renderer(specification);
+				renderer.SetViewportSize(size.x, size.y);
+				const SceneCamera camera = SunRoomCamera(glm::vec3(-10.0f, 1.6f, -4.0f), size);
+				// Settled frames: the first phase draws everything in view, so the final depth is the one the pyramid reduces.
+				for (int frame = 0; frame < 3; frame++)
+					Frame(gpu, renderer, scene.World, camera);
+				nvrhi::ITexture* pyramid = renderer.GetDepthPyramid();
+				REQUIRE(pyramid != nullptr);
+				ReadbackImage depthImage;
+				REQUIRE(Renderer::ReadTexture(renderer.GetDepthTexture(), depthImage));
+				REQUIRE(depthImage.Width == size.x);
+				REQUIRE(depthImage.Height == size.y);
+				const std::vector<float> depth = ReadFloats(depthImage);
+
+				// Level 0 is half the depth buffer, rounded up; each level below it half the one above, rounded down (the
+				// texture's own mip sizes), down to one texel.
+				const glm::uvec2 levelZero = (size + 1u) / 2u;
+				const uint32_t levels = pyramid->getDesc().mipLevels;
+				CHECK((std::max(levelZero.x, levelZero.y) >> (levels - 1)) == 1u);
+				for (uint32_t level = 0; level < levels; level++)
 				{
-					const uint32_t row = std::min(y >> (level + 1), levelSize.y - 1);
-					for (uint32_t x = 0; x < size.x; x++)
+					INFO("level " << level);
+					const glm::uvec2 levelSize = glm::max(levelZero >> level, glm::uvec2(1));
+					ReadbackImage image;
+					REQUIRE(Renderer::ReadTexture(pyramid, image, level));
+					REQUIRE(image.Width == levelSize.x);
+					REQUIRE(image.Height == levelSize.y);
+					const std::vector<float> values = ReadFloats(image);
+					// Pixel p belongs to texel p >> (level + 1), the last row and column also to those past them: Cull.comp reads
+					// that texel for it.
+					std::vector<float> expected(values.size(), std::numeric_limits<float>::infinity());
+					for (uint32_t y = 0; y < size.y; y++)
 					{
-						const uint32_t column = std::min(x >> (level + 1), levelSize.x - 1);
-						float& farthest = expected[static_cast<size_t>(row) * levelSize.x + column];
-						farthest = std::min(farthest, depth[static_cast<size_t>(y) * size.x + x]);
+						const uint32_t row = std::min(y >> (level + 1), levelSize.y - 1);
+						for (uint32_t x = 0; x < size.x; x++)
+						{
+							const uint32_t column = std::min(x >> (level + 1), levelSize.x - 1);
+							float& farthest = expected[static_cast<size_t>(row) * levelSize.x + column];
+							farthest = std::min(farthest, depth[static_cast<size_t>(y) * size.x + x]);
+						}
 					}
+					uint32_t wrong = 0;
+					uint32_t nearer = 0; // Not conservative: nearer than a pixel it covers, which can hide what that pixel shows
+					for (size_t texel = 0; texel < values.size(); texel++)
+					{
+						wrong += values[texel] != expected[texel] ? 1u : 0u;
+						nearer += values[texel] > expected[texel] ? 1u : 0u;
+					}
+					CHECK(nearer == 0u);
+					CHECK(wrong == 0u);
 				}
-				uint32_t wrong = 0;
-				uint32_t nearer = 0; // Not conservative: nearer than a pixel it covers, which can hide what that pixel shows
-				for (size_t texel = 0; texel < values.size(); texel++)
-				{
-					wrong += values[texel] != expected[texel] ? 1u : 0u;
-					nearer += values[texel] > expected[texel] ? 1u : 0u;
-				}
-				CHECK(nearer == 0u);
-				CHECK(wrong == 0u);
 			}
 		}
 		gpu.GetDevice().WaitForIdle();
