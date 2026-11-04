@@ -123,6 +123,10 @@ namespace
 		SceneRendererSpecification specification = ExactSpecification();
 		specification.GlobalIllumination.Level = level;
 		specification.GlobalIllumination.VoxelizeTrianglesOnCut = 0; // The first frame is complete
+		// These cases measure the field on the surfaces drawn. GPU-driven occlusion culling hides the room's box below the window
+		// from cameras within about 0.3 m of x = -10 (Docs/Roadmap.md's open items), and the views then show the sunlit ground
+		// behind it: the field would be read on the wrong surface.
+		specification.OcclusionCulling = false;
 		return specification;
 	}
 
@@ -361,6 +365,8 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		REQUIRE(layer < field.VoxelValidMaximum[0].y);
 		double power = 0.0;
 		double reference = 0.0;
+		glm::dvec2 powerCenter(0.0);
+		glm::dvec2 referenceCenter(0.0);
 		uint32_t columns = 0;
 		for (int z = field.VoxelValidMinimum[0].z; z < field.VoxelValidMaximum[0].z; z++)
 		{
@@ -377,12 +383,22 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 				if (alpha > 0.0f)
 				{
 					const glm::vec3 color(glm::unpackHalf1x16(value[0]), glm::unpackHalf1x16(value[1]), glm::unpackHalf1x16(value[2]));
-					power += Luminance(color / alpha) / RenderData::c_GIRadianceScale * voxel * voxel;
+					const double voxelPower = Luminance(color / alpha) / RenderData::c_GIRadianceScale * voxel * voxel;
+					power += voxelPower;
+					powerCenter += voxelPower * glm::dvec2(center.x, center.z);
 				}
-				reference += Luminance(SunRoomRadiance(room, glm::vec3(center.x, 0.1f, center.z), c_Up)) * voxel * voxel;
+				const double referencePower = Luminance(SunRoomRadiance(room, glm::vec3(center.x, 0.1f, center.z), c_Up)) * voxel * voxel;
+				reference += referencePower;
+				referenceCenter += referencePower * glm::dvec2(center.x, center.z);
 			}
 		}
 		MESSAGE("the floor's sunlit power: voxels " << power << ", reference " << reference << " (" << power / reference << ") over " << columns << " columns");
+		// Where the power lies too: a patch of the right power in the wrong place would light the wrong walls.
+		powerCenter /= std::max(power, 1e-9);
+		referenceCenter /= std::max(reference, 1e-9);
+		MESSAGE("the patch's center (x, z): voxels " << powerCenter.x << ", " << powerCenter.y << ", reference " << referenceCenter.x << ", "
+			<< referenceCenter.y);
+		CHECK(glm::length(powerCenter - referenceCenter) <= 0.05);
 		CHECK(columns == 3600u);
 		CHECK(power >= 0.9 * reference);
 		CHECK(power <= 1.1 * reference);
