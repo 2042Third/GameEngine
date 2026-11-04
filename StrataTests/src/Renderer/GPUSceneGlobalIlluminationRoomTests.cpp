@@ -561,6 +561,111 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Still frames are identical")
+	{
+		// 6.2: the GI is a function of the scene and the camera alone (fixed directions, no history, nothing jitters): the gi view of
+		// a still camera's frames 8 and 9 agree to the bit, at High and Low.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
+		{
+			CAPTURE(level == GlobalIlluminationLevel::High ? "High" : "Low");
+			RoomRender render(DefaultRoom(), c_RoomSize, RoomSpecification(level));
+			AssetManager::SetActive(render.Assets.Manager);
+			const SceneCamera camera = RoomCamera();
+			ReadbackImage frames[2];
+			for (uint32_t frame = 1; frame <= 9; frame++)
+			{
+				REQUIRE(RenderGIFrame(*render.Renderer, render.SceneData, camera, GIViewOptions()));
+				if (frame >= 8)
+					REQUIRE(Renderer::ReadTexture(render.Renderer->GetHDRTexture(), frames[frame - 8]));
+			}
+			REQUIRE(render.Renderer->GetStats().GlobalIllumination);
+			REQUIRE(frames[0].Pixels.size() == frames[1].Pixels.size());
+			REQUIRE_FALSE(frames[0].Pixels.empty());
+			size_t differing = 0;
+			for (size_t index = 0; index < frames[0].Pixels.size(); index++)
+				differing += frames[0].Pixels[index] != frames[1].Pixels[index] ? 1 : 0;
+			CHECK(differing == 0);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Dead probes")
+	{
+		// 6.2: cascade 0's probes inside a 2 m closed block are dead (validity 0: no march, no gather takes them), those 0.05 m from
+		// its faces partly valid (validity fades as a surface comes near), and GIDeadProbes counts exactly the probes whose centers
+		// lie inside it (nothing else is in the scene). The block's faces lie 0.05 m past the probe planes (0.25 m + 0.5 m k).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		MaterialProperties properties;
+		properties.BaseColor = glm::vec4(glm::vec3(0.58f), 1.0f);
+		const glm::vec3 minimum(0.3f);
+		const glm::vec3 maximum(2.3f);
+		AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(properties), 0.5f * (minimum + maximum), "Block").GetComponent<TransformComponent>().Scale =
+			maximum - minimum;
+		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification());
+		renderer->SetViewportSize(c_FloorSize.x, c_FloorSize.y);
+		AssetManager::SetActive(assets.Manager);
+		const SceneCamera camera = MakeCamera(glm::vec3(1.3f, 1.3f, 4.5f), glm::vec3(1.3f), 70.0f, c_FloorSize);
+		// The block's mesh resident first, then the frame that makes the GI and counts its dead probes.
+		for (uint32_t frame = 0; frame < 100 && (frame < 2 || renderer->GetStats().PendingAssets > 0 || renderer->GetStats().DeferredProxies > 0); frame++)
+			REQUIRE(RenderGIFrame(*renderer, scene, camera, SceneRenderOptions {}));
+		// Without HDR output: the frame runs to its end, where the GI's counters are copied back.
+		SceneRenderOptions options;
+		options.LightingView = SceneLightingView::GlobalIllumination;
+		REQUIRE(RenderGIFrame(*renderer, scene, camera, options));
+		REQUIRE(renderer->GetStats().GlobalIllumination);
+		REQUIRE_FALSE(renderer->GetStats().GlobalIlluminationPending);
+		renderer->ResolveGPUStats(true);
+		const SceneRendererGPUStats& counts = renderer->GetGPUStats();
+		REQUIRE(counts.HasGICounters);
+		REQUIRE(counts.GICountersRender == renderer->GetRenderCount());
+
+		std::vector<uint8_t> validity;
+		REQUIRE(renderer->ReadGlobalIlluminationValidity(0, validity));
+		const ProbeCascadeLayout& probes = renderer->GetGlobalIlluminationLayout()->Cascades.front();
+		const glm::ivec3 grid(probes.Grid);
+		REQUIRE(validity.size() == static_cast<size_t>(grid.x) * grid.y * grid.z * 4);
+		const glm::vec3 origin = camera.Position + glm::vec3(renderer->GetGlobalIlluminationFieldConstants().FieldOrigin);
+		uint32_t inside = 0;
+		uint32_t beside = 0;
+		for (int z = 0; z < grid.z; z++)
+		{
+			for (int y = 0; y < grid.y; y++)
+			{
+				for (int x = 0; x < grid.x; x++)
+				{
+					const glm::vec3 position = origin + (glm::vec3(x, y, z) + 0.5f) * probes.Spacing;
+					const uint8_t value = validity[(x + grid.x * (y + grid.y * static_cast<size_t>(z))) * 4];
+					INFO("probe at " << position.x << ", " << position.y << ", " << position.z << ": validity " << value / 255.0f);
+					if (glm::all(glm::greaterThan(position, minimum)) && glm::all(glm::lessThan(position, maximum)))
+					{
+						CHECK(value == 0);
+						inside++;
+						continue;
+					}
+					// 0.05 m outside one of the block's faces, level with its middle on the other axes.
+					const glm::vec3 outside = glm::max(minimum - position, position - maximum);
+					const int axes = (outside.x > 0.0f ? 1 : 0) + (outside.y > 0.0f ? 1 : 0) + (outside.z > 0.0f ? 1 : 0);
+					if (axes == 1 && std::max({ outside.x, outside.y, outside.z }) < 0.06f)
+					{
+						CHECK(value > 0);
+						CHECK(value < 255);
+						beside++;
+					}
+				}
+			}
+		}
+		CHECK(inside == 64u);
+		CHECK(beside == 3u * 16u); // The probes 0.05 m outside the three faces at 0.3 m
+		CHECK(counts.GIDeadProbes == inside);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The sun lights no voxel inside a sealed room")
 	{
 		// The sun's walk from a voxel whose surface runs on under a wall (the floor under the walls' feet) went through the wall
