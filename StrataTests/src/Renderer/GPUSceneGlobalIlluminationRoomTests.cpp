@@ -353,6 +353,23 @@ namespace
 		return points;
 	}
 
+	// The hall's floor and ceiling where they meet its south wall (inside face z 1) on both sides of the window (correction 4's
+	// junctions: 0.05 and 0.15 m from the wall on the floor, 0.1 m on the ceiling).
+	std::vector<RoomPoint> GetHallJunctions(const glm::vec3& offset)
+	{
+		std::vector<RoomPoint> points;
+		for (const float x : { -12.0f, -8.0f })
+		{
+			const std::string side = x < -10.0f ? "west" : "east";
+			for (const float inset : { 0.05f, 0.15f })
+				points.push_back({ fmt::format("floor {} m from the south wall, {}", inset, side), { x, 0.1f, 1.0f - inset }, c_Up });
+			points.push_back({ fmt::format("ceiling by the south wall, {}", side), { x, 3.0f, 0.9f }, c_Down });
+		}
+		for (RoomPoint& point : points)
+			point.Point += offset;
+		return points;
+	}
+
 }
 
 TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
@@ -418,7 +435,8 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 	{
 		// Room B is room A moved 6.2 m east (sharing A's east wall), sealed. Room A's light is the nineteen points' mean, as the
 		// sealed room's case takes it: one bounce leaves A's floor nearly dark (its reference is 0-60 nits), so a floor mean alone
-		// made the bound a thousandth of a nit.
+		// made the bound a thousandth of a nit. Every point of B is checked, its floor's and ceiling's junctions with the walls
+		// too (correction 4).
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SunRoomOptions room = DefaultRoom();
@@ -428,6 +446,8 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		RoomRender floorA(room, c_FloorSize, RoomSpecification());
 		const float meanA = 0.5f * (MeanLuminance(wallsA.Measure(RoomCamera(), GetWallPoints())) + MeanLuminance(floorA.Measure(FloorCamera(), GetFloorPoints())));
 		std::vector<RoomPoint> wallPointsB = GetWallPoints(toB);
+		const std::vector<RoomPoint> ceilingJunctionsB = GetCeilingJunctions(toB);
+		wallPointsB.insert(wallPointsB.end(), ceilingJunctionsB.begin(), ceilingJunctionsB.end());
 		std::vector<RoomPoint> floorPointsB = GetFloorPoints(toB, true);
 		RoomRender wallsB(room, c_RoomSize, RoomSpecification());
 		RoomRender floorB(room, c_FloorSize, RoomSpecification());
@@ -758,6 +778,45 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Orthographic cameras")
+	{
+		// An orthographic camera 5 m above the yard runs the GI, and its gi view equals a perspective camera's at the same point
+		// within 2% at the image center (the field follows the camera's position, never its projection).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		BuildYard(scene, assets);
+		AssetManager::SetActive(assets.Manager);
+		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification());
+		renderer->SetViewportSize(256, 256);
+		const glm::vec3 position(0.5f, 5.0f, -3.0f);
+		const glm::vec3 target(0.5f, 0.0f, -2.9f);
+		const SceneCamera cameras[] = { LookAt(position, target), OrthographicLookAt(position, target, 6.0f) };
+		float centers[2] = {};
+		for (int index = 0; index < 2; index++)
+		{
+			CAPTURE(index);
+			for (uint32_t frame = 0; frame < 4; frame++)
+				REQUIRE(RenderGIFrame(*renderer, scene, cameras[index], GIViewOptions()));
+			REQUIRE(renderer->GetStats().GlobalIllumination);
+			REQUIRE_FALSE(renderer->GetStats().GlobalIlluminationPending);
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer->GetHDRTexture(), image));
+			glm::vec3 sum(0.0f);
+			for (uint32_t dy = 0; dy < 3; dy++)
+			{
+				for (uint32_t dx = 0; dx < 3; dx++)
+					sum += glm::vec3(ReadHalfTexel(image, image.Width / 2 - 1 + dx, image.Height / 2 - 1 + dy));
+			}
+			centers[index] = Luminance(sum / 9.0f / c_RoomPreExposure);
+		}
+		MESSAGE("the image center: perspective " << centers[0] << ", orthographic " << centers[1]);
+		CHECK(centers[0] > 0.0f);
+		CHECK(centers[1] == doctest::Approx(centers[0]).epsilon(0.02));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A probe's move off a wall does not depend on the camera's distance")
 	{
 		// The move was c_GIProbeMoveVoxels voxels of the finest level holding the probe: a camera risen far enough above the room
@@ -1019,7 +1078,8 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		// Correction 2: a 16 m hall, whose cascade-2 probes' 8 m rays end inside it, merges its parents' sunlit outside through the
 		// wall unless the lead-in reaches back to the probe; and the top cascade's rays must cross its 0.2 m walls in voxels that
 		// hold them (level 2's 0.4 m voxels let 0.0031 to 0.056 of the open hall's light in). The sealed hall's twelve points at
-		// most 0.0017 of the same hall's with its 2 x 1.3 m window, at High, with the hall moved as the sealed room is.
+		// most 0.0017 of the same hall's with its 2 x 1.3 m window, at High, with the hall moved as the sealed room is, and each of
+		// its junctions with the south wall too (correction 4).
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		const float spacing = FirstSpacing(GlobalIlluminationLevel::High);
@@ -1033,13 +1093,16 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 			SunRoomOptions sealed = open;
 			sealed.SealWindow = true;
 			const std::vector<RoomPoint> points = GetHallPoints(offset);
+			const std::vector<RoomPoint> junctions = GetHallJunctions(offset);
 			std::vector<glm::vec3> openValues;
 			std::vector<glm::vec3> sealedValues;
+			std::vector<glm::vec3> sealedJunctions;
 			{
 				RoomRender openRender(open, c_RoomSize, RoomSpecification());
 				openValues = openRender.Measure(HallCamera(offset), points);
 				RoomRender sealedRender(sealed, c_RoomSize, RoomSpecification());
 				sealedValues = sealedRender.Measure(HallCamera(offset), points);
+				sealedJunctions = ReadPoints(*sealedRender.Renderer, HallCamera(offset), junctions);
 			}
 			CollectReleases();
 			float error = 0.0f;
@@ -1049,6 +1112,11 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 				<< MeanLuminance(sealedValues) / MeanLuminance(openValues) << ")");
 			CHECK(MeanLuminance(openValues) > 0.0f);
 			CHECK(MeanLuminance(sealedValues) <= c_SealedBound * MeanLuminance(openValues));
+			for (size_t index = 0; index < junctions.size(); index++)
+			{
+				INFO(junctions[index].Name);
+				CHECK(Luminance(sealedJunctions[index]) <= c_SealedBound * MeanLuminance(openValues));
+			}
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

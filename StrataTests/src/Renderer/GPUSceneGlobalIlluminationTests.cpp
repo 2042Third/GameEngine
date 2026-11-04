@@ -1335,13 +1335,14 @@ TEST_SUITE("GPU.SceneRenderer.GPUDriven")
 	TEST_CASE("The GI's voxels")
 	{
 		// The voxels read the render scene's GPU copy and the geometry pool, never culling: the CPU and GPU paths (occlusion
-		// culling on) give the same voxels.
+		// culling on) give the same voxels, and draw the same gi view from them.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
 		Scene scene;
 		BuildYard(scene, assets, YardOptions { .GrassCards = 100 });
 		std::vector<VoxelLevel> levels[2];
+		ReadbackImage images[2];
 		for (int path = 0; path < 2; path++)
 		{
 			SceneRendererSpecification specification = ExactSpecification();
@@ -1353,8 +1354,16 @@ TEST_SUITE("GPU.SceneRenderer.GPUDriven")
 			RenderUntilSettled(*renderer, scene, YardCamera(glm::vec3(0.0f)));
 			CHECK(renderer->GetStats().GPUDriven == (path == 1));
 			levels[path] = ReadLevels(*renderer);
+			SceneRenderOptions giView;
+			giView.LightingView = SceneLightingView::GlobalIllumination;
+			for (uint32_t frame = 0; frame < 3; frame++)
+				REQUIRE(RenderGIFrame(*renderer, scene, YardCamera(glm::vec3(0.0f)), giView));
+			REQUIRE(renderer->GetStats().GlobalIllumination);
+			REQUIRE(Renderer::ReadTexture(renderer->GetOutputTexture(), images[path]));
 		}
 		CHECK(CountDifferences(levels[0], levels[1]) == 0);
+		REQUIRE(images[0].Pixels.size() == images[1].Pixels.size());
+		CHECK(MaxDifference(images[0], images[1]) == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }
