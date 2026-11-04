@@ -489,11 +489,18 @@ namespace Strata
 			.setIsVolatile(true)
 			.setMaxVersions(c_FrameConstantVersions)
 			.setDebugName(m_Specification.DebugName + ".FrameConstants"));
+		// The GI field's constants are written by every frame after its FrameConstants, and again by a frame whose GI could not be
+		// recorded (the field switched off for its draws): at most c_MaxGIFieldConstantWrites a frame. ReserveFrameConstantVersions
+		// starts a frame only while the frames in flight leave room for c_MaxFrameConstantWrites more FrameConstants versions, so
+		// at most c_FrameConstantVersions - c_MaxFrameConstantWrites + 1 frames hold versions of this buffer, each that many.
+		constexpr uint32_t c_MaxGIFieldConstantWrites = 2;
+		constexpr uint32_t c_GIFieldConstantVersions = c_MaxGIFieldConstantWrites * (c_FrameConstantVersions - c_MaxFrameConstantWrites + 1);
+		static_assert(c_MaxFrameConstantWrites >= 1, "every frame that writes the GI field's constants holds a FrameConstants version");
 		m_GIFieldConstantBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
 			.setByteSize(sizeof(RenderData::GIFieldConstants))
 			.setIsConstantBuffer(true)
 			.setIsVolatile(true)
-			.setMaxVersions(c_FrameConstantVersions)
+			.setMaxVersions(c_GIFieldConstantVersions)
 			.setDebugName(m_Specification.DebugName + ".GIFieldConstants"));
 
 		bool recreated = false;
@@ -588,7 +595,7 @@ namespace Strata
 
 		const bool inputLayoutsCreated = std::all_of(m_SceneInputLayouts.begin(), m_SceneInputLayouts.end(),
 			[](const nvrhi::InputLayoutHandle& layout) { return layout != nullptr; });
-		ST_CORE_VERIFY(inputLayoutsCreated && m_SceneBindingLayout && m_FrameConstantBuffer && m_CommandList && m_ShadowPushBindingSet
+		ST_CORE_VERIFY(inputLayoutsCreated && m_SceneBindingLayout && m_FrameConstantBuffer && m_GIFieldConstantBuffer && m_CommandList && m_ShadowPushBindingSet
 			&& m_PointClampSampler && m_LinearClampSampler && m_EquirectSampler && m_ShadowCompareSampler && m_DummyShadowMap && m_DummyShadowRanges && m_DummyLocalShadowAtlas
 			&& m_LocalShadowBuffer && m_ReflectionProbeBuffer && m_ClusterBuffer
 			&& m_ClusterBindingLayout && m_ClusterPipeline
@@ -3451,7 +3458,8 @@ namespace Strata
 				degraded = true;
 				m_Stats.GlobalIlluminationPending = true;
 				m_Stats.GlobalIlluminationSettled = false;
-				// The forward pass reads no field this frame (a newer version of its constants, which the draws below bind).
+				// The forward pass reads no field this frame (a newer version of its constants, which the draws below bind; the
+				// buffer's versions count this second write: c_MaxGIFieldConstantWrites).
 				m_GIFieldConstants.FieldSize.w = 0.0f;
 				commandList->writeBuffer(m_GIFieldConstantBuffer, &m_GIFieldConstants, sizeof(m_GIFieldConstants));
 			}
