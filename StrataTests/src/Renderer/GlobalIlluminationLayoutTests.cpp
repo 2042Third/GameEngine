@@ -141,26 +141,26 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 	{
 		const GlobalIlluminationMemory high = GetLayout(GlobalIlluminationLevel::High).GetMemory();
 		CHECK(high.VoxelLevels == 83886080);
-		CHECK(high.Scratch == 8388608);
+		CHECK(high.Scratch == 11534336); // 262,144 voxels a batch, 11 words each
 		CHECK(high.Atlases == 10321920); // Cascades 1-3: cascade 0's rays go straight into the field
 		CHECK(high.Weights == 840960);
 		CHECK(high.Validity == 421200);
 		CHECK(high.Field == 4423680);
 		CHECK(high.Tiles == 262144);
 		CHECK(high.WorkItems == 1572864);
-		CHECK(high.GetTotal() == 110117456);
-		CHECK(GetLayout(GlobalIlluminationLevel::High).GetMemoryBytes() == 110117456);
+		CHECK(high.GetTotal() == 113263184);
+		CHECK(GetLayout(GlobalIlluminationLevel::High).GetMemoryBytes() == 113263184);
 
 		const GlobalIlluminationMemory low = GetLayout(GlobalIlluminationLevel::Low).GetMemory();
 		CHECK(low.VoxelLevels == 7864320);
-		CHECK(low.Scratch == 4194304);
+		CHECK(low.Scratch == 5767168);
 		CHECK(low.Atlases == 1105920);
 		CHECK(low.Weights == 103680);
 		CHECK(low.Validity == 52560);
 		CHECK(low.Field == 552960);
 		CHECK(low.Tiles == 262144);
 		CHECK(low.WorkItems == 1572864);
-		CHECK(low.GetTotal() == 15708752);
+		CHECK(low.GetTotal() == 17281616);
 	}
 
 	TEST_CASE("Directions and solid angles")

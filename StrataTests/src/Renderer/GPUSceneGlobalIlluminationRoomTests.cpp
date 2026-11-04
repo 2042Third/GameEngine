@@ -286,6 +286,18 @@ namespace
 		return Luminance(glm::vec3(glm::unpackHalf1x16(value[0]), glm::unpackHalf1x16(value[1]), glm::unpackHalf1x16(value[2]))) / RenderData::c_GIRadianceScale;
 	}
 
+	// The ceiling's junctions with the walls the room camera sees (0.1 m from each).
+	std::vector<RoomPoint> GetCeilingJunctions(const glm::vec3& offset = glm::vec3(0.0f))
+	{
+		std::vector<RoomPoint> points = {
+			{ "ceiling by the south wall", { -10.5f, 3.0f, 0.9f }, c_Down },
+			{ "ceiling by the west wall", { -12.9f, 3.0f, -0.5f }, c_Down },
+		};
+		for (RoomPoint& point : points)
+			point.Point += offset;
+		return points;
+	}
+
 	// A table of the field's luminance at the points against the reference's, for MESSAGE; adds the points' absolute errors of
 	// the ratio (field over reference, minus 1) to `error`.
 	std::string FormatTable(const std::string& title, const std::vector<RoomPoint>& points, const std::vector<glm::vec3>& measured,
@@ -503,6 +515,52 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The ceiling's voxels face up")
+	{
+		// The walls' inner faces end at the ceiling's underside, a voxel boundary: touching counts as overlap, so their top edges
+		// marked the ceiling's layer above them, and their normals turned the ceiling's sunlit top toward the room (normals (0,
+		// 0.71, 0.71) along the north wall, with the room moved off the grid at Low). A face's normal goes only to voxels it
+		// covers part of or lies on, never to one it touches along an edge: the layer holds no surface, or the walls' hidden tops (up).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const glm::vec3 offset(0.25f * FirstSpacing(GlobalIlluminationLevel::Low), 0.0f, 0.25f * FirstSpacing(GlobalIlluminationLevel::Low));
+		SunRoomOptions room = DefaultRoom();
+		room.Offset = offset;
+		RoomRender render(room, c_RoomSize, RoomSpecification(GlobalIlluminationLevel::Low));
+		const SceneCamera camera = RoomCamera(offset);
+		render.Measure(camera, {});
+		const RenderData::GIFieldConstants& field = render.Renderer->GetGlobalIlluminationFieldConstants();
+		const glm::ivec3 dimensions(field.VoxelDimensions);
+		std::vector<uint8_t> normals;
+		REQUIRE(render.Renderer->ReadGlobalIlluminationVoxels(0, SceneRenderer::GlobalIlluminationTexture::Normal, normals));
+		const float voxel = field.VoxelOrigin[0].w;
+		uint32_t checked = 0;
+		for (int z = field.VoxelValidMinimum[0].z; z < field.VoxelValidMaximum[0].z; z++)
+		{
+			for (int y = field.VoxelValidMinimum[0].y; y < field.VoxelValidMaximum[0].y; y++)
+			{
+				for (int x = field.VoxelValidMinimum[0].x; x < field.VoxelValidMaximum[0].x; x++)
+				{
+					// The ceiling's layer (3.0-3.2 m) over the room and its walls' inner faces, short of the ceiling's own end faces.
+					const glm::vec3 center = camera.Position + glm::vec3(field.VoxelOrigin[0]) + (glm::vec3(x, y, z) + 0.5f) * voxel;
+					if (std::abs(center.y - 3.1f) > 0.01f || center.x < -13.0f + offset.x || center.x > -6.9f + offset.x || center.z < -5.0f + offset.z
+						|| center.z > 1.1f + offset.z)
+						continue;
+					const glm::ivec3 texel = ((glm::ivec3(x, y, z) + glm::ivec3(field.VoxelTexel[0])) % dimensions + dimensions) % dimensions;
+					const int8_t* normal = reinterpret_cast<const int8_t*>(normals.data() + (texel.x + dimensions.x * (texel.y + dimensions.y * texel.z)) * 4);
+					INFO("voxel at " << center.x << ", " << center.y << ", " << center.z << ": normal " << normal[0] / 127.0f << ", " << normal[1] / 127.0f << ", "
+						<< normal[2] / 127.0f << ", w " << normal[3] / 127.0f);
+					CHECK(normal[3] >= 0); // No surface (under the ceiling's top) or the walls' tops under it, never two-sided
+					CHECK(std::abs(normal[0]) <= 6);
+					CHECK(std::abs(normal[2]) <= 6);
+					checked++;
+				}
+			}
+		}
+		CHECK(checked == 31u * 31u);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The sun lights no voxel inside a sealed room")
 	{
 		// The sun's walk from a voxel whose surface runs on under a wall (the floor under the walls' feet) went through the wall
@@ -656,6 +714,83 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 			INFO(points[index].Name << ": camera A " << a << ", camera B " << b);
 			CHECK(a > 0.0f);
 			CHECK(std::abs(b - a) <= 0.1f * a);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A sealed room stays dark")
+	{
+		// The window filled with plaster: the nineteen points' mean at most erhe's 0.0017 of the open room's, and every junction of
+		// the floor and the ceiling with the walls (correction 4) too, at High and Low, with the room moved by a quarter and a half
+		// of the first cascade's spacing along x and z (the probe planes cut its walls at three places).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
+		{
+			const float spacing = FirstSpacing(level);
+			for (float share : { 0.0f, 0.25f, 0.5f })
+			{
+				const glm::vec3 offset(share * spacing, 0.0f, share * spacing);
+				const std::string name = fmt::format("{}, offset {} m", level == GlobalIlluminationLevel::High ? "High" : "Low", offset.x);
+				CAPTURE(name);
+				SunRoomOptions open = DefaultRoom();
+				open.Offset = offset;
+				SunRoomOptions sealed = open;
+				sealed.SealWindow = true;
+				std::vector<RoomPoint> walls = GetWallPoints(offset);
+				const std::vector<RoomPoint> ceilingJunctions = GetCeilingJunctions(offset);
+				walls.insert(walls.end(), ceilingJunctions.begin(), ceilingJunctions.end());
+				const std::vector<RoomPoint> floors = GetFloorPoints(offset, true);
+				const auto measure = [&](const SunRoomOptions& room, std::vector<glm::vec3>& wallValues, std::vector<glm::vec3>& floorValues)
+				{
+					RoomRender wallRender(room, c_RoomSize, RoomSpecification(level));
+					wallValues = wallRender.Measure(RoomCamera(offset), walls);
+					RoomRender floorRender(room, c_FloorSize, RoomSpecification(level));
+					floorValues = floorRender.Measure(FloorCamera(offset), floors);
+				};
+				// The nineteen points: the ten on the walls and ceiling, the floor's nine.
+				const auto nineteenMean = [](const std::vector<glm::vec3>& wallValues, const std::vector<glm::vec3>& floorValues)
+				{
+					float sum = 0.0f;
+					for (size_t index = 0; index < 10; index++)
+						sum += Luminance(wallValues[index]);
+					for (size_t index = 0; index < 9; index++)
+						sum += Luminance(floorValues[index]);
+					return sum / 19.0f;
+				};
+				std::vector<glm::vec3> openWalls, openFloors, sealedWalls, sealedFloors;
+				measure(open, openWalls, openFloors);
+				measure(sealed, sealedWalls, sealedFloors);
+				CollectReleases();
+				const float openMean = nineteenMean(openWalls, openFloors);
+				const float sealedMean = nineteenMean(sealedWalls, sealedFloors);
+				float largest = 0.0f;
+				std::string largestName;
+				for (size_t index = 0; index < walls.size() + floors.size(); index++)
+				{
+					const bool wall = index < walls.size();
+					const float value = Luminance(wall ? sealedWalls[index] : sealedFloors[index - walls.size()]);
+					if (value > largest)
+					{
+						largest = value;
+						largestName = wall ? walls[index].Name : floors[index - walls.size()].Name;
+					}
+				}
+				MESSAGE(name << ": open room " << openMean << ", sealed " << sealedMean << " (" << sealedMean / openMean << "), its brightest point "
+					<< largestName << " " << largest << " (" << largest / openMean << ")");
+				CHECK(openMean > 0.0f);
+				CHECK(sealedMean <= c_SealedBound * openMean);
+				for (size_t index = 10; index < walls.size(); index++)
+				{
+					INFO(walls[index].Name);
+					CHECK(Luminance(sealedWalls[index]) <= c_SealedBound * openMean);
+				}
+				for (size_t index = 9; index < floors.size(); index++)
+				{
+					INFO(floors[index].Name << " " << floors[index].Point.x << ", " << floors[index].Point.z);
+					CHECK(Luminance(sealedFloors[index]) <= c_SealedBound * openMean);
+				}
+			}
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

@@ -326,7 +326,7 @@ namespace Strata
 			bytes += byteSize;
 			return buffer;
 		};
-		gi->Scratch = createBuffer(static_cast<uint64_t>(layout.BatchVoxels) * 8 * sizeof(uint32_t), 0, true, true, "Scratch");
+		gi->Scratch = createBuffer(static_cast<uint64_t>(layout.BatchVoxels) * RenderData::c_GIScratchWords * sizeof(uint32_t), 0, true, true, "Scratch");
 		gi->Tiles = createBuffer(static_cast<uint64_t>(RenderData::c_GIMaxTiles) * 8, 8, false, true, "Tiles");
 		{
 			nvrhi::BufferDesc desc;

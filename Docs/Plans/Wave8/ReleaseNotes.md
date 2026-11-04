@@ -170,6 +170,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   screen, and moving the sun moves the bounce in the same frame. The lit image does not use it yet (stage 3).
 - AI agents: `viewport.capture` and `viewport.setSettings` take `debugView` `"gi"`, `"open"` and `"probes"`; the capture's
   `debugView.globalIllumination` adds the probes' spacing, grid, cascades, directions and live and dead counts.
+- A sealed room stays dark at Low wherever its walls stand: walls thinner than the coarser voxels, standing off their grid,
+  let the sunlit outside into the room (it read a sixth of the open room's light).
 
 ## Defaults that change
 

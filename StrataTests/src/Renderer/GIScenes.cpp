@@ -538,9 +538,12 @@ namespace Strata::Tests
 							if (!TriangleBoxOverlap(center, glm::vec3(0.5f), corners[0], corners[1], corners[2]))
 								continue;
 							voxels.push_back(anchorVoxel + glm::i64vec3(x, y, z));
-							// Include/Voxelize.slang's IsVoxelBehind.
+							// Include/Voxelize.slang's FacesVoxel: not wholly behind the triangle (IsVoxelBehind), and overlapping it with the box
+							// inset along the triangle's plane (no edge or corner touch).
 							const float reach = glm::dot(facing, center - corners[0]) + 0.5f * (std::abs(facing.x) + std::abs(facing.y) + std::abs(facing.z));
-							if (outFacing && reach > 0.0f)
+							const float planeInset = 0.5f - RenderData::c_GISolidInsetVoxels;
+							const glm::vec3 facingHalfSize(facing.x != 0.0f ? 0.5f : planeInset, facing.y != 0.0f ? 0.5f : planeInset, facing.z != 0.0f ? 0.5f : planeInset);
+							if (outFacing && reach > 0.0f && TriangleBoxOverlap(center, facingHalfSize, corners[0], corners[1], corners[2]))
 								outFacing->push_back(anchorVoxel + glm::i64vec3(x, y, z));
 							// Include/Voxelize.slang's IsVoxelInFront and IsVoxelSolidFor: a triangle not wholly behind the voxel's center
 							// plane reaches into the voxel's inset box; one behind it covers part of the voxel's face (inset along it).

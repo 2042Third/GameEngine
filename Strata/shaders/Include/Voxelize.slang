@@ -87,6 +87,7 @@ RWByteAddressBuffer u_Counters : register(u6);
 #define ST_SCRATCH_NORMALS 3u
 #define ST_SCRATCH_COVERAGE 6u
 #define ST_SCRATCH_NORMAL_COUNT 7u
+#define ST_SCRATCH_NORMAL_SPREAD 8u // Three words: per axis, the sum of the triangles' normal components' magnitudes (c_GIScratchWords: 11)
 #define ST_GI_COVERAGE_FIXED_POINT 65536.0 // A whole voxel face's coverage
 #define ST_GI_COUNTER_TILES 0u
 #define ST_GI_COUNTER_TILE_OVERFLOW 4u
@@ -295,11 +296,24 @@ bool IsVoxelSolidFor(VoxelTriangle triangle, int3 voxel)
 	return TriangleBoxOverlap(center, select(triangle.Facing != float3(0.0, 0.0, 0.0), float3(0.5, 0.5, 0.5), inset), triangle.A, triangle.B, triangle.C);
 }
 
+// Whether a triangle's normal goes to a voxel (anchor-relative index) it marks: not when the voxel lies wholly behind it (a face on
+// a voxel boundary faces the voxel in front of it, and one touching a voxel from behind, a resting box's bottom or the floor's top
+// under it, cannot cancel the faces the voxel shows), and not when it only touches the voxel along an edge or at a corner (the
+// box inset along the triangle's own plane: the top edge of a wall under a ceiling on the grid touches the ceiling's layer, and
+// its normal there turned the ceiling's sunlit top toward the room, which then read the sun through a sealed ceiling at Low).
+// Exact for faces on the grid (their facing has two zero components; coordinates snapped).
+bool FacesVoxel(VoxelTriangle triangle, int3 voxel)
+{
+	if (IsVoxelBehind(triangle, voxel))
+		return false;
+	float3 halfSize = select(triangle.Facing != float3(0.0, 0.0, 0.0), float3(0.5, 0.5, 0.5), float3(0.5, 0.5, 0.5) - ST_GI_SOLID_INSET_VOXELS);
+	return TriangleBoxOverlap(float3(voxel) + 0.5, halfSize, triangle.A, triangle.B, triangle.C);
+}
+
 // The writes of a triangle to a voxel of its region's scratch (local: relative to the region's minimum). A glowing triangle adds
 // the share of the voxel's face it covers (fixed point, integer adds: the same in any order); the voxel's emission is the
 // brightest of its triangles' times their coverage together, at most 1 (GI/VoxelFinalize.comp). Its normal goes only to voxels
-// not wholly behind it: a face on a voxel boundary faces the voxel in front of it, and one touching a voxel from behind (a resting
-// box's bottom, the floor's top under it) cannot cancel the faces the voxel shows.
+// it faces (FacesVoxel).
 void WriteVoxel(VoxelTriangle triangle, int3 local, uint emission, uint coverage)
 {
 	uint voxel = GetScratchVoxel(triangle.Region, local);
@@ -312,12 +326,15 @@ void WriteVoxel(VoxelTriangle triangle, int3 local, uint emission, uint coverage
 		u_Scratch.InterlockedMax(GetScratchAddress(ST_SCRATCH_EMISSION, voxel), emission, previous);
 		u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_COVERAGE, voxel), coverage, previous);
 	}
-	if (any(triangle.Normal != int3(0, 0, 0)) && !IsVoxelBehind(triangle, triangle.Region.Minimum.xyz + local))
+	if (any(triangle.Normal != int3(0, 0, 0)) && FacesVoxel(triangle, triangle.Region.Minimum.xyz + local))
 	{
 		// Signed sums as two's complement words: integer adds, the same whatever the order.
 		u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_NORMALS + 0u, voxel), uint(triangle.Normal.x), previous);
 		u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_NORMALS + 1u, voxel), uint(triangle.Normal.y), previous);
 		u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_NORMALS + 2u, voxel), uint(triangle.Normal.z), previous);
+		u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_NORMAL_SPREAD + 0u, voxel), uint(abs(triangle.Normal.x)), previous);
+		u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_NORMAL_SPREAD + 1u, voxel), uint(abs(triangle.Normal.y)), previous);
+		u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_NORMAL_SPREAD + 2u, voxel), uint(abs(triangle.Normal.z)), previous);
 		u_Scratch.InterlockedAdd(GetScratchAddress(ST_SCRATCH_NORMAL_COUNT, voxel), 1u, previous);
 	}
 }

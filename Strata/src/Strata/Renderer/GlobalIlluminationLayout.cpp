@@ -70,10 +70,10 @@ namespace Strata
 
 	GlobalIlluminationMemory GlobalIlluminationLayout::GetMemory() const
 	{
-		// Material (RGBA8), emission (R32_UINT), normal (RGBA8_SNORM) and radiance (RGBA16F) per voxel; the scratch's eight words
-		// per voxel (key, winding, emission, three normal sums and their count, the emission's coverage).
+		// Material (RGBA8), emission (R32_UINT), normal (RGBA8_SNORM) and radiance (RGBA16F) per voxel; the scratch's eleven words
+		// per voxel (key, winding, emission, three normal sums, the emission's coverage, the normals' count and their magnitudes' three sums).
 		constexpr uint64_t c_VoxelBytes = 4 + 4 + 4 + 8;
-		constexpr uint64_t c_ScratchBytes = 8 * 4;
+		constexpr uint64_t c_ScratchBytes = RenderData::c_GIScratchWords * 4;
 		constexpr uint64_t c_RayBytes = 8;
 		constexpr uint64_t c_WeightBytes = 2 * 4;
 		constexpr uint64_t c_ValidityBytes = 4;

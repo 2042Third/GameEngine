@@ -726,6 +726,10 @@ namespace Strata
 		// face on the grid): low, so openings on the grid keep their size, yet the layer's light is taken (Include/Voxelize.slang).
 		constexpr float c_GITouchOccupancy = 0.05f;
 		constexpr float c_GITwoSidedSum = 0.5f;          // A voxel whose triangles' unit normals sum to less than this times their count is two-sided
+		// A voxel whose triangles' unit normals reach at least this far both ways along an axis is two-sided too: it holds both sides
+		// of something thinner than it (a wall's inside and outside), whatever else adds to its sum (the ground beside the wall's foot).
+		constexpr float c_GIOpposedComponent = 0.5f;
+		constexpr uint32_t c_GIScratchWords = 11;        // The voxelizer's scratch words per voxel of a batch (Include/Voxelize.slang)
 		// Voxel coordinates this close to a voxel boundary snap onto it: faces meant to lie on the grid, or on each other, meet
 		// exactly whatever the floats' rounding (0.4 mm at level 0; four ulps of a coordinate 16,384 voxels from its anchor).
 		constexpr float c_GISnapVoxels = 1.0f / 256.0f;

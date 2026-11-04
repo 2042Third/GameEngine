@@ -4992,7 +4992,12 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   alpha-masked voxels; `Emission<l>` R32_UINT: RGB9E5 nits; `Normal<l>` RGBA8_SNORM: the summed normal, w 1; w -1 where
   the sum is shorter than `c_GITwoSidedSum` times the triangles that added (they face against each other: the scratch
   counts them, since a face's triangles touch a voxel once or twice), a **two-sided** voxel holding both faces of a wall
-  thinner than it: it will get no light rather than let one side's into the other; w 0 where every face touching the
+  thinner than it: it will get no light rather than let one side's into the other; also two-sided where the normals reach
+  `c_GIOpposedComponent` (0.5) both ways along an axis, whatever else adds (a wall's inside and outside in one coarse voxel,
+  with the sunlit ground at its foot, summed to a normal facing the room; the scratch keeps each axis's sum of magnitudes,
+  `c_GIScratchWords` words a voxel); a face's normal goes only to voxels it covers part of or lies on (`FacesVoxel`), never
+  to one it touches along an edge (a wall's top edge under a ceiling on the grid turned the ceiling's sunlit top toward the
+  room); w 0 where every face touching the
   voxel has it behind (the layer inside a box's faces on the grid); w 0.5 for double-sided materials, whose triangles
   add no normal). The scene layout binds levels 0-2's material at SRV 38-40, the field at 35 and the
   probes' validity at 37 (the black 3D texture without them), and the forward pass's GI constants
@@ -5023,7 +5028,8 @@ stage 1 holds: the voxels and their view; the probes, the light and the join to 
   occupancy's gain thickened every edge by a fraction of a voxel: the sun room's patch had 48% of its power; the walk gives
   it within 1% (`GlobalIlluminationRoom`'s "The sunlit patch's voxels hold its power"). `GI/VoxelDownsample` gives each
   coarser level the mean of the finer level's light where that one holds the scene, blended by the finer level's weight
-  (coarse voxels close small openings). Faces on the grid mark a lit layer in front of them at `c_GITouchOccupancy` (0.05:
+  (coarse voxels close small openings), taking only the finer surfaces that face the coarse voxel's own way (none into a
+  two-sided one: the mean carried a thin wall's sunlit outside into the room wherever the finer level fades out). Faces on the grid mark a lit layer in front of them at `c_GITouchOccupancy` (0.05:
   openings on the grid keep their size); a voxel is solid only where a face reaches into it or covers part of one of its
   faces from behind (`IsVoxelSolidFor`, inset `c_GISolidInsetVoxels`): a box's edge that only touches a voxel from outside
   leaves it in the lit layer (marking those solid closed every opening on the grid by a voxel at its edges). The probe

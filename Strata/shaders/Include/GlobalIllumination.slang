@@ -18,6 +18,7 @@
 #define ST_GI_MASKED_OCCUPANCY 0.15       // c_GIMaskedOccupancy
 #define ST_GI_TOUCH_OCCUPANCY 0.05        // c_GITouchOccupancy
 #define ST_GI_TWO_SIDED_SUM 0.5           // c_GITwoSidedSum
+#define ST_GI_OPPOSED_COMPONENT 0.5       // c_GIOpposedComponent
 #define ST_GI_SNAP_VOXELS (1.0 / 256.0)   // c_GISnapVoxels
 #define ST_GI_SOLID_INSET_VOXELS (1.0 / 64.0) // c_GISolidInsetVoxels
 #define ST_GI_NORMAL_FIXED_POINT 256.0    // c_GINormalFixedPoint
