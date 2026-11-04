@@ -173,11 +173,11 @@ IndirectInputs GetIndirectInputs(SurfaceData surface, float3 f0, float2 dfg, flo
 // The GI's views (SceneLightingView::GlobalIllumination, OpenShare): inside the field its diffuse light on a white surface (absolute
 // luminance, under the diffuse occlusion as the join will carry it) or the share of the sky it sees; beyond it, blended over the
 // field's fade, today's diffuse light on white (every form of Include/IndirectLight.slang) or 1 (today's light counts all open).
-float3 ShadeGlobalIlluminationView(uint lightingView, SurfaceData surface, float3 f0, float2 dfg, float NoV, float diffuseOcclusion, float diffuseWeight)
+// `field` and `openShare` are SampleIrradianceField's at the surface (ShadeLitSurface samples the field once for these views
+// and the join).
+float3 ShadeGlobalIlluminationView(uint lightingView, SurfaceData surface, float4 field, float openShare, float3 geometricNormal, float3 f0, float2 dfg,
+	float NoV, float diffuseOcclusion, float diffuseWeight)
 {
-	float3 geometricNormal = normalize(v_Normal) * (st_FrontFacing ? 1.0 : -1.0);
-	float openShare;
-	float4 field = SampleIrradianceField(u_Samplers[0], surface.Position, geometricNormal, surface.Normal, openShare);
 	if (lightingView == ST_LIGHTING_VIEW_OPEN_SHARE)
 		return float3(openShare * field.a + (1.0 - field.a));
 	SurfaceData white = surface;
@@ -290,13 +290,20 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 	float diffuseOcclusion = surface.Occlusion * screenOcclusion;
 	if (lightingView == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION)
 		return float3(diffuseOcclusion);
-	if (lightingView == ST_LIGHTING_VIEW_GLOBAL_ILLUMINATION || lightingView == ST_LIGHTING_VIEW_OPEN_SHARE)
-		return ShadeGlobalIlluminationView(lightingView, surface, f0, dfg, NoV, diffuseOcclusion, diffuseWeight);
+	float3 surfaceGeometricNormal = normalize(v_Normal) * (st_FrontFacing ? 1.0 : -1.0);
+	// The field, sampled once for the GI views and the join (its gather's loops compiled in once, correction 19), only where one
+	// of them reads it: global illumination joined (the scene asked, the field is used; ReflectionParams.y) or a GI view.
+	bool globalIlluminationView = lightingView == ST_LIGHTING_VIEW_GLOBAL_ILLUMINATION || lightingView == ST_LIGHTING_VIEW_OPEN_SHARE;
+	float4 field = float4(0.0, 0.0, 0.0, 0.0);
+	float openShare = 1.0;
+	if (u_Frame.ReflectionParams.y > 0.0 || globalIlluminationView)
+		field = SampleIrradianceField(u_Samplers[0], surface.Position, surfaceGeometricNormal, surface.Normal, openShare);
+	if (globalIlluminationView)
+		return ShadeGlobalIlluminationView(lightingView, surface, field, openShare, surfaceGeometricNormal, f0, dfg, NoV, diffuseOcclusion, diffuseWeight);
 	// Multi-bounce (AOParams.y): occluded corners keep the light their walls, of the surface's diffuse albedo, reflect into
 	// them (Include/AmbientOcclusionFit.slang). Diffuse light only; specular occlusion keeps the visibility.
 	float3 diffuseOcclusionColor = u_Frame.AOParams.y > 0.0 ? AOMultiBounce(diffuseOcclusion, surface.Albedo * (1.0 - surface.Metallic))
 		: float3(diffuseOcclusion);
-	float3 surfaceGeometricNormal = normalize(v_Normal) * (st_FrontFacing ? 1.0 : -1.0);
 	IndirectInputs indirectInputs = GetIndirectInputs(surface, f0, dfg, NoV, surfaceGeometricNormal, st_FragCoord.xy, diffuseOcclusion,
 		diffuseOcclusionColor, diffuseWeight);
 	// The base's image-based light (or constant ambient), which the clear coat covers below.
@@ -306,8 +313,6 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 		// Global illumination joined (the scene asked, the field is used; .z the intensity): inside the field its diffuse light
 		// replaces today's (box probes, the sky or the constant ambient), blended over the field's fade; specular stays today's.
 		// Where the field's weight is 0 this is today's light exactly (x * 1 and + 0).
-		float openShare;
-		float4 field = SampleIrradianceField(u_Samplers[0], surface.Position, surfaceGeometricNormal, surface.Normal, openShare);
 		indirectInputs.FieldWeight = field.a;
 		indirectInputs.FieldIrradiance = field.rgb * (u_Frame.ReflectionParams.z / ST_GI_RADIANCE_SCALE);
 		indirectInputs.FieldOpen = openShare;
