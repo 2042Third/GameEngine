@@ -679,10 +679,12 @@ namespace Strata
 		bool ScreenSpaceReflectionsPending = false;
 		// Global illumination (world-space radiance cascades over a voxel clipmap; Docs/DeveloperGuide.md, "Global
 		// illumination"): the frame ran it (a GI view showed); its voxel levels 0-2 were incomplete (a rebuild or a jump under
-		// way: what reads them falls back); settled (nothing left to voxelize, not pending; true without GI); the triangles it
-		// voxelized, the regions left for later frames, the proxies left out until resident with their mesh or while they move,
-		// and the submeshes its regions left out (VoxelFrame::UnvoxelizedSubmeshes: past a mesh's 256th, or past a frame's
-		// limits; logged the first time while the renderer's GI lives).
+		// way: what reads them falls back); settled (nothing left to voxelize, not pending, and with every bounce GISettleFrames
+		// frames since the light last changed; true without GI); the triangles it voxelized, the regions left for later frames,
+		// the proxies left out until resident with their mesh or while they move, and the submeshes its regions left out
+		// (VoxelFrame::UnvoxelizedSubmeshes: past a mesh's 256th, or past a frame's limits; logged the first time while the
+		// renderer's GI lives). GISettleFrames: the frames the scene's bounces take to settle (GlobalIllumination::GetSettleFrames
+		// of its brightest albedo; 0 with one bounce).
 		bool GlobalIllumination = false;
 		bool GlobalIlluminationPending = false;
 		bool GlobalIlluminationSettled = true;
@@ -691,6 +693,7 @@ namespace Strata
 		uint32_t GIWaitingProxies = 0;
 		uint32_t GIMovingProxies = 0;
 		uint32_t GIUnvoxelizedSubmeshes = 0;
+		uint32_t GISettleFrames = 0;
 		// Copies of the scene's color the frame made for transmissive surfaces and spatial reflections (CopySceneColor: 1 when
 		// it made one, else 0).
 		uint32_t SceneColorCopies = 0;
@@ -2046,7 +2049,7 @@ namespace Strata
 		void ReleaseGlobalIllumination(std::vector<nvrhi::ResourceHandle>& released);
 		// The frame's voxelization on the CPU (VoxelClipmap::BuildFrame, in Render.Extract) and the GI's constants.
 		void PrepareGlobalIllumination(const RenderScene& renderScene, const Ref<AssetManagerBase>& assets, const SceneCamera& camera);
-		// GlobalIlluminationSettled under re-injection, once the frame's sun and sky are known: not until c_GISettleFrames frames
+		// GlobalIlluminationSettled under re-injection, once the frame's sun and sky are known: not until GISettleFrames frames
 		// after the light's inputs or the bounce's source last changed.
 		void SettleGlobalIllumination(const RenderData::FrameConstants& frame);
 		// The GI's passes (GPU.RadianceCascades): the frame's voxelization batches, then the counters' copy. False (reported) when

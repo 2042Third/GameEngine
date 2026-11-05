@@ -331,9 +331,9 @@ slightly in its light while the camera moves (see the list below).
   Low, is lit from both sides at once: give rooms walls at least that thick, so that they stay lit from inside only.
 - **The first frames after a cut:** when the camera jumps (a cut, a teleport, a scene just opened), the voxels around the
   new place are built first, and until they are the image shows the light without global illumination. Then each further
-  bounce arrives a frame after the one before: rooms fill with light over about a quarter of a second (14 frames; white
-  rooms a few frames more), and so they do when the light changes (the sun moves, an object is placed). The editor's
-  captures and the project's picture wait for it.
+  bounce arrives a frame after the one before: rooms fill with light over 12 frames when their brightest surface is
+  plaster-like (albedo 0.58), 17 for a white of 0.73 and up to 38 for the brightest whites, and so they do when the light
+  changes (the sun moves, an object is placed). The editor's captures and the project's picture wait for it.
 - **Debug views** (the viewport's debug view chip): **GI** shows the bounce light on surfaces made white, **Open** the share
   of the sky each surface sees, **Voxels** the voxel copy of the scene (walls too thin in the error color) and **Probes**
   the probes, dead ones dark red.

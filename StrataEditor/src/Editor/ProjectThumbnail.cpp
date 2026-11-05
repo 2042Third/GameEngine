@@ -11,6 +11,7 @@
 #include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/RendererQuality.h>
+#include <Strata/Renderer/SceneRenderData.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Renderer/TextureReadback.h>
 
@@ -21,6 +22,8 @@
 
 namespace Strata
 {
+
+	static_assert(ProjectThumbnail::c_MaxGIFrames >= RenderData::c_GIMaxSettleFrames + 16, "the picture allows the bounces' longest settling");
 
 	struct ProjectThumbnail::WriteState
 	{

@@ -178,6 +178,12 @@ namespace Strata
 		uint32_t PackRGB9E5(const glm::vec3& color);
 		glm::vec3 UnpackRGB9E5(uint32_t value);
 
+		// The frames the bounce series takes to settle after a change, for a share `ratio` each bounce keeps of the one before
+		// (VoxelClipmap::GetBounceAlbedo times the bounce's gain; clamped to [0, c_GIMaxBounceAlbedo]): in a closed room the
+		// light after k frames is the series' first k terms, so the next frame adds ratio^k (1 - ratio) of it; the first k where
+		// that falls below c_GISettleChange, plus c_GISettleMarginFrames. 0 for a ratio of 0 (one bounce: settled with the
+		// voxels).
+		uint32_t GetSettleFrames(float ratio);
 	}
 
 }

@@ -261,7 +261,7 @@ namespace
 		}
 
 		// The edited scene's Post Process components ask for no global illumination (their bounces settle over
-		// c_GISettleFrames frames, which captures wait for).
+		// GISettleFrames frames, which captures wait for).
 		void TurnOffGlobalIllumination()
 		{
 			std::vector<UUID> volumes;

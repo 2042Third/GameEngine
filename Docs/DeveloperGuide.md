@@ -4978,7 +4978,7 @@ probe-field levels and local lights follow.
   triangles, in batches of one level that fit the scratch. A frame is pending (`GlobalIlluminationPending`) only while a
   valid box of levels 0-2 misses its window shrunk by two scroll steps (a rebuild or a jump under way), never for a slab,
   a change or a waiting proxy; it is settled (`GlobalIlluminationSettled`) once nothing is left to voxelize and the bounces
-  have settled (Multi-bounce, below).
+  have settled (`GISettleFrames`; Multi-bounce, below).
 - **What enters:** indexed, active proxies of the Static arena (meshes of the Skinned arena are left out: characters
   neither occlude nor bounce light; they receive it), opaque and alpha-masked submeshes (transparent and transmissive
   ones are left out); `CastShadows` does not matter. A proxy placed anew is moving for `c_GIMovingFrames` (30) frames:
@@ -5092,25 +5092,31 @@ probe-field levels and local lights follow.
   an emissive wall's light at its directions' centres' cosines, 1.34-1.42 times the form factor.
 - **Multi-bounce** (re-injection; `GlobalIlluminationSettings::BounceGain`, 1, within [0, 1]; the tests' one-bounce
   cases set 0; High only, `GlobalIlluminationLayout::Bounces`: Low bounces once, What it cannot do below): `VoxelInject`
-  adds to each lit surface voxel its albedo, clamped below `c_GIMaxBounceAlbedo` (0.9) so the series converges in any room,
-  times the field the frame before left at the voxel (`SampleIrradianceField` half a voxel off it along the normal its light
-  is taken along, with the gather's visibility), times the gain. The first bounce arrives in the frame the light changes,
-  each further one a frame later, through world data: no GI buffer is blended over time. When injection runs, the field's
-  texture and cascade 0's validity still hold the frame before's; the pass reads them through `Include/GIField.slang` with
-  that frame's field constants (b3, `PreviousFieldBuffer`), relative to its camera, and this frame's voxel levels moved there
-  (`GlobalIlluminationConstants::Bounce.yzw`: this camera minus that one, in double), so a scroll or a move takes each
-  point's light from the same place. A cut (a rebuild, another render scene, a window's jump: `VoxelFrame::Cut`), a pending
-  frame, and a frame after one that ran no GI or did not record its field (`FieldRender`) start again from one bounce
-  (`Bounce.x` 0). `SettleGlobalIllumination` (once the frame's sun and sky are known) keeps `GlobalIlluminationSettled` false
-  until `c_GISettleFrames` (14) frames after the last change of the light's inputs: voxel work, the sun, the sky
-  (`AmbientColor`, `EnvironmentParams`, the cube), the field's place, or a restart. 14 is measured: the first frame from
-  which every 32 px block of the gi view changes by less than 0.25% for four frames is 11 in the sun room, 3 in the yard and
-  15 in the Cornell box, whose white walls (albedo 0.73) keep about two thirds of each bounce for the next; brighter rooms
-  take longer. Captures wait at most `c_GISettleFrames + 16` frames for it, the project picture 30. Still frames are
-  identical to the bit (frame 30 against 31, the sun room and the Cornell box): no rounding cycle showed, so the spec's
-  2^-10 grid is not used. Cost at 3840 x 2160 at High (three interleaved pairs against main): `GPU.RadianceCascades`
-  3.96-4.01 ms in the sun room against 5.56-5.64 ms, 3.98-3.99 ms in the yard against 4.06-4.12 ms; the injection's
-  gather costs nothing measurable, and why the sun room's stage got faster was not found. Without GI nothing of it runs.
+  adds to each lit surface voxel its albedo, clamped below `c_GIMaxBounceAlbedo` (0.9) so the series converges in any
+  room, times the field the frame before left at the voxel (`SampleIrradianceField` half a voxel off it along the normal
+  its light is taken along, with the gather's visibility), times the gain. The first bounce arrives in the frame the
+  light changes, each further one a frame later, through world data: no GI buffer is blended over time. When injection
+  runs, the field's texture and cascade 0's validity still hold the frame before's; the pass reads them through
+  `Include/GIField.slang` with that frame's field constants (b3, `PreviousFieldBuffer`), relative to its camera, and
+  this frame's voxel levels moved there (`GlobalIlluminationConstants::Bounce.yzw`: this camera minus that one, in
+  double), so a scroll or a move takes each point's light from the same place. A cut (a rebuild, another render scene, a
+  window's jump: `VoxelFrame::Cut`), a pending frame, and a frame after one that ran no GI or did not record its field
+  (`FieldRender`) start again from one bounce (`Bounce.x` 0). `SettleGlobalIllumination` (once the frame's sun and sky
+  are known) keeps `GlobalIlluminationSettled` false until `GISettleFrames` frames after the last change of the light's
+  inputs: voxel work, the sun, the sky (`AmbientColor`, `EnvironmentParams`, the cube), the field's place, or a restart.
+  `GISettleFrames` is `GlobalIllumination::GetSettleFrames` of the brightest albedo channel voxelized since the clipmap
+  started over (`VoxelClipmap::GetBounceAlbedo`, clamped as re-injection clamps it) times the gain: in a closed room the
+  light k frames after a change is the series' first k terms, so the next frame adds r^k (1 - r) of it; the first k
+  where that falls below `c_GISettleChange` (0.25%), plus `c_GISettleMarginFrames` (2). That gives 12 in the sun room
+  (plaster 0.58), 17 in the Cornell box (white 0.73) and `c_GIMaxSettleFrames` (38) at the clamp; the image's settling
+  frame K (the first from which every 32 px block of the gi view changes by less than 0.25% for four frames) measured 11
+  in the sun room (flag at 13), 15 in the Cornell box (18), 3 in the yard (17, its plaster 0.70: outdoors little light
+  comes back) and 27 in a closed box glowing at the clamp (39). Captures wait at most `c_GIMaxSettleFrames + 16` frames
+  for it, the project picture too. Still frames are identical to the bit (frame 30 against 31, the sun room and the
+  Cornell box): no rounding cycle showed, so the spec's 2^-10 grid is not used. Cost at 3840 x 2160 at High (three
+  interleaved pairs against main): `GPU.RadianceCascades` 3.96-4.01 ms in the sun room against 5.56-5.64 ms, 3.98-3.99
+  ms in the yard against 4.06-4.12 ms; the injection's gather costs nothing measurable, and why the sun room's stage got
+  faster was not found. Without GI nothing of it runs.
 - **The join** (`Scene/Forward.frag.slang`'s `ShadeLitSurface`, `Include/IndirectLight.slang`'s `GatherIndirectField`):
   where the scene asked and the frame's field is used (ran, not pending), `FrameConstants::ReflectionParams.y` is 1 and `.z`
   the intensity (clamped to [0, 4], non-finite 1). Every variant (opaque, alpha-blended, glass: no screen data is read)
@@ -5146,9 +5152,10 @@ probe-field levels and local lights follow.
   `debugView.globalIllumination: {ran, pending, settled, voxelizedTriangles, queuedRegions, waitingProxies,
   movingProxies, memoryMiB, voxelLevels: [{voxelSize, dimensions, valid}], probeSpacing, probeGrid, cascades,
   directions, liveProbes, deadProbes}` (the probes' fields once a layout has cascades, the counts once the GPU's counters
-  arrived) for the four GI views, `gi` and `open` also the `lighting` statistics (EV100, and `open`'s value median), and waits up to `c_MaxCaptureGIFrames` (16)
-  frames for it to settle (the capture renderer voxelizes without a budget, so only scenes past a frame's work items or
-  triangle groups wait; `waitedFrames` counts them); every capture's result has
+  arrived) for the four GI views, `gi` and `open` also the `lighting` statistics (EV100, and `open`'s value median), and
+  waits up to `c_MaxCaptureGIFrames` (`c_GIMaxSettleFrames` + 16) frames for it to settle (the capture renderer voxelizes
+  without a budget, so only scenes past a frame's work items or triangle groups, or bouncing light, wait; `waitedFrames`
+  counts them); every capture's result has
   `globalIlluminationSettled`, `editor.perf`'s `renderStats` `globalIllumination: {ran, pending, settled}`.
 - **Statistics** (`SceneRendererStats`): `GlobalIllumination`, `GlobalIlluminationPending`, `GlobalIlluminationSettled`,
   `GIVoxelizedTriangles`, `GIQueuedRegions`, `GIWaitingProxies`, `GIMovingProxies`,
@@ -5177,10 +5184,12 @@ probe-field levels and local lights follow.
   integrated from the panel, the floor and the sphere take the colored walls' tints; a glowing closed box converges to
   Le / (1 - rho) within 3% of the series its one-bounce field's own error predicts (that error is 4-9% low at High); the sun
   room's points take at least their one-bounce light, the ceiling over the patch 10% more, and what the bounces add stays
-  within the series' bound; settling after a cut; still frames; a panel in the dark sealed room; strafes through the yard and
-  the sun room flicker at most half again as much as with one bounce; Low's gain 1 gives one bounce's light),
-  `GlobalIlluminationRoom`'s "A sealed room stays dark" with the gain 1 at High and Low, and
-  `Renderer.GlobalIlluminationLayout`'s "High bounces on, Low once".
+  within the series' bound; settling after a cut, also at the albedo clamp, at least `c_GISettleMarginFrames` after the
+  image; still frames; a panel in the dark sealed room; strafes through the yard and the sun room flicker at most half
+  again as much as with one bounce; Low's gain 1 gives one bounce's light), `GlobalIlluminationRoom`'s "A sealed room
+  stays dark" with the gain 1 at High and Low, `Renderer.GlobalIlluminationLayout`'s "High bounces on, Low once" and
+  "Bounces settle by the scene's brightest albedo", and `Renderer.VoxelClipmap`'s "The brightest albedo voxelized bounds
+  the bounces".
 - **What it cannot do** (so far): Low bounces once (`GlobalIlluminationLayout::Bounces` false, whatever the gain). With
   every bounce at Low, the sealed room moved by a quarter of a probe spacing lit its walls' pixels in the north-west
   three-wall corner through the walls (73 nits; 0.019 with one bounce, whose outside there is dark: the gather's

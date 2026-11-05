@@ -487,6 +487,30 @@ TEST_SUITE("Renderer.VoxelClipmap")
 		CHECK_FALSE(fixture.Frame.Regions.empty());
 	}
 
+	TEST_CASE("The brightest albedo voxelized bounds the bounces")
+	{
+		// GetBounceAlbedo, what GlobalIlluminationSettled's wait follows: the largest channel of the voxelized submeshes' albedos
+		// (a transparent one is not voxelized), clamped below c_GIMaxBounceAlbedo, kept while the clipmap lives.
+		Fixture fixture;
+		fixture.Source.MaterialAlbedo[c_RedMaterial] = 0x10109Eu;
+		fixture.Source.MaterialAlbedo[c_GlassMaterial] = 0xFFFFFFu;
+		fixture.Source.MaterialFlags[c_GlassMaterial] = RenderData::c_CullMaterialAvailable | RenderData::c_CullMaterialTransparent;
+		CHECK(fixture.Clipmap.GetBounceAlbedo() == 0.0f);
+		fixture.Add(glm::vec3(2.0f, 0.5f, 2.0f), c_CubeMesh, c_RedMaterial);
+		fixture.Add(glm::vec3(-2.0f, 0.5f, 2.0f), c_CubeMesh, c_GlassMaterial);
+		fixture.Build();
+		CHECK_FALSE(fixture.Frame.Items.empty());
+		CHECK(fixture.Clipmap.GetBounceAlbedo() == 158.0f / 255.0f);
+		fixture.Source.MaterialAlbedo[c_RedMaterial] = 0xFFFFFFu;
+		fixture.Source.Version++;
+		fixture.Build();
+		CHECK(fixture.Clipmap.GetBounceAlbedo() == RenderData::c_GIMaxBounceAlbedo);
+		fixture.Source.MaterialAlbedo[c_RedMaterial] = 0x101010u;
+		fixture.Source.Version++;
+		fixture.Build();
+		CHECK(fixture.Clipmap.GetBounceAlbedo() == RenderData::c_GIMaxBounceAlbedo);
+	}
+
 	TEST_CASE("A closed mesh with a glass submesh fills nothing")
 	{
 		Fixture fixture;

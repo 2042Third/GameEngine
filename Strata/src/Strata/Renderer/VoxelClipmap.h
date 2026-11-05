@@ -7,6 +7,7 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <deque>
@@ -113,6 +114,10 @@ namespace Strata
 		const LevelState& GetLevel(uint32_t level) const { return m_Levels[level].State; }
 		// The material table by material slot (RenderData::GIMaterial), as the voxelizer reads it.
 		std::span<const RenderData::GIMaterial> GetMaterials() const { return m_Materials; }
+		// The largest channel of the albedos of the submeshes voxelized since the clipmap started over (Reset), clamped below
+		// c_GIMaxBounceAlbedo as re-injection clamps it: what each bounce keeps at most of the one before (the bounces' settling,
+		// GlobalIllumination::GetSettleFrames). It never falls while the clipmap lives: a brighter material once voxelized stays.
+		float GetBounceAlbedo() const { return std::min(static_cast<float>(m_LargestAlbedo) / 255.0f, RenderData::c_GIMaxBounceAlbedo); }
 		// Frames built (BuildFrame), and the render scene the clipmap follows.
 		uint64_t GetFrameCount() const { return m_Frame; }
 		uint64_t GetRenderSceneId() const { return m_SceneId; }
@@ -211,6 +216,7 @@ namespace Strata
 		std::vector<uint32_t> m_Moving;  // Likewise for Moving
 		std::vector<MeshInfo> m_Meshes;  // By mesh slot
 		std::vector<RenderData::GIMaterial> m_Materials; // By material slot
+		uint32_t m_LargestAlbedo = 0;                    // 0-255: GetBounceAlbedo
 		std::vector<uint32_t> m_Scratch;
 		std::vector<uint32_t> m_Candidates;
 		std::vector<uint32_t> m_Below;

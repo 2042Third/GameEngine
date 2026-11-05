@@ -604,9 +604,10 @@ namespace Strata
 	void SceneRenderer::SettleGlobalIllumination(const RenderData::FrameConstants& frame)
 	{
 		GlobalIlluminationResources& gi = *m_GI;
-		// With re-injection each bounce arrives a frame after the one before it: the light settles c_GISettleFrames frames after
-		// its inputs last changed (the voxels, the sun, the sky, the field's place) or the bounce last started over (a cut, a
-		// frame that read no field of the frame before). One bounce is a function of the frame's voxels: settled with them.
+		// With re-injection each bounce arrives a frame after the one before it: the light settles GetSettleFrames frames (by the
+		// brightest albedo voxelized) after its inputs last changed (the voxels, the sun, the sky, the field's place) or the
+		// bounce last started over (a cut, a frame that read no field of the frame before). One bounce is a function of the
+		// frame's voxels: settled with them.
 		GlobalIlluminationResources::LightInputs inputs;
 		inputs.SunDirection = frame.DirectionalLightDirection;
 		inputs.SunColor = frame.DirectionalLightColor;
@@ -618,7 +619,9 @@ namespace Strata
 		const bool changed = gi.Constants.Bounce.x <= 0.0f || !work.Batches.empty() || work.MaterialsChanged || inputs != gi.SettleInputs;
 		gi.SettleInputs = inputs;
 		gi.StableFrames = changed ? 0 : gi.StableFrames + 1;
-		if (GetBounceGain(m_Specification.GlobalIllumination, gi.Layout) > 0.0f && gi.StableFrames < RenderData::c_GISettleFrames)
+		const uint32_t settleFrames = GlobalIllumination::GetSettleFrames(gi.Clipmap->GetBounceAlbedo() * GetBounceGain(m_Specification.GlobalIllumination, gi.Layout));
+		m_Stats.GISettleFrames = settleFrames;
+		if (gi.StableFrames < settleFrames)
 			m_Stats.GlobalIlluminationSettled = false;
 	}
 

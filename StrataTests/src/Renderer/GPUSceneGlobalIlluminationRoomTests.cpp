@@ -35,6 +35,9 @@ namespace
 	constexpr glm::uvec2 c_RoomSize { 960, 540 };
 	constexpr glm::uvec2 c_FloorSize { 512, 512 };
 	constexpr float c_SealedBound = 0.0017f; // erhe's leak between rooms
+	// Frames the sun room's cases render with every bounce: its bounces settle in 12 (GISettleFrames of its plaster's 0.58;
+	// "Bounces settle after a cut" checks it), and four more.
+	constexpr uint32_t c_BounceFrames = 16;
 
 	struct RoomPoint
 	{
@@ -1018,7 +1021,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 			for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
 			{
 				const float spacing = FirstSpacing(level);
-				const uint32_t frames = bounceGain > 0.0f ? RenderData::c_GISettleFrames + 2 : 3;
+				const uint32_t frames = bounceGain > 0.0f ? c_BounceFrames : 3;
 				for (float share : { 0.0f, 0.25f, 0.5f })
 				{
 					const glm::vec3 offset(share * spacing, 0.0f, share * spacing);
@@ -2012,7 +2015,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 		const auto measure = [&](float bounceGain, const SceneCamera& camera, glm::uvec2 size, const std::vector<RoomPoint>& points)
 		{
 			RoomRender render(room, size, RoomSpecification(GlobalIlluminationLevel::High, bounceGain));
-			return render.Measure(camera, points, bounceGain > 0.0f ? RenderData::c_GISettleFrames + 2 : 3);
+			return render.Measure(camera, points, bounceGain > 0.0f ? c_BounceFrames : 3);
 		};
 		std::vector<RoomPoint> points = walls;
 		points.insert(points.end(), floors.begin(), floors.end());
@@ -2054,19 +2057,22 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("Bounces settle within c_GISettleFrames frames after a cut")
+	TEST_CASE("Bounces settle after a cut")
 	{
-		// 6.4: a still camera's gi view from its first frame (a cut): the first frame K from which every 32 px block's mean changes
-		// by less than 0.25% for four frames comes no later than the frame the GI says it settled, c_GISettleFrames frames after
-		// the cut, and it stays settled. The sun room, the yard and the Cornell box at High.
+		// 6.4: a still camera's gi view from its first frame (a cut). The GI says it settled GISettleFrames frames after the cut
+		// (GlobalIllumination::GetSettleFrames of the scene's brightest albedo) and stays settled; the first frame K from which
+		// every 32 px block's mean changes by less than 0.25% for four frames comes at least c_GISettleMarginFrames before that.
+		// The sun room, the yard, the Cornell box and a closed box glowing at the albedo clamp (0.95, kept as 0.9: the slowest
+		// series, c_GIMaxSettleFrames), at High.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
-		constexpr uint32_t c_Frames = 24;
-		constexpr float c_Change = 0.0025f;
+		constexpr uint32_t c_Frames = RenderData::c_GIMaxSettleFrames + 8;
+		constexpr float c_Change = RenderData::c_GISettleChange;
 		const float aspect = static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y);
-		for (uint32_t sceneIndex = 0; sceneIndex < 3; sceneIndex++)
+		for (uint32_t sceneIndex = 0; sceneIndex < 4; sceneIndex++)
 		{
-			const std::string sceneName = sceneIndex == 0 ? "the sun room" : sceneIndex == 1 ? "the yard" : "the Cornell box";
+			const std::string sceneName = sceneIndex == 0 ? "the sun room" : sceneIndex == 1 ? "the yard" : sceneIndex == 2 ? "the Cornell box"
+				: "a glowing closed box at the clamp";
 			CAPTURE(sceneName);
 			SceneTestAssets assets;
 			Scene scene;
@@ -2081,20 +2087,27 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 				BuildYard(scene, assets);
 				camera = YardStrafe(0, 0.0f, aspect);
 			}
-			else
+			else if (sceneIndex == 2)
 			{
 				BuildCornellBox(scene, assets);
 				camera = CornellCamera(aspect);
+			}
+			else
+			{
+				BuildGlowingBox(scene, assets, glm::vec3(-2.0f, 0.0f, -2.0f), glm::vec3(2.0f, 3.0f, 2.0f), 0.95f, 100.0f);
+				camera = MakeCamera(glm::vec3(0.0f, 1.5f, 1.6f), glm::vec3(0.0f, 1.5f, -2.0f), 75.0f, c_RoomSize);
 			}
 			Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification(GlobalIlluminationLevel::High, 1.0f));
 			renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
 			std::vector<std::vector<float>> means;
 			uint32_t firstSettled = 0;
+			uint32_t settleFrames = 0;
 			for (uint32_t frame = 1; frame <= c_Frames; frame++)
 			{
 				REQUIRE(RenderGIFrame(*renderer, scene, camera, GIViewOptions()));
 				REQUIRE(renderer->GetStats().GlobalIllumination);
 				REQUIRE_FALSE(renderer->GetStats().GlobalIlluminationPending);
+				settleFrames = renderer->GetStats().GISettleFrames;
 				if (renderer->GetStats().GlobalIlluminationSettled && firstSettled == 0)
 					firstSettled = frame;
 				if (firstSettled != 0)
@@ -2120,10 +2133,14 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 			for (size_t index = 0; index < changes.size(); index++)
 				list += fmt::format("{}{:.3f}%", index == 0 ? "" : " ", 100.0f * changes[index]);
 			MESSAGE(sceneName << ": the image settles (K) at frame " << settledImage << ", the GI says settled at frame " << firstSettled
-				<< "; the largest block change frame to frame: " << list);
+				<< " (GISettleFrames " << settleFrames << "); the largest block change frame to frame: " << list);
 			CHECK(settledImage > 0);
-			CHECK(firstSettled == RenderData::c_GISettleFrames + 1);
-			CHECK(settledImage <= firstSettled);
+			CHECK(firstSettled == settleFrames + 1);
+			CHECK(settledImage + RenderData::c_GISettleMarginFrames <= firstSettled);
+			if (sceneIndex == 0)
+				CHECK(settleFrames + 4 <= c_BounceFrames);
+			if (sceneIndex == 3)
+				CHECK(settleFrames == RenderData::c_GIMaxSettleFrames);
 			renderer.reset();
 			CollectReleases();
 		}
@@ -2195,7 +2212,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 			RoomRender render(dark, c_RoomSize, RoomSpecification(GlobalIlluminationLevel::High, bounceGain));
 			AddMesh(render.SceneData, BuiltinAssets::CubeMesh, render.Assets.AddMaterial(Emitting(2000.0f)), glm::vec3(-12.95f, 1.5f, -2.0f), "Panel")
 				.GetComponent<TransformComponent>().Scale = glm::vec3(0.1f, 0.6f, 1.0f);
-			values[pass] = MeanLuminance(render.Measure(RoomCamera(), points, bounceGain > 0.0f ? RenderData::c_GISettleFrames + 2 : 3));
+			values[pass] = MeanLuminance(render.Measure(RoomCamera(), points, bounceGain > 0.0f ? c_BounceFrames : 3));
 			if (pass == 1)
 			{
 				REQUIRE(RenderGIFrame(*render.Renderer, render.SceneData, RoomCamera(), GIViewOptions(SceneLightingView::OpenShare)));
@@ -2245,8 +2262,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 					BuildSunRoom(scene, assets, DefaultRoom());
 				Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification(GlobalIlluminationLevel::High, pass == 0 ? 0.0f : 1.0f));
 				renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
-				for (uint32_t frame = 0; frame < RenderData::c_GISettleFrames + 4; frame++)
-					REQUIRE(RenderGIFrame(*renderer, scene, path(0), GIViewOptions()));
+				RenderUntilSettled(*renderer, scene, path(0), GIViewOptions(), RenderData::c_GIMaxSettleFrames + 4);
 				REQUIRE(renderer->GetStats().GlobalIlluminationSettled);
 				FlickerSequence sequence(3);
 				for (uint32_t frame = 0; frame < c_StrafeFrames; frame++)

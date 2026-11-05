@@ -220,6 +220,7 @@ namespace Strata
 		}
 		m_Meshes.clear();
 		m_Materials.clear();
+		m_LargestAlbedo = 0;
 		m_Proxies.clear();
 		m_Waiting.clear();
 		m_Moving.clear();
@@ -629,9 +630,13 @@ namespace Strata
 			const MeshInfo& mesh = m_Meshes[meshSlot];
 			const std::span<const uint32_t> submeshMaterials = renderScene.GetSubmeshMaterialSlots(meshSlot);
 			const uint32_t overrideSlot = renderScene.GetOverrideMaterialSlot(proxy);
+			const auto slotOf = [&](size_t submesh) -> uint32_t
+			{
+				return overrideSlot != RenderScene::c_InvalidIndex ? overrideSlot : (submesh < submeshMaterials.size() ? submeshMaterials[submesh] : RenderScene::c_InvalidIndex);
+			};
 			const auto materialOf = [&](size_t submesh) -> uint32_t
 			{
-				const uint32_t slot = overrideSlot != RenderScene::c_InvalidIndex ? overrideSlot : (submesh < submeshMaterials.size() ? submeshMaterials[submesh] : RenderScene::c_InvalidIndex);
+				const uint32_t slot = slotOf(submesh);
 				return slot < m_Materials.size() ? m_Materials[slot].Flags : 0u;
 			};
 			// Submeshes past c_VoxelItemMaxSubmesh (a work item holds 8 bits of submesh) or past the proxy's instances are left
@@ -708,6 +713,8 @@ namespace Strata
 				outRegion.ItemTriangles.push_back(itemTriangles);
 				outRegion.ItemProxies.push_back(proxy);
 				outRegion.Triangles += itemTriangles;
+				const uint32_t albedo = m_Materials[slotOf(submesh)].Albedo; // Available: the slot is in the table
+				m_LargestAlbedo = std::max({ m_LargestAlbedo, albedo & 255u, (albedo >> 8) & 255u, (albedo >> 16) & 255u });
 			}
 		};
 		for (uint32_t proxy : m_Candidates)

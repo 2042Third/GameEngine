@@ -398,6 +398,15 @@ namespace Strata
 			return glm::vec3(static_cast<float>(value & 511u), static_cast<float>((value >> 9) & 511u), static_cast<float>((value >> 18) & 511u)) * scale;
 		}
 
+		uint32_t GetSettleFrames(float ratio)
+		{
+			if (!std::isfinite(ratio) || ratio <= 0.0f)
+				return 0;
+			const double kept = std::min(static_cast<double>(ratio), static_cast<double>(RenderData::c_GIMaxBounceAlbedo));
+			const double frames = std::ceil(std::log(static_cast<double>(RenderData::c_GISettleChange) / (1.0 - kept)) / std::log(kept));
+			return static_cast<uint32_t>(std::max(frames, 1.0)) + RenderData::c_GISettleMarginFrames;
+		}
+
 	}
 
 }

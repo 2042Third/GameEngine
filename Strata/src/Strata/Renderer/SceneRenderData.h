@@ -772,9 +772,12 @@ namespace Strata
 		// Multi-bounce by re-injection (GI/VoxelInject.comp): a surface voxel adds its albedo, clamped below this so the series of
 		// bounces converges in every room, times last frame's field at it.
 		constexpr float c_GIMaxBounceAlbedo = 0.9f;
-		// Frames with re-injection and no change of the light's inputs (voxel work, the sun, the sky, the field's place, a cut)
-		// before GlobalIlluminationSettled: the frames the bounce series takes to settle within 0.25% (measured: 6.4).
-		constexpr uint32_t c_GISettleFrames = 14;
+		// Settling under re-injection (GlobalIllumination::GetSettleFrames): GlobalIlluminationSettled waits, after the light's
+		// inputs last changed, until a closed room's next bounce would change its light by less than this share, plus a margin;
+		// c_GIMaxSettleFrames is the wait at the albedo clamp (GetSettleFrames(c_GIMaxBounceAlbedo)), what captures allow for.
+		constexpr float c_GISettleChange = 0.0025f;
+		constexpr uint32_t c_GISettleMarginFrames = 2;
+		constexpr uint32_t c_GIMaxSettleFrames = 38;
 
 		// VoxelWorkItem::Flags
 		constexpr uint32_t c_VoxelItemClosed = 1u << 0;      // A closed mesh whose submeshes are all opaque: its triangles add winding steps

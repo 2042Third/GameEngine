@@ -528,6 +528,27 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 		CHECK_FALSE(GlobalIllumination::ComputeLayout(GlobalIlluminationLevel::Low)->Bounces);
 	}
 
+	TEST_CASE("Bounces settle by the scene's brightest albedo")
+	{
+		// The series' next term r^k (1 - r) below 0.25%, plus two frames: 10 + 2 for the sun room's plaster (0.58, its measured K
+		// 11), 15 + 2 for the Cornell box's white (0.73, K 15), 36 + 2 at the clamp, which brighter albedos and gains above 1 keep.
+		CHECK(GlobalIllumination::GetSettleFrames(0.0f) == 0);
+		CHECK(GlobalIllumination::GetSettleFrames(-1.0f) == 0);
+		CHECK(GlobalIllumination::GetSettleFrames(std::numeric_limits<float>::quiet_NaN()) == 0);
+		CHECK(GlobalIllumination::GetSettleFrames(1e-6f) == 1 + RenderData::c_GISettleMarginFrames);
+		CHECK(GlobalIllumination::GetSettleFrames(148.0f / 255.0f) == 12);
+		CHECK(GlobalIllumination::GetSettleFrames(186.0f / 255.0f) == 17);
+		CHECK(GlobalIllumination::GetSettleFrames(RenderData::c_GIMaxBounceAlbedo) == RenderData::c_GIMaxSettleFrames);
+		CHECK(GlobalIllumination::GetSettleFrames(1.0f) == RenderData::c_GIMaxSettleFrames);
+		uint32_t previous = 0;
+		for (int step = 1; step <= 90; step++)
+		{
+			const uint32_t frames = GlobalIllumination::GetSettleFrames(static_cast<float>(step) / 100.0f);
+			CHECK(frames >= previous);
+			previous = frames;
+		}
+	}
+
 	TEST_CASE("Level weights are continuous")
 	{
 		for (GlobalIlluminationLevel quality : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
