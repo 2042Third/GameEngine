@@ -305,7 +305,7 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 		// The field, sampled at this one place for the join and the GI views (its gather's loops compiled in once) and only
 		// where one of them reads it, after today's inputs as the join always sampled it.
 		float openShare;
-		float4 field = SampleIrradianceField(u_Samplers[0], surface.Position, surfaceGeometricNormal, surface.Normal, surface.View, openShare);
+		float4 field = SampleIrradianceField(u_Samplers[0], surface.Position, surfaceGeometricNormal, surface.Normal, surface.View, true, openShare);
 		if (globalIlluminationView)
 			return ShadeGlobalIlluminationView(lightingView, surface, field, openShare, surfaceGeometricNormal, f0, dfg, NoV, diffuseOcclusion, diffuseWeight);
 		// Global illumination joined (the scene asked, the field is used; .z the intensity): inside the field its diffuse light

@@ -4940,9 +4940,9 @@ Known issues), so some input still follows the camera; it has not been found. Bu
 `Docs/Plans/Wave8/specs/radiance-cascades-world.md` (its review corrections win over its body); the sources are the
 radiance-cascades lab (Daniel Quevedo, MIT: the triangle-box test, the winding steps and the column fill, the emission's
 coverage), Akenine-Moller's triangle-box test and, as ideas, Split RC, EggyStudio and creikey's voxel cascades.
-**Experimental** (stages 1-4): the voxels, the light with every bounce, the debug views and the
-join to shading are built; one probe field around the camera, and the misses `Docs/Plans/Wave8/ReleaseNotes.md`'s Known
-issues list with their numbers (Gate W of the spec is not fully met). The probes' visibility and resolution, nested
+**Experimental** (stages 1-4): the voxels, the light with every bounce (High; Low bounces once), the debug views and
+the join to shading are built; one probe field around the camera, and the misses `Docs/Plans/Wave8/ReleaseNotes.md`'s
+Known issues list with their numbers (Gate W of the spec is not fully met). The probes' visibility and resolution, nested
 probe-field levels and local lights follow.
 
 - **The scene's ask and the row:** `PostProcessComponent::GlobalIllumination` (off) and `GlobalIlluminationIntensity` (1,
@@ -5097,8 +5097,8 @@ probe-field levels and local lights follow.
   as the mean and the variance in a 10 x 10 octahedral tile per probe, two halves an R32_UINT texel (RG16F is an extended
   storage format) (a texel per ray inside a one-texel border that repeats the interior across the octahedron's edges), SRV 54.
 - **Multi-bounce** (re-injection; `GlobalIlluminationSettings::BounceGain`, 1, within [0, 1]; the tests' one-bounce
-  cases set 0; both qualities, `GlobalIlluminationLayout::Bounces`; Low bounced once until the gather's depth-moment
-  visibility and guard kept bounced light out of closed rooms' corners): `VoxelInject`
+  cases set 0; High only, `GlobalIlluminationLayout::Bounces`: Low bounces once, because its field brightens the series to
+  about 1.8 times High's, What it cannot do below): `VoxelInject`
   adds to each lit surface voxel its albedo, clamped below `c_GIMaxBounceAlbedo` (0.9) so the series converges in any
   room, times the field the frame before left at the voxel (`SampleIrradianceField` half a voxel off it along the normal
   its light is taken along, with the gather's visibility), times the gain. The first bounce arrives in the frame the
@@ -5141,7 +5141,13 @@ probe-field levels and local lights follow.
   its grid position), validity, whether it lies in front of the surface's plane (from where it moved) and its visibility, then
   normalized. The visibility is continuous, so the light has no steps at cell borders and no voxel staircase: Chebyshev's
   bound on the probe's depth moments toward the point (moved a further `c_GIGatherViewBias` spacings toward the viewer, DDGI's
-  view bias), cubed, times the guard where the probe's rays around the point hit something before it (open space skips it, a
+  view bias, then out of any solid it lies in: within a voxel of a perpendicular wall, floor or object it lies in that
+  surface's voxels, where the guard and the grazing distances hid it from every probe and drew a black line along every
+  concave corner; `c_GIGatherPushSteps` (2) steps down the occupancy's gradient, each of up to a voxel by how far the
+  occupancy lies into `c_GIGatherPushOccupancy` (0.1-0.3); drawn surfaces only: re-injection reads the field at voxels inside
+  walls, which moved out would take the light of the wall's far side), with the distances' spread at least
+  `c_GIGatherMinDeviation` (0.1) spacings so the bound falls continuously where every ray stored one distance, cubed, times
+  the guard where the probe's rays around the point hit something before it (open space skips it, a
   third of the gather's cost): the transmittance through levels 0-2 along the segment from the probe, `c_GIGatherGuardSteps`
   (16) samples at fixed fractions counting only voxels' solid cores (`c_GIGatherGuardCore`, occupancy 0.6-0.72, so a surface's
   own soft layer never hides a probe), which a wall a voxel thick always meets (Chebyshev's bound over 64 directions lets a
@@ -5158,7 +5164,11 @@ probe-field levels and local lights follow.
   read the probes (blocking). `GPU.SceneRenderer.GlobalIlluminationStitching` checks the depth moments against a probe's
   known distances and the Cornell box's gi view at High: across every probe plane on its walls, ceiling and floor the light
   steps at most 10% beyond its slope (the old on/off gather: 25% on the red wall), and the floor around the sphere's foot
-  has no point darker than half its brightest neighbour a voxel away (it was 0.31).
+  has no point darker than half its brightest neighbour a voxel away (it was 0.31), and along the far corners (the back wall
+  with the side walls and the ceiling, the ceiling with the side walls) no point within 0.2 m of the junction is darker than
+  half of the point a voxel farther from it (0.53 at the least; without the push out of solids 0 at every junction). The
+  floor the sphere overhangs (its last 0.3 m) and around the tall box's foot have no black point beside a lit neighbour, but
+  fall to 0.02 and 0.1 of it: reported, a goal not met.
 
 - **Sampling** (`Include/GlobalIllumination.slang`): a point reads the finest level whose valid box holds it with
   `c_GILevelGuardVoxels` to spare, blended into the next over `c_GILevelBlendVoxels` by its distance from the camera (not
@@ -5208,15 +5218,16 @@ probe-field levels and local lights follow.
   image; a 2 m move in one frame, whose next frame matches a renderer settled there; still frames; a panel in the dark
   sealed room; strafes through the yard and the sun room flicker at most half again as much as with one bounce; Low's gain
   1 gives one bounce's light), `GlobalIlluminationRoom`'s "A sealed room stays dark" with the gain 1 at High and Low,
-  `Renderer.GlobalIlluminationLayout`'s "Both qualities bounce" and "Bounces settle by the scene's brightest albedo",
+  `Renderer.GlobalIlluminationLayout`'s "High bounces on, Low once" and "Bounces settle by the scene's brightest albedo",
   `Renderer.VoxelClipmap`'s "The brightest albedo voxelized bounds the bounces", and `PerfGPU.Renderer`'s "Global
   illumination's bounces' cost at 3840x2160" (the gain 0 against 1 in one process).
 - **What it cannot do** (so far): the field resolves no more than its probes, 0.5 m apart at High and 1 m at Low. In the
-  Cornell box at High the floor the sphere overhangs, the gap between the tall box's back-left corner and the red wall and a
-  thin line along the back wall's corners still go dark within a voxel (no probe sees them; the stitching case reports them),
-  and at Low whole cells of probes beside the box and the sphere lie in the coarse voxels' solids, so the floor and walls
-  there still step and go black. Low's Cornell box with every bounce is about 1.8 times as bright as High's (ceiling 165-235
-  nits per albedo against 89-142). Denser probes near surfaces are the next step. Walls thinner than two voxels go two-sided
+  Cornell box at High the visible rim of the floor the sphere overhangs and the gap between the tall box's back-left corner
+  and the red wall still fall to a tenth of their neighbours' light within a voxel (no probe sees them; the stitching case
+  reports them), and at Low whole cells of probes beside the box and the sphere lie in the coarse voxels' solids, so the floor
+  and walls there still step and go black, and its ceiling's junctions with the walls darken within a voxel. Low bounces once:
+  with every bounce its Cornell box is about 1.8 times as bright as High's (ceiling 165-235 nits per albedo against 89-142).
+  Denser probes near surfaces are the next step. Walls thinner than two voxels go two-sided
   (dark from both sides), thin props blur into
   blobs of whole voxels, characters and moving objects are not in the voxels until they rest, textured albedo and emission
   count by their maps' means (models colored from one shared palette map, as the ThirdPerson sample's Kenney models are,

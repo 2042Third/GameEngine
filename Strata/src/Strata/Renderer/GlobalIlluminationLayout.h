@@ -94,8 +94,9 @@ namespace Strata
 		float FieldSnap = 0.0f;            // The field moves in whole steps of the top cascade's spacing
 		glm::vec2 FieldFullExtent{ 0.0f }; // Meters around the camera where the field has full weight: horizontally, vertically
 		float FieldFade = 0.0f;            // Meters over which it fades to the fallback beyond that
-		// Re-injection runs (every bounce): both qualities, since the gather's depth-moment visibility and its guard keep bounced
-		// light outside a closed room out of its corners (Low bounced once until then).
+		// Re-injection runs (every bounce): High. Low bounces once: its field brightens the series of bounces to about 1.8 times
+		// High's (the Cornell box's ceiling, 165-235 nits per albedo against 89-142), though the gather's depth-moment visibility
+		// and its guard now keep bounced light outside a closed room out of its corners.
 		bool Bounces = false;
 
 		GlobalIlluminationMemory GetMemory() const;

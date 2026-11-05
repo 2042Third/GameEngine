@@ -2576,12 +2576,16 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
 	{
 		// Around the sphere's and the tall box's feet (every bounce, settled), outside what they cover, the floor's GI may fall
 		// toward them, but no floor point is darker than c_MinRatio of the brightest of its neighbours a voxel (0.1 m) away along x
-		// and z: a gather whose probes each pass or fail a march through the voxels left a staircase of black cells there. Points the
-		// camera does not see and neighbours under the objects are left out, and so are points whose brightest neighbour is darker
-		// than a fiftieth of the floor's median. At High around the sphere; the gap between the box's back-left corner and
-		// the red wall, Low and the floor the sphere overhangs (within its radius of its foot) are measured and reported: no probe
-		// of 0.5 m (1 m at Low) sees them, and they still go dark within a voxel (DeveloperGuide, "Global illumination").
+		// and z: a gather whose probes each pass or fail a march through the voxels left a staircase of black cells there. The floor
+		// the sphere overhangs counts where the camera sees it, down to c_ContactGap from its contact point (a gap of 0.23 m under
+		// it, two voxels: closer in, no visibility point fits between the floor's and the sphere's voxels). Points the camera does
+		// not see and neighbours under the objects are left out, and so are points whose brightest neighbour is darker than a
+		// fiftieth of the floor's median. At High around the sphere's footprint; the overhung rim and the tall box's foot (the gap
+		// between its back-left corner and the red wall) go dark within a voxel, which no probe of 0.5 m resolves: there no point
+		// may be black beside a lit neighbour, and the bound is a goal not met yet (DeveloperGuide, "Global illumination"). Low's 1 m
+		// probes are measured and reported: whole cells of them lie in the coarse voxels' solids beside the box and the sphere.
 		constexpr float c_MinRatio = 0.5f;
+		constexpr float c_ContactGap = 0.6f;
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		const glm::vec2 sphere(1.15f, -0.3f);
@@ -2596,7 +2600,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
 			const glm::vec2 local(std::cos(boxAngle) * d.x - std::sin(boxAngle) * d.y, std::sin(boxAngle) * d.x + std::cos(boxAngle) * d.y);
 			return std::max(std::abs(local.x), std::abs(local.y)) - c_BoxHalf;
 		};
-		const auto covered = [&](const glm::vec2& point) { return glm::distance(point, sphere) < c_SphereRadius || outsideBox(point) < 0.0f; };
+		const auto covered = [&](const glm::vec2& point) { return glm::distance(point, sphere) < c_ContactGap || outsideBox(point) < 0.0f; };
 		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
 		{
 			const std::string levelName = level == GlobalIlluminationLevel::High ? "High" : "Low";
@@ -2613,9 +2617,10 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
 			}
 			const float floorMedian = Median(floorValues);
 			REQUIRE(floorMedian > 0.0f);
-			for (uint32_t feet = 0; feet < 2; feet++)
+			// 0: the floor around the sphere's footprint, 1: the rim it overhangs, 2: around the tall box's footprint.
+			for (uint32_t area = 0; area < 3; area++)
 			{
-				const std::string name = feet == 0 ? "the sphere's foot" : "the tall box's foot";
+				const std::string name = area == 0 ? "the sphere's foot" : area == 1 ? "the floor the sphere overhangs" : "the tall box's foot";
 				INFO(name);
 				float lowest = std::numeric_limits<float>::max();
 				glm::vec2 lowestAt(0.0f);
@@ -2626,7 +2631,8 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
 					{
 						const glm::vec2 point(-2.6f + 0.025f * static_cast<float>(i), -2.6f + 0.025f * static_cast<float>(j));
 						const float fromSphere = glm::distance(point, sphere);
-						const bool near = feet == 0 ? fromSphere <= c_SphereRadius + 0.6f : outsideBox(point) <= 0.8f;
+						const bool near = area == 0 ? fromSphere >= c_SphereRadius && fromSphere <= c_SphereRadius + 0.6f
+							: area == 1 ? fromSphere < c_SphereRadius : fromSphere >= c_SphereRadius && outsideBox(point) <= 0.8f;
 						if (!near || covered(point))
 							continue;
 						const std::optional<float> value = view.Read(glm::vec3(point.x, 0.0f, point.y));
@@ -2654,8 +2660,95 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
 				}
 				MESSAGE(levelName << ", " << name << ": " << measured << " floor points, the darkest against its neighbours " << lowest
 					<< " of the brightest, at (" << lowestAt.x << ", 0, " << lowestAt.y << "); the floor's median " << floorMedian);
+				CHECK(measured > (area == 1 ? 50u : 200u));
+				if (level == GlobalIlluminationLevel::High && area == 0)
+					CHECK(lowest >= c_MinRatio);
+				else if (level == GlobalIlluminationLevel::High)
+					CHECK(lowest > 0.0f);
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The Cornell box's far corners darken smoothly")
+	{
+		// Where the back wall meets the side walls and the ceiling, and the ceiling the side walls (every bounce, settled), the light
+		// on either face may fall toward the junction, but no point within c_Reach of it is darker than c_MinRatio of the point a
+		// voxel (0.1 m) farther from it: a gather whose visibility point lay in the perpendicular face's voxels drew a black line
+		// a voxel wide along every concave corner, beaded at voxel spacing. Points the camera does not see are left out. At High;
+		// Low is measured and reported.
+		constexpr float c_MinRatio = 0.5f;
+		constexpr float c_Reach = 0.2f;
+		constexpr float c_Edge = 2.75f;
+		constexpr float c_Height = 5.5f;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		// A junction: the face a point lies on is where coordinate FaceAxis is FaceValue; it moves away from the junction along
+		// AwayAxis in direction AwaySign from AwayStart, and along it along AlongAxis from AlongMinimum to AlongMaximum.
+		struct Junction
+		{
+			const char* Name = "";
+			int FaceAxis = 0;
+			float FaceValue = 0.0f;
+			int AwayAxis = 0;
+			float AwayStart = 0.0f;
+			float AwaySign = 1.0f;
+			int AlongAxis = 0;
+			float AlongMinimum = 0.0f;
+			float AlongMaximum = 0.0f;
+		};
+		const std::vector<Junction> junctions = {
+			{ "back wall by the red wall", 2, -c_Edge, 0, -c_Edge, 1.0f, 1, 0.3f, c_Height - 0.3f },
+			{ "red wall by the back wall", 0, -c_Edge, 2, -c_Edge, 1.0f, 1, 0.3f, c_Height - 0.3f },
+			{ "back wall by the green wall", 2, -c_Edge, 0, c_Edge, -1.0f, 1, 0.3f, c_Height - 0.3f },
+			{ "green wall by the back wall", 0, c_Edge, 2, -c_Edge, 1.0f, 1, 0.3f, c_Height - 0.3f },
+			{ "back wall by the ceiling", 2, -c_Edge, 1, c_Height, -1.0f, 0, -c_Edge + 0.3f, c_Edge - 0.3f },
+			{ "ceiling by the back wall", 1, c_Height, 2, -c_Edge, 1.0f, 0, -c_Edge + 0.3f, c_Edge - 0.3f },
+			{ "ceiling by the red wall", 1, c_Height, 0, -c_Edge, 1.0f, 2, -c_Edge + 0.3f, c_Edge - 0.3f },
+			{ "red wall by the ceiling", 0, -c_Edge, 1, c_Height, -1.0f, 2, -c_Edge + 0.3f, c_Edge - 0.3f },
+			{ "ceiling by the green wall", 1, c_Height, 0, c_Edge, -1.0f, 2, -c_Edge + 0.3f, c_Edge - 0.3f },
+			{ "green wall by the ceiling", 0, c_Edge, 1, c_Height, -1.0f, 2, -c_Edge + 0.3f, c_Edge - 0.3f },
+		};
+		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
+		{
+			const std::string levelName = level == GlobalIlluminationLevel::High ? "High" : "Low";
+			CAPTURE(levelName);
+			const CornellView view = RenderCornellView(level);
+			for (const Junction& junction : junctions)
+			{
+				INFO(junction.Name);
+				const auto pointAt = [&](float away, float along)
+				{
+					glm::vec3 point(0.0f);
+					point[junction.FaceAxis] = junction.FaceValue;
+					point[junction.AwayAxis] = junction.AwayStart + junction.AwaySign * away;
+					point[junction.AlongAxis] = along;
+					return point;
+				};
+				float lowest = std::numeric_limits<float>::max();
+				glm::vec3 lowestAt(0.0f);
+				uint32_t measured = 0;
+				for (float along = junction.AlongMinimum; along <= junction.AlongMaximum; along += 0.025f)
+				{
+					for (float away = 0.01f; away <= c_Reach; away += 0.01f)
+					{
+						const std::optional<float> value = view.Read(pointAt(away, along));
+						const std::optional<float> farther = view.Read(pointAt(away + 0.1f, along));
+						if (!value || !farther || *farther <= 0.0f)
+							continue;
+						measured++;
+						const float ratio = *value / *farther;
+						if (ratio < lowest)
+						{
+							lowest = ratio;
+							lowestAt = pointAt(away, along);
+						}
+					}
+				}
+				MESSAGE(levelName << ", " << std::string(junction.Name) << ": " << measured << " points, the darkest against the point 0.1 m "
+					<< "farther from the corner " << lowest << " of it, at (" << lowestAt.x << ", " << lowestAt.y << ", " << lowestAt.z << ")");
 				CHECK(measured > 200);
-				if (level == GlobalIlluminationLevel::High && feet == 0)
+				if (level == GlobalIlluminationLevel::High)
 					CHECK(lowest >= c_MinRatio);
 			}
 		}

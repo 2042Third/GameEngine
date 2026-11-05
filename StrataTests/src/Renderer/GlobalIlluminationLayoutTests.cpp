@@ -522,13 +522,12 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 		CHECK(clamped.y == 65408.0f);
 	}
 
-	TEST_CASE("Both qualities bounce")
+	TEST_CASE("High bounces on, Low once")
 	{
-		// Low's re-injection waited for the probes' visibility to keep bounced light out of closed rooms' corners; the depth
-		// moments and the gather's guard do (GPU.SceneRenderer.GlobalIlluminationRoom's "A sealed room stays dark", every bounce at
-		// Low).
+		// Low's field brightens the series of bounces to about 1.8 times High's (the Cornell box with every bounce), so its
+		// re-injection stays off until Low's light matches High's.
 		CHECK(GlobalIllumination::ComputeLayout(GlobalIlluminationLevel::High)->Bounces);
-		CHECK(GlobalIllumination::ComputeLayout(GlobalIlluminationLevel::Low)->Bounces);
+		CHECK_FALSE(GlobalIllumination::ComputeLayout(GlobalIlluminationLevel::Low)->Bounces);
 	}
 
 	TEST_CASE("Bounces settle by the scene's brightest albedo")

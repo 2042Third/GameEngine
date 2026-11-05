@@ -198,7 +198,7 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   Each further bounce arrives a frame after the one before: after a cut or a change of the light, rooms fill over a
   number of frames set by their brightest surface (12 for the sun room's plaster, 17 for the Cornell box's white, at
   most 38), and captures and the project's picture wait for it. A sealed room stays as dark as with one bounce (its
-  points' mean and every junction within 0.17% of the open room's light). Low bounces too (below). Look-dev: the Cornell box,
+  points' mean and every junction within 0.17% of the open room's light). Low bounces once. Look-dev: the Cornell box,
   `lookdev.cornell`.
 - What the bounces cost: 0.06-0.10 ms of global illumination's 4 ms at 3840 x 2160 at High in the sun room (one bounce
   against every bounce in one run). Scenes without global illumination look exactly as before.
@@ -210,8 +210,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   walls, floors and ceilings. In the owner's Cornell box at High, the bands at probe-cell borders on the walls are gone
   (the largest step across a probe plane fell from 25% to 8% of the light), the black staircase around the sphere's foot
   and the blocky rectangle of its indirect shadow became a soft shadow, and the dark square at the tall box's foot is gone.
-  Closed rooms stay dark, now at Low with every bounce too: Low bounces again. Probes that sat in a wall move out of it
-  into the room. Look-dev: `lookdev.cornell`, `lookdev.sunroom`.
+  The room's concave corners keep their light up to the junction. Closed rooms stay dark. Probes that sat in a wall move
+  out of it into the room. Look-dev: `lookdev.cornell`, `lookdev.sunroom`.
 - What it costs at 3840 x 2160 at High: about 0.3 ms more in global illumination's own stage (4.3 ms in the sun room and
   the yard) and 0.25-0.3 ms more in the opaque pass; 35 MiB more memory per view at High (4.4 MiB at Low).
 
@@ -304,12 +304,12 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
 - Its light ends at the probe field's edge around the camera (High: full within 7.5 m horizontally, 5.5 m up and down;
   Low: 7 m and 2.8 m; faded to the light without it over 2 m): outdoors the edge of a bubble can show.
 - The owner's Cornell box at High, with every bounce: the probes are 0.5 m apart (1 m at Low), and what none of them
-  sees still goes dark within a few centimetres: a dark rim with small teeth where the sphere meets the floor, a few dark
-  notches along the tall box's left foot and in the gap between the box and the red wall, and a thin dark line along the
-  room's far corners. At Low, cells of probes beside the box and the sphere lie inside them, and the walls and floor there
-  still show steps and black patches; Low's Cornell box is about 1.8 times as bright as High's with every bounce (its
-  ceiling 165-235 nits per unit of albedo against 89-142). In the sun room, the window wall keeps its dark vertical bands
-  either side of the window and the dark band along its foot.
+  sees still goes dark within a few centimetres: a dark rim where the floor shows under the sphere's overhang, and dark
+  notches in the gap between the tall box and the red wall. At Low, cells of probes beside the box and the sphere lie
+  inside them, and the walls and floor there still show steps and black patches, and the ceiling darkens along its edges.
+  Low bounces once: with every bounce its Cornell box would be about 1.8 times as bright as High's (its ceiling 165-235
+  nits per unit of albedo against 89-142). In the sun room, the window wall keeps its dark vertical bands either side of
+  the window and the dark band along its foot.
 - With every bounce, rooms take frames to fill after a cut, by their brightest surface: the sun room's gi view changes
   by less than 0.25% a frame from frame 11 (it is reported settled at 13), the Cornell box's from 15 (18), a closed
   white box's from 27 (39). Until then a game's cut shows the light rising.

@@ -151,23 +151,58 @@ float GetProbeVisibility(int3 probe, float3 probePosition, float3 target, out bo
 	if (distance <= depth.x)
 		return 1.0;
 	float excess = distance - depth.x;
-	float chebyshev = depth.y / max(depth.y + excess * excess, 1e-12);
+	// The variance's floor keeps the bound continuous where every ray around the direction stored one distance (the march's end,
+	// a wall head-on): a variance of 0 would drop the weight from 1 to 0 at the mean.
+	float deviation = ST_GI_GATHER_MIN_DEVIATION * u_GIField.FieldOrigin.w;
+	float variance = max(depth.y, deviation * deviation);
+	float chebyshev = variance / (variance + excess * excess);
 	return chebyshev * chebyshev * chebyshev;
+}
+
+// The point the gather's probes are asked about, moved out of a solid it lies in: within about a voxel of a perpendicular wall,
+// floor or object (a concave corner, a contact) the biased point lies in that surface's voxels, where every probe's guard and
+// grazing distances would hide it. Down the occupancy's gradient, ST_GI_GATHER_PUSH_STEPS times at most a voxel of the finest
+// level holding it, each by how far its occupancy lies into ST_GI_GATHER_PUSH_OCCUPANCY (continuous: no step where a point starts
+// to move). The gradient leads out on the side the point is nearer, so it never crosses a wall thicker than two voxels.
+float3 PushOutOfSolid(SamplerState repeat, float3 position)
+{
+	uint level = FindFieldLevel(position, position);
+	if (level >= 3u)
+		return position;
+	float h = u_GIField.VoxelOrigin[level].w;
+	[loop]
+	for (uint step = 0u; step < ST_GI_GATHER_PUSH_STEPS; step++)
+	{
+		float push = smoothstep(ST_GI_GATHER_PUSH_OCCUPANCY.x, ST_GI_GATHER_PUSH_OCCUPANCY.y, SampleFieldOccupancy(level, repeat, position));
+		if (push <= 0.0)
+			break;
+		float3 gradient = float3(
+			SampleFieldOccupancy(level, repeat, position + float3(h, 0.0, 0.0)) - SampleFieldOccupancy(level, repeat, position - float3(h, 0.0, 0.0)),
+			SampleFieldOccupancy(level, repeat, position + float3(0.0, h, 0.0)) - SampleFieldOccupancy(level, repeat, position - float3(0.0, h, 0.0)),
+			SampleFieldOccupancy(level, repeat, position + float3(0.0, 0.0, h)) - SampleFieldOccupancy(level, repeat, position - float3(0.0, 0.0, h)));
+		float gradientLength = length(gradient);
+		if (gradientLength < 1e-4)
+			break;
+		position -= gradient / gradientLength * (push * h);
+	}
+	return position;
 }
 
 // The field's irradiance over pi at a camera-relative surface point for a shading normal (luminance, times
 // ST_GI_RADIANCE_SCALE), .a the field's weight there (0 outside it, while pending or where no voxel level holds the point). The
 // eight cascade-0 probes around the point moved ST_GI_GATHER_NORMAL_BIAS spacings along its geometric normal, each weighted
 // trilinearly, by its validity, by whether it lies in front of the surface's plane and by how much it sees the point
-// (GetProbeVisibility, at the moved point moved ST_GI_GATHER_VIEW_BIAS spacings more toward the viewer: a surface's own voxels
-// never hide it; times the transmittance of the voxels between them, GetFieldTransmittance), then normalized. Where the live
+// (GetProbeVisibility, at the moved point moved ST_GI_GATHER_VIEW_BIAS spacings more toward the viewer and out of any solid it
+// then lies in when pushOut, PushOutOfSolid: neither a surface's own voxels nor a perpendicular one's beside it hide it; times the transmittance of the voxels between them, GetFieldTransmittance), then normalized. Where the live
 // probes in front of the point see less of it than ST_GI_GATHER_MIN_VISIBLE of the weight all the probes in front would give it
 // (a contact, a junction, a cell of probes dead inside a solid), the light fades with what they see rather than giving the few
 // that see it full weight; a point no probe sees takes no field light (dark, never the sky). Every weight is continuous, so the
 // light is: no bands at cell borders, no staircase of voxels. openShare receives the cosine-weighted share of the sky it sees.
-// viewDirection points toward the viewer (the normal where there is none).
+// viewDirection points toward the viewer (the normal where there is none). pushOut moves the visibility point out of solids: drawn
+// surfaces only. Re-injection reads the field at voxels, some of them inside walls (the floor's face runs on under a wall), and
+// moved out of the solid such a point would take the light on the wall's far side into a sealed room.
 float4 SampleIrradianceField(SamplerState repeat, float3 position, float3 geometricNormal, float3 shadingNormal, float3 viewDirection,
-	out float openShare)
+	bool pushOut, out float openShare)
 {
 	openShare = 1.0;
 	float fieldWeight = GetFieldWeight(position);
@@ -183,6 +218,8 @@ float4 SampleIrradianceField(SamplerState repeat, float3 position, float3 geomet
 	int3 base = int3(floor(coordinate));
 	float3 fraction = coordinate - float3(base);
 	float3 seen = biased + viewDirection * (ST_GI_GATHER_VIEW_BIAS * spacing);
+	if (pushOut)
+		seen = PushOutOfSolid(repeat, seen);
 
 	float3 irradiance = float3(0.0, 0.0, 0.0);
 	float sky = 0.0;

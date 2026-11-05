@@ -162,7 +162,7 @@ void main(uint3 globalID : SV_DispatchThreadID, uint localIndex : SV_GroupIndex)
 			{
 				// The field holds irradiance over pi times ST_GI_RADIANCE_SCALE: a Lambertian surface's radiance per albedo.
 				float openShare;
-				float4 field = SampleIrradianceField(u_GIRepeat, center + n * (0.5 * voxel) + u_GI.Bounce.yzw, n, n, n, openShare);
+				float4 field = SampleIrradianceField(u_GIRepeat, center + n * (0.5 * voxel) + u_GI.Bounce.yzw, n, n, n, false, openShare);
 				float3 bounceAlbedo = min(albedo, float3(ST_GI_MAX_BOUNCE_ALBEDO, ST_GI_MAX_BOUNCE_ALBEDO, ST_GI_MAX_BOUNCE_ALBEDO));
 				scaled += SanitizeHDR(bounceAlbedo * field.rgb * (field.a * u_GI.Bounce.x));
 			}

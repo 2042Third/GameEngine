@@ -771,8 +771,19 @@ namespace Strata
 		// field light fades with what they see instead of renormalizing the few that see it to full weight.
 		constexpr float c_GIGatherMinVisible = 0.25f;
 		// Samples of the gather's guard against walls between a probe and the point (Include/GIField.slang): a cell's diagonal
-		// (sqrt(3) spacings) over this many is under one voxel of level 0 at either quality (a spacing is five voxels).
-		constexpr uint32_t c_GIGatherGuardSteps = 10;
+		// (sqrt(3) spacings, 8.7 voxels of level 0 at either quality: a spacing is five voxels) over this many is about 0.54 voxel.
+		constexpr uint32_t c_GIGatherGuardSteps = 16;
+		// The guard counts only voxels' solid cores: a sample's occupancy from the first to the second fades the probe out, so a
+		// surface's soft trilinear edge does not.
+		constexpr glm::vec2 c_GIGatherGuardCore{ 0.6f, 0.72f };
+		// The gather's visibility point moves out of a solid it lies in (a perpendicular surface within a voxel: concave corners,
+		// contacts), down the occupancy's gradient this many times, each by up to a voxel: by none below the first occupancy, by a
+		// whole voxel from the second.
+		constexpr uint32_t c_GIGatherPushSteps = 2;
+		constexpr glm::vec2 c_GIGatherPushOccupancy{ 0.1f, 0.3f };
+		// The probes' distances toward a point spread at least this many spacings in the gather's Chebyshev bound (half a voxel), so
+		// its weight falls continuously past the mean where every ray stored one distance.
+		constexpr float c_GIGatherMinDeviation = 0.1f;
 		constexpr uint32_t c_GIFieldFaces = 6;           // The field's faces per probe: +X, -X, +Y, -Y, +Z, -Z
 		// Each cascade-0 probe's distances to the first hit (GI/FieldReduce.comp): an octahedral tile of this many texels a side, a
 		// one-texel border around one texel per ray of its c_GIFieldDirections (8 x 8), of the mean distance and its variance
