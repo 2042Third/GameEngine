@@ -2147,6 +2147,52 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A move takes each voxel's bounce from its own place")
+	{
+		// Re-injection reads the field the frame before left relative to that frame's camera (Bounce.yzw, this camera minus that
+		// one, and PreviousField's voxel origins): the sun room settled under the floor camera 1 m west of its middle, which then
+		// moves 2 m east in one frame (less than a window: no cut, the bounces go on). In the frame after the move the floor,
+		// lit almost only by the walls' and the ceiling's re-injected light, reads as a renderer settled at the new camera does,
+		// within 1% at each of nine points (measured: within 0.02%; with Bounce.yzw 0, which takes each voxel's bounce from 2 m
+		// west, 11% to four times as bright).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		constexpr float c_Tolerance = 0.01f;
+		const glm::vec3 before(-1.0f, 0.0f, 0.0f);
+		const glm::vec3 after(1.0f, 0.0f, 0.0f);
+		std::vector<RoomPoint> points;
+		for (float x : { -11.6f, -10.0f, -8.4f })
+		{
+			for (float z : { -4.4f, -2.0f, 0.4f })
+				points.push_back({ fmt::format("floor at {}, {}", x, z), { x, 0.1f, z }, c_Up });
+		}
+		std::vector<glm::vec3> moved;
+		{
+			RoomRender render(DefaultRoom(), c_FloorSize, RoomSpecification(GlobalIlluminationLevel::High, 1.0f));
+			render.Measure(FloorCamera(before), points, c_BounceFrames);
+			REQUIRE(render.Renderer->GetStats().GlobalIlluminationSettled);
+			moved = render.Measure(FloorCamera(after), points, 1);
+		}
+		CollectReleases();
+		std::vector<glm::vec3> settled;
+		{
+			RoomRender render(DefaultRoom(), c_FloorSize, RoomSpecification(GlobalIlluminationLevel::High, 1.0f));
+			settled = render.Measure(FloorCamera(after), points, c_BounceFrames);
+		}
+		CollectReleases();
+		std::string table = "the floor in the frame after a 2 m move against settled there (gi view, nits per albedo):";
+		for (size_t index = 0; index < points.size(); index++)
+		{
+			const float ratio = Luminance(moved[index]) / std::max(Luminance(settled[index]), 1e-6f);
+			table += fmt::format("\n  {:<22} {:9.3f} against {:9.3f} ({:.4f})", points[index].Name, Luminance(moved[index]), Luminance(settled[index]), ratio);
+			INFO(points[index].Name);
+			CHECK(Luminance(settled[index]) > 1.0f);
+			CHECK(std::abs(ratio - 1.0f) <= c_Tolerance);
+		}
+		MESSAGE(table);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Still frames are identical with bounces")
 	{
 		// 6.4: re-injection feeds the field back through the voxels, yet a still camera's frames 30 and 31 agree to the bit (no

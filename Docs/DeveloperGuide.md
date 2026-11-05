@@ -5185,11 +5185,11 @@ probe-field levels and local lights follow.
   Le / (1 - rho) within 3% of the series its one-bounce field's own error predicts (that error is 4-9% low at High); the sun
   room's points take at least their one-bounce light, the ceiling over the patch 10% more, and what the bounces add stays
   within the series' bound; settling after a cut, also at the albedo clamp, at least `c_GISettleMarginFrames` after the
-  image; still frames; a panel in the dark sealed room; strafes through the yard and the sun room flicker at most half
-  again as much as with one bounce; Low's gain 1 gives one bounce's light), `GlobalIlluminationRoom`'s "A sealed room
-  stays dark" with the gain 1 at High and Low, `Renderer.GlobalIlluminationLayout`'s "High bounces on, Low once" and
-  "Bounces settle by the scene's brightest albedo", and `Renderer.VoxelClipmap`'s "The brightest albedo voxelized bounds
-  the bounces".
+  image; a 2 m move in one frame, whose next frame matches a renderer settled there; still frames; a panel in the dark
+  sealed room; strafes through the yard and the sun room flicker at most half again as much as with one bounce; Low's gain
+  1 gives one bounce's light), `GlobalIlluminationRoom`'s "A sealed room stays dark" with the gain 1 at High and Low,
+  `Renderer.GlobalIlluminationLayout`'s "High bounces on, Low once" and "Bounces settle by the scene's brightest albedo",
+  and `Renderer.VoxelClipmap`'s "The brightest albedo voxelized bounds the bounces".
 - **What it cannot do** (so far): Low bounces once (`GlobalIlluminationLayout::Bounces` false, whatever the gain). With
   every bounce at Low, the sealed room moved by a quarter of a probe spacing lit its walls' pixels in the north-west
   three-wall corner through the walls (73 nits; 0.019 with one bounce, whose outside there is dark: the gather's
