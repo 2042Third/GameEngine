@@ -799,11 +799,11 @@ TEST_SUITE("Renderer.Quality")
 		CHECK(MemoryBytes(oddProbes, { 3840, 2160 }, "ReflectionProbeResolution") == 17821680); // Clamped to 128
 		// Global illumination, for a scene that asks for it: its layout's voxel clipmap, cascades and field, the same at every
 		// output size (GlobalIlluminationLayout::GetMemoryBytes, checked in Renderer.GlobalIlluminationLayout); none at Off.
-		CHECK(MemoryBytes(high, { 3840, 2160 }, "GlobalIllumination") == 116605552);
-		CHECK(MemoryBytes(ultra, { 1280, 720 }, "GlobalIllumination") == 116605552);
+		CHECK(MemoryBytes(high, { 3840, 2160 }, "GlobalIllumination") == 153469552);
+		CHECK(MemoryBytes(ultra, { 1280, 720 }, "GlobalIllumination") == 153469552);
 		RendererQualitySettings lowGI = medium;
 		lowGI.GlobalIllumination = GlobalIlluminationLevel::Low;
-		CHECK(MemoryBytes(lowGI, { 3840, 2160 }, "GlobalIllumination") == 19051120);
+		CHECK(MemoryBytes(lowGI, { 3840, 2160 }, "GlobalIllumination") == 23659120);
 		CHECK(MemoryBytes(medium, { 3840, 2160 }, "GlobalIllumination") == 0);
 		// The rows that allocate nothing of their own have no estimate.
 		for (const RendererQuality::RowTraits& row : RendererQuality::GetRowTraits())

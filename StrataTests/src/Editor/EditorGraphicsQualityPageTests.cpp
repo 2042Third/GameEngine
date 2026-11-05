@@ -192,15 +192,15 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		// screen-space reflections' and the motion blur's targets but at Low, which turns both off (RowTraits::MemoryBytes; the
 		// reflections': Checkerboard 19.8 MiB at 1920 x 1080 and 79.1 MiB at 3840 x 2160, Spatial 58.0 and 232.0 MiB; the motion
 		// blur's: 24.2 and 96.9 MiB), the reflection probes' cubes (17.0 MiB at 128 per face, 68.0 at 256) and, at High and Ultra,
-		// global illumination's layout (111.2 MiB at every size). Whole MiB, rounded down.
+		// global illumination's layout (146.4 MiB at every size). Whole MiB, rounded down.
 		CHECK(TextOf(PageKey("Memory1080.Low")) == "48 MiB");
 		CHECK(TextOf(PageKey("Memory1080.Medium")) == "192 MiB");
-		CHECK(TextOf(PageKey("Memory1080.High")) == "405 MiB");
-		CHECK(TextOf(PageKey("Memory1080.Ultra")) == "789 MiB");
-		CHECK(TextOf(PageKey("Memory2160.High")) == "844 MiB");
-		CHECK(TextOf(PageKey("Memory2160.Ultra")) == "1.76 GiB");
+		CHECK(TextOf(PageKey("Memory1080.High")) == "440 MiB");
+		CHECK(TextOf(PageKey("Memory1080.Ultra")) == "824 MiB");
+		CHECK(TextOf(PageKey("Memory2160.High")) == "879 MiB");
+		CHECK(TextOf(PageKey("Memory2160.Ultra")) == "1.8 GiB");
 		// Custom's column under High shows where a switch to Custom starts: High's values.
-		CHECK(TextOf(PageKey("Memory2160.Custom")) == "844 MiB");
+		CHECK(TextOf(PageKey("Memory2160.Custom")) == "879 MiB");
 		CHECK(ColorOf(PageKey("Memory2160.High")) == AccentMuted());
 		// The harness renders nothing on a GPU.
 		CHECK(TextOf(PageKey("GPU")) == "GPU times appear while the Scene view renders");

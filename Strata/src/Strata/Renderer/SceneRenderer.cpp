@@ -391,13 +391,14 @@ namespace Strata
 			nvrhi::BindingLayoutItem::Texture_SRV(29),          // Aerial perspective's volume (Include/AerialPerspective.slang)
 			nvrhi::BindingLayoutItem::Texture_SRV(32),          // The sun shadow cascades' depth ranges (Include/Shadows.slang)
 			nvrhi::BindingLayoutItem::Texture_SRV(33),          // The blue-noise tile (Include/Shadows.slang)
-			// Global illumination (Include/GlobalIllumination.slang): its field, its probes' validity and voxel levels 0-2; the
-			// black 3D texture in frames without GI.
+			// Global illumination (Include/GIField.slang): its field, its probes' validity, voxel levels 0-2 and the probes' depth
+			// moments; the black 3D texture in frames without GI.
 			nvrhi::BindingLayoutItem::Texture_SRV(35),
 			nvrhi::BindingLayoutItem::Texture_SRV(37),
 			nvrhi::BindingLayoutItem::Texture_SRV(38),
 			nvrhi::BindingLayoutItem::Texture_SRV(39),
 			nvrhi::BindingLayoutItem::Texture_SRV(40),
+			nvrhi::BindingLayoutItem::Texture_SRV(54),
 			nvrhi::BindingLayoutItem::Sampler(0).setSize(RenderData::c_SamplerCount),
 			nvrhi::BindingLayoutItem::Sampler(8),
 			nvrhi::BindingLayoutItem::Sampler(9),
@@ -1073,7 +1074,7 @@ namespace Strata
 		nvrhi::ITexture* probeArray = GetBoundReflectionProbes();
 		nvrhi::ITexture* screenReflections = GetBoundScreenReflections();
 		nvrhi::ITexture* sceneColor = GetBoundSceneColor();
-		const std::array<nvrhi::ITexture*, 5> giTextures = GetBoundGITextures();
+		const std::array<nvrhi::ITexture*, 6> giTextures = GetBoundGITextures();
 
 		// The shadow pass reads the same resources except for its own draw list (and never the shadow maps it draws into).
 		nvrhi::ITexture* screenShadows = GetBoundScreenShadows();
@@ -1103,6 +1104,7 @@ namespace Strata
 				nvrhi::BindingSetItem::Texture_SRV(38, giTextures[2], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
 				nvrhi::BindingSetItem::Texture_SRV(39, giTextures[3], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
 				nvrhi::BindingSetItem::Texture_SRV(40, giTextures[4], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
+				nvrhi::BindingSetItem::Texture_SRV(54, giTextures[5], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SceneGPU->GetMaterialBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment->Irradiance.Get() : blackCube),

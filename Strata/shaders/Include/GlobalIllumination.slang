@@ -27,6 +27,7 @@
 #define ST_GI_OCCUPANCY_GAIN 2.5          // c_GIOccupancyGain
 #define ST_GI_LEAD_IN_OCCUPANCY 0.3       // c_GILeadInOccupancy
 #define ST_GI_PROBE_MOVE_VOXELS 1.5       // c_GIProbeMoveVoxels
+#define ST_GI_FIELD_PROBE_MOVE 0.5        // c_GIFieldProbeMove
 #define ST_GI_REFRESH_OCCUPANCY 0.1       // c_GIRefreshOccupancy
 #define ST_GI_SHADOW_OFFSET_VOXELS 1.0    // c_GIShadowOffsetVoxels
 #define ST_GI_SHADOW_TILT_VOXELS 1.5      // c_GIShadowTiltVoxels
@@ -37,20 +38,67 @@
 #define ST_GI_SKY_LEVEL 5.3               // c_GISkyLevel
 #define ST_GI_MAX_MARCH_STEPS 1024u       // c_GIMaxMarchSteps
 #define ST_GI_GATHER_NORMAL_BIAS 0.25     // c_GIGatherNormalBias
-#define ST_GI_GATHER_START_VOXELS 1.5     // c_GIGatherStartVoxels
-#define ST_GI_VISIBILITY_CUTOFF 0.05      // c_GIVisibilityCutoff
+#define ST_GI_GATHER_VIEW_BIAS 0.3        // c_GIGatherViewBias
+#define ST_GI_GATHER_MIN_VISIBLE 0.25     // c_GIGatherMinVisible
+#define ST_GI_GATHER_GUARD_STEPS 16u      // c_GIGatherGuardSteps
+#define ST_GI_GATHER_GUARD_CORE float2(0.6, 0.72) // c_GIGatherGuardCore
 #define ST_GI_MAX_BOUNCE_ALBEDO 0.9       // c_GIMaxBounceAlbedo
+#define ST_GI_FIELD_DEPTH_TEXELS 10       // c_GIFieldDepthTexels
+#define ST_GI_FIELD_DIRECTIONS 64u        // c_GIFieldDirections
+#define ST_GI_FIELD_DEPTH_SHARPNESS 8.0   // c_GIFieldDepthSharpness
 
-// The octahedral direction of texel (u, v) of an a x a tile (GlobalIllumination::GetDirection): OctahedralDecode (Include/Scene.slang)
-// of the texel's center mapped to [-1, 1]^2. The same arithmetic, written out so this header needs nothing of Scene.slang.
-float3 GetTileDirection(uint2 texel, uint a)
+// A probe's move off the surface it sits on (ProbeValidity.comp), stored in its validity texel's gba (RGBA8) as 128 + round(127 o)
+// over 255, o the move over half a spacing (so no move is stored exactly), and read back in meters.
+float3 EncodeProbeMove(float3 move, float spacing)
 {
-	float2 encoded = (float2(texel) + 0.5) / float(a) * 2.0 - 1.0;
+	return (128.0 + round(127.0 * clamp(move / (0.5 * spacing), -1.0, 1.0))) / 255.0;
+}
+
+float3 DecodeProbeMove(float4 validity, float spacing)
+{
+	return (round(validity.gba * 255.0) - 128.0) / 127.0 * (0.5 * spacing);
+}
+
+// The octahedral direction of a point of [-1, 1]^2: the engine's OctahedralDecode (Include/Scene.slang), written out so this header
+// needs nothing of Scene.slang.
+float3 DecodeOctahedral(float2 encoded)
+{
 	float3 n = float3(encoded, 1.0 - abs(encoded.x) - abs(encoded.y));
 	float t = max(-n.z, 0.0);
 	n.x += n.x >= 0.0 ? -t : t;
 	n.y += n.y >= 0.0 ? -t : t;
 	return normalize(n);
+}
+
+// A direction's point of [-1, 1]^2: the engine's OctahedralEncode (Include/Scene.slang).
+float2 EncodeOctahedral(float3 n)
+{
+	n /= abs(n.x) + abs(n.y) + abs(n.z);
+	return n.z >= 0.0 ? n.xy : (1.0 - abs(n.yx)) * float2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+}
+
+// The octahedral direction of texel (u, v) of an a x a tile (GlobalIllumination::GetDirection): DecodeOctahedral of the texel's
+// center mapped to [-1, 1]^2.
+float3 GetTileDirection(uint2 texel, uint a)
+{
+	return DecodeOctahedral((float2(texel) + 0.5) / float(a) * 2.0 - 1.0);
+}
+
+// The interior texel a texel of a probe's depth tile holds (ST_GI_FIELD_DEPTH_TEXELS a side, a one-texel border): itself inside;
+// on the border the interior texel across the octahedron's edge (an edge's two halves meet mirrored, the corners all at -z), so
+// bilinear reads across the border are seamless (DDGI's border).
+uint2 GetDepthTileSource(uint2 texel)
+{
+	uint last = ST_GI_FIELD_DEPTH_TEXELS - 1u;
+	bool column = texel.x == 0u || texel.x == last;
+	bool row = texel.y == 0u || texel.y == last;
+	if (column && row)
+		return uint2(texel.x == 0u ? last - 1u : 1u, texel.y == 0u ? last - 1u : 1u);
+	if (column)
+		return uint2(texel.x == 0u ? 1u : last - 1u, last - texel.y);
+	if (row)
+		return uint2(last - texel.x, texel.y == 0u ? 1u : last - 1u);
+	return texel;
 }
 
 // A color packed as shared-exponent RGB9E5 (GlobalIllumination::PackRGB9E5).

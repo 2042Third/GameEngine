@@ -4,9 +4,10 @@
 #include "Include/Scene.slang"
 
 // The probes debug view (SceneLightingView::Probes): global illumination's cascade-0 probes over the lit image. Per pixel, the
-// camera's ray walks the field's cells (a 3D DDA, at most c_MaxCells) and tests a sphere of 0.12 spacings at each cell's probe,
-// nearer than the scene's depth: a live probe is shaded with its ambient cube at the sphere's normal through the frame's exposure
-// and the display curve x / (1 + x); a dead one (inside a solid) dark red. Pixels without a probe keep the lit image.
+// camera's ray walks the field's cells (a 3D DDA, at most c_MaxCells) and tests a sphere of 0.12 spacings at each cell's probe
+// where it moved, nearer than the scene's depth: a live probe is shaded with its ambient cube at the sphere's normal through
+// the frame's exposure and the display curve x / (1 + x); a dead one (inside a solid) dark red. Pixels without a probe keep the
+// lit image.
 
 Texture2D<float4> u_SceneDepth : register(t41);
 
@@ -61,7 +62,9 @@ float4 main(float4 fragCoord : SV_Position) : SV_Target0
 	{
 		if (any(cell < int3(0, 0, 0)) || any(cell >= int3(grid)))
 			break;
-		float3 center = boxMinimum + (float3(cell) + 0.5) * spacing;
+		float4 validity = u_GIFieldValidity.Load(int4(cell, 0));
+		// Where the probe moved off a surface it sat on (ProbeValidity.comp): a ray tests it in its own cell only.
+		float3 center = boxMinimum + (float3(cell) + 0.5) * spacing + DecodeProbeMove(validity, spacing);
 		float3 toCenter = center - origin;
 		float along = dot(toCenter, direction);
 		float3 closest = toCenter - direction * along;
@@ -73,7 +76,7 @@ float4 main(float4 fragCoord : SV_Position) : SV_Target0
 			{
 				float3 normal = normalize(origin + direction * hit - center);
 				float3 radiance = max(ReadAmbientCube(cell, normal).rgb, float3(0.0, 0.0, 0.0)) / ST_GI_RADIANCE_SCALE * u_Frame.TemporalParams.y;
-				color = u_GIFieldValidity.Load(int4(cell, 0)).r <= 0.0 ? c_DeadColor : radiance / (1.0 + radiance);
+				color = validity.r <= 0.0 ? c_DeadColor : radiance / (1.0 + radiance);
 				found = true;
 				break;
 			}

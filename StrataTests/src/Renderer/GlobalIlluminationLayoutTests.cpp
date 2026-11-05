@@ -146,11 +146,12 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 		CHECK(high.Weights == 840960);
 		CHECK(high.Validity == 421200);
 		CHECK(high.Field == 4423680);
+		CHECK(high.FieldDepth == 36864000); // 92,160 probes, a 10 x 10 RG16F tile each
 		CHECK(high.Tiles == 262144);
 		CHECK(high.WorkItems == 1572864);
 		CHECK(high.Regions == 196640);
-		CHECK(high.GetTotal() == 116605552);
-		CHECK(GetLayout(GlobalIlluminationLevel::High).GetMemoryBytes() == 116605552);
+		CHECK(high.GetTotal() == 153469552);
+		CHECK(GetLayout(GlobalIlluminationLevel::High).GetMemoryBytes() == 153469552);
 
 		const GlobalIlluminationMemory low = GetLayout(GlobalIlluminationLevel::Low).GetMemory();
 		CHECK(low.VoxelLevels == 7864320);
@@ -159,10 +160,11 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 		CHECK(low.Weights == 103680);
 		CHECK(low.Validity == 52560);
 		CHECK(low.Field == 552960);
+		CHECK(low.FieldDepth == 4608000);
 		CHECK(low.Tiles == 262144);
 		CHECK(low.WorkItems == 1572864);
 		CHECK(low.Regions == 196640);
-		CHECK(low.GetTotal() == 19051120);
+		CHECK(low.GetTotal() == 23659120);
 	}
 
 	TEST_CASE("Directions and solid angles")
@@ -520,12 +522,13 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 		CHECK(clamped.y == 65408.0f);
 	}
 
-	TEST_CASE("High bounces on, Low once")
+	TEST_CASE("Both qualities bounce")
 	{
-		// Low's probe visibility lets bounced light into closed rooms' corners (GPU.SceneRenderer.GlobalIlluminationRoom's "A
-		// sealed room stays dark"): its re-injection waits for the visibility's rework.
+		// Low's re-injection waited for the probes' visibility to keep bounced light out of closed rooms' corners; the depth
+		// moments and the gather's guard do (GPU.SceneRenderer.GlobalIlluminationRoom's "A sealed room stays dark", every bounce at
+		// Low).
 		CHECK(GlobalIllumination::ComputeLayout(GlobalIlluminationLevel::High)->Bounces);
-		CHECK_FALSE(GlobalIllumination::ComputeLayout(GlobalIlluminationLevel::Low)->Bounces);
+		CHECK(GlobalIllumination::ComputeLayout(GlobalIlluminationLevel::Low)->Bounces);
 	}
 
 	TEST_CASE("Bounces settle by the scene's brightest albedo")

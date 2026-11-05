@@ -2,7 +2,7 @@
 
 #include "Include/GIProbes.slang"
 
-// The field the frame before left (multi-bounce by re-injection): b3, SRV 35, 37 and 38-40 hold it as the scene passes read this
+// The field the frame before left (multi-bounce by re-injection): b3, SRV 35, 37, 38-40 and 54 hold it as the scene passes read this
 // frame's, with its constants relative to that frame's camera (SceneRendererGlobalIllumination.cpp, PreviousField).
 #include "Include/GIField.slang"
 
@@ -162,7 +162,7 @@ void main(uint3 globalID : SV_DispatchThreadID, uint localIndex : SV_GroupIndex)
 			{
 				// The field holds irradiance over pi times ST_GI_RADIANCE_SCALE: a Lambertian surface's radiance per albedo.
 				float openShare;
-				float4 field = SampleIrradianceField(u_GIRepeat, center + n * (0.5 * voxel) + u_GI.Bounce.yzw, n, n, openShare);
+				float4 field = SampleIrradianceField(u_GIRepeat, center + n * (0.5 * voxel) + u_GI.Bounce.yzw, n, n, n, openShare);
 				float3 bounceAlbedo = min(albedo, float3(ST_GI_MAX_BOUNCE_ALBEDO, ST_GI_MAX_BOUNCE_ALBEDO, ST_GI_MAX_BOUNCE_ALBEDO));
 				scaled += SanitizeHDR(bounceAlbedo * field.rgb * (field.a * u_GI.Bounce.x));
 			}

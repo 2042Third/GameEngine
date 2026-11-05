@@ -164,18 +164,6 @@ float3 GetProbePosition(uint3 index, float spacing)
 	return u_GI.FieldOrigin.xyz + (float3(index) + 0.5) * spacing;
 }
 
-// A probe's move off the surface it sits on (ProbeValidity.comp), stored in its validity texel's gba (RGBA8) as 128 + round(127 o)
-// over 255, o the move over half a spacing (so no move is stored exactly), and read back in meters.
-float3 EncodeProbeMove(float3 move, float spacing)
-{
-	return (128.0 + round(127.0 * clamp(move / (0.5 * spacing), -1.0, 1.0))) / 255.0;
-}
-
-float3 DecodeProbeMove(float4 validity, float spacing)
-{
-	return (round(validity.gba * 255.0) - 128.0) / 127.0 * (0.5 * spacing);
-}
-
 // What the sky sends along a direction a ray leaves the clipmap by (scaled luminance): the environment cube's level about a
 // top-cascade direction's size times its intensity, or the constant ambient without an environment.
 float3 GetSkyRadiance(float3 direction)

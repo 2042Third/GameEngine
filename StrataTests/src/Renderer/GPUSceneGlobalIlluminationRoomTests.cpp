@@ -2342,3 +2342,368 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }
+
+namespace
+{
+	// The Cornell box's gi view with every bounce, settled, each pixel's world position (none where nothing is drawn) and the field's
+	// probe planes: cascade 0's probes lie at Origin + (i + 0.5) Spacing.
+	struct CornellView
+	{
+		ReadbackImage Image;
+		std::vector<std::optional<glm::vec3>> Positions;
+		SceneCamera Camera;
+		glm::vec3 Origin { 0.0f };
+		float Spacing = 0.0f;
+
+		float GetLuminance(uint32_t x, uint32_t y) const
+		{
+			return Luminance(glm::vec3(ReadHalfTexel(Image, x, y))) / c_RoomPreExposure;
+		}
+
+		// The gi view's luminance at a world point: the pixel it projects to, when that pixel shows the point (its position within
+		// 1.5 cm of it).
+		std::optional<float> Read(const glm::vec3& point) const
+		{
+			const glm::vec4 clip = Camera.Projection * Camera.View * glm::vec4(point, 1.0f);
+			if (clip.w <= 0.0f || std::abs(clip.x) >= clip.w || std::abs(clip.y) >= clip.w)
+				return std::nullopt;
+			const glm::uvec2 pixel = ProjectToPixel(Camera, point, Image.Width, Image.Height);
+			if (pixel.x >= Image.Width || pixel.y >= Image.Height)
+				return std::nullopt;
+			const std::optional<glm::vec3>& position = Positions[static_cast<size_t>(pixel.y) * Image.Width + pixel.x];
+			if (!position || glm::distance(*position, point) > 0.015f)
+				return std::nullopt;
+			return GetLuminance(pixel.x, pixel.y);
+		}
+	};
+
+	CornellView RenderCornellView(GlobalIlluminationLevel level)
+	{
+		SceneTestAssets assets;
+		Scene scene;
+		BuildCornellBox(scene, assets);
+		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification(level, 1.0f));
+		renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+		CornellView view;
+		view.Camera = CornellCamera(static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y));
+		RenderUntilSettled(*renderer, scene, view.Camera, GIViewOptions(), 40);
+		REQUIRE_FALSE(renderer->GetStats().GlobalIlluminationPending);
+		REQUIRE(Renderer::ReadTexture(renderer->GetHDRTexture(), view.Image));
+		REQUIRE(view.Image.Format == nvrhi::Format::RGBA16_FLOAT);
+		view.Positions = ReadRelativePositions(*renderer, view.Camera);
+		for (std::optional<glm::vec3>& position : view.Positions)
+		{
+			if (position)
+				*position += view.Camera.Position;
+		}
+		view.Origin = view.Camera.Position + glm::vec3(renderer->GetGlobalIlluminationFieldConstants().FieldOrigin);
+		view.Spacing = FirstSpacing(level);
+		renderer.reset();
+		CollectReleases();
+		return view;
+	}
+
+	// One of the Cornell box's inside faces: the plane where coordinate `Axis` is `Value`, within `Minimum` to `Maximum` along
+	// the other two axes (in x, y, z order).
+	struct CornellFace
+	{
+		const char* Name = "";
+		int Axis = 0;
+		float Value = 0.0f;
+		glm::vec2 Minimum { 0.0f };
+		glm::vec2 Maximum { 0.0f };
+	};
+
+	// How far outside the Cornell box's sphere and tall box a floor point (x, z) lies (negative under them): the sphere's footprint is
+	// its radius around its foot, the box's its 1.6 m square turned 18 degrees, measured along its own axes.
+	float GetCornellClearance(const glm::vec2& point)
+	{
+		const glm::vec2 sphere(1.15f, -0.3f);
+		const glm::vec2 d = point - glm::vec2(-1.05f, -1.0f);
+		const float angle = glm::radians(18.0f);
+		const glm::vec2 local(std::cos(angle) * d.x - std::sin(angle) * d.y, std::sin(angle) * d.x + std::cos(angle) * d.y);
+		return std::min(glm::distance(point, sphere) - 0.9f, std::max(std::abs(local.x), std::abs(local.y)) - 0.8f);
+	}
+
+	// The median of some values (0 for none).
+	float Median(std::vector<float> values)
+	{
+		if (values.empty())
+			return 0.0f;
+		std::nth_element(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(values.size() / 2), values.end());
+		return values[values.size() / 2];
+	}
+
+	// A cascade-0 probe's depth moments toward a direction as Include/GIField.slang's ReadProbeDepth reads them (bilinear between the
+	// four texels around the direction's octahedral point, as their mixture): the mean distance to the first hit and its variance.
+	glm::vec2 ReadProbeDepth(const SceneRenderer& renderer, const std::vector<uint8_t>& depth, const glm::ivec3& probe, const glm::vec3& direction)
+	{
+		const glm::ivec3 grid(renderer.GetGlobalIlluminationLayout()->Cascades.front().Grid);
+		constexpr int c_Texels = static_cast<int>(RenderData::c_GIFieldDepthTexels);
+		const glm::vec3 n = direction / (std::abs(direction.x) + std::abs(direction.y) + std::abs(direction.z));
+		const glm::vec2 encoded = n.z >= 0.0f ? glm::vec2(n.x, n.y)
+			: glm::vec2((1.0f - std::abs(n.y)) * (n.x >= 0.0f ? 1.0f : -1.0f), (1.0f - std::abs(n.x)) * (n.y >= 0.0f ? 1.0f : -1.0f));
+		const glm::vec2 coordinate = (encoded * 0.5f + 0.5f) * static_cast<float>(c_Texels - 2) + 0.5f;
+		const glm::ivec2 first = glm::clamp(glm::ivec2(glm::floor(coordinate)), glm::ivec2(0), glm::ivec2(c_Texels - 2));
+		const glm::vec2 fraction = glm::clamp(coordinate - glm::vec2(first), 0.0f, 1.0f);
+		glm::vec2 texels[4];
+		for (int corner = 0; corner < 4; corner++)
+		{
+			const size_t x = static_cast<size_t>(probe.x * c_Texels + first.x + (corner & 1));
+			const size_t y = static_cast<size_t>(probe.y * c_Texels + first.y + (corner >> 1));
+			const size_t index = x + static_cast<size_t>(grid.x * c_Texels) * (y + static_cast<size_t>(grid.y * c_Texels) * static_cast<size_t>(probe.z));
+			REQUIRE((index + 1) * 4 <= depth.size());
+			uint16_t value[2];
+			std::memcpy(value, depth.data() + index * 4, sizeof(value));
+			texels[corner] = glm::vec2(glm::unpackHalf1x16(value[0]), glm::unpackHalf1x16(value[1]));
+		}
+		const float weights[4] = { (1.0f - fraction.x) * (1.0f - fraction.y), fraction.x * (1.0f - fraction.y), (1.0f - fraction.x) * fraction.y,
+			fraction.x * fraction.y };
+		float mean = 0.0f;
+		for (int corner = 0; corner < 4; corner++)
+			mean += weights[corner] * texels[corner].x;
+		float variance = 0.0f;
+		for (int corner = 0; corner < 4; corner++)
+			variance += weights[corner] * (texels[corner].y + (texels[corner].x - mean) * (texels[corner].x - mean));
+		return glm::vec2(mean, variance);
+	}
+}
+
+TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
+{
+	TEST_CASE("The Cornell box's GI has no steps at probe-cell borders")
+	{
+		// The owner's Cornell box (every bounce, settled): where a face crosses a probe plane, the gather's eight probes change, and
+		// a gather that switches probes on and off (a visibility march's verdict, a renormalized weight that reaches 0) changes its
+		// light there in a step: the bands on the walls and the blocks on the floor. Across every probe plane crossing the floor,
+		// the ceiling and the three walls (lines 5 cm apart, 15 cm inside the face's edges), the change between the points c_Near
+		// on either side of the plane exceeds what the light's slope just beside it (the changes from c_Near to 3 c_Near on each
+		// side) predicts by at most c_MaxStep of the light there (or of a twentieth of the faces' median where darker). A smooth
+		// gradient passes however steep; a step of a probe's weight does not. The floor within 0.3 m of the sphere and the box is
+		// the contact case's (below). At High (the owner's look); Low's 1 m probes are measured and reported: next to the box and
+		// the sphere whole cells of them lie in the coarse voxels' solids, and the floor and walls there still step (DeveloperGuide,
+		// "Global illumination").
+		constexpr float c_Near = 0.02f;
+		constexpr float c_MaxStep = 0.1f;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::vector<CornellFace> faces = {
+			{ "floor", 1, 0.0f, { -2.75f, -2.75f }, { 2.75f, 2.75f } },
+			{ "ceiling", 1, 5.5f, { -2.75f, -2.75f }, { 2.75f, 2.75f } },
+			{ "back wall", 2, -2.75f, { -2.75f, 0.0f }, { 2.75f, 5.5f } },
+			{ "red wall", 0, -2.75f, { 0.0f, -2.75f }, { 5.5f, 2.75f } },
+			{ "green wall", 0, 2.75f, { 0.0f, -2.75f }, { 5.5f, 2.75f } },
+		};
+		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
+		{
+			const std::string levelName = level == GlobalIlluminationLevel::High ? "High" : "Low";
+			CAPTURE(levelName);
+			const CornellView view = RenderCornellView(level);
+			for (const CornellFace& face : faces)
+			{
+				INFO(face.Name);
+				// The face's two tangent axes, in x, y, z order (CornellFace's Minimum and Maximum).
+				const int axes[2] = { face.Axis == 0 ? 1 : 0, face.Axis == 2 ? 1 : 2 };
+				const auto pointOn = [&](float a, float b)
+				{
+					glm::vec3 point(0.0f);
+					point[face.Axis] = face.Value;
+					point[axes[0]] = a;
+					point[axes[1]] = b;
+					return point;
+				};
+				std::vector<float> values;
+				for (float a = face.Minimum.x + 0.15f; a <= face.Maximum.x - 0.15f; a += 0.1f)
+				{
+					for (float b = face.Minimum.y + 0.15f; b <= face.Maximum.y - 0.15f; b += 0.1f)
+					{
+						if (const std::optional<float> value = view.Read(pointOn(a, b)))
+							values.push_back(*value);
+					}
+				}
+				const float floorLevel = 0.05f * Median(values);
+				float largest = 0.0f;
+				glm::vec3 where(0.0f);
+				uint32_t crossings = 0;
+				for (int across = 0; across < 2; across++)
+				{
+					const int axis = axes[across];
+					const float low = across == 0 ? face.Minimum.x + 0.15f : face.Minimum.y + 0.15f;
+					const float high = across == 0 ? face.Maximum.x - 0.15f : face.Maximum.y - 0.15f;
+					const float otherLow = across == 0 ? face.Minimum.y + 0.15f : face.Minimum.x + 0.15f;
+					const float otherHigh = across == 0 ? face.Maximum.y - 0.15f : face.Maximum.x - 0.15f;
+					const float first = std::ceil((low - view.Origin[axis]) / view.Spacing - 0.5f);
+					for (float k = first; view.Origin[axis] + (k + 0.5f) * view.Spacing <= high; k += 1.0f)
+					{
+						const float plane = view.Origin[axis] + (k + 0.5f) * view.Spacing;
+						for (float other = otherLow; other <= otherHigh; other += 0.05f)
+						{
+							const auto at = [&](float offset)
+							{
+								return across == 0 ? view.Read(pointOn(plane + offset, other)) : view.Read(pointOn(other, plane + offset));
+							};
+							const glm::vec3 center = across == 0 ? pointOn(plane, other) : pointOn(other, plane);
+							if (face.Axis == 1 && face.Value == 0.0f && GetCornellClearance(glm::vec2(center.x, center.z)) < 0.3f)
+								continue;
+							const std::optional<float> farBefore = at(-3.0f * c_Near);
+							const std::optional<float> before = at(-c_Near);
+							const std::optional<float> after = at(c_Near);
+							const std::optional<float> farAfter = at(3.0f * c_Near);
+							if (!farBefore || !before || !after || !farAfter)
+								continue;
+							crossings++;
+							const float slope = 0.5f * (std::abs(*before - *farBefore) + std::abs(*farAfter - *after));
+							const float step = (std::abs(*after - *before) - slope) / std::max(0.5f * (*before + *after), floorLevel);
+							if (step > largest)
+							{
+								largest = step;
+								where = across == 0 ? pointOn(plane, other) : pointOn(other, plane);
+							}
+						}
+					}
+				}
+				MESSAGE(levelName << ", " << std::string(face.Name) << ": " << crossings << " crossings of probe planes, the largest step "
+					<< largest * 100.0f << "% at (" << where.x << ", " << where.y << ", " << where.z << ")");
+				CHECK(crossings > 100);
+				if (level == GlobalIlluminationLevel::High)
+					CHECK(largest <= c_MaxStep);
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The Cornell box's floor darkens smoothly toward the sphere's and the box's feet")
+	{
+		// Around the sphere's and the tall box's feet (every bounce, settled), outside what they cover, the floor's GI may fall
+		// toward them, but no floor point is darker than c_MinRatio of the brightest of its neighbours a voxel (0.1 m) away along x
+		// and z: a gather whose probes each pass or fail a march through the voxels left a staircase of black cells there. Points the
+		// camera does not see and neighbours under the objects are left out, and so are points whose brightest neighbour is darker
+		// than a fiftieth of the floor's median. At High around the sphere; the gap between the box's back-left corner and
+		// the red wall, Low and the floor the sphere overhangs (within its radius of its foot) are measured and reported: no probe
+		// of 0.5 m (1 m at Low) sees them, and they still go dark within a voxel (DeveloperGuide, "Global illumination").
+		constexpr float c_MinRatio = 0.5f;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const glm::vec2 sphere(1.15f, -0.3f);
+		constexpr float c_SphereRadius = 0.9f;
+		const glm::vec2 box(-1.05f, -1.0f);
+		constexpr float c_BoxHalf = 0.8f;
+		const float boxAngle = glm::radians(18.0f);
+		// The distance outside the tall box's footprint along its own axes (negative inside): (x, z) turned back by its 18 degrees.
+		const auto outsideBox = [&](const glm::vec2& point)
+		{
+			const glm::vec2 d = point - box;
+			const glm::vec2 local(std::cos(boxAngle) * d.x - std::sin(boxAngle) * d.y, std::sin(boxAngle) * d.x + std::cos(boxAngle) * d.y);
+			return std::max(std::abs(local.x), std::abs(local.y)) - c_BoxHalf;
+		};
+		const auto covered = [&](const glm::vec2& point) { return glm::distance(point, sphere) < c_SphereRadius || outsideBox(point) < 0.0f; };
+		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
+		{
+			const std::string levelName = level == GlobalIlluminationLevel::High ? "High" : "Low";
+			CAPTURE(levelName);
+			const CornellView view = RenderCornellView(level);
+			std::vector<float> floorValues;
+			for (int i = 0; i <= 52; i++)
+			{
+				for (int j = 0; j <= 52; j++)
+				{
+					if (const std::optional<float> value = view.Read(glm::vec3(-2.6f + 0.1f * static_cast<float>(i), 0.0f, -2.6f + 0.1f * static_cast<float>(j))))
+						floorValues.push_back(*value);
+				}
+			}
+			const float floorMedian = Median(floorValues);
+			REQUIRE(floorMedian > 0.0f);
+			for (uint32_t feet = 0; feet < 2; feet++)
+			{
+				const std::string name = feet == 0 ? "the sphere's foot" : "the tall box's foot";
+				INFO(name);
+				float lowest = std::numeric_limits<float>::max();
+				glm::vec2 lowestAt(0.0f);
+				uint32_t measured = 0;
+				for (int i = 0; i <= 208; i++)
+				{
+					for (int j = 0; j <= 208; j++)
+					{
+						const glm::vec2 point(-2.6f + 0.025f * static_cast<float>(i), -2.6f + 0.025f * static_cast<float>(j));
+						const float fromSphere = glm::distance(point, sphere);
+						const bool near = feet == 0 ? fromSphere <= c_SphereRadius + 0.6f : outsideBox(point) <= 0.8f;
+						if (!near || covered(point))
+							continue;
+						const std::optional<float> value = view.Read(glm::vec3(point.x, 0.0f, point.y));
+						if (!value)
+							continue;
+						float brightest = 0.0f;
+						for (const glm::vec2 offset : { glm::vec2(0.1f, 0.0f), glm::vec2(-0.1f, 0.0f), glm::vec2(0.0f, 0.1f), glm::vec2(0.0f, -0.1f) })
+						{
+							const glm::vec2 neighbour = point + offset;
+							if (covered(neighbour) || std::abs(neighbour.x) > 2.7f || std::abs(neighbour.y) > 2.7f)
+								continue;
+							if (const std::optional<float> other = view.Read(glm::vec3(neighbour.x, 0.0f, neighbour.y)))
+								brightest = std::max(brightest, *other);
+						}
+						if (brightest < 0.02f * floorMedian)
+							continue;
+						measured++;
+						const float ratio = *value / brightest;
+						if (ratio < lowest)
+						{
+							lowest = ratio;
+							lowestAt = point;
+						}
+					}
+				}
+				MESSAGE(levelName << ", " << name << ": " << measured << " floor points, the darkest against its neighbours " << lowest
+					<< " of the brightest, at (" << lowestAt.x << ", 0, " << lowestAt.y << "); the floor's median " << floorMedian);
+				CHECK(measured > 200);
+				if (level == GlobalIlluminationLevel::High && feet == 0)
+					CHECK(lowest >= c_MinRatio);
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A probe's depth moments hold its distances to the surfaces around it")
+	{
+		// Cascade 0's probes keep each direction's distance to the first hit (FieldReduce.comp), what the gather's visibility reads.
+		// In the Cornell box, a probe a known height over the open floor finds the floor straight down within a voxel and a half
+		// (the voxels' soft surface and the filter over neighbouring rays), its spread within two voxels, and nothing up to the
+		// march's end straight up (the ceiling lies farther): the distances are the march's, in meters.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
+		{
+			const std::string levelName = level == GlobalIlluminationLevel::High ? "High" : "Low";
+			CAPTURE(levelName);
+			SceneTestAssets assets;
+			Scene scene;
+			BuildCornellBox(scene, assets);
+			Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification(level));
+			renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+			const SceneCamera camera = CornellCamera(static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y));
+			for (uint32_t frame = 0; frame < 3; frame++)
+				REQUIRE(RenderGIFrame(*renderer, scene, camera, GIViewOptions()));
+			REQUIRE_FALSE(renderer->GetStats().GlobalIlluminationPending);
+			std::vector<uint8_t> depth;
+			REQUIRE(renderer->ReadGlobalIlluminationFieldDepth(depth));
+			const float spacing = FirstSpacing(level);
+			const float voxel = renderer->GetGlobalIlluminationLayout()->Levels.front().VoxelSize;
+			// Probes lie at (i + 0.5) spacings from a corner snapped to whole top-cascade spacings: half a spacing over the floor, and
+			// this one toward the open front, beside the middle, far from every other surface.
+			const glm::vec3 position(0.5f * spacing, 0.5f * spacing, 1.5f);
+			const glm::ivec3 probe = FindProbe(*renderer, camera, 0, position);
+			const glm::vec3 center = camera.Position + glm::vec3(renderer->GetGlobalIlluminationFieldConstants().FieldOrigin)
+				+ (glm::vec3(probe) + 0.5f) * spacing;
+			const float missDistance = 2.0f * spacing;
+			const glm::vec2 down = ReadProbeDepth(*renderer, depth, probe, glm::vec3(0.0f, -1.0f, 0.0f));
+			const glm::vec2 up = ReadProbeDepth(*renderer, depth, probe, glm::vec3(0.0f, 1.0f, 0.0f));
+			MESSAGE(levelName << ": the probe at (" << center.x << ", " << center.y << ", " << center.z << ") finds the floor at " << down.x
+				<< " m (spread " << std::sqrt(down.y) << "), up " << up.x << " m (spread " << std::sqrt(up.y) << ")");
+			CHECK(std::abs(down.x - center.y) <= 1.5f * voxel);
+			CHECK(std::sqrt(down.y) <= 2.0f * voxel);
+			CHECK(up.x >= 0.95f * missDistance);
+			renderer.reset();
+			CollectReleases();
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+}

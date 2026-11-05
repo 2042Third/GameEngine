@@ -2,8 +2,9 @@
 #define STRATA_GI_FIELD_SLANG
 
 // Global illumination's irradiance field as the scene passes read it (Docs/DeveloperGuide.md, "Global illumination"): b3 of the
-// scene layout (RenderData::GIFieldConstants, zero without GI), the field's faces (SRV 35), cascade 0's validity (SRV 37) and voxel
-// levels 0-2 (SRV 38-40) for the gather's visibility. Everything is world data: no screen input.
+// scene layout (RenderData::GIFieldConstants, zero without GI), the field's faces (SRV 35), cascade 0's validity (SRV 37), its
+// probes' depth moments (SRV 54) and voxel levels 0-2 (SRV 38-40) for the gather's visibility. Everything is world data: no screen
+// input.
 
 #include "Include/Common.slang"
 
@@ -27,6 +28,7 @@ Texture3D<float4> u_GIFieldValidity : register(t37);
 Texture3D<float4> u_GIFieldVoxels0 : register(t38);
 Texture3D<float4> u_GIFieldVoxels1 : register(t39);
 Texture3D<float4> u_GIFieldVoxels2 : register(t40);
+Texture3D<float4> u_GIFieldDepth : register(t54);
 
 // The field's weight at a camera-relative point: 1 within its full extent around the camera, falling to 0 over the fade (by the
 // distance from the camera, not from the snapped field, so it moves continuously), times FieldSize.w (0 while pending).
@@ -87,127 +89,133 @@ float SampleFieldOccupancy(uint level, SamplerState repeat, float3 position)
 	return SampleFieldVoxels(level, repeat, coordinate);
 }
 
-// The transmittance from a start point to a probe through one level (FindFieldLevel's), one voxel a step; below
-// ST_GI_VISIBILITY_CUTOFF nothing is seen. Points no level holds both of are not seen: nothing tells whether a floor or a
-// ceiling lies between them (a valid box falls up to two scroll steps short while a scroll is voxelized), and dark is never a
-// leak.
-float GetFieldVisibility(SamplerState repeat, float3 start, float3 target)
+// The transmittance through the voxels from a probe to the point it lights (the gather's guard against walls):
+// ST_GI_GATHER_GUARD_STEPS samples at fixed fractions of the segment, under a voxel apart over a cell's diagonal at either
+// quality (a fixed count, so it changes continuously with the point), through the finest of levels 0-2 whose valid box holds
+// both ends; none holds them: 0 (nothing tells whether a wall lies between, and dark is never a leak). Chebyshev's bound on a
+// probe's 64 directions lets a thin wall seen at a grazing angle through; a solid voxel on the segment does not.
+float GetFieldTransmittance(SamplerState repeat, float3 from, float3 to)
 {
-	uint level = FindFieldLevel(start, target);
+	uint level = FindFieldLevel(from, to);
 	if (level >= 3u)
 		return 0.0;
-	float voxel = u_GIField.VoxelOrigin[level].w;
-	float3 delta = target - start;
-	float distance = length(delta);
-	uint steps = uint(ceil(distance / voxel));
 	float transmittance = 1.0;
 	[loop]
-	for (uint step = 0u; step < steps; step++)
+	for (uint step = 0u; step < ST_GI_GATHER_GUARD_STEPS; step++)
 	{
-		float3 position = start + delta * ((float(step) + 0.5) / float(steps));
-		transmittance *= 1.0 - saturate(SampleFieldOccupancy(level, repeat, position) * ST_GI_OCCUPANCY_GAIN);
-		if (transmittance < ST_GI_VISIBILITY_CUTOFF)
-			return 0.0;
+		float3 position = lerp(from, to, (float(step) + 0.5) / float(ST_GI_GATHER_GUARD_STEPS));
+		transmittance *= 1.0 - smoothstep(ST_GI_GATHER_GUARD_CORE.x, ST_GI_GATHER_GUARD_CORE.y, SampleFieldOccupancy(level, repeat, position));
 	}
 	return transmittance;
 }
 
-// The voxel size of the finest of levels 0-2 holding a point (level 0's when none does).
-float GetFieldVoxelSize(float3 position)
+// A cascade-0 probe's distance to the first hit toward a direction (FieldReduce.comp's depth moments): the four texels of its tile
+// around the direction's octahedral point, bilinear, as the mixture of their distributions: x the mean distance, y its variance
+// (meters).
+float2 ReadProbeDepth(int3 probe, float3 direction)
 {
-	[loop]
-	for (uint level = 0u; level < 3u; level++)
-	{
-		if (IsInFieldLevel(level, position))
-			return u_GIField.VoxelOrigin[level].w;
-	}
-	return max(u_GIField.VoxelOrigin[0].w, 1e-3);
+	float interior = float(ST_GI_FIELD_DEPTH_TEXELS - 2);
+	// Texel k of the tile spans [k, k + 1); the interior starts at 1, and bilinear reads are between texel centers.
+	float2 coordinate = (EncodeOctahedral(direction) * 0.5 + 0.5) * interior + 0.5;
+	int2 first = clamp(int2(floor(coordinate)), int2(0, 0), int2(ST_GI_FIELD_DEPTH_TEXELS - 2, ST_GI_FIELD_DEPTH_TEXELS - 2));
+	float2 fraction = saturate(coordinate - float2(first));
+	int2 origin = probe.xy * ST_GI_FIELD_DEPTH_TEXELS + first;
+	float2 a = u_GIFieldDepth.Load(int4(origin, probe.z, 0)).rg;
+	float2 b = u_GIFieldDepth.Load(int4(origin + int2(1, 0), probe.z, 0)).rg;
+	float2 c = u_GIFieldDepth.Load(int4(origin + int2(0, 1), probe.z, 0)).rg;
+	float2 d = u_GIFieldDepth.Load(int4(origin + int2(1, 1), probe.z, 0)).rg;
+	float4 weights = float4((1.0 - fraction.x) * (1.0 - fraction.y), fraction.x * (1.0 - fraction.y), (1.0 - fraction.x) * fraction.y,
+		fraction.x * fraction.y);
+	float mean = dot(weights, float4(a.x, b.x, c.x, d.x));
+	float4 spread = float4(a.x, b.x, c.x, d.x) - mean;
+	float variance = dot(weights, float4(a.y, b.y, c.y, d.y) + spread * spread);
+	return float2(mean, variance);
 }
 
-// The field's irradiance over pi at a camera-relative surface point for a shading normal (luminance, times ST_GI_RADIANCE_SCALE),
-// .a the field's weight there (0 outside it, while pending or where no voxel level holds the point). The eight cascade-0 probes around the point moved along its
-// geometric normal, each weighted trilinearly, by its validity, by whether it lies in front of the surface's plane and by its
-// visibility from just off the surface (a march through the voxels). Where no probe is visible, the march starts again moved off
-// the solid (down the occupancy's gradient, a voxel at a time, at most two, while the start's occupancy reaches 0.3); a point that
-// still sees none takes no field light (dark, never the sky). openShare receives the cosine-weighted share of the sky it sees.
-float4 SampleIrradianceField(SamplerState repeat, float3 position, float3 geometricNormal, float3 shadingNormal, out float openShare)
+// How much a probe sees a point (Chebyshev's bound on the probe's distances toward it, the test of DDGI, Majercik et al. 2019;
+// ideas only): 1 where the point lies no farther than the mean distance to the first hit; beyond it the share of the distribution
+// the bound leaves, cubed so the light falls off within the hit's spread rather than over its tail. Continuous: no step where a
+// probe stops seeing a point.
+float GetProbeVisibility(int3 probe, float3 probePosition, float3 target)
+{
+	float3 toTarget = target - probePosition;
+	float distance = length(toTarget);
+	if (distance <= 1e-5)
+		return 1.0;
+	float2 depth = ReadProbeDepth(probe, toTarget / distance);
+	if (distance <= depth.x)
+		return 1.0;
+	float excess = distance - depth.x;
+	float chebyshev = depth.y / max(depth.y + excess * excess, 1e-12);
+	return chebyshev * chebyshev * chebyshev;
+}
+
+// The field's irradiance over pi at a camera-relative surface point for a shading normal (luminance, times
+// ST_GI_RADIANCE_SCALE), .a the field's weight there (0 outside it, while pending or where no voxel level holds the point). The
+// eight cascade-0 probes around the point moved ST_GI_GATHER_NORMAL_BIAS spacings along its geometric normal, each weighted
+// trilinearly, by its validity, by whether it lies in front of the surface's plane and by how much it sees the point
+// (GetProbeVisibility, at the moved point moved ST_GI_GATHER_VIEW_BIAS spacings more toward the viewer: a surface's own voxels
+// never hide it; times the transmittance of the voxels between them, GetFieldTransmittance), then normalized. Where the live
+// probes in front of the point see less of it than ST_GI_GATHER_MIN_VISIBLE of the weight all the probes in front would give it
+// (a contact, a junction, a cell of probes dead inside a solid), the light fades with what they see rather than giving the few
+// that see it full weight; a point no probe sees takes no field light (dark, never the sky). Every weight is continuous, so the
+// light is: no bands at cell borders, no staircase of voxels. openShare receives the cosine-weighted share of the sky it sees.
+// viewDirection points toward the viewer (the normal where there is none).
+float4 SampleIrradianceField(SamplerState repeat, float3 position, float3 geometricNormal, float3 shadingNormal, float3 viewDirection,
+	out float openShare)
 {
 	openShare = 1.0;
 	float fieldWeight = GetFieldWeight(position);
-	// A point no voxel level holds cannot check what it sees: today's light, as outside the field. The field's reach stays
-	// where level 2 holds every point one scroll slab short (GlobalIllumination::ComputeLayout), so only a camera that moved on
-	// by more than a step before the slab was voxelized meets this.
+	// A point no voxel level holds is outside what the probes' marches saw: today's light, as outside the field. The field's
+	// reach stays where level 2 holds every point one scroll slab short (GlobalIllumination::ComputeLayout), so only a camera that
+	// moved on by more than a step before the slab was voxelized meets this.
 	if (fieldWeight <= 0.0 || FindFieldLevel(position, position) >= 3u)
 		return float4(0.0, 0.0, 0.0, 0.0);
 	float spacing = u_GIField.FieldOrigin.w;
 	int3 grid = int3(u_GIField.FieldSize.xyz);
-	float3 coordinate = (position + geometricNormal * (ST_GI_GATHER_NORMAL_BIAS * spacing) - u_GIField.FieldOrigin.xyz) / spacing - 0.5;
+	float3 biased = position + geometricNormal * (ST_GI_GATHER_NORMAL_BIAS * spacing);
+	float3 coordinate = (biased - u_GIField.FieldOrigin.xyz) / spacing - 0.5;
 	int3 base = int3(floor(coordinate));
 	float3 fraction = coordinate - float3(base);
-	float voxel = GetFieldVoxelSize(position);
-	float3 start = position + geometricNormal * (ST_GI_GATHER_START_VOXELS * voxel);
+	float3 seen = biased + viewDirection * (ST_GI_GATHER_VIEW_BIAS * spacing);
 
 	float3 irradiance = float3(0.0, 0.0, 0.0);
 	float sky = 0.0;
 	float total = 0.0;
+	float reachable = 0.0;
 	[loop]
-	for (uint pass = 0u; pass < 2u; pass++)
+	for (uint corner = 0u; corner < 8u; corner++)
 	{
-		[loop]
-		for (uint corner = 0u; corner < 8u; corner++)
-		{
-			int3 offset = int3(int(corner & 1u), int((corner >> 1) & 1u), int((corner >> 2) & 1u));
-			int3 probe = base + offset;
-			if (any(probe < int3(0, 0, 0)) || any(probe >= grid))
-				continue;
-			float validity = u_GIFieldValidity.Load(int4(probe, 0)).r;
-			if (validity <= 0.0)
-				continue;
-			float3 probePosition = u_GIField.FieldOrigin.xyz + (float3(probe) + 0.5) * spacing;
-			float3 toProbe = probePosition - position;
-			float facing = smoothstep(-0.05, 0.25, dot(toProbe * rsqrt(max(dot(toProbe, toProbe), 1e-8)), geometricNormal));
-			if (facing <= 0.0)
-				continue;
-			float3 trilinear3 = select(offset != int3(0, 0, 0), fraction, 1.0 - fraction);
-			float weight = trilinear3.x * trilinear3.y * trilinear3.z * validity * facing;
-			if (weight <= 0.0)
-				continue;
-			weight *= GetFieldVisibility(repeat, start, probePosition);
-			if (weight <= 0.0)
-				continue;
-			float4 cube = ReadAmbientCube(probe, shadingNormal);
-			irradiance += weight * cube.rgb;
-			sky += weight * cube.a;
-			total += weight;
-		}
-		if (total > 0.0 || pass == 1u)
-			break;
-		// No probe visible: the start may lie in the solid (a floor-wall junction); move it off down the occupancy's gradient.
-		uint level = FindFieldLevel(start, start);
-		if (level >= 3u)
-			break;
-		bool moved = false;
-		[loop]
-		for (uint step = 0u; step < 2u; step++)
-		{
-			if (SampleFieldOccupancy(level, repeat, start) < 0.3)
-				break;
-			float h = u_GIField.VoxelOrigin[level].w;
-			float3 gradient = float3(
-				SampleFieldOccupancy(level, repeat, start + float3(h, 0.0, 0.0)) - SampleFieldOccupancy(level, repeat, start - float3(h, 0.0, 0.0)),
-				SampleFieldOccupancy(level, repeat, start + float3(0.0, h, 0.0)) - SampleFieldOccupancy(level, repeat, start - float3(0.0, h, 0.0)),
-				SampleFieldOccupancy(level, repeat, start + float3(0.0, 0.0, h)) - SampleFieldOccupancy(level, repeat, start - float3(0.0, 0.0, h)));
-			float gradientLength = length(gradient);
-			if (gradientLength < 1e-4)
-				break;
-			start -= gradient / gradientLength * h;
-			moved = true;
-		}
-		if (!moved)
-			break;
+		int3 offset = int3(int(corner & 1u), int((corner >> 1) & 1u), int((corner >> 2) & 1u));
+		int3 probe = base + offset;
+		if (any(probe < int3(0, 0, 0)) || any(probe >= grid))
+			continue;
+		float4 validity4 = u_GIFieldValidity.Load(int4(probe, 0));
+		float validity = validity4.r;
+		// Where the probe's light and distances were measured: moved off a surface it sat on (ProbeValidity.comp).
+		float3 probePosition = u_GIField.FieldOrigin.xyz + (float3(probe) + 0.5) * spacing + DecodeProbeMove(validity4, spacing);
+		float3 toProbe = probePosition - position;
+		float facing = smoothstep(-0.05, 0.25, dot(toProbe * rsqrt(max(dot(toProbe, toProbe), 1e-8)), geometricNormal));
+		float3 trilinear3 = select(offset != int3(0, 0, 0), fraction, 1.0 - fraction);
+		float weight = trilinear3.x * trilinear3.y * trilinear3.z * facing;
+		reachable += weight;
+		weight *= validity;
+		if (weight <= 0.0)
+			continue;
+		weight *= GetProbeVisibility(probe, probePosition, seen);
+		if (weight <= 0.0)
+			continue;
+		weight *= GetFieldTransmittance(repeat, probePosition, seen);
+		if (weight <= 0.0)
+			continue;
+		float4 cube = ReadAmbientCube(probe, shadingNormal);
+		irradiance += weight * cube.rgb;
+		sky += weight * cube.a;
+		total += weight;
 	}
 	openShare = total > 0.0 ? sky / total : 0.0;
-	return float4(total > 0.0 ? irradiance / total : float3(0.0, 0.0, 0.0), fieldWeight);
+	float normalization = max(total, ST_GI_GATHER_MIN_VISIBLE * reachable);
+	return float4(total > 0.0 ? irradiance / normalization : float3(0.0, 0.0, 0.0), fieldWeight);
 }
 
 #endif

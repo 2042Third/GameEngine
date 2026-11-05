@@ -232,10 +232,10 @@ namespace Strata
 		return m_GI ? m_GI->MemoryBytes : 0;
 	}
 
-	std::array<nvrhi::ITexture*, 5> SceneRenderer::GetBoundGITextures() const
+	std::array<nvrhi::ITexture*, 6> SceneRenderer::GetBoundGITextures() const
 	{
 		nvrhi::ITexture* black = Renderer::GetBlack3DTexture();
-		std::array<nvrhi::ITexture*, 5> textures = { black, black, black, black, black };
+		std::array<nvrhi::ITexture*, 6> textures = { black, black, black, black, black, black };
 		if (!m_GI)
 			return textures;
 		if (m_GI->Field)
@@ -244,6 +244,8 @@ namespace Strata
 			textures[1] = m_GI->Cascades.front().Validity;
 		for (uint32_t level = 0; level < 3 && level < m_GI->Levels.size(); level++)
 			textures[2 + level] = m_GI->Levels[level].Material;
+		if (m_GI->FieldDepth)
+			textures[5] = m_GI->FieldDepth;
 		return textures;
 	}
 
@@ -312,6 +314,13 @@ namespace Strata
 		}
 		const ProbeCascadeLayout& firstCascade = layout.Cascades.front();
 		gi->Field = createTexture(nvrhi::Format::RGBA16_FLOAT, glm::uvec3(3 * firstCascade.Grid.x, 2 * firstCascade.Grid.y, firstCascade.Grid.z), name + "Field");
+		// The probes' depth moments (FieldReduce.comp): a tile per probe, of the mean distance to the first hit and its variance, a
+		// texel per ray of cascade 0 inside a one-texel border.
+		ST_CORE_VERIFY(firstCascade.DirectionsPerAxis * firstCascade.DirectionsPerAxis == RenderData::c_GIFieldDirections
+				&& firstCascade.DirectionsPerAxis + 2 == RenderData::c_GIFieldDepthTexels,
+			"SceneRenderer: global illumination's first cascade must march {} directions", RenderData::c_GIFieldDirections);
+		gi->FieldDepth = createTexture(nvrhi::Format::RG16_FLOAT, glm::uvec3(firstCascade.Grid.x * RenderData::c_GIFieldDepthTexels,
+			firstCascade.Grid.y * RenderData::c_GIFieldDepthTexels, firstCascade.Grid.z), name + "FieldDepth");
 		// Cascade 0's solid angle normalization and its faces' cosine sums, the same every frame.
 		gi->SolidAngleNorms = glm::vec4(GlobalIllumination::GetSolidAngleNormalization(firstCascade.DirectionsPerAxis), 0.0f, 0.0f, 0.0f);
 		for (uint32_t face = 0; face < RenderData::c_GIFieldFaces; face++)
@@ -462,6 +471,7 @@ namespace Strata
 			release(cascade.Atlas);
 		}
 		release(gi.Field);
+		release(gi.FieldDepth);
 		for (GlobalIlluminationResources::Pass* pass : { &gi.Inject, &gi.Downsample, &gi.Validity, &gi.Weights, &gi.March, &gi.Reduce })
 		{
 			for (nvrhi::BindingSetHandle& set : pass->Sets)
@@ -651,6 +661,7 @@ namespace Strata
 				}
 			}
 			commandList->clearTextureFloat(gi.Field, nvrhi::AllSubresources, nvrhi::Color(0.0f));
+			commandList->clearTextureFloat(gi.FieldDepth, nvrhi::AllSubresources, nvrhi::Color(0.0f));
 			gi.Cleared = true;
 		}
 		commandList->clearBufferUInt(gi.Counters, 0);
@@ -888,12 +899,13 @@ namespace Strata
 				nvrhi::BindingSetDesc desc = common(false);
 				add3D(desc, 53, gi.Levels[level].Emission);
 				// Re-injection reads the field the frame before left through Include/GIField.slang: its constants (b3), its faces,
-				// cascade 0's validity and voxel levels 0-2 for the gather's visibility.
+				// cascade 0's validity, its probes' depth moments and voxel levels 0-2 for the gather's visibility.
 				desc.bindings.push_back(nvrhi::BindingSetItem::ConstantBuffer(3, gi.PreviousFieldBuffer));
 				add3D(desc, 35, gi.Field);
 				add3D(desc, 37, gi.Cascades.front().Validity);
 				for (uint32_t fieldLevel = 0; fieldLevel < 3; fieldLevel++)
 					add3D(desc, 38 + fieldLevel, fieldLevel < levels ? gi.Levels[fieldLevel].Material.Get() : nullptr);
+				add3D(desc, 54, gi.FieldDepth);
 				addUAV(desc, 0, gi.Levels[level].Radiance);
 				desc.bindings.push_back(nvrhi::BindingSetItem::RawBuffer_UAV(7, gi.Counters));
 				makeSet(gi.Inject, desc, "GI/VoxelInject.comp");
@@ -939,6 +951,7 @@ namespace Strata
 			add3D(reduce, 59, single ? nullptr : gi.Cascades.front().WeightsB.Get());
 			add3D(reduce, 60, single ? nullptr : gi.Cascades[1].Atlas.Get());
 			addUAV(reduce, 0, gi.Field);
+			addUAV(reduce, 1, gi.FieldDepth);
 			makeSet(gi.Reduce, reduce, "GI/FieldReduce.comp");
 			gi.LightBound = created;
 			gi.BoundEnvironment = environment;
@@ -1150,6 +1163,12 @@ namespace Strata
 	{
 		outTexels.clear();
 		return m_GI && ReadTexture3D(m_Device, m_GI->Field, outTexels);
+	}
+
+	bool SceneRenderer::ReadGlobalIlluminationFieldDepth(std::vector<uint8_t>& outTexels) const
+	{
+		outTexels.clear();
+		return m_GI && ReadTexture3D(m_Device, m_GI->FieldDepth, outTexels);
 	}
 
 	bool SceneRenderer::DrawProbeView(nvrhi::ICommandList* commandList, const nvrhi::Viewport& viewport)

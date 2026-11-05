@@ -15,9 +15,14 @@
 // ST_GI_REFRESH_OCCUPANCY full (the layer in front of the surface the ray entered; one read at the run's first sample and nothing
 // deeper, so a thin wall's sunlit far face never lights its near one), each weighted by what the samples from it on absorb: a ray
 // grazing a floor is absorbed where it reaches the floor's sunlit patch, not where it first touched the floor's layer before it.
-float4 MarchRay(float3 origin, float3 direction, float start, float end, bool top, uint minimumLevel, out bool left)
+// `hit` receives the distances at which the ray is absorbed past its origin: x the sum of each sample's absorbed share times its
+// distance, y times its square, z the shares' sum (FieldReduce.comp's depth moments). The origin's own sample is the probe's
+// validity, not a hit: a probe half in a wall's surface sees the room on its open side. What the cutoff leaves is in none.
+float4 MarchRay(float3 origin, float3 direction, float start, float end, bool top, uint minimumLevel, out bool left, out float3 hit)
 {
 	float transmittance = 1.0;
+	hit = float3(0.0, 0.0, 0.0);
+	float hitTransmittance = 1.0;
 	float3 light = float3(0.0, 0.0, 0.0);
 	bool inRun = false;
 	left = false;
@@ -47,6 +52,11 @@ float4 MarchRay(float3 origin, float3 direction, float start, float end, bool to
 			float absorbed = saturate(occupancy * ST_GI_OCCUPANCY_GAIN);
 			if (t >= start)
 				runWeight += transmittance * absorbed;
+			if (t > 0.0)
+			{
+				hit += hitTransmittance * absorbed * float3(t, t * t, 1.0);
+				hitTransmittance *= 1.0 - absorbed;
+			}
 			transmittance *= 1.0 - absorbed;
 			if (transmittance < ST_GI_TRANSMITTANCE_CUTOFF)
 				break;

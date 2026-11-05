@@ -65,7 +65,7 @@ namespace Strata
 
 	uint64_t GlobalIlluminationMemory::GetTotal() const
 	{
-		return VoxelLevels + Scratch + Atlases + Weights + Validity + Field + Tiles + WorkItems + Regions;
+		return VoxelLevels + Scratch + Atlases + Weights + Validity + Field + FieldDepth + Tiles + WorkItems + Regions;
 	}
 
 	GlobalIlluminationMemory GlobalIlluminationLayout::GetMemory() const
@@ -78,6 +78,7 @@ namespace Strata
 		constexpr uint64_t c_WeightBytes = 2 * 4;
 		constexpr uint64_t c_ValidityBytes = 4;
 		constexpr uint64_t c_FieldBytes = 6 * 8;
+		constexpr uint64_t c_FieldDepthBytes = RenderData::c_GIFieldDepthTexels * RenderData::c_GIFieldDepthTexels * 4;
 		constexpr uint64_t c_MaxTiles = 32768;
 		constexpr uint64_t c_TileBytes = 8;
 		constexpr uint64_t c_MaxWorkItems = 65536;
@@ -97,7 +98,10 @@ namespace Strata
 				memory.Weights += probes * c_WeightBytes;
 			memory.Validity += probes * c_ValidityBytes;
 			if (k == 0)
+			{
 				memory.Field = probes * c_FieldBytes;
+				memory.FieldDepth = probes * c_FieldDepthBytes;
+			}
 		}
 		memory.Tiles = c_MaxTiles * c_TileBytes;
 		memory.WorkItems = c_MaxWorkItems * c_WorkItemBytes;
@@ -183,7 +187,7 @@ namespace Strata
 			// and the fade. High's holds 8.8 m.
 			layout.FieldFullExtent = high ? glm::vec2(7.5f, 5.5f) : glm::vec2(7.0f, 2.8f);
 			layout.FieldFade = 2.0f;
-			layout.Bounces = high;
+			layout.Bounces = true;
 			return layout;
 		}
 

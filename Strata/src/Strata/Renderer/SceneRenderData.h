@@ -766,9 +766,24 @@ namespace Strata
 		constexpr float c_GISkyLevel = 5.3f;             // The environment cube's level rays that leave the clipmap read (a top-cascade direction's solid angle)
 		constexpr uint32_t c_GIMaxMarchSteps = 1024;     // A march gives up after this many samples (the top cascade's leave the clipmap long before)
 		constexpr float c_GIGatherNormalBias = 0.25f;    // Guess: the forward gather's lookup point moves this many probe spacings along the geometric normal
-		constexpr float c_GIGatherStartVoxels = 1.5f;    // Guess: visibility marches start this many voxels off the surface
-		constexpr float c_GIVisibilityCutoff = 0.05f;    // A visibility march below this transmittance sees nothing
+		constexpr float c_GIGatherViewBias = 0.3f;       // Guess: its visibility point moves this many more toward the viewer (DDGI's view bias)
+		// Where the probes around a point see less of it than this share of the weight they would give it (contacts, junctions), its
+		// field light fades with what they see instead of renormalizing the few that see it to full weight.
+		constexpr float c_GIGatherMinVisible = 0.25f;
+		// Samples of the gather's guard against walls between a probe and the point (Include/GIField.slang): a cell's diagonal
+		// (sqrt(3) spacings) over this many is under one voxel of level 0 at either quality (a spacing is five voxels).
+		constexpr uint32_t c_GIGatherGuardSteps = 10;
 		constexpr uint32_t c_GIFieldFaces = 6;           // The field's faces per probe: +X, -X, +Y, -Y, +Z, -Z
+		// Each cascade-0 probe's distances to the first hit (GI/FieldReduce.comp): an octahedral tile of this many texels a side, a
+		// one-texel border around one texel per ray of its c_GIFieldDirections (8 x 8), of the mean distance and its variance
+		// (RG16F, meters), each ray's filtered with its neighbours' by the cosine between them to the power
+		// c_GIFieldDepthSharpness.
+		constexpr uint32_t c_GIFieldDepthTexels = 10;
+		constexpr float c_GIFieldDepthSharpness = 8.0f;
+		// Cascade 0's probes that a surface covers move up to this many spacings off it (GI/ProbeValidity.comp; the others
+		// c_GIProbeMoveVoxels voxels): a wall on their plane beyond voxel level 0 lies in level 1's thicker voxels.
+		constexpr float c_GIFieldProbeMove = 0.5f;
+		constexpr uint32_t c_GIFieldDirections = 64;
 		// Multi-bounce by re-injection (GI/VoxelInject.comp): a surface voxel adds its albedo, clamped below this so the series of
 		// bounces converges in every room, times last frame's field at it.
 		constexpr float c_GIMaxBounceAlbedo = 0.9f;

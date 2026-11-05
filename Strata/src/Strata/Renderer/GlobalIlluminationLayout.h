@@ -75,6 +75,7 @@ namespace Strata
 		uint64_t Weights = 0;     // Each probe's eight parents' weights (two RGBA8), of every cascade but the top
 		uint64_t Validity = 0;    // RGBA8 per probe of every cascade
 		uint64_t Field = 0;       // Six RGBA16F faces per probe of the first cascade
+		uint64_t FieldDepth = 0;  // A 10 x 10 RG16F tile of depth moments per probe of the first cascade
 		uint64_t Tiles = 0;       // The large triangles' tiles of a batch (8 bytes each)
 		uint64_t WorkItems = 0;   // The frame's work items (16 bytes) and triangle groups (8 bytes)
 		uint64_t Regions = 0;     // The frame's voxel regions (48 bytes each) and the GI's counters
@@ -93,9 +94,8 @@ namespace Strata
 		float FieldSnap = 0.0f;            // The field moves in whole steps of the top cascade's spacing
 		glm::vec2 FieldFullExtent{ 0.0f }; // Meters around the camera where the field has full weight: horizontally, vertically
 		float FieldFade = 0.0f;            // Meters over which it fades to the fallback beyond that
-		// Re-injection runs (every bounce): High. Low bounces once: through its 1 m probes' visibility, bounced light outside a
-		// closed room reaches its three-wall corners (a quarter spacing off the grid), and its field brightens the series to about
-		// twice High's (the Cornell box), until the probes' visibility is reworked.
+		// Re-injection runs (every bounce): both qualities, since the gather's depth-moment visibility and its guard keep bounced
+		// light outside a closed room out of its corners (Low bounced once until then).
 		bool Bounces = false;
 
 		GlobalIlluminationMemory GetMemory() const;

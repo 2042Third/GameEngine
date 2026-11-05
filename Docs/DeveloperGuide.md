@@ -4031,7 +4031,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | Screen-space reflections' targets per view (scenes that ask for them; "Reflections") | none | 20 MiB, 79 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows |
 | Motion blur's targets per view (scenes with motion blur) | none | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows |
 | Reflection probes per view (16 slots, scenes with probes) | 17 MiB | 17 MiB | 68 MiB | 68 MiB |
-| Global illumination per view (scenes that ask for it; Low's layout 18.2 MiB) | none | none | 111.2 MiB | 111.2 MiB |
+| Global illumination per view (scenes that ask for it; Low's layout 22.6 MiB) | none | none | 146.4 MiB | 146.4 MiB |
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
   High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for rows that cost at every
@@ -4940,7 +4940,7 @@ Known issues), so some input still follows the camera; it has not been found. Bu
 `Docs/Plans/Wave8/specs/radiance-cascades-world.md` (its review corrections win over its body); the sources are the
 radiance-cascades lab (Daniel Quevedo, MIT: the triangle-box test, the winding steps and the column fill, the emission's
 coverage), Akenine-Moller's triangle-box test and, as ideas, Split RC, EggyStudio and creikey's voxel cascades.
-**Experimental** (stages 1-4): the voxels, the light with every bounce (High; Low bounces once), the debug views and the
+**Experimental** (stages 1-4): the voxels, the light with every bounce, the debug views and the
 join to shading are built; one probe field around the camera, and the misses `Docs/Plans/Wave8/ReleaseNotes.md`'s Known
 issues list with their numbers (Gate W of the spec is not fully met). The probes' visibility and resolution, nested
 probe-field levels and local lights follow.
@@ -4957,10 +4957,10 @@ probe-field levels and local lights follow.
 - **Layout** (`R/GlobalIlluminationLayout.h`, `Renderer.GlobalIlluminationLayout`): per quality level the voxel levels
   (High four of 128 x 64 x 128 voxels from 10 cm, Low three of 64 x 32 x 64 from 20 cm, each level twice the voxel size of
   the one before) and the probe cascades (High four from 0.5 m, 16 to 1,024 directions; Low three from 1 m). Memory per view
-  that runs GI (`GetMemory`, the same at every output size, the frame's work and region lists included): 111.2 MiB at
-  High, 18.2 MiB at Low; `SceneRenderer::GetGlobalIlluminationMemoryBytes` adds the scene's material table (4 KiB for
-  256 materials, doubling as it grows). A frame that wants none releases everything (`ReleaseGlobalIllumination`), and so
-  do the render targets' release and a `SetQuality` that changes the row.
+  that runs GI (`GetMemory`, the same at every output size, the frame's work and region lists included): 146.4 MiB at High,
+  22.6 MiB at Low (the probes' depth moments 35.2 and 4.4 of them); `SceneRenderer::GetGlobalIlluminationMemoryBytes` adds the
+  scene's material table (4 KiB for 256 materials, doubling as it grows). A frame that wants none releases everything
+  (`ReleaseGlobalIllumination`), and so do the render targets' release and a `SetQuality` that changes the row.
 - **The clipmap** (`R/VoxelClipmap.h`, CPU, main thread, `Renderer.VoxelClipmap`): per level a window centered on the
   camera, snapped to steps of `c_GIScrollVoxels` (4) voxels, stored toroidally (world voxel `w` at texel `w mod
   dimensions`: a scroll rewrites only the slabs that entered), with a queue of regions and the box of valid voxels. Regions
@@ -5065,9 +5065,10 @@ probe-field levels and local lights follow.
   openings on the grid keep their size); a voxel is solid only where a face reaches into it or covers part of one of its
   faces from behind (`IsVoxelSolidFor`, inset `c_GISolidInsetVoxels`): a box's edge that only touches a voxel from outside
   leaves it in the lit layer (marking those solid closed every opening on the grid by a voxel at its edges). The probe
-  cascades (D10-D12 of the spec) then run top down: `ProbeValidity` (dead probes inside solids; a probe of cascades 1 and
-  up that a surface covers moves off it along the surface's normal by up to `c_GIProbeMoveVoxels` voxels of its cascade's
-  minimum level (the same from every camera: voxels of the finest level holding it doubled the move as the camera went
+  cascades (D10-D12 of the spec) then run top down: `ProbeValidity` (dead probes inside solids; a probe that a surface
+  covers moves off it along the surface's normal, cascade 0's by up to `c_GIFieldProbeMove` (half a spacing: a wall on its
+  plane beyond level 0 lies in level 1's voxels, twice as thick), the others' by up to `c_GIProbeMoveVoxels` voxels of their
+  cascade's minimum level (the same from every camera: voxels of the finest level holding it doubled the move as the camera went
   away, and the probe's light stepped), stored in its
   validity texel's gba: probe planes on a room's faces otherwise died, and their children took one surviving parent's view
   from metres away, three times the patch's light on one side of the sun room and a fifth on the other), `ProbeWeights` (the
@@ -5089,9 +5090,15 @@ probe-field levels and local lights follow.
   continued by cascade 1's merged ray of the same direction and gated by its own transmittance, into the field's ambient cube:
   six RGBA16F faces per cascade-0 probe, irradiance over pi and the sky share, normalized by the directions' cosine sum;
   cascade 0 has no atlas). A 16-direction cascade 0 reduced apart gated four of cascade 1's directions with one ray and put
-  an emissive wall's light at its directions' centres' cosines, 1.34-1.42 times the form factor.
+  an emissive wall's light at its directions' centres' cosines, 1.34-1.42 times the form factor. The same pass keeps each
+  probe's **depth moments** (DDGI's, Majercik et al. 2019 and 2021, ideas only): each ray's distance to its first hit over
+  its march (the absorbed shares' mean; what passes counts at the march's end, two spacings; the probe's own sample is its
+  validity, not a hit), its mean and mean square filtered over the neighbouring rays by the cosine to
+  `c_GIFieldDepthSharpness` (8), stored as the mean and the variance in a 10 x 10 RG16F octahedral tile per probe (a texel
+  per ray inside a one-texel border that repeats the interior across the octahedron's edges), SRV 54.
 - **Multi-bounce** (re-injection; `GlobalIlluminationSettings::BounceGain`, 1, within [0, 1]; the tests' one-bounce
-  cases set 0; High only, `GlobalIlluminationLayout::Bounces`: Low bounces once, What it cannot do below): `VoxelInject`
+  cases set 0; both qualities, `GlobalIlluminationLayout::Bounces`; Low bounced once until the gather's depth-moment
+  visibility and guard kept bounced light out of closed rooms' corners): `VoxelInject`
   adds to each lit surface voxel its albedo, clamped below `c_GIMaxBounceAlbedo` (0.9) so the series converges in any
   room, times the field the frame before left at the voxel (`SampleIrradianceField` half a voxel off it along the normal
   its light is taken along, with the gather's visibility), times the gain. The first bounce arrives in the frame the
@@ -5131,16 +5138,27 @@ probe-field levels and local lights follow.
   `viewport.capture` and the project picture (`ProjectThumbnail`, `c_MaxGIFrames`) wait for `GlobalIlluminationSettled`.
 - **The field in the forward pass** (`Include/GIField.slang`, the `gi` and `open` views and the join):
   the eight cascade-0 probes around the point moved `c_GIGatherNormalBias` spacings along its geometric normal, each by its
-  trilinear weight, validity, whether it lies in front of the surface's plane and its visibility (a march through levels
-  0-2 from `c_GIGatherStartVoxels` off the surface; with none visible, again from up to two voxels down the occupancy's
-  gradient; still none: no field light, never the sky; a probe that no level holds together with the point is not
-  visible, and a point no level holds, beyond a valid box a scroll left short, takes today's light), faded to today's
-  light within 2 m of the field's edge.
+  trilinear weight (from its grid position), validity, whether it lies in front of the surface's plane (from where it
+  moved) and its visibility, then normalized. The visibility is continuous, so the light has no steps at cell borders and
+  no voxel staircase: Chebyshev's bound on the probe's depth moments toward the point (moved a further `c_GIGatherViewBias`
+  spacings toward the viewer, DDGI's view bias), cubed, times the guard: the transmittance through levels 0-2 along the
+  segment from the probe, `c_GIGatherGuardSteps` (16) samples at fixed fractions counting only voxels' solid cores
+  (`c_GIGatherGuardCore`, occupancy 0.6-0.72, so a surface's own soft layer never hides a probe), which a wall a voxel thick
+  always meets (Chebyshev's bound over 64 directions lets a thin wall seen at a grazing angle through; a probe that no level
+  holds together with the point is not visible). Where the live probes in front see less than `c_GIGatherMinVisible` (a
+  quarter) of the weight all the probes in front would give, dead ones included, the light fades with what they see instead
+  of renormalizing a vanishing weight (which stepped at the cells' borders); none visible: no field light, never the sky. A
+  point no level holds, beyond a valid box a scroll left short, takes today's light; within 2 m of the field's edge it fades
+  to today's light.
   `SceneLightingView::GlobalIllumination` (`gi`) shades white and returns the diffuse indirect light (the field inside,
   today's beyond, under the diffuse occlusion), `OpenShare` (`open`) the share of the sky a surface sees, as gray;
   `Probes` (`probes`, `GI/ProbeView.frag` in `GPU.Overlays`) draws cascade 0's probes over the image, live ones lit by
   their ambient cube, dead ones dark red. `SceneRendererGPUStats` adds `GIDeadProbes`, `GILiveProbes`,
-  `GISurfaceVoxels`; `ReadGlobalIlluminationValidity` and `ReadGlobalIlluminationField` read the probes (blocking).
+  `GISurfaceVoxels`; `ReadGlobalIlluminationValidity`, `ReadGlobalIlluminationField` and `ReadGlobalIlluminationFieldDepth`
+  read the probes (blocking). `GPU.SceneRenderer.GlobalIlluminationStitching` checks the depth moments against a probe's
+  known distances and the Cornell box's gi view at High: across every probe plane on its walls, ceiling and floor the light
+  steps at most 10% beyond its slope (the old on/off gather: 25% on the red wall), and the floor around the sphere's foot
+  has no point darker than half its brightest neighbour a voxel away (it was 0.31).
 
 - **Sampling** (`Include/GlobalIllumination.slang`): a point reads the finest level whose valid box holds it with
   `c_GILevelGuardVoxels` to spare, blended into the next over `c_GILevelBlendVoxels` by its distance from the camera (not
@@ -5190,15 +5208,16 @@ probe-field levels and local lights follow.
   image; a 2 m move in one frame, whose next frame matches a renderer settled there; still frames; a panel in the dark
   sealed room; strafes through the yard and the sun room flicker at most half again as much as with one bounce; Low's gain
   1 gives one bounce's light), `GlobalIlluminationRoom`'s "A sealed room stays dark" with the gain 1 at High and Low,
-  `Renderer.GlobalIlluminationLayout`'s "High bounces on, Low once" and "Bounces settle by the scene's brightest albedo",
+  `Renderer.GlobalIlluminationLayout`'s "Both qualities bounce" and "Bounces settle by the scene's brightest albedo",
   `Renderer.VoxelClipmap`'s "The brightest albedo voxelized bounds the bounces", and `PerfGPU.Renderer`'s "Global
   illumination's bounces' cost at 3840x2160" (the gain 0 against 1 in one process).
-- **What it cannot do** (so far): Low bounces once (`GlobalIlluminationLayout::Bounces` false, whatever the gain). With
-  every bounce at Low, the sealed room moved by a quarter of a probe spacing lit its walls' pixels in the north-west
-  three-wall corner through the walls (73 nits; 0.019 with one bounce, whose outside there is dark: the gather's
-  visibility leaks there), and the Cornell box came out about twice as bright as at High (ceiling 180-300 nits per albedo
-  against 95-150); the probes' visibility's rework brings Low's bounces. Walls thinner than two voxels go two-sided (dark
-  from both sides), thin props blur into
+- **What it cannot do** (so far): the field resolves no more than its probes, 0.5 m apart at High and 1 m at Low. In the
+  Cornell box at High the floor the sphere overhangs, the gap between the tall box's back-left corner and the red wall and a
+  thin line along the back wall's corners still go dark within a voxel (no probe sees them; the stitching case reports them),
+  and at Low whole cells of probes beside the box and the sphere lie in the coarse voxels' solids, so the floor and walls
+  there still step and go black. Low's Cornell box with every bounce is about 1.8 times as bright as High's (ceiling 165-235
+  nits per albedo against 89-142). Denser probes near surfaces are the next step. Walls thinner than two voxels go two-sided
+  (dark from both sides), thin props blur into
   blobs of whole voxels, characters and moving objects are not in the voxels until they rest, textured albedo and emission
   count by their maps' means (models colored from one shared palette map, as the ThirdPerson sample's Kenney models are,
   take the palette's mean everywhere: one mauve for grass, wood and rock), double-sided materials' voxels have no facing

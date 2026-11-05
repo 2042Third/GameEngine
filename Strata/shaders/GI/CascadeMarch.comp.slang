@@ -81,7 +81,8 @@ void main(uint3 globalID : SV_DispatchThreadID)
 		n.x += n.x >= 0.0 ? -fold : fold;
 		n.y += n.y >= 0.0 ? -fold : fold;
 		bool left;
-		float4 ray = MarchRay(origin, normalize(n), start, end, top, minimumLevel, left);
+		float3 hit;
+		float4 ray = MarchRay(origin, normalize(n), start, end, top, minimumLevel, left, hit);
 		own += ray;
 		if (left)
 			leftShare += ray.a;
