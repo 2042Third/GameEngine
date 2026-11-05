@@ -190,14 +190,16 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 
 **Global illumination: every bounce (stage 4; experimental).**
 
-- Scenes with **Global Illumination** on: light now bounces on between surfaces instead of stopping after its first
-  bounce. A room lit by a panel in its ceiling has a lit ceiling (in the owner's Cornell box, a 5,000-nit panel's room,
-  the ceiling rises from 13-22 to 95-150 nits per unit of albedo at High), colored walls tint the floor and objects
-  beside them (the floor by the red wall turns 9% redder than by the green one, the sphere's sides 26%), and a sunlit
-  room's floor, which only the window's sill lit before, takes 40-230 nits of the walls' and ceiling's light. Each
-  further bounce arrives a frame after the one before: after a cut or a change of the light, rooms fill over 14 frames
-  (white rooms a few more), and captures and the project's picture wait for it. Closed rooms stay dark. Look-dev: the
-  Cornell box, `lookdev.cornell`.
+- Scenes with **Global Illumination** on at High: light now bounces on between surfaces instead of stopping after its
+  first bounce. A room lit by a panel in its ceiling has a lit ceiling (in the owner's Cornell box, a 5,000-nit panel's
+  room, the ceiling rises from 13-22 to 95-150 nits per unit of albedo at High), colored walls tint the floor and
+  objects beside them (the floor by the red wall turns 9% redder than by the green one, the sphere's sides 26%), and a
+  sunlit room's floor, which only the window's sill lit before, takes 40-230 nits of the walls' and ceiling's light.
+  Each further bounce arrives a frame after the one before: after a cut or a change of the light, rooms fill over 14
+  frames (white rooms a few more), and captures and the project's picture wait for it. A sealed room stays as dark as
+  with one bounce (its points' mean and every junction within 0.17% of the open room's light). At Low, light still
+  bounces once: Low's coarser probes let bounced light into a closed room's three-wall corners. Look-dev: the Cornell
+  box, `lookdev.cornell`.
 - Global illumination's cost does not change (3.96-4.01 ms at 3840 x 2160 at High in the sun room, 3.98-3.99 ms in the
   yard), and scenes without it look exactly as before.
 
@@ -296,9 +298,10 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   vertical bands either side of the window and a dark band along its foot.
 - With every bounce, rooms settle over 14 frames after a cut (the sun room's gi view changes by less than 0.25% a frame
   from frame 11, the Cornell box's from frame 15); rooms brighter than the Cornell box's white take longer.
-- At Low with every bounce, the sealed room moved by a quarter of a probe spacing shows light through its walls in a
-  three-wall corner (73 nits, the gather's visibility leaking where one bounce, dark outside, hid it), and the Cornell box
-  comes out about twice as bright as at High (its ceiling 180-300 nits per unit of albedo against 95-150).
+- Low bounces once. With every bounce, the sealed room moved by a quarter of a probe spacing showed light through its
+  walls in a three-wall corner (73 nits: the gather's visibility leaks there, which one bounce, dark outside, hid), and
+  the Cornell box came out about twice as bright as at High (its ceiling 180-300 nits per unit of albedo against
+  95-150), so Low's bounces wait for the probes' visibility to be reworked.
 
 **Reflections (R1)**
 

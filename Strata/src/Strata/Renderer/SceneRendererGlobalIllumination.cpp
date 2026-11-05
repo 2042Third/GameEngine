@@ -43,10 +43,11 @@ namespace Strata
 		constexpr uint32_t c_LightGroupSize = 4; // Inject, validity, weights, reduce: 4 x 4 x 4 threads
 		constexpr uint32_t c_MarchGroupSize = 8; // CascadeMarch: 8 x 8 x 1 rays
 
-		// The bounce's gain as re-injection uses it: 0 (one bounce) for negative or non-finite settings.
-		float GetBounceGain(const GlobalIlluminationSettings& settings)
+		// The bounce's gain as re-injection uses it: within [0, 1] (a gain above 1 would let the series diverge), 0 (one bounce)
+		// for non-finite settings and for layouts that bounce once (Low).
+		float GetBounceGain(const GlobalIlluminationSettings& settings, const GlobalIlluminationLayout& layout)
 		{
-			return std::isfinite(settings.BounceGain) ? std::max(settings.BounceGain, 0.0f) : 0.0f;
+			return layout.Bounces && std::isfinite(settings.BounceGain) ? std::clamp(settings.BounceGain, 0.0f, 1.0f) : 0.0f;
 		}
 
 		// A compute layout holding exactly a binding set's items (a volatile constant buffer as one).
@@ -563,7 +564,7 @@ namespace Strata
 		// Its constants are that frame's, relative to that frame's camera, with this frame's voxel levels moved there (the
 		// visibility marches through the voxels as they are now); a camera-relative point plus Bounce.yzw is relative to it. The
 		// field holds world positions, so a scroll or a move between the frames takes each point's light from the same place.
-		const float bounceGain = GetBounceGain(m_Specification.GlobalIllumination);
+		const float bounceGain = GetBounceGain(m_Specification.GlobalIllumination, gi.Layout);
 		const bool previousField = bounceGain > 0.0f && gi.FieldRender != 0 && gi.FieldRender == m_RenderCount && gi.LastField.FieldSize.w > 0.0f
 			&& !work.Pending && !work.Cut && !work.Rebuilt;
 		gi.PreviousField = gi.LastField;
@@ -617,7 +618,7 @@ namespace Strata
 		const bool changed = gi.Constants.Bounce.x <= 0.0f || !work.Batches.empty() || work.MaterialsChanged || inputs != gi.SettleInputs;
 		gi.SettleInputs = inputs;
 		gi.StableFrames = changed ? 0 : gi.StableFrames + 1;
-		if (GetBounceGain(m_Specification.GlobalIllumination) > 0.0f && gi.StableFrames < RenderData::c_GISettleFrames)
+		if (GetBounceGain(m_Specification.GlobalIllumination, gi.Layout) > 0.0f && gi.StableFrames < RenderData::c_GISettleFrames)
 			m_Stats.GlobalIlluminationSettled = false;
 	}
 

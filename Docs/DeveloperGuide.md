@@ -4940,10 +4940,10 @@ Known issues), so some input still follows the camera; it has not been found. Bu
 `Docs/Plans/Wave8/specs/radiance-cascades-world.md` (its review corrections win over its body); the sources are the
 radiance-cascades lab (Daniel Quevedo, MIT: the triangle-box test, the winding steps and the column fill, the emission's
 coverage), Akenine-Moller's triangle-box test and, as ideas, Split RC, EggyStudio and creikey's voxel cascades.
-**Experimental** (stages 1-4): the voxels, the light with every bounce, the debug views and the join to shading are built;
-one probe field around the camera, and the misses `Docs/Plans/Wave8/ReleaseNotes.md`'s Known issues list with their numbers
-(Gate W of the spec is not fully met). The probes' visibility and resolution, nested probe-field levels and local lights
-follow.
+**Experimental** (stages 1-4): the voxels, the light with every bounce (High; Low bounces once), the debug views and the
+join to shading are built; one probe field around the camera, and the misses `Docs/Plans/Wave8/ReleaseNotes.md`'s Known
+issues list with their numbers (Gate W of the spec is not fully met). The probes' visibility and resolution, nested
+probe-field levels and local lights follow.
 
 - **The scene's ask and the row:** `PostProcessComponent::GlobalIllumination` (off) and `GlobalIlluminationIntensity` (1,
   0-4; inactive reason "Global Illumination is off"), section "Global illumination"; the quality row
@@ -5090,7 +5090,8 @@ follow.
   six RGBA16F faces per cascade-0 probe, irradiance over pi and the sky share, normalized by the directions' cosine sum;
   cascade 0 has no atlas). A 16-direction cascade 0 reduced apart gated four of cascade 1's directions with one ray and put
   an emissive wall's light at its directions' centres' cosines, 1.34-1.42 times the form factor.
-- **Multi-bounce** (re-injection; `GlobalIlluminationSettings::BounceGain`, 1; the tests' one-bounce cases set 0): `VoxelInject`
+- **Multi-bounce** (re-injection; `GlobalIlluminationSettings::BounceGain`, 1, within [0, 1]; the tests' one-bounce
+  cases set 0; High only, `GlobalIlluminationLayout::Bounces`: Low bounces once, What it cannot do below): `VoxelInject`
   adds to each lit surface voxel its albedo, clamped below `c_GIMaxBounceAlbedo` (0.9) so the series converges in any room,
   times the field the frame before left at the voxel (`SampleIrradianceField` half a voxel off it along the normal its light
   is taken along, with the gather's visibility), times the gain. The first bounce arrives in the frame the light changes,
@@ -5177,13 +5178,15 @@ follow.
   Le / (1 - rho) within 3% of the series its one-bounce field's own error predicts (that error is 4-9% low at High); the sun
   room's points take at least their one-bounce light, the ceiling over the patch 10% more, and what the bounces add stays
   within the series' bound; settling after a cut; still frames; a panel in the dark sealed room; strafes through the yard and
-  the sun room flicker at most half again as much as with one bounce) and
-  `GlobalIlluminationRoom`'s "A sealed room stays dark" with every bounce at High.
-- **What it cannot do** (so far): at Low with every bounce, the sealed room moved by a quarter of a probe spacing lights
-  its walls' pixels in the north-west three-wall corner through the walls (73 nits; 0.019 with one bounce, whose outside
-  there is dark): the gather's visibility leaks there, and the case's Low variant waits for its rework. In the Cornell box
-  Low's bounce is about twice High's (ceiling 180-300 nits per albedo against 95-150), as Low's one-bounce field differs from
-  High's. Walls thinner than two voxels go two-sided (dark from both sides), thin props blur into
+  the sun room flicker at most half again as much as with one bounce; Low's gain 1 gives one bounce's light),
+  `GlobalIlluminationRoom`'s "A sealed room stays dark" with the gain 1 at High and Low, and
+  `Renderer.GlobalIlluminationLayout`'s "High bounces on, Low once".
+- **What it cannot do** (so far): Low bounces once (`GlobalIlluminationLayout::Bounces` false, whatever the gain). With
+  every bounce at Low, the sealed room moved by a quarter of a probe spacing lit its walls' pixels in the north-west
+  three-wall corner through the walls (73 nits; 0.019 with one bounce, whose outside there is dark: the gather's
+  visibility leaks there), and the Cornell box came out about twice as bright as at High (ceiling 180-300 nits per albedo
+  against 95-150); the probes' visibility's rework brings Low's bounces. Walls thinner than two voxels go two-sided (dark
+  from both sides), thin props blur into
   blobs of whole voxels, characters and moving objects are not in the voxels until they rest, textured albedo and emission
   count by their maps' means (models colored from one shared palette map, as the ThirdPerson sample's Kenney models are,
   take the palette's mean everywhere: one mauve for grass, wood and rock), double-sided materials' voxels have no facing

@@ -317,8 +317,8 @@ without TAA.
 
 The **Post Process**'s **Global Illumination** (off by default) adds bounce light traced in the world around the camera: a
 sunlit floor lights the walls and the ceiling, a red floor tints them, glowing surfaces light their surroundings, light
-goes on bouncing between the surfaces as it does in life (a room lit by a lamp in its ceiling has a lit ceiling, and
-colored walls tint the floor beside them), and a closed room stays dark, whether the source is on screen or not. The
+goes on bouncing between the surfaces as it does in life (at High: a room lit by a lamp in its ceiling has a lit ceiling,
+and colored walls tint the floor beside them), and a closed room stays dark, whether the source is on screen or not. The
 engine keeps a voxel copy of the scene around the camera, lights it with the sun every frame and gathers it in probes;
 moving the sun moves the bounce in the same frame.
 Nothing in it is blended over frames, so it does not smear behind a moving camera, but thin geometry can still crawl
@@ -339,8 +339,8 @@ slightly in its light while the camera moves (see the list below).
   the probes, dead ones dark red.
 - It is experimental:
   - The east wall and the ceiling of a sunlit room get about half of their first bounce.
-  - At Low, the corners where three walls of a closed room meet can let some outside light in, and rooms lit by glowing
-    panels come out brighter than at High.
+  - At Low, light bounces only once, as it did before every bounce came: a room lit by a panel in its ceiling keeps a
+    dark ceiling there. Low's coarser probes would let bounced light into a closed room's corners; High bounces on.
   - A surface that sees none of the probes around it gets no indirect light at all, darker than without global
     illumination: gaps, recesses and ledges thinner than about two voxels (20 cm at High, 40 cm at Low) and the bases of
     walls beside bright patches can go nearly black. Outdoors this shows at the foot of large boxes on the ground and on

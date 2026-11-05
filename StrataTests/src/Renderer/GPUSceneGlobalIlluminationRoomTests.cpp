@@ -1006,19 +1006,17 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 	{
 		// The window filled with plaster: the nineteen points' mean at most erhe's 0.0017 of the open room's, and every junction of
 		// the floor and the ceiling with the walls (correction 4) too, at High and Low, with the room moved by a quarter and a half
-		// of the first cascade's spacing along x and z (the probe planes cut its walls at three places); with one bounce, and at
-		// High with every bounce too (6.4: re-injection must not carry a leak further), settled. Low with every bounce is left
-		// out: at the quarter offset the walls' pixels in the north-west three-wall corner take light through the walls in the
-		// gather (0.019 nits with one bounce, whose outside there is dark; 73 with every bounce, which lights the outside), a leak
-		// of the gather's visibility that the probe visibility's rework fixes (DeveloperGuide, "Global illumination").
+		// of the first cascade's spacing along x and z (the probe planes cut its walls at three places); with one bounce, and with
+		// the bounce's gain 1 too (6.4: re-injection must not carry a leak further), settled. Low bounces once whatever the gain
+		// (GlobalIlluminationLayout::Bounces): with every bounce, at the quarter offset the walls' pixels in its north-west
+		// three-wall corner took light through the walls in the gather (73 nits; 0.019 with one bounce, whose outside there is
+		// dark), so its pass with the gain 1 guards that Low's default stays dark.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		for (const float bounceGain : { 0.0f, 1.0f })
 		{
 			for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
 			{
-				if (bounceGain > 0.0f && level == GlobalIlluminationLevel::Low)
-					continue;
 				const float spacing = FirstSpacing(level);
 				const uint32_t frames = bounceGain > 0.0f ? RenderData::c_GISettleFrames + 2 : 3;
 				for (float share : { 0.0f, 0.25f, 0.5f })
@@ -1827,7 +1825,8 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 {
 	TEST_CASE("The Cornell box: bounces light the ceiling and carry the walls' colors")
 	{
-		// The owner's box (6.4), lit by its ceiling panel alone. One bounce leaves the ceiling dark (only the panel's sides reach it,
+		// The owner's box (6.4), lit by its ceiling panel alone, at High (Low bounces once: its gain 1 gives one bounce's light).
+		// One bounce leaves the ceiling dark (only the panel's sides reach it,
 		// at a grazing angle) and the floor and sphere white. What every bounce adds to each ceiling point is at least half of what
 		// the floor alone sends it (the floor's light straight from the panel's underside, integrated, times its albedo, seen from
 		// the point: the box and sphere hide less than a quarter of it and the walls add about as much again, so half bounds a
@@ -1868,6 +1867,17 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 			uint32_t everyFrames = 0;
 			const std::vector<glm::vec3> one = MeasureCornellBox(0.0f, level, oneFrames);
 			const std::vector<glm::vec3> every = MeasureCornellBox(1.0f, level, everyFrames);
+			if (!GlobalIllumination::ComputeLayout(level)->Bounces)
+			{
+				// Low bounces once whatever the gain (GlobalIlluminationLayout::Bounces): the same light, settled with the voxels.
+				for (size_t index = 0; index < points.size(); index++)
+				{
+					INFO(points[index].Name);
+					CHECK(every[index] == one[index]);
+				}
+				CHECK(everyFrames == oneFrames);
+				continue;
+			}
 			std::string table = fmt::format("the Cornell box at {} (every bounce settled in {} frames), gi view (nits per albedo):", levelName, everyFrames);
 			for (size_t index = 0; index < points.size(); index++)
 			{
@@ -1928,6 +1938,8 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
 		{
 			CAPTURE(level == GlobalIlluminationLevel::High ? "High" : "Low");
+			// Low bounces once whatever the gain (GlobalIlluminationLayout::Bounces): its second pass reads the first's values.
+			const bool bounces = GlobalIllumination::ComputeLayout(level)->Bounces;
 			std::vector<float> oneRatios(points.size(), 1.0f); // One bounce's field over Le at each point (the first pass)
 			for (const float bounceGain : { 0.0f, 1.0f })
 			{
@@ -1945,8 +1957,9 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 					REQUIRE(RenderGIFrame(*renderer, scene, camera, options));
 				ReadbackImage image;
 				REQUIRE(Renderer::ReadTexture(renderer->GetHDRTexture(), image));
-				const float expected = bounceGain > 0.0f ? c_Luminance / (1.0f - storedAlbedo) : c_Luminance;
-				std::string table = fmt::format("{}: expected {:.3f}", bounceGain > 0.0f ? "every bounce" : "one bounce", expected);
+				const bool everyBounce = bounces && bounceGain > 0.0f;
+				const float expected = everyBounce ? c_Luminance / (1.0f - storedAlbedo) : c_Luminance;
+				std::string table = fmt::format("{}: expected {:.3f}", everyBounce ? "every bounce" : "one bounce", expected);
 				float meanRatio = 0.0f;
 				for (const float ratio : oneRatios)
 					meanRatio += ratio / static_cast<float>(oneRatios.size());
@@ -1960,8 +1973,10 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 					REQUIRE(pixel.y + 3 < image.Height);
 					const float value = Luminance(glm::vec3(ReadHalfTexel(image, pixel.x, pixel.y))) / c_PreExposure;
 					INFO(point.Name << ": " << value << " against " << expected);
-					if (bounceGain <= 0.0f)
+					if (!everyBounce)
 					{
+						if (bounceGain > 0.0f)
+							CHECK(value == doctest::Approx(oneRatios[index] * expected).epsilon(1e-6));
 						oneRatios[index] = value / expected;
 						table += fmt::format("\n  {:<16} {:9.3f} ({:.3f})", point.Name, value, value / expected);
 						CHECK(std::abs(value / expected - 1.0f) <= 0.1f);
@@ -2118,17 +2133,18 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 	TEST_CASE("Still frames are identical with bounces")
 	{
 		// 6.4: re-injection feeds the field back through the voxels, yet a still camera's frames 30 and 31 agree to the bit (no
-		// rounding cycle), in the sun room at High and Low and in the Cornell box at High.
+		// rounding cycle), in the sun room and the Cornell box at High (Low bounces once: "Still frames are identical").
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
-		for (uint32_t run = 0; run < 3; run++)
+		REQUIRE(GlobalIllumination::ComputeLayout(GlobalIlluminationLevel::High)->Bounces);
+		for (uint32_t run = 0; run < 2; run++)
 		{
-			const GlobalIlluminationLevel level = run == 1 ? GlobalIlluminationLevel::Low : GlobalIlluminationLevel::High;
+			const GlobalIlluminationLevel level = GlobalIlluminationLevel::High;
 			CAPTURE(run);
 			SceneTestAssets assets;
 			Scene scene;
 			SceneCamera camera;
-			if (run < 2)
+			if (run == 0)
 			{
 				BuildSunRoom(scene, assets, DefaultRoom());
 				camera = RoomCamera();

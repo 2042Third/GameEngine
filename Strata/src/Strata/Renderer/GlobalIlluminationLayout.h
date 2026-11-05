@@ -27,7 +27,8 @@ namespace Strata
 		uint32_t VoxelizeTrianglesPerFrame = RenderData::c_GIVoxelizeTrianglesPerFrame;
 		uint32_t VoxelizeTrianglesOnCut = RenderData::c_GIVoxelizeTrianglesOnCut;
 		// Multi-bounce: the share of last frame's field each surface voxel's light takes again (times its albedo, below
-		// c_GIMaxBounceAlbedo). 1 by default; 0 is one bounce, as the tests' one-bounce references compute.
+		// c_GIMaxBounceAlbedo), within [0, 1]. 1 by default; 0 is one bounce, as the tests' one-bounce references compute. Only
+		// layouts that bounce (GlobalIlluminationLayout::Bounces) read it.
 		float BounceGain = 1.0f;
 	};
 
@@ -92,6 +93,10 @@ namespace Strata
 		float FieldSnap = 0.0f;            // The field moves in whole steps of the top cascade's spacing
 		glm::vec2 FieldFullExtent{ 0.0f }; // Meters around the camera where the field has full weight: horizontally, vertically
 		float FieldFade = 0.0f;            // Meters over which it fades to the fallback beyond that
+		// Re-injection runs (every bounce): High. Low bounces once: through its 1 m probes' visibility, bounced light outside a
+		// closed room reaches its three-wall corners (a quarter spacing off the grid), and its field brightens the series to about
+		// twice High's (the Cornell box), until the probes' visibility is reworked.
+		bool Bounces = false;
 
 		GlobalIlluminationMemory GetMemory() const;
 		uint64_t GetMemoryBytes() const { return GetMemory().GetTotal(); }
@@ -172,6 +177,7 @@ namespace Strata
 		uint32_t PackAlbedo(const glm::vec3& albedo);
 		uint32_t PackRGB9E5(const glm::vec3& color);
 		glm::vec3 UnpackRGB9E5(uint32_t value);
+
 	}
 
 }

@@ -183,6 +183,7 @@ namespace Strata
 			// and the fade. High's holds 8.8 m.
 			layout.FieldFullExtent = high ? glm::vec2(7.5f, 5.5f) : glm::vec2(7.0f, 2.8f);
 			layout.FieldFade = 2.0f;
+			layout.Bounces = high;
 			return layout;
 		}
 

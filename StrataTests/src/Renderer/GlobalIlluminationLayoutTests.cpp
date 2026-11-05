@@ -520,6 +520,14 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 		CHECK(clamped.y == 65408.0f);
 	}
 
+	TEST_CASE("High bounces on, Low once")
+	{
+		// Low's probe visibility lets bounced light into closed rooms' corners (GPU.SceneRenderer.GlobalIlluminationRoom's "A
+		// sealed room stays dark"): its re-injection waits for the visibility's rework.
+		CHECK(GlobalIllumination::ComputeLayout(GlobalIlluminationLevel::High)->Bounces);
+		CHECK_FALSE(GlobalIllumination::ComputeLayout(GlobalIlluminationLevel::Low)->Bounces);
+	}
+
 	TEST_CASE("Level weights are continuous")
 	{
 		for (GlobalIlluminationLevel quality : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
