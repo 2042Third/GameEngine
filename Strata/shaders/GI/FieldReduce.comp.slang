@@ -24,7 +24,8 @@ Texture3D<float4> u_WeightsA : register(t58);
 Texture3D<float4> u_WeightsB : register(t59);
 Texture3D<float4> u_ParentAtlas : register(t60);
 [vk::image_format("rgba16f")] RWTexture3D<float4> o_Field : register(u0);
-[vk::image_format("rg16f")] RWTexture3D<float2> o_Depth : register(u1);
+// Two halves a texel (PackHalf2x16): RG16F is an extended storage format, which devices may lack.
+[vk::image_format("r32ui")] RWTexture3D<uint> o_Depth : register(u1);
 
 #define ST_GI_REDUCE_GROUP 64u
 
@@ -160,6 +161,6 @@ void main(uint3 groupID : SV_GroupID, uint index : SV_GroupIndex)
 			float2 moments = sum.xy / max(sum.z, 1e-6);
 			depth = float2(moments.x, max(moments.y - moments.x * moments.x, 0.0));
 		}
-		o_Depth[uint3(probe.xy * ST_GI_FIELD_DEPTH_TEXELS + texel, probe.z)] = depth;
+		o_Depth[uint3(probe.xy * ST_GI_FIELD_DEPTH_TEXELS + texel, probe.z)] = PackHalf2x16(depth);
 	}
 }

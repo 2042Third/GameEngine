@@ -146,7 +146,7 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 		CHECK(high.Weights == 840960);
 		CHECK(high.Validity == 421200);
 		CHECK(high.Field == 4423680);
-		CHECK(high.FieldDepth == 36864000); // 92,160 probes, a 10 x 10 RG16F tile each
+		CHECK(high.FieldDepth == 36864000); // 92,160 probes, a 10 x 10 tile of two halves each
 		CHECK(high.Tiles == 262144);
 		CHECK(high.WorkItems == 1572864);
 		CHECK(high.Regions == 196640);

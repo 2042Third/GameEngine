@@ -1086,7 +1086,7 @@ namespace Strata
 		// The probes' textures as the GPU holds them (tests and tools only, waiting for the GPU), texels in rows of x, then y, then z:
 		// a cascade's validity (RGBA8, r the validity, gba the probe's move off a surface: GI/ProbeValidity.comp), the field
 		// (RGBA16F, (3 x, 2 y, z) per cascade-0 probe: faces +X, -X, +Y in the first row, -Y, +Z, -Z in the second; rgb
-		// irradiance over pi times c_GIRadianceScale, a the face's sky share), the field's depth moments (RG16F, a tile of
+		// irradiance over pi times c_GIRadianceScale, a the face's sky share), the field's depth moments (two halves, a tile of
 		// c_GIFieldDepthTexels a side at (probe.xy * texels + texel, probe.z): the mean distance to the first hit around the
 		// texel's octahedral direction and its variance, meters).
 		bool ReadGlobalIlluminationValidity(uint32_t cascade, std::vector<uint8_t>& outTexels) const;

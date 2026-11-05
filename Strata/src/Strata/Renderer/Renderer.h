@@ -108,6 +108,8 @@ namespace Strata
 		static nvrhi::ITexture* GetBlueNoiseTexture();
 		// A 1x1x1 black 3D texture: what the scene passes bind as aerial perspective's volume in frames without it.
 		static nvrhi::ITexture* GetBlack3DTexture();
+		// A 1x1x1 R32_UINT 3D texture of 0: what the scene passes bind as the GI probes' depth moments in frames without GI.
+		static nvrhi::ITexture* GetZero3DUintTexture();
 
 		// Copies one subresource of a 2D, 2D-array or cube texture (a mip level of an array slice or cube face) to the
 		// CPU. Blocks until the GPU is done; meant for screenshots, picking fallbacks and tests, not per-frame use.

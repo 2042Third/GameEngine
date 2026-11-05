@@ -235,7 +235,7 @@ namespace Strata
 	std::array<nvrhi::ITexture*, 6> SceneRenderer::GetBoundGITextures() const
 	{
 		nvrhi::ITexture* black = Renderer::GetBlack3DTexture();
-		std::array<nvrhi::ITexture*, 6> textures = { black, black, black, black, black, black };
+		std::array<nvrhi::ITexture*, 6> textures = { black, black, black, black, black, Renderer::GetZero3DUintTexture() };
 		if (!m_GI)
 			return textures;
 		if (m_GI->Field)
@@ -319,7 +319,8 @@ namespace Strata
 		ST_CORE_VERIFY(firstCascade.DirectionsPerAxis * firstCascade.DirectionsPerAxis == RenderData::c_GIFieldDirections
 				&& firstCascade.DirectionsPerAxis + 2 == RenderData::c_GIFieldDepthTexels,
 			"SceneRenderer: global illumination's first cascade must march {} directions", RenderData::c_GIFieldDirections);
-		gi->FieldDepth = createTexture(nvrhi::Format::RG16_FLOAT, glm::uvec3(firstCascade.Grid.x * RenderData::c_GIFieldDepthTexels,
+		// R32_UINT holding two halves (PackHalf2x16), not RG16F: that is an extended storage format, which devices may lack.
+		gi->FieldDepth = createTexture(nvrhi::Format::R32_UINT, glm::uvec3(firstCascade.Grid.x * RenderData::c_GIFieldDepthTexels,
 			firstCascade.Grid.y * RenderData::c_GIFieldDepthTexels, firstCascade.Grid.z), name + "FieldDepth");
 		// Cascade 0's solid angle normalization and its faces' cosine sums, the same every frame.
 		gi->SolidAngleNorms = glm::vec4(GlobalIllumination::GetSolidAngleNormalization(firstCascade.DirectionsPerAxis), 0.0f, 0.0f, 0.0f);
@@ -661,7 +662,7 @@ namespace Strata
 				}
 			}
 			commandList->clearTextureFloat(gi.Field, nvrhi::AllSubresources, nvrhi::Color(0.0f));
-			commandList->clearTextureFloat(gi.FieldDepth, nvrhi::AllSubresources, nvrhi::Color(0.0f));
+			commandList->clearTextureUInt(gi.FieldDepth, nvrhi::AllSubresources, 0);
 			gi.Cleared = true;
 		}
 		commandList->clearBufferUInt(gi.Counters, 0);

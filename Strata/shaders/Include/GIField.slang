@@ -28,7 +28,7 @@ Texture3D<float4> u_GIFieldValidity : register(t37);
 Texture3D<float4> u_GIFieldVoxels0 : register(t38);
 Texture3D<float4> u_GIFieldVoxels1 : register(t39);
 Texture3D<float4> u_GIFieldVoxels2 : register(t40);
-Texture3D<float4> u_GIFieldDepth : register(t54);
+Texture3D<uint> u_GIFieldDepth : register(t54); // Two halves a texel (PackHalf2x16): the mean and the variance
 
 // The field's weight at a camera-relative point: 1 within its full extent around the camera, falling to 0 over the fade (by the
 // distance from the camera, not from the snapped field, so it moves continuously), times FieldSize.w (0 while pending).
@@ -121,10 +121,10 @@ float3 ReadProbeDepth(int3 probe, float3 direction)
 	int2 first = clamp(int2(floor(coordinate)), int2(0, 0), int2(ST_GI_FIELD_DEPTH_TEXELS - 2, ST_GI_FIELD_DEPTH_TEXELS - 2));
 	float2 fraction = saturate(coordinate - float2(first));
 	int2 origin = probe.xy * ST_GI_FIELD_DEPTH_TEXELS + first;
-	float2 a = u_GIFieldDepth.Load(int4(origin, probe.z, 0)).rg;
-	float2 b = u_GIFieldDepth.Load(int4(origin + int2(1, 0), probe.z, 0)).rg;
-	float2 c = u_GIFieldDepth.Load(int4(origin + int2(0, 1), probe.z, 0)).rg;
-	float2 d = u_GIFieldDepth.Load(int4(origin + int2(1, 1), probe.z, 0)).rg;
+	float2 a = UnpackHalf2x16(u_GIFieldDepth.Load(int4(origin, probe.z, 0)));
+	float2 b = UnpackHalf2x16(u_GIFieldDepth.Load(int4(origin + int2(1, 0), probe.z, 0)));
+	float2 c = UnpackHalf2x16(u_GIFieldDepth.Load(int4(origin + int2(0, 1), probe.z, 0)));
+	float2 d = UnpackHalf2x16(u_GIFieldDepth.Load(int4(origin + int2(1, 1), probe.z, 0)));
 	float4 weights = float4((1.0 - fraction.x) * (1.0 - fraction.y), fraction.x * (1.0 - fraction.y), (1.0 - fraction.x) * fraction.y,
 		fraction.x * fraction.y);
 	float mean = dot(weights, float4(a.x, b.x, c.x, d.x));

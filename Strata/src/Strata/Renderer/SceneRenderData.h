@@ -776,7 +776,7 @@ namespace Strata
 		constexpr uint32_t c_GIFieldFaces = 6;           // The field's faces per probe: +X, -X, +Y, -Y, +Z, -Z
 		// Each cascade-0 probe's distances to the first hit (GI/FieldReduce.comp): an octahedral tile of this many texels a side, a
 		// one-texel border around one texel per ray of its c_GIFieldDirections (8 x 8), of the mean distance and its variance
-		// (RG16F, meters), each ray's filtered with its neighbours' by the cosine between them to the power
+		// (meters, two halves in an R32_UINT), each ray's filtered with its neighbours' by the cosine between them to the power
 		// c_GIFieldDepthSharpness.
 		constexpr uint32_t c_GIFieldDepthTexels = 10;
 		constexpr float c_GIFieldDepthSharpness = 8.0f;

@@ -5089,13 +5089,13 @@ probe-field levels and local lights follow.
   `FieldReduce` (a group per cascade-0 probe, a thread per direction: cascade 0 marches cascade 1's 64 directions, each
   continued by cascade 1's merged ray of the same direction and gated by its own transmittance, into the field's ambient cube:
   six RGBA16F faces per cascade-0 probe, irradiance over pi and the sky share, normalized by the directions' cosine sum;
-  cascade 0 has no atlas). A 16-direction cascade 0 reduced apart gated four of cascade 1's directions with one ray and put
-  an emissive wall's light at its directions' centres' cosines, 1.34-1.42 times the form factor. The same pass keeps each
-  probe's **depth moments** (DDGI's, Majercik et al. 2019 and 2021, ideas only): each ray's distance to its first hit over
-  its march (the absorbed shares' mean; what passes counts at the march's end, two spacings; the probe's own sample is its
-  validity, not a hit), its mean and mean square filtered over the neighbouring rays by the cosine to
-  `c_GIFieldDepthSharpness` (8), stored as the mean and the variance in a 10 x 10 RG16F octahedral tile per probe (a texel
-  per ray inside a one-texel border that repeats the interior across the octahedron's edges), SRV 54.
+  cascade 0 has no atlas). A 16-direction cascade 0 reduced apart gated four of cascade 1's directions with one ray and put an
+  emissive wall's light at its directions' centres' cosines, 1.34-1.42 times the form factor. The same pass keeps each probe's
+  **depth moments** (DDGI's, Majercik et al. 2019 and 2021, ideas only): each ray's distance to its first hit over its march
+  (the absorbed shares' mean; what passes counts at the march's end, two spacings; the probe's own sample is its validity, not
+  a hit), its mean and mean square filtered over the neighbouring rays by the cosine to `c_GIFieldDepthSharpness` (8), stored
+  as the mean and the variance in a 10 x 10 octahedral tile per probe, two halves an R32_UINT texel (RG16F is an extended
+  storage format) (a texel per ray inside a one-texel border that repeats the interior across the octahedron's edges), SRV 54.
 - **Multi-bounce** (re-injection; `GlobalIlluminationSettings::BounceGain`, 1, within [0, 1]; the tests' one-bounce
   cases set 0; both qualities, `GlobalIlluminationLayout::Bounces`; Low bounced once until the gather's depth-moment
   visibility and guard kept bounced light out of closed rooms' corners): `VoxelInject`

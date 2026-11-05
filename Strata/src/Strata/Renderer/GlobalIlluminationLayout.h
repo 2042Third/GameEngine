@@ -75,7 +75,7 @@ namespace Strata
 		uint64_t Weights = 0;     // Each probe's eight parents' weights (two RGBA8), of every cascade but the top
 		uint64_t Validity = 0;    // RGBA8 per probe of every cascade
 		uint64_t Field = 0;       // Six RGBA16F faces per probe of the first cascade
-		uint64_t FieldDepth = 0;  // A 10 x 10 RG16F tile of depth moments per probe of the first cascade
+		uint64_t FieldDepth = 0;  // A 10 x 10 tile of depth moments (two halves a texel) per probe of the first cascade
 		uint64_t Tiles = 0;       // The large triangles' tiles of a batch (8 bytes each)
 		uint64_t WorkItems = 0;   // The frame's work items (16 bytes) and triangle groups (8 bytes)
 		uint64_t Regions = 0;     // The frame's voxel regions (48 bytes each) and the GI's counters
