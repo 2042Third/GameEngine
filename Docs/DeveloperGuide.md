@@ -5176,7 +5176,8 @@ follow.
   integrated from the panel, the floor and the sphere take the colored walls' tints; a glowing closed box converges to
   Le / (1 - rho) within 3% of the series its one-bounce field's own error predicts (that error is 4-9% low at High); the sun
   room's points take at least their one-bounce light, the ceiling over the patch 10% more, and what the bounces add stays
-  within the series' bound; settling after a cut; still frames; a panel in the dark sealed room) and
+  within the series' bound; settling after a cut; still frames; a panel in the dark sealed room; strafes through the yard and
+  the sun room flicker at most half again as much as with one bounce) and
   `GlobalIlluminationRoom`'s "A sealed room stays dark" with every bounce at High.
 - **What it cannot do** (so far): at Low with every bounce, the sealed room moved by a quarter of a probe spacing lights
   its walls' pixels in the north-west three-wall corner through the walls (73 nits; 0.019 with one bounce, whose outside

@@ -1,3 +1,4 @@
+#include "Renderer/FlickerMetrics.h"
 #include "Renderer/GIScenes.h"
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Strata/Asset/AssetManager.h"
@@ -1861,7 +1862,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 		}
 		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
 		{
-			const char* levelName = level == GlobalIlluminationLevel::High ? "High" : "Low";
+			const std::string levelName = level == GlobalIlluminationLevel::High ? "High" : "Low";
 			CAPTURE(levelName);
 			uint32_t oneFrames = 0;
 			uint32_t everyFrames = 0;
@@ -2050,7 +2051,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 		const float aspect = static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y);
 		for (uint32_t sceneIndex = 0; sceneIndex < 3; sceneIndex++)
 		{
-			const char* sceneName = sceneIndex == 0 ? "the sun room" : sceneIndex == 1 ? "the yard" : "the Cornell box";
+			const std::string sceneName = sceneIndex == 0 ? "the sun room" : sceneIndex == 1 ? "the yard" : "the Cornell box";
 			CAPTURE(sceneName);
 			SceneTestAssets assets;
 			Scene scene;
@@ -2194,6 +2195,72 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 		MESSAGE("the east wall's light from the panel: one bounce " << values[0] << ", every bounce " << values[1] << " (" << values[1] / values[0] << ")");
 		CHECK(values[0] > 0.0f);
 		CHECK(values[1] > 1.05f * values[0]);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Bounces add no flicker in motion")
+	{
+		// 6.4: the strafes again with every bounce. Moving the camera scrolls the voxel levels and moves the field, and each frame's
+		// bounce takes last frame's field from the same world place (Bounce.yzw), so a strafe's gi view flickers about as much with
+		// every bounce as with one: the yard's fence strafe (0.02 m a frame) and a strafe across the sun room (0.06 m a frame: probe
+		// cells and voxel scrolls crossed). Each renderer first settles at the strafe's first camera, so the series' approach is not
+		// measured as change. Each statistic with every bounce is at most half again one bounce's, or 0.01% above it where one
+		// bounce barely flickers (measured: the yard 0.0064% mean against 0.0055%, the sun room 0.031% against 0.048%).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		constexpr uint32_t c_StrafeFrames = 12;
+		const float aspect = static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y);
+		for (uint32_t sceneIndex = 0; sceneIndex < 2; sceneIndex++)
+		{
+			const std::string sceneName = sceneIndex == 0 ? "the yard's fence strafe" : "the sun room strafe";
+			CAPTURE(sceneName);
+			const auto path = [&](uint32_t frame)
+			{
+				return sceneIndex == 0 ? YardStrafe(frame, 1.0f, aspect) : RoomCamera(glm::vec3(0.06f * static_cast<float>(frame), 0.0f, 0.0f));
+			};
+			FlickerResult results[2];
+			for (uint32_t pass = 0; pass < 2; pass++)
+			{
+				SceneTestAssets assets;
+				Scene scene;
+				if (sceneIndex == 0)
+					BuildYard(scene, assets);
+				else
+					BuildSunRoom(scene, assets, DefaultRoom());
+				Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification(GlobalIlluminationLevel::High, pass == 0 ? 0.0f : 1.0f));
+				renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+				for (uint32_t frame = 0; frame < RenderData::c_GISettleFrames + 4; frame++)
+					REQUIRE(RenderGIFrame(*renderer, scene, path(0), GIViewOptions()));
+				REQUIRE(renderer->GetStats().GlobalIlluminationSettled);
+				FlickerSequence sequence(3);
+				for (uint32_t frame = 0; frame < c_StrafeFrames; frame++)
+				{
+					const SceneCamera camera = path(frame);
+					REQUIRE(RenderGIFrame(*renderer, scene, camera, GIViewOptions()));
+					REQUIRE_FALSE(renderer->GetStats().GlobalIlluminationPending);
+					sequence.Add(ReadFlickerFrame(*renderer, camera));
+				}
+				results[pass] = sequence.GetResult();
+				renderer.reset();
+				CollectReleases();
+			}
+			for (uint32_t pass = 0; pass < 2; pass++)
+			{
+				const FlickerResult& result = results[pass];
+				MESSAGE(sceneName << ", " << std::string(pass == 0 ? "one bounce" : "every bounce") << ": mean " << result.Mean * 100.0 << "%, p99 " << result.P99 * 100.0
+					<< "%, blocks " << result.Blocks * 100.0 << "%, blocks p99 " << result.BlocksP99 * 100.0 << "%, measured "
+					<< result.MeasuredShare * 100.0 << "% over " << result.Frames << " triples");
+				CHECK(std::isfinite(result.Mean));
+				CHECK(std::isfinite(result.Blocks));
+				CHECK(result.MeasuredShare > 0.3);
+				CHECK(result.Frames == c_StrafeFrames - 3);
+			}
+			const auto bound = [](double one) { return std::max(1.5 * one, one + 0.0001); };
+			CHECK(results[1].Mean <= bound(results[0].Mean));
+			CHECK(results[1].P99 <= bound(results[0].P99));
+			CHECK(results[1].Blocks <= bound(results[0].Blocks));
+			CHECK(results[1].BlocksP99 <= bound(results[0].BlocksP99));
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }
