@@ -39,8 +39,9 @@ namespace Strata
 		// wait for it.
 		static constexpr uint32_t c_MaxShadowFitFrames = 12;
 		// Frames rendered while global illumination settles (SceneRendererStats::GlobalIlluminationSettled; scenes whose Post Process
-		// asks for it at a quality that runs it), as captures wait for it: meshes still uploading join the voxels as they arrive.
-		static constexpr uint32_t c_MaxGIFrames = 16;
+		// asks for it at a quality that runs it), as captures wait for it: meshes still uploading join the voxels as they arrive,
+		// and the bounces settle RenderData::c_GISettleFrames (14) frames after the last of them.
+		static constexpr uint32_t c_MaxGIFrames = 30;
 		// Frames rendered again while spatial screen-space reflections wait for a previous frame's color
 		// (SceneRendererStats::ScreenSpaceReflectionsPending), as captures wait for them: the first makes it, the second reads it.
 		static constexpr uint32_t c_MaxReflectionFrames = 2;

@@ -43,6 +43,12 @@ namespace Strata
 		constexpr uint32_t c_LightGroupSize = 4; // Inject, validity, weights, reduce: 4 x 4 x 4 threads
 		constexpr uint32_t c_MarchGroupSize = 8; // CascadeMarch: 8 x 8 x 1 rays
 
+		// The bounce's gain as re-injection uses it: 0 (one bounce) for negative or non-finite settings.
+		float GetBounceGain(const GlobalIlluminationSettings& settings)
+		{
+			return std::isfinite(settings.BounceGain) ? std::max(settings.BounceGain, 0.0f) : 0.0f;
+		}
+
 		// A compute layout holding exactly a binding set's items (a volatile constant buffer as one).
 		nvrhi::BindingLayoutHandle CreateLayoutFor(nvrhi::IDevice* device, const nvrhi::BindingSetDesc& set)
 		{
@@ -354,6 +360,13 @@ namespace Strata
 			.setMaxVersions(c_FrameConstantVersions)
 			.setDebugName(name + "Constants"));
 		created = created && gi->ConstantBuffer;
+		gi->PreviousFieldBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
+			.setByteSize(sizeof(RenderData::GIFieldConstants))
+			.setIsConstantBuffer(true)
+			.setIsVolatile(true)
+			.setMaxVersions(c_FrameConstantVersions)
+			.setDebugName(name + "PreviousField"));
+		created = created && gi->PreviousFieldBuffer;
 		gi->RepeatSampler = m_Device->createSampler(nvrhi::SamplerDesc().setAllFilters(true).setAllAddressModes(nvrhi::SamplerAddressMode::Wrap));
 		created = created && gi->RepeatSampler;
 		for (GlobalIlluminationResources::CounterReadback& readback : gi->Readbacks)
@@ -459,6 +472,7 @@ namespace Strata
 		release(gi.ProbeViewPipeline);
 		release(gi.ProbeViewLayout);
 		release(gi.ConstantBuffer);
+		release(gi.PreviousFieldBuffer);
 		release(gi.Scratch);
 		release(gi.Tiles);
 		release(gi.TileArguments);
@@ -543,6 +557,32 @@ namespace Strata
 			field.VoxelValidMaximum[level] = data.ValidMaximum;
 		}
 		field.VoxelDimensions = glm::vec4(glm::vec3(dimensions), 0.0f);
+
+		// Re-injection (multi-bounce): VoxelInject reads the field the frame before left, when that frame of this renderer recorded its
+		// light whole and used its field (not pending) and this frame cuts nothing (a rebuild or a jump starts again from one bounce).
+		// Its constants are that frame's, relative to that frame's camera, with this frame's voxel levels moved there (the
+		// visibility marches through the voxels as they are now); a camera-relative point plus Bounce.yzw is relative to it. The
+		// field holds world positions, so a scroll or a move between the frames takes each point's light from the same place.
+		const float bounceGain = GetBounceGain(m_Specification.GlobalIllumination);
+		const bool previousField = bounceGain > 0.0f && gi.FieldRender != 0 && gi.FieldRender == m_RenderCount && gi.LastField.FieldSize.w > 0.0f
+			&& !work.Pending && !work.Cut && !work.Rebuilt;
+		gi.PreviousField = gi.LastField;
+		gi.PreviousField.FieldSize.w = previousField ? 1.0f : 0.0f;
+		for (uint32_t level = 0; level < 3 && level < levels; level++)
+		{
+			const VoxelClipmap::LevelState& state = gi.Clipmap->GetLevel(level);
+			const double voxelSize = static_cast<double>(gi.Layout.Levels[level].VoxelSize);
+			gi.PreviousField.VoxelOrigin[level] = glm::vec4(glm::vec3(glm::dvec3(state.Window) * voxelSize - gi.LastCamera), field.VoxelOrigin[level].w);
+			gi.PreviousField.VoxelTexel[level] = field.VoxelTexel[level];
+			gi.PreviousField.VoxelValidMinimum[level] = field.VoxelValidMinimum[level];
+			gi.PreviousField.VoxelValidMaximum[level] = field.VoxelValidMaximum[level];
+		}
+		gi.PreviousField.VoxelDimensions = field.VoxelDimensions;
+		constants.Bounce = glm::vec4(previousField ? bounceGain : 0.0f, glm::vec3(cameraPosition - gi.LastCamera));
+		gi.LastField = field;
+		gi.LastCamera = cameraPosition;
+		gi.FieldMinimum = GlobalIllumination::GetFieldMinimum(gi.Layout, cameraPosition);
+
 		m_Stats.GlobalIllumination = true;
 		m_Stats.GlobalIlluminationPending = work.Pending;
 		m_Stats.GlobalIlluminationSettled = !work.Pending && work.QueuedRegions == 0;
@@ -560,12 +600,34 @@ namespace Strata
 		}
 	}
 
+	void SceneRenderer::SettleGlobalIllumination(const RenderData::FrameConstants& frame)
+	{
+		GlobalIlluminationResources& gi = *m_GI;
+		// With re-injection each bounce arrives a frame after the one before it: the light settles c_GISettleFrames frames after
+		// its inputs last changed (the voxels, the sun, the sky, the field's place) or the bounce last started over (a cut, a
+		// frame that read no field of the frame before). One bounce is a function of the frame's voxels: settled with them.
+		GlobalIlluminationResources::LightInputs inputs;
+		inputs.SunDirection = frame.DirectionalLightDirection;
+		inputs.SunColor = frame.DirectionalLightColor;
+		inputs.Ambient = frame.AmbientColor;
+		inputs.Environment = frame.EnvironmentParams;
+		inputs.EnvironmentCube = GetEnvironmentCube();
+		inputs.FieldMinimum = gi.FieldMinimum;
+		const VoxelFrame& work = gi.Frame;
+		const bool changed = gi.Constants.Bounce.x <= 0.0f || !work.Batches.empty() || work.MaterialsChanged || inputs != gi.SettleInputs;
+		gi.SettleInputs = inputs;
+		gi.StableFrames = changed ? 0 : gi.StableFrames + 1;
+		if (GetBounceGain(m_Specification.GlobalIllumination) > 0.0f && gi.StableFrames < RenderData::c_GISettleFrames)
+			m_Stats.GlobalIlluminationSettled = false;
+	}
+
 	bool SceneRenderer::RecordGlobalIllumination(nvrhi::ICommandList* commandList)
 	{
 		ST_PROFILE_FUNCTION();
 		GlobalIlluminationResources& gi = *m_GI;
 		const VoxelFrame& frame = gi.Frame;
 		commandList->writeBuffer(gi.ConstantBuffer, &gi.Constants, sizeof(gi.Constants));
+		commandList->writeBuffer(gi.PreviousFieldBuffer, &gi.PreviousField, sizeof(gi.PreviousField));
 		if (!gi.Cleared)
 		{
 			// Their first frame: no voxel holds garbage, also where no region reached yet.
@@ -821,6 +883,13 @@ namespace Strata
 			{
 				nvrhi::BindingSetDesc desc = common(false);
 				add3D(desc, 53, gi.Levels[level].Emission);
+				// Re-injection reads the field the frame before left through Include/GIField.slang: its constants (b3), its faces,
+				// cascade 0's validity and voxel levels 0-2 for the gather's visibility.
+				desc.bindings.push_back(nvrhi::BindingSetItem::ConstantBuffer(3, gi.PreviousFieldBuffer));
+				add3D(desc, 35, gi.Field);
+				add3D(desc, 37, gi.Cascades.front().Validity);
+				for (uint32_t fieldLevel = 0; fieldLevel < 3; fieldLevel++)
+					add3D(desc, 38 + fieldLevel, fieldLevel < levels ? gi.Levels[fieldLevel].Material.Get() : nullptr);
 				addUAV(desc, 0, gi.Levels[level].Radiance);
 				desc.bindings.push_back(nvrhi::BindingSetItem::RawBuffer_UAV(7, gi.Counters));
 				makeSet(gi.Inject, desc, "GI/VoxelInject.comp");
@@ -937,6 +1006,7 @@ namespace Strata
 		}
 		const glm::uvec3 grid = layout.Cascades.front().Grid;
 		dispatch(gi.Reduce, 0, parameters(0), grid.x, grid.y, grid.z);
+		gi.FieldRender = m_RenderCount + 1; // The next frame may read this field (re-injection)
 
 		// The counters into the next free readback (a copy still under way leaves the frame unread).
 		GlobalIlluminationResources::CounterReadback& readback = gi.Readbacks[gi.ReadbackIndex];

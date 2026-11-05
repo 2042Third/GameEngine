@@ -769,6 +769,12 @@ namespace Strata
 		constexpr float c_GIGatherStartVoxels = 1.5f;    // Guess: visibility marches start this many voxels off the surface
 		constexpr float c_GIVisibilityCutoff = 0.05f;    // A visibility march below this transmittance sees nothing
 		constexpr uint32_t c_GIFieldFaces = 6;           // The field's faces per probe: +X, -X, +Y, -Y, +Z, -Z
+		// Multi-bounce by re-injection (GI/VoxelInject.comp): a surface voxel adds its albedo, clamped below this so the series of
+		// bounces converges in every room, times last frame's field at it.
+		constexpr float c_GIMaxBounceAlbedo = 0.9f;
+		// Frames with re-injection and no change of the light's inputs (voxel work, the sun, the sky, the field's place, a cut)
+		// before GlobalIlluminationSettled: the frames the bounce series takes to settle within 0.25% (measured: 6.4).
+		constexpr uint32_t c_GISettleFrames = 14;
 
 		// VoxelWorkItem::Flags
 		constexpr uint32_t c_VoxelItemClosed = 1u << 0;      // A closed mesh whose submeshes are all opaque: its triangles add winding steps
@@ -842,8 +848,12 @@ namespace Strata
 			// 1 / C_f per face (+X, -X, +Y, -Y, +Z, -Z; [1].zw unused): C_f the sum of cascade 0's directions' cosines to the face
 			// times their solid angles, so a uniform radiance reduces to itself on every face (GetFaceCosineSum).
 			glm::vec4 FaceWeights[2];
+			// Re-injection: x the bounce's gain (GlobalIlluminationSettings::BounceGain; 0 when the frame reads no field of the frame
+			// before: one bounce), yzw this frame's camera minus last frame's (m; a camera-relative point plus it is relative to
+			// last frame's camera, as the field VoxelInject reads at b3).
+			glm::vec4 Bounce;
 		};
-		static_assert(sizeof(GlobalIlluminationConstants) == c_GIMaxVoxelLevels * 80 + 32 + 32 + 16 + 32);
+		static_assert(sizeof(GlobalIlluminationConstants) == c_GIMaxVoxelLevels * 80 + 32 + 32 + 16 + 32 + 16);
 
 		// The probe passes' push constants (b2; Include/GIProbes.slang): the cascade a dispatch works on.
 		struct GIProbePassParameters

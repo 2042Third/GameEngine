@@ -188,6 +188,19 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - AI agents: `component.set` on `PostProcess` takes `GlobalIllumination` and `GlobalIlluminationIntensity`;
   `project.setSettings` and the players' graphics options take `Renderer.Quality.GlobalIllumination`.
 
+**Global illumination: every bounce (stage 4; experimental).**
+
+- Scenes with **Global Illumination** on: light now bounces on between surfaces instead of stopping after its first
+  bounce. A room lit by a panel in its ceiling has a lit ceiling (in the owner's Cornell box, a 5,000-nit panel's room,
+  the ceiling rises from 13-22 to 95-150 nits per unit of albedo at High), colored walls tint the floor and objects
+  beside them (the floor by the red wall turns 9% redder than by the green one, the sphere's sides 26%), and a sunlit
+  room's floor, which only the window's sill lit before, takes 40-230 nits of the walls' and ceiling's light. Each
+  further bounce arrives a frame after the one before: after a cut or a change of the light, rooms fill over 14 frames
+  (white rooms a few more), and captures and the project's picture wait for it. Closed rooms stay dark. Look-dev: the
+  Cornell box, `lookdev.cornell`.
+- Global illumination's cost does not change (3.96-4.01 ms at 3840 x 2160 at High in the sun room, 3.98-3.99 ms in the
+  yard), and scenes without it look exactly as before.
+
 **Occlusion culling (cull fix)**
 
 - Fixed: occlusion culling hid objects in plain view. Its depth pyramid was built a texel or more off where a level's
@@ -275,7 +288,17 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   the floor meets the wall under the sun room's window. With the sun high, the bounce on the window wall ends in sharp
   vertical edges either side of the patch's light.
 - Its light ends at the probe field's edge around the camera (High: full within 7.5 m horizontally, 5.5 m up and down;
-  Low: 7 m and 2.8 m; faded to the light without it over 2 m): outdoors the edge of a bubble can show. One bounce only.
+  Low: 7 m and 2.8 m; faded to the light without it over 2 m): outdoors the edge of a bubble can show.
+- The owner's Cornell box at High, with every bounce: black, jagged staircases surround the sphere's foot and notch the
+  tall box's foot, a dark square sits on the box's front near its base, the sphere's indirect shadow on the floor is a
+  blocky rectangle, and a dark wedge stays between the box and the red wall: the probes are 0.5 m apart and their
+  visibility is on or off, so contacts and small gaps show the probe cells. In the sun room, the window wall keeps dark
+  vertical bands either side of the window and a dark band along its foot.
+- With every bounce, rooms settle over 14 frames after a cut (the sun room's gi view changes by less than 0.25% a frame
+  from frame 11, the Cornell box's from frame 15); rooms brighter than the Cornell box's white take longer.
+- At Low with every bounce, the sealed room moved by a quarter of a probe spacing shows light through its walls in a
+  three-wall corner (73 nits, the gather's visibility leaking where one bounce, dark outside, hid it), and the Cornell box
+  comes out about twice as bright as at High (its ceiling 180-300 nits per unit of albedo against 95-150).
 
 **Reflections (R1)**
 

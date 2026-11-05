@@ -32,6 +32,7 @@
 #include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Renderer/RenderScene.h>
 #include <Strata/Renderer/Renderer.h>
+#include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Runtime/GameGraphicsService.h>
@@ -257,6 +258,22 @@ namespace
 			for (const UUID sun : suns)
 				Run("component.set", { { "entity", UUIDToJson(sun) }, { "component", "DirectionalLight" }, { "values", { { "CastShadows", false } } } });
 			CHECK_FALSE(suns.empty());
+		}
+
+		// The edited scene's Post Process components ask for no global illumination (their bounces settle over
+		// c_GISettleFrames frames, which captures wait for).
+		void TurnOffGlobalIllumination()
+		{
+			std::vector<UUID> volumes;
+			Scene& scene = *Context.GetEditScene();
+			for (const entt::entity handle : scene.GetRegistry().view<PostProcessComponent>())
+			{
+				if (scene.GetRegistry().get<PostProcessComponent>(handle).GlobalIllumination)
+					volumes.push_back(Entity(handle, &scene).GetUUID());
+			}
+			for (const UUID volume : volumes)
+				Run("component.set", { { "entity", UUIDToJson(volume) }, { "component", "PostProcess" }, { "values", { { "GlobalIllumination", false } } } });
+			CHECK_FALSE(volumes.empty());
 		}
 
 		int CountDifferences(const DecodedImage& a, const DecodedImage& b)
@@ -743,10 +760,12 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(harness.CountDifferences(image, settled) == 0);
 
 		// Without waiting, a capture takes what the frame has: it renders again only for the scene's temporal anti-aliasing, the
-		// jitter's phases. Its sun casts no shadows here: else the capture would first wait for the cascades' fit, whose frames
-		// follow how soon the GPU finishes the readbacks, and waitedFrames would report the larger of the two waits.
+		// jitter's phases. Its sun casts no shadows here and it asks for no global illumination: else the capture would first wait
+		// for the cascades' fit, whose frames follow how soon the GPU finishes the readbacks, or for the bounces to settle, and
+		// waitedFrames would report the larger of the waits.
 		harness.Run("play.stop");
 		harness.TurnOffSunShadows();
+		harness.TurnOffGlobalIllumination();
 		harness.Run("play.start", { { "build", false } });
 		nlohmann::json immediate = size;
 		immediate["waitForAssets"] = false;

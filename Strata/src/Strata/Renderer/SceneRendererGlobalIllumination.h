@@ -75,6 +75,29 @@ namespace Strata
 		};
 		std::vector<Cascade> Cascades;
 		nvrhi::TextureHandle Field;
+		// Multi-bounce by re-injection: VoxelInject reads the field the frame before left (its texture and cascade 0's validity
+		// still hold it when injection runs) through these constants (b3), relative to that frame's camera.
+		nvrhi::BufferHandle PreviousFieldBuffer;   // RenderData::GIFieldConstants
+		RenderData::GIFieldConstants PreviousField = {};
+		RenderData::GIFieldConstants LastField = {}; // The latest frame's field constants (Prepare), for the frame after it
+		glm::dvec3 LastCamera { 0.0 };               // ...and its camera
+		uint64_t FieldRender = 0;                    // RenderCount + 1 of the latest frame whose light passes were recorded whole
+		// Settling: the light's inputs besides the voxels (the sun, the sky, the field's place), and the frames since they, the
+		// voxels or the re-injection's source last changed.
+		struct LightInputs
+		{
+			glm::vec4 SunDirection { 0.0f };
+			glm::vec4 SunColor { 0.0f };
+			glm::vec4 Ambient { 0.0f };
+			glm::vec4 Environment { 0.0f };
+			const nvrhi::ITexture* EnvironmentCube = nullptr;
+			glm::dvec3 FieldMinimum { 0.0 };
+
+			bool operator==(const LightInputs&) const = default;
+		};
+		LightInputs SettleInputs;
+		glm::dvec3 FieldMinimum { 0.0 };             // This frame's field minimum corner (world)
+		uint32_t StableFrames = 0;
 		glm::vec4 SolidAngleNorms { 0.0f };        // RenderData::GlobalIlluminationConstants::SolidAngleNorms
 		std::array<glm::vec4, 2> FaceWeights = {}; // ...FaceWeights
 		struct Pass

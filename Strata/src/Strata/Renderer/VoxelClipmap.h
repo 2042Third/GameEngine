@@ -75,6 +75,7 @@ namespace Strata
 		// The clipmap's levels 0-2 do not hold their windows (shrunk by two scroll steps) yet: a rebuild or a jump not done.
 		bool Pending = false;
 		bool Rebuilt = false;              // The frame started the clipmap over (its first, another render scene)
+		bool Cut = false;                  // ...or a window moved by a whole window or more (a jump): the cut's budget
 		bool MaterialsChanged = false;     // The material table changed (GetMaterials): upload it
 
 		void Clear();

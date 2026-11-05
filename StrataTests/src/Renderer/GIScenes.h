@@ -67,6 +67,26 @@ namespace Strata::Tests
 	// vertical field of view of 55 degrees.
 	SceneCamera YardStrafe(uint32_t frame, float speed, float aspectRatio);
 
+	// The owner's Cornell box (Tools/LookDev/LookDevScene.json's scene Cornell mirrors it: change both): a 5.5 m box open to the
+	// front (+z), its inside x and z within +-2.75 m and y within 0-5.5 m, of 0.2 m walls: red on the left (-x), green on the right
+	// (+x), a white floor, ceiling and back wall; a white box 1.6 x 3.2 x 1.6 m turned 18 degrees at the back left and a white
+	// sphere of radius 0.9 m at the right; a 1.3 x 1.05 m panel 0.3 m thick under the middle of the ceiling (thick enough that
+	// every quality's voxels hold its faces apart: a thinner one is two-sided at Low and sends nothing), emitting
+	// c_CornellPanelLuminance; no sun and no sky. Neutral post-processing. The colors are the measured Cornell box's reflectances.
+	constexpr float c_CornellPanelLuminance = 5000.0f;
+	const glm::vec3 c_CornellWhite(0.73f, 0.71f, 0.68f);
+	const glm::vec3 c_CornellRed(0.63f, 0.065f, 0.05f);
+	const glm::vec3 c_CornellGreen(0.14f, 0.45f, 0.091f);
+	void BuildCornellBox(Scene& scene, SceneTestAssets& assets);
+	// The look-dev shot's camera (lookdev.cornell): from (0, 2.75, 4.6), 1.85 m in front of the opening, toward (0, 2.4, 0), 70
+	// degrees: the whole inside within the field's full extent at High.
+	SceneCamera CornellCamera(float aspectRatio);
+
+	// A closed box of 0.2 m slabs whose inside spans `minimum` to `maximum` (on the 0.1 m voxel grid), every slab of one material:
+	// diffuse `albedo` and emitting `luminance` (nits) from every face. Inside, the radiance is uniform: L = Le / (1 - rho)
+	// with every bounce, Le with one. Neutral post-processing, no sun, no sky.
+	void BuildGlowingBox(Scene& scene, SceneTestAssets& assets, const glm::vec3& minimum, const glm::vec3& maximum, float albedo, float luminance);
+
 	// Inside the room: from (-9, 1.5, -4.5) toward (-10, 1.2, 1.1), moving +x by 0.01 m a frame, 70 degrees.
 	SceneCamera RoomStrafe(uint32_t frame, float aspectRatio);
 

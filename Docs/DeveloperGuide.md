@@ -4940,9 +4940,10 @@ Known issues), so some input still follows the camera; it has not been found. Bu
 `Docs/Plans/Wave8/specs/radiance-cascades-world.md` (its review corrections win over its body); the sources are the
 radiance-cascades lab (Daniel Quevedo, MIT: the triangle-box test, the winding steps and the column fill, the emission's
 coverage), Akenine-Moller's triangle-box test and, as ideas, Split RC, EggyStudio and creikey's voxel cascades.
-**Experimental** (stages 1-3): the voxels, the light, the debug views and the join to shading are built; one bounce only,
+**Experimental** (stages 1-4): the voxels, the light with every bounce, the debug views and the join to shading are built;
 one probe field around the camera, and the misses `Docs/Plans/Wave8/ReleaseNotes.md`'s Known issues list with their numbers
-(Gate W of the spec is not fully met). Multi-bounce and nested probe-field levels follow.
+(Gate W of the spec is not fully met). The probes' visibility and resolution, nested probe-field levels and local lights
+follow.
 
 - **The scene's ask and the row:** `PostProcessComponent::GlobalIllumination` (off) and `GlobalIlluminationIntensity` (1,
   0-4; inactive reason "Global Illumination is off"), section "Global illumination"; the quality row
@@ -4976,7 +4977,8 @@ one probe field around the camera, and the misses `Docs/Plans/Wave8/ReleaseNotes
   and lists the GPU's work: regions, work items (instance, mesh slot, submesh, level of detail, flags) and groups of 64
   triangles, in batches of one level that fit the scratch. A frame is pending (`GlobalIlluminationPending`) only while a
   valid box of levels 0-2 misses its window shrunk by two scroll steps (a rebuild or a jump under way), never for a slab,
-  a change or a waiting proxy; it is settled (`GlobalIlluminationSettled`) once nothing is left to voxelize.
+  a change or a waiting proxy; it is settled (`GlobalIlluminationSettled`) once nothing is left to voxelize and the bounces
+  have settled (Multi-bounce, below).
 - **What enters:** indexed, active proxies of the Static arena (meshes of the Skinned arena are left out: characters
   neither occlude nor bounce light; they receive it), opaque and alpha-masked submeshes (transparent and transmissive
   ones are left out); `CastShadows` does not matter. A proxy placed anew is moving for `c_GIMovingFrames` (30) frames:
@@ -5088,6 +5090,26 @@ one probe field around the camera, and the misses `Docs/Plans/Wave8/ReleaseNotes
   six RGBA16F faces per cascade-0 probe, irradiance over pi and the sky share, normalized by the directions' cosine sum;
   cascade 0 has no atlas). A 16-direction cascade 0 reduced apart gated four of cascade 1's directions with one ray and put
   an emissive wall's light at its directions' centres' cosines, 1.34-1.42 times the form factor.
+- **Multi-bounce** (re-injection; `GlobalIlluminationSettings::BounceGain`, 1; the tests' one-bounce cases set 0): `VoxelInject`
+  adds to each lit surface voxel its albedo, clamped below `c_GIMaxBounceAlbedo` (0.9) so the series converges in any room,
+  times the field the frame before left at the voxel (`SampleIrradianceField` half a voxel off it along the normal its light
+  is taken along, with the gather's visibility), times the gain. The first bounce arrives in the frame the light changes,
+  each further one a frame later, through world data: no GI buffer is blended over time. When injection runs, the field's
+  texture and cascade 0's validity still hold the frame before's; the pass reads them through `Include/GIField.slang` with
+  that frame's field constants (b3, `PreviousFieldBuffer`), relative to its camera, and this frame's voxel levels moved there
+  (`GlobalIlluminationConstants::Bounce.yzw`: this camera minus that one, in double), so a scroll or a move takes each
+  point's light from the same place. A cut (a rebuild, another render scene, a window's jump: `VoxelFrame::Cut`), a pending
+  frame, and a frame after one that ran no GI or did not record its field (`FieldRender`) start again from one bounce
+  (`Bounce.x` 0). `SettleGlobalIllumination` (once the frame's sun and sky are known) keeps `GlobalIlluminationSettled` false
+  until `c_GISettleFrames` (14) frames after the last change of the light's inputs: voxel work, the sun, the sky
+  (`AmbientColor`, `EnvironmentParams`, the cube), the field's place, or a restart. 14 is measured: the first frame from
+  which every 32 px block of the gi view changes by less than 0.25% for four frames is 11 in the sun room, 3 in the yard and
+  15 in the Cornell box, whose white walls (albedo 0.73) keep about two thirds of each bounce for the next; brighter rooms
+  take longer. Captures wait at most `c_GISettleFrames + 16` frames for it, the project picture 30. Still frames are
+  identical to the bit (frame 30 against 31, the sun room and the Cornell box): no rounding cycle showed, so the spec's
+  2^-10 grid is not used. Cost at 3840 x 2160 at High (three interleaved pairs against main): `GPU.RadianceCascades`
+  3.96-4.01 ms in the sun room against 5.56-5.64 ms, 3.98-3.99 ms in the yard against 4.06-4.12 ms; the injection's
+  gather costs nothing measurable, and why the sun room's stage got faster was not found. Without GI nothing of it runs.
 - **The join** (`Scene/Forward.frag.slang`'s `ShadeLitSurface`, `Include/IndirectLight.slang`'s `GatherIndirectField`):
   where the scene asked and the frame's field is used (ran, not pending), `FrameConstants::ReflectionParams.y` is 1 and `.z`
   the intensity (clamped to [0, 4], non-finite 1). Every variant (opaque, alpha-blended, glass: no screen data is read)
@@ -5148,8 +5170,19 @@ one probe field around the camera, and the misses `Docs/Plans/Wave8/ReleaseNotes
   `GPU.Editor.Thumbnails`' "A project picture waits for GI to settle" (scenes past the voxelizer's per-frame work items,
   `Tests::AddVoxelizerBacklog`, with nothing else to wait for: the picture's frame has the field settled and joined);
   `Renderer.GlobalIlluminationLayout`'s "The field reaches only where level 2 holds while a scroll is voxelized";
-  `PerfGPU.Renderer`'s "Global illumination's cost at 3840x2160" (sun room and yard, provisional).
-- **What it cannot do** (so far): walls thinner than two voxels go two-sided (dark from both sides), thin props blur into
+  `PerfGPU.Renderer`'s "Global illumination's cost at 3840x2160" (sun room and yard, provisional);
+  `GPU.SceneRenderer.GlobalIlluminationBounce` (the owner's Cornell box, `Tests::BuildCornellBox`, which look-dev's
+  `Cornell` scene and `lookdev.cornell` mirror: what the bounces add to the ceiling is at least half of the floor's light
+  integrated from the panel, the floor and the sphere take the colored walls' tints; a glowing closed box converges to
+  Le / (1 - rho) within 3% of the series its one-bounce field's own error predicts (that error is 4-9% low at High); the sun
+  room's points take at least their one-bounce light, the ceiling over the patch 10% more, and what the bounces add stays
+  within the series' bound; settling after a cut; still frames; a panel in the dark sealed room) and
+  `GlobalIlluminationRoom`'s "A sealed room stays dark" with every bounce at High.
+- **What it cannot do** (so far): at Low with every bounce, the sealed room moved by a quarter of a probe spacing lights
+  its walls' pixels in the north-west three-wall corner through the walls (73 nits; 0.019 with one bounce, whose outside
+  there is dark): the gather's visibility leaks there, and the case's Low variant waits for its rework. In the Cornell box
+  Low's bounce is about twice High's (ceiling 180-300 nits per albedo against 95-150), as Low's one-bounce field differs from
+  High's. Walls thinner than two voxels go two-sided (dark from both sides), thin props blur into
   blobs of whole voxels, characters and moving objects are not in the voxels until they rest, textured albedo and emission
   count by their maps' means (models colored from one shared palette map, as the ThirdPerson sample's Kenney models are,
   take the palette's mean everywhere: one mauve for grass, wood and rock), double-sided materials' voxels have no facing

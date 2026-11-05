@@ -2,6 +2,10 @@
 
 #include "Include/GIProbes.slang"
 
+// The field the frame before left (multi-bounce by re-injection): b3, SRV 35, 37 and 38-40 hold it as the scene passes read this
+// frame's, with its constants relative to that frame's camera (SceneRendererGlobalIllumination.cpp, PreviousField).
+#include "Include/GIField.slang"
+
 // Light injection (Docs/DeveloperGuide.md, "Global illumination"): every voxel of one level (u_Pass.Level), every frame, so moving
 // the sun re-lights the clipmap in the frame it moved. A surface voxel (its normal's w 1, or 0.5 double-sided) sends
 // albedo * E / pi + emission (luminance, times ST_GI_RADIANCE_SCALE), alpha 1: E the sun's illuminance on the voxel's normal
@@ -10,6 +14,12 @@
 // toward the sun. A two-sided voxel (w -1: both faces of a thin wall) sends nothing but stays a surface (alpha 1), so marches never
 // take a neighbor's light for it. Voxels without a surface, and those outside the level's valid box, are zero. Counts the surface
 // voxels (counter 4).
+//
+// Multi-bounce (re-injection): a lit surface voxel also sends its albedo, clamped below ST_GI_MAX_BOUNCE_ALBEDO so the series
+// converges, times the field the frame before left at it (SampleIrradianceField half a voxel off it along the normal the sun's
+// light takes, with the gather's visibility) times u_GI.Bounce.x. Each further bounce arrives a frame later, through world data:
+// nothing of the GI is blended over time. Bounce.x is 0 on a cut, a pending frame, the first frame and frames whose previous
+// frame did not record its field: those start again from one bounce.
 
 Texture3D<uint> u_GIEmission : register(t53);
 [vk::image_format("rgba16f")] RWTexture3D<float4> o_Radiance : register(u0);
@@ -117,19 +127,22 @@ void main(uint3 globalID : SV_DispatchThreadID, uint localIndex : SV_GroupIndex)
 			InterlockedAdd(s_SurfaceVoxels, 1u);
 			float3 albedo = LoadGIMaterial(level, texel).rgb;
 			float3 light = UnpackRGB9E5(u_GIEmission.Load(int4(texel, 0)));
+			float voxel = data.Origin.w;
+			float3 center = data.Origin.xyz + (float3(local) + 0.5) * voxel;
+			float normalLength = length(normal.xyz);
+			// The normal the voxel's light is taken along (zero when its triangles' normals cancel and no sun turns it).
+			float3 n = normalLength > 1e-4 ? normal.xyz / normalLength : float3(0.0, 0.0, 0.0);
 			if (u_Frame.DirectionalLightDirection.w > 0.0)
 			{
 				float3 toSun = -u_Frame.DirectionalLightDirection.xyz;
-				float normalLength = length(normal.xyz);
-				float3 n = normalLength > 1e-4 ? normal.xyz / normalLength : toSun;
+				if (normalLength <= 1e-4)
+					n = toSun;
 				// Double-sided (w 0.5) voxels are lit from whichever side the sun is on.
 				if (normal.w < 0.75 && dot(n, toSun) < 0.0)
 					n = -n;
 				float cosine = dot(n, toSun);
 				if (cosine > 0.0)
 				{
-					float voxel = data.Origin.w;
-					float3 center = data.Origin.xyz + (float3(local) + 0.5) * voxel;
 					// A voxel holding only a face on its boundary (the layer in front of a face on the grid) is free: the walk starts on
 					// the face, half a voxel behind the center (the shadow's edges stay where the geometry puts them). A solid one holds
 					// the surface somewhere inside: the walk starts ST_GI_SHADOW_OFFSET_VOXELS along the normal from its center, plus
@@ -144,7 +157,16 @@ void main(uint3 globalID : SV_DispatchThreadID, uint localIndex : SV_GroupIndex)
 					light += albedo * u_Frame.DirectionalLightColor.rgb * (cosine * transmittance / PI);
 				}
 			}
-			radiance = float4(min(SanitizeHDR(light) * ST_GI_RADIANCE_SCALE, float3(ST_GI_MAX_RADIANCE, ST_GI_MAX_RADIANCE, ST_GI_MAX_RADIANCE)), 1.0);
+			float3 scaled = SanitizeHDR(light) * ST_GI_RADIANCE_SCALE;
+			if (u_GI.Bounce.x > 0.0 && any(n != float3(0.0, 0.0, 0.0)))
+			{
+				// The field holds irradiance over pi times ST_GI_RADIANCE_SCALE: a Lambertian surface's radiance per albedo.
+				float openShare;
+				float4 field = SampleIrradianceField(u_GIRepeat, center + n * (0.5 * voxel) + u_GI.Bounce.yzw, n, n, openShare);
+				float3 bounceAlbedo = min(albedo, float3(ST_GI_MAX_BOUNCE_ALBEDO, ST_GI_MAX_BOUNCE_ALBEDO, ST_GI_MAX_BOUNCE_ALBEDO));
+				scaled += SanitizeHDR(bounceAlbedo * field.rgb * (field.a * u_GI.Bounce.x));
+			}
+			radiance = float4(min(scaled, float3(ST_GI_MAX_RADIANCE, ST_GI_MAX_RADIANCE, ST_GI_MAX_RADIANCE)), 1.0);
 		}
 		o_Radiance[globalID] = radiance;
 	}

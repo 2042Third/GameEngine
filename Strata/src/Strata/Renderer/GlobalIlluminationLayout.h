@@ -26,6 +26,9 @@ namespace Strata
 	{
 		uint32_t VoxelizeTrianglesPerFrame = RenderData::c_GIVoxelizeTrianglesPerFrame;
 		uint32_t VoxelizeTrianglesOnCut = RenderData::c_GIVoxelizeTrianglesOnCut;
+		// Multi-bounce: the share of last frame's field each surface voxel's light takes again (times its albedo, below
+		// c_GIMaxBounceAlbedo). 1 by default; 0 is one bounce, as the tests' one-bounce references compute.
+		float BounceGain = 1.0f;
 	};
 
 	// A level of the voxel clipmap: every level has the same dimensions, each twice the voxel size of the one before.

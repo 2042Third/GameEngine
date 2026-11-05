@@ -38,6 +38,8 @@ namespace
 	{
 		specification.GlobalIllumination.VoxelizeTrianglesPerFrame = 0;
 		specification.GlobalIllumination.VoxelizeTrianglesOnCut = 0;
+		// One bounce: the voxels' light is the sun's and emission's alone (the cases compare it with them), settled with the voxels.
+		specification.GlobalIllumination.BounceGain = 0.0f;
 		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(specification);
 		renderer->SetViewportSize(width, height);
 		return renderer;

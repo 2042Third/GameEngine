@@ -128,11 +128,13 @@ namespace
 		return options;
 	}
 
-	SceneRendererSpecification RoomSpecification(GlobalIlluminationLevel level = GlobalIlluminationLevel::High)
+	// One bounce unless asked (`bounceGain` 1): the one-bounce reference (SunRoomReference) and the cases tuned against it.
+	SceneRendererSpecification RoomSpecification(GlobalIlluminationLevel level = GlobalIlluminationLevel::High, float bounceGain = 0.0f)
 	{
 		SceneRendererSpecification specification = ExactSpecification();
 		specification.Quality.GlobalIllumination = level;
 		specification.GlobalIllumination.VoxelizeTrianglesOnCut = 0; // The first frame is complete
+		specification.GlobalIllumination.BounceGain = bounceGain;
 		return specification;
 	}
 
@@ -1003,73 +1005,84 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 	{
 		// The window filled with plaster: the nineteen points' mean at most erhe's 0.0017 of the open room's, and every junction of
 		// the floor and the ceiling with the walls (correction 4) too, at High and Low, with the room moved by a quarter and a half
-		// of the first cascade's spacing along x and z (the probe planes cut its walls at three places).
+		// of the first cascade's spacing along x and z (the probe planes cut its walls at three places); with one bounce, and at
+		// High with every bounce too (6.4: re-injection must not carry a leak further), settled. Low with every bounce is left
+		// out: at the quarter offset the walls' pixels in the north-west three-wall corner take light through the walls in the
+		// gather (0.019 nits with one bounce, whose outside there is dark; 73 with every bounce, which lights the outside), a leak
+		// of the gather's visibility that the probe visibility's rework fixes (DeveloperGuide, "Global illumination").
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
-		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
+		for (const float bounceGain : { 0.0f, 1.0f })
 		{
-			const float spacing = FirstSpacing(level);
-			for (float share : { 0.0f, 0.25f, 0.5f })
+			for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
 			{
-				const glm::vec3 offset(share * spacing, 0.0f, share * spacing);
-				const std::string name = fmt::format("{}, offset {} m", level == GlobalIlluminationLevel::High ? "High" : "Low", offset.x);
-				CAPTURE(name);
-				SunRoomOptions open = DefaultRoom();
-				open.Offset = offset;
-				SunRoomOptions sealed = open;
-				sealed.SealWindow = true;
-				std::vector<RoomPoint> walls = GetWallPoints(offset);
-				const std::vector<RoomPoint> ceilingJunctions = GetCeilingJunctions(offset);
-				walls.insert(walls.end(), ceilingJunctions.begin(), ceilingJunctions.end());
-				const std::vector<RoomPoint> floors = GetFloorPoints(offset, true);
-				const auto measure = [&](const SunRoomOptions& room, std::vector<glm::vec3>& wallValues, std::vector<glm::vec3>& floorValues)
+				if (bounceGain > 0.0f && level == GlobalIlluminationLevel::Low)
+					continue;
+				const float spacing = FirstSpacing(level);
+				const uint32_t frames = bounceGain > 0.0f ? RenderData::c_GISettleFrames + 2 : 3;
+				for (float share : { 0.0f, 0.25f, 0.5f })
 				{
-					RoomRender wallRender(room, c_RoomSize, RoomSpecification(level));
-					wallValues = wallRender.Measure(RoomCamera(offset), walls);
-					RoomRender floorRender(room, c_FloorSize, RoomSpecification(level));
-					floorValues = floorRender.Measure(FloorCamera(offset), floors);
-				};
-				// The nineteen points: the ten on the walls and ceiling, the floor's nine.
-				const auto nineteenMean = [](const std::vector<glm::vec3>& wallValues, const std::vector<glm::vec3>& floorValues)
-				{
-					float sum = 0.0f;
-					for (size_t index = 0; index < 10; index++)
-						sum += Luminance(wallValues[index]);
-					for (size_t index = 0; index < 9; index++)
-						sum += Luminance(floorValues[index]);
-					return sum / 19.0f;
-				};
-				std::vector<glm::vec3> openWalls, openFloors, sealedWalls, sealedFloors;
-				measure(open, openWalls, openFloors);
-				measure(sealed, sealedWalls, sealedFloors);
-				CollectReleases();
-				const float openMean = nineteenMean(openWalls, openFloors);
-				const float sealedMean = nineteenMean(sealedWalls, sealedFloors);
-				float largest = 0.0f;
-				std::string largestName;
-				for (size_t index = 0; index < walls.size() + floors.size(); index++)
-				{
-					const bool wall = index < walls.size();
-					const float value = Luminance(wall ? sealedWalls[index] : sealedFloors[index - walls.size()]);
-					if (value > largest)
+					const glm::vec3 offset(share * spacing, 0.0f, share * spacing);
+					const std::string name = fmt::format("{}, offset {} m, bounce gain {}", level == GlobalIlluminationLevel::High ? "High" : "Low", offset.x,
+						bounceGain);
+					CAPTURE(name);
+					SunRoomOptions open = DefaultRoom();
+					open.Offset = offset;
+					SunRoomOptions sealed = open;
+					sealed.SealWindow = true;
+					std::vector<RoomPoint> walls = GetWallPoints(offset);
+					const std::vector<RoomPoint> ceilingJunctions = GetCeilingJunctions(offset);
+					walls.insert(walls.end(), ceilingJunctions.begin(), ceilingJunctions.end());
+					const std::vector<RoomPoint> floors = GetFloorPoints(offset, true);
+					const auto measure = [&](const SunRoomOptions& room, std::vector<glm::vec3>& wallValues, std::vector<glm::vec3>& floorValues)
 					{
-						largest = value;
-						largestName = wall ? walls[index].Name : floors[index - walls.size()].Name;
+						RoomRender wallRender(room, c_RoomSize, RoomSpecification(level, bounceGain));
+						wallValues = wallRender.Measure(RoomCamera(offset), walls, frames);
+						RoomRender floorRender(room, c_FloorSize, RoomSpecification(level, bounceGain));
+						floorValues = floorRender.Measure(FloorCamera(offset), floors, frames);
+					};
+					// The nineteen points: the ten on the walls and ceiling, the floor's nine.
+					const auto nineteenMean = [](const std::vector<glm::vec3>& wallValues, const std::vector<glm::vec3>& floorValues)
+					{
+						float sum = 0.0f;
+						for (size_t index = 0; index < 10; index++)
+							sum += Luminance(wallValues[index]);
+						for (size_t index = 0; index < 9; index++)
+							sum += Luminance(floorValues[index]);
+						return sum / 19.0f;
+					};
+					std::vector<glm::vec3> openWalls, openFloors, sealedWalls, sealedFloors;
+					measure(open, openWalls, openFloors);
+					measure(sealed, sealedWalls, sealedFloors);
+					CollectReleases();
+					const float openMean = nineteenMean(openWalls, openFloors);
+					const float sealedMean = nineteenMean(sealedWalls, sealedFloors);
+					float largest = 0.0f;
+					std::string largestName;
+					for (size_t index = 0; index < walls.size() + floors.size(); index++)
+					{
+						const bool wall = index < walls.size();
+						const float value = Luminance(wall ? sealedWalls[index] : sealedFloors[index - walls.size()]);
+						if (value > largest)
+						{
+							largest = value;
+							largestName = wall ? walls[index].Name : floors[index - walls.size()].Name;
+						}
 					}
-				}
-				MESSAGE(name << ": open room " << openMean << ", sealed " << sealedMean << " (" << sealedMean / openMean << "), its brightest point "
-					<< largestName << " " << largest << " (" << largest / openMean << ")");
-				CHECK(openMean > 0.0f);
-				CHECK(sealedMean <= c_SealedBound * openMean);
-				for (size_t index = 10; index < walls.size(); index++)
-				{
-					INFO(walls[index].Name);
-					CHECK(Luminance(sealedWalls[index]) <= c_SealedBound * openMean);
-				}
-				for (size_t index = 9; index < floors.size(); index++)
-				{
-					INFO(floors[index].Name << " " << floors[index].Point.x << ", " << floors[index].Point.z);
-					CHECK(Luminance(sealedFloors[index]) <= c_SealedBound * openMean);
+					MESSAGE(name << ": open room " << openMean << ", sealed " << sealedMean << " (" << sealedMean / openMean << "), its brightest point "
+						<< largestName << " " << largest << " (" << largest / openMean << ")");
+					CHECK(openMean > 0.0f);
+					CHECK(sealedMean <= c_SealedBound * openMean);
+					for (size_t index = 10; index < walls.size(); index++)
+					{
+						INFO(walls[index].Name);
+						CHECK(Luminance(sealedWalls[index]) <= c_SealedBound * openMean);
+					}
+					for (size_t index = 9; index < floors.size(); index++)
+					{
+						INFO(floors[index].Name << " " << floors[index].Point.x << ", " << floors[index].Point.z);
+						CHECK(Luminance(sealedFloors[index]) <= c_SealedBound * openMean);
+					}
 				}
 			}
 		}
@@ -1679,6 +1692,508 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationJoin")
 		CHECK(beyond > positions.size() / 10);
 		CHECK(beyondChanged == 0);
 		CHECK(insideChanged > 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+}
+
+namespace
+{
+	// Renders a still camera's view until the GI says it settled with nothing left to load (at least three frames, at most
+	// `maxFrames`); the frames rendered.
+	uint32_t RenderUntilSettled(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, uint32_t maxFrames)
+	{
+		for (uint32_t frame = 1; frame <= maxFrames; frame++)
+		{
+			REQUIRE(RenderGIFrame(renderer, scene, camera, options));
+			const SceneRendererStats& stats = renderer.GetStats();
+			REQUIRE(stats.GlobalIllumination);
+			if (frame >= 3 && stats.GlobalIlluminationSettled && stats.GIWaitingProxies == 0 && stats.PendingAssets == 0)
+				return frame;
+		}
+		FAIL_CHECK("the GI did not settle within " << maxFrames << " frames");
+		return maxFrames;
+	}
+
+	// A color's share of its sum: how red (x), green (y) and blue (z) it is whatever its brightness.
+	glm::vec3 Chromaticity(const glm::vec3& color)
+	{
+		return color / std::max(color.r + color.g + color.b, 1e-6f);
+	}
+
+	// The irradiance over pi a point (normal `normal`) receives straight from the rectangle y = `height`, x and z within
+	// `minimum` to `maximum`, of luminance `luminance`, facing it (no occluders): numeric integration over `steps` x `steps` cells.
+	double RectangleLight(const glm::dvec3& point, const glm::dvec3& normal, double height, const glm::dvec2& minimum, const glm::dvec2& maximum,
+		double luminance, int steps)
+	{
+		const glm::dvec2 cell = (maximum - minimum) / static_cast<double>(steps);
+		const double facing = height > point.y ? -1.0 : 1.0; // The rectangle's normal: along y, toward the point
+		double sum = 0.0;
+		for (int i = 0; i < steps; i++)
+		{
+			for (int j = 0; j < steps; j++)
+			{
+				const glm::dvec3 sample(minimum.x + (i + 0.5) * cell.x, height, minimum.y + (j + 0.5) * cell.y);
+				const glm::dvec3 toSample = sample - point;
+				const double distance2 = glm::dot(toSample, toSample);
+				const double distance = std::sqrt(distance2);
+				const double cosine = glm::dot(normal, toSample) / distance;
+				const double cosineThere = -facing * toSample.y / distance;
+				if (cosine > 0.0 && cosineThere > 0.0)
+					sum += cosine * cosineThere / distance2;
+			}
+		}
+		return luminance * sum * cell.x * cell.y / glm::pi<double>();
+	}
+
+	// The 32 x 32 pixel blocks' mean luminance of an RGBA16F image (the blocks wholly inside it).
+	std::vector<float> BlockMeans(const ReadbackImage& image)
+	{
+		std::vector<float> means;
+		for (uint32_t y = 0; y + 32 <= image.Height; y += 32)
+		{
+			for (uint32_t x = 0; x + 32 <= image.Width; x += 32)
+			{
+				double sum = 0.0;
+				for (uint32_t dy = 0; dy < 32; dy++)
+				{
+					for (uint32_t dx = 0; dx < 32; dx++)
+						sum += Luminance(glm::vec3(ReadHalfTexel(image, x + dx, y + dy)));
+				}
+				means.push_back(static_cast<float>(sum / 1024.0));
+			}
+		}
+		return means;
+	}
+
+	// The largest change of a block's mean from one frame to the next, relative to it; blocks darker than a hundredth of the
+	// image's mean are left out (their relative changes are noise around zero).
+	float LargestBlockChange(const std::vector<float>& before, const std::vector<float>& after)
+	{
+		double total = 0.0;
+		for (float mean : after)
+			total += mean;
+		const float darkest = 0.01f * static_cast<float>(total / static_cast<double>(std::max<size_t>(after.size(), 1)));
+		float largest = 0.0f;
+		for (size_t index = 0; index < before.size() && index < after.size(); index++)
+		{
+			if (after[index] < darkest)
+				continue;
+			largest = std::max(largest, std::abs(after[index] - before[index]) / after[index]);
+		}
+		return largest;
+	}
+
+	// The points the Cornell box's camera reads: the ceiling away from the panel, the floor beside each colored wall, the sphere's
+	// sides turned toward each wall (45 degrees toward the camera), the floor's middle and the back wall.
+	std::vector<RoomPoint> GetCornellPoints()
+	{
+		const glm::vec3 sphere(1.15f, 0.9f, -0.3f);
+		const glm::vec3 towardRed = glm::normalize(glm::vec3(-1.0f, 0.0f, 1.0f));
+		const glm::vec3 towardGreen = glm::normalize(glm::vec3(1.0f, 0.0f, 1.0f));
+		return {
+			{ "ceiling left", { -1.8f, 5.5f, -1.8f }, c_Down },
+			{ "ceiling right", { 1.8f, 5.5f, -1.8f }, c_Down },
+			{ "ceiling back", { 0.0f, 5.5f, -2.0f }, c_Down },
+			{ "floor by the red wall", { -2.45f, 0.0f, 0.8f }, c_Up },
+			{ "floor by the green wall", { 2.45f, 0.0f, 0.8f }, c_Up },
+			{ "sphere toward the red wall", sphere + 0.9f * towardRed, towardRed },
+			{ "sphere toward the green wall", sphere + 0.9f * towardGreen, towardGreen },
+			{ "floor middle", { 0.0f, 0.0f, 0.8f }, c_Up },
+			{ "back wall", { 0.0f, 2.75f, -2.75f }, -c_North },
+		};
+	}
+
+	// The field (the gi view) at the Cornell box's points, with one bounce or every bounce (settled); `outFrames` receives the
+	// frames it took to settle.
+	std::vector<glm::vec3> MeasureCornellBox(float bounceGain, GlobalIlluminationLevel level, uint32_t& outFrames)
+	{
+		SceneTestAssets assets;
+		Scene scene;
+		BuildCornellBox(scene, assets);
+		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification(level, bounceGain));
+		renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+		const SceneCamera camera = CornellCamera(static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y));
+		outFrames = RenderUntilSettled(*renderer, scene, camera, GIViewOptions(), 40);
+		REQUIRE_FALSE(renderer->GetStats().GlobalIlluminationPending);
+		std::vector<glm::vec3> values = ReadPoints(*renderer, camera, GetCornellPoints());
+		renderer.reset();
+		CollectReleases();
+		return values;
+	}
+}
+
+TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
+{
+	TEST_CASE("The Cornell box: bounces light the ceiling and carry the walls' colors")
+	{
+		// The owner's box (6.4), lit by its ceiling panel alone. One bounce leaves the ceiling dark (only the panel's sides reach it,
+		// at a grazing angle) and the floor and sphere white. What every bounce adds to each ceiling point is at least half of what
+		// the floor alone sends it (the floor's light straight from the panel's underside, integrated, times its albedo, seen from
+		// the point: the box and sphere hide less than a quarter of it and the walls add about as much again, so half bounds a
+		// field within Gate W's errors), and the floor and sphere beside each
+		// colored wall take its color: redder by the red wall than by the green one, greener by the green one. The floor 0.3 m
+		// from a wall sees it over nearly half its hemisphere, but the panel's white light dominates there: the walls' light
+		// estimated from the panel and the floor puts its red share 9% above the other side's (0.356 against 0.327), so the case
+		// asks 4%; the sphere's sides, lit far less by the panel, 10%. One bounce leaves both sides the panel's white.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::vector<RoomPoint> points = GetCornellPoints();
+		const double whiteLuminance = Luminance(c_CornellWhite);
+		std::vector<double> bounds(points.size(), 0.0);
+		for (size_t index = 0; index < 3; index++)
+		{
+			constexpr int c_Cells = 22;
+			const glm::dvec3 point(points[index].Point);
+			double sum = 0.0;
+			for (int i = 0; i < c_Cells; i++)
+			{
+				for (int j = 0; j < c_Cells; j++)
+				{
+					const glm::dvec3 cell(-2.75 + (i + 0.5) * 5.5 / c_Cells, 0.0, -2.75 + (j + 0.5) * 5.5 / c_Cells);
+					const double floorLight = RectangleLight(cell, glm::dvec3(0.0, 1.0, 0.0), 5.2, { -0.65, -0.525 }, { 0.65, 0.525 }, c_CornellPanelLuminance, 12);
+					const glm::dvec3 toCell = cell - point;
+					const double distance2 = glm::dot(toCell, toCell);
+					const double cosine = -toCell.y / std::sqrt(distance2); // At the ceiling point and at the floor cell alike
+					sum += whiteLuminance * floorLight * cosine * cosine / distance2;
+				}
+			}
+			bounds[index] = 0.5 * sum * (5.5 / c_Cells) * (5.5 / c_Cells) / glm::pi<double>();
+		}
+		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
+		{
+			const char* levelName = level == GlobalIlluminationLevel::High ? "High" : "Low";
+			CAPTURE(levelName);
+			uint32_t oneFrames = 0;
+			uint32_t everyFrames = 0;
+			const std::vector<glm::vec3> one = MeasureCornellBox(0.0f, level, oneFrames);
+			const std::vector<glm::vec3> every = MeasureCornellBox(1.0f, level, everyFrames);
+			std::string table = fmt::format("the Cornell box at {} (every bounce settled in {} frames), gi view (nits per albedo):", levelName, everyFrames);
+			for (size_t index = 0; index < points.size(); index++)
+			{
+				const glm::vec3 chroma = Chromaticity(every[index]);
+				table += fmt::format("\n  {:<30} one bounce {:9.3f}  every bounce {:9.3f} (r {:.3f} g {:.3f} b {:.3f})", points[index].Name,
+					Luminance(one[index]), Luminance(every[index]), chroma.r, chroma.g, chroma.b);
+				if (bounds[index] > 0.0)
+					table += fmt::format("  bound {:.3f}", bounds[index]);
+			}
+			MESSAGE(table);
+			for (size_t index = 0; index < 3; index++)
+			{
+				INFO(points[index].Name);
+				CHECK(Luminance(every[index]) - Luminance(one[index]) >= bounds[index]);
+			}
+			// Beside each wall the floor and the sphere take its color; with one bounce both sides are the panel's white.
+			const glm::vec3 redFloor = Chromaticity(every[3]);
+			const glm::vec3 greenFloor = Chromaticity(every[4]);
+			const glm::vec3 redSphere = Chromaticity(every[5]);
+			const glm::vec3 greenSphere = Chromaticity(every[6]);
+			CHECK(redFloor.r > 1.04f * greenFloor.r);
+			CHECK(greenFloor.g > 1.04f * redFloor.g);
+			CHECK(redSphere.r > 1.1f * greenSphere.r);
+			CHECK(greenSphere.g > 1.1f * redSphere.g);
+			CHECK(Chromaticity(one[3]).r <= 1.04f * Chromaticity(one[4]).r);
+			for (size_t index = 0; index < points.size(); index++)
+			{
+				INFO(points[index].Name);
+				CHECK(Luminance(every[index]) >= 0.999f * Luminance(one[index]));
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A glowing closed box converges to the series of bounces")
+	{
+		// A closed 4 x 3 x 4 m box whose every face emits Le and reflects rho of its light: inside, the radiance is uniform, Le with
+		// one bounce and Le (1 + rho + rho^2 + ...) = Le / (1 - rho) with every bounce, rho the albedo as the voxels hold it (8 bits).
+		// The field reads Le within 10% with one bounce (the cascades' own error in a closed room: 4-9% low at High). Each bounce
+		// gathers through the same field, so with every bounce a point whose one-bounce field reads f_i Le reads
+		// f_i Le / (1 - rho f), f the room's mean ratio (the six points' mean): re-injection adds no error of its own when every
+		// point is within 3% of that series (and the series is within 20% of Le / (1 - rho)).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		constexpr float c_Luminance = 100.0f;
+		constexpr float c_Albedo = 0.5f;
+		constexpr float c_PreExposure = 1.0f / 256.0f;
+		const float storedAlbedo = std::round(c_Albedo * 255.0f) / 255.0f;
+		const std::vector<RoomPoint> points = {
+			{ "north wall", { 0.0f, 1.5f, -2.0f }, -c_North },
+			{ "north wall high", { 0.8f, 2.2f, -2.0f }, -c_North },
+			{ "west wall", { -2.0f, 1.2f, -1.0f }, c_East },
+			{ "east wall", { 2.0f, 1.8f, -1.0f }, -c_East },
+			{ "floor", { 0.0f, 0.0f, -1.0f }, c_Up },
+			{ "ceiling", { 0.0f, 3.0f, -1.2f }, c_Down },
+		};
+		const SceneCamera camera = MakeCamera(glm::vec3(0.0f, 1.5f, 1.6f), glm::vec3(0.0f, 1.5f, -2.0f), 75.0f, c_RoomSize);
+		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
+		{
+			CAPTURE(level == GlobalIlluminationLevel::High ? "High" : "Low");
+			std::vector<float> oneRatios(points.size(), 1.0f); // One bounce's field over Le at each point (the first pass)
+			for (const float bounceGain : { 0.0f, 1.0f })
+			{
+				CAPTURE(bounceGain);
+				SceneTestAssets assets;
+				Scene scene;
+				BuildGlowingBox(scene, assets, glm::vec3(-2.0f, 0.0f, -2.0f), glm::vec3(2.0f, 3.0f, 2.0f), c_Albedo, c_Luminance);
+				Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification(level, bounceGain));
+				renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+				SceneRenderOptions options = GIViewOptions();
+				options.PreExposure = c_PreExposure;
+				// Settled, then on until each further bounce adds less than a thousandth of Le (rho^12).
+				const uint32_t settled = RenderUntilSettled(*renderer, scene, camera, options, 40);
+				for (uint32_t frame = settled; frame < 14; frame++)
+					REQUIRE(RenderGIFrame(*renderer, scene, camera, options));
+				ReadbackImage image;
+				REQUIRE(Renderer::ReadTexture(renderer->GetHDRTexture(), image));
+				const float expected = bounceGain > 0.0f ? c_Luminance / (1.0f - storedAlbedo) : c_Luminance;
+				std::string table = fmt::format("{}: expected {:.3f}", bounceGain > 0.0f ? "every bounce" : "one bounce", expected);
+				float meanRatio = 0.0f;
+				for (const float ratio : oneRatios)
+					meanRatio += ratio / static_cast<float>(oneRatios.size());
+				for (size_t index = 0; index < points.size(); index++)
+				{
+					const RoomPoint& point = points[index];
+					const glm::uvec2 pixel = ProjectToPixel(camera, point.Point + point.Normal * 0.01f, image.Width, image.Height);
+					REQUIRE(pixel.x > 2);
+					REQUIRE(pixel.y > 2);
+					REQUIRE(pixel.x + 3 < image.Width);
+					REQUIRE(pixel.y + 3 < image.Height);
+					const float value = Luminance(glm::vec3(ReadHalfTexel(image, pixel.x, pixel.y))) / c_PreExposure;
+					INFO(point.Name << ": " << value << " against " << expected);
+					if (bounceGain <= 0.0f)
+					{
+						oneRatios[index] = value / expected;
+						table += fmt::format("\n  {:<16} {:9.3f} ({:.3f})", point.Name, value, value / expected);
+						CHECK(std::abs(value / expected - 1.0f) <= 0.1f);
+						continue;
+					}
+					const float series = oneRatios[index] * c_Luminance / (1.0f - storedAlbedo * meanRatio);
+					table += fmt::format("\n  {:<16} {:9.3f} ({:.3f}; the one-bounce series {:.3f}: {:.3f})", point.Name, value, value / expected, series,
+						value / series);
+					CHECK(std::abs(value / series - 1.0f) <= 0.03f);
+					CHECK(std::abs(value / expected - 1.0f) <= 0.2f);
+				}
+				MESSAGE(table);
+				renderer.reset();
+				CollectReleases();
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Bounces fill the sun room")
+	{
+		// 6.4: with every bounce each point takes at least its one-bounce light and the ceiling over the patch at least 10% more.
+		// What the bounces add is at most the series rho / (1 - rho) times the brightest one-bounce light the points read (each
+		// bounce's field is at most rho times the brightest of the one before; the ceiling over the patch is the room's brightest
+		// field). The spec's guess, at most 2.5 times the one-bounce reference, does not hold where one bounce is dim: what the
+		// bounces add is about even across the room, so the east and south walls rise about threefold, and the floor, which one
+		// bounce leaves dark (it sees no sunlit surface), far more.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const SunRoomOptions room = DefaultRoom();
+		const std::vector<RoomPoint> walls = GetWallPoints();
+		const std::vector<RoomPoint> floors = GetFloorPoints();
+		const auto measure = [&](float bounceGain, const SceneCamera& camera, glm::uvec2 size, const std::vector<RoomPoint>& points)
+		{
+			RoomRender render(room, size, RoomSpecification(GlobalIlluminationLevel::High, bounceGain));
+			return render.Measure(camera, points, bounceGain > 0.0f ? RenderData::c_GISettleFrames + 2 : 3);
+		};
+		std::vector<RoomPoint> points = walls;
+		points.insert(points.end(), floors.begin(), floors.end());
+		std::vector<glm::vec3> one = measure(0.0f, RoomCamera(), c_RoomSize, walls);
+		std::vector<glm::vec3> every = measure(1.0f, RoomCamera(), c_RoomSize, walls);
+		const std::vector<glm::vec3> oneFloors = measure(0.0f, FloorCamera(), c_FloorSize, floors);
+		const std::vector<glm::vec3> everyFloors = measure(1.0f, FloorCamera(), c_FloorSize, floors);
+		CollectReleases();
+		one.insert(one.end(), oneFloors.begin(), oneFloors.end());
+		every.insert(every.end(), everyFloors.begin(), everyFloors.end());
+		const std::vector<glm::vec3> references = References(room, points);
+		std::string table = "the sun room at High, one bounce and every bounce against the one-bounce reference:";
+		for (size_t index = 0; index < points.size(); index++)
+		{
+			const float oneValue = Luminance(one[index]);
+			const float everyValue = Luminance(every[index]);
+			table += fmt::format("\n  {:<30} one {:9.3f}  every {:9.3f} ({:.3f} of one, {:.3f} of the reference)", points[index].Name, oneValue, everyValue,
+				everyValue / std::max(oneValue, 1e-6f), everyValue / std::max(Luminance(references[index]), 1e-6f));
+		}
+		float brightest = 0.0f;
+		for (const glm::vec3& value : one)
+			brightest = std::max(brightest, Luminance(value));
+		const float albedo = std::min(room.FloorAlbedo.x, RenderData::c_GIMaxBounceAlbedo); // The plaster's, walls and floor alike
+		const float addedBound = albedo / (1.0f - albedo) * brightest;
+		table += fmt::format("\n  what the bounces add: at most {:.3f}", addedBound);
+		MESSAGE(table);
+		for (size_t index = 0; index < points.size(); index++)
+		{
+			INFO(points[index].Name);
+			CHECK(Luminance(every[index]) >= 0.999f * Luminance(one[index]));
+			CHECK(Luminance(every[index]) - Luminance(one[index]) <= addedBound);
+		}
+		// The ceiling over the patch: GetWallPoints' "ceiling over the window side" and "ceiling middle".
+		for (const size_t index : { size_t { 7 }, size_t { 8 } })
+		{
+			INFO(points[index].Name);
+			CHECK(Luminance(every[index]) >= 1.1f * Luminance(one[index]));
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Bounces settle within c_GISettleFrames frames after a cut")
+	{
+		// 6.4: a still camera's gi view from its first frame (a cut): the first frame K from which every 32 px block's mean changes
+		// by less than 0.25% for four frames comes no later than the frame the GI says it settled, c_GISettleFrames frames after
+		// the cut, and it stays settled. The sun room, the yard and the Cornell box at High.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		constexpr uint32_t c_Frames = 24;
+		constexpr float c_Change = 0.0025f;
+		const float aspect = static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y);
+		for (uint32_t sceneIndex = 0; sceneIndex < 3; sceneIndex++)
+		{
+			const char* sceneName = sceneIndex == 0 ? "the sun room" : sceneIndex == 1 ? "the yard" : "the Cornell box";
+			CAPTURE(sceneName);
+			SceneTestAssets assets;
+			Scene scene;
+			SceneCamera camera;
+			if (sceneIndex == 0)
+			{
+				BuildSunRoom(scene, assets, DefaultRoom());
+				camera = RoomCamera();
+			}
+			else if (sceneIndex == 1)
+			{
+				BuildYard(scene, assets);
+				camera = YardStrafe(0, 0.0f, aspect);
+			}
+			else
+			{
+				BuildCornellBox(scene, assets);
+				camera = CornellCamera(aspect);
+			}
+			Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification(GlobalIlluminationLevel::High, 1.0f));
+			renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+			std::vector<std::vector<float>> means;
+			uint32_t firstSettled = 0;
+			for (uint32_t frame = 1; frame <= c_Frames; frame++)
+			{
+				REQUIRE(RenderGIFrame(*renderer, scene, camera, GIViewOptions()));
+				REQUIRE(renderer->GetStats().GlobalIllumination);
+				REQUIRE_FALSE(renderer->GetStats().GlobalIlluminationPending);
+				if (renderer->GetStats().GlobalIlluminationSettled && firstSettled == 0)
+					firstSettled = frame;
+				if (firstSettled != 0)
+					CHECK(renderer->GetStats().GlobalIlluminationSettled);
+				ReadbackImage image;
+				REQUIRE(Renderer::ReadTexture(renderer->GetHDRTexture(), image));
+				means.push_back(BlockMeans(image));
+			}
+			// changes[k] is the change from frame k + 1 to frame k + 2 (frames counted from 1).
+			std::vector<float> changes;
+			for (size_t index = 1; index < means.size(); index++)
+				changes.push_back(LargestBlockChange(means[index - 1], means[index]));
+			uint32_t settledImage = 0;
+			for (uint32_t frame = 1; frame + 4 <= c_Frames && settledImage == 0; frame++)
+			{
+				bool still = true;
+				for (uint32_t step = 0; step < 4; step++)
+					still = still && changes[frame - 1 + step] < c_Change;
+				if (still)
+					settledImage = frame;
+			}
+			std::string list;
+			for (size_t index = 0; index < changes.size(); index++)
+				list += fmt::format("{}{:.3f}%", index == 0 ? "" : " ", 100.0f * changes[index]);
+			MESSAGE(sceneName << ": the image settles (K) at frame " << settledImage << ", the GI says settled at frame " << firstSettled
+				<< "; the largest block change frame to frame: " << list);
+			CHECK(settledImage > 0);
+			CHECK(firstSettled == RenderData::c_GISettleFrames + 1);
+			CHECK(settledImage <= firstSettled);
+			renderer.reset();
+			CollectReleases();
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Still frames are identical with bounces")
+	{
+		// 6.4: re-injection feeds the field back through the voxels, yet a still camera's frames 30 and 31 agree to the bit (no
+		// rounding cycle), in the sun room at High and Low and in the Cornell box at High.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		for (uint32_t run = 0; run < 3; run++)
+		{
+			const GlobalIlluminationLevel level = run == 1 ? GlobalIlluminationLevel::Low : GlobalIlluminationLevel::High;
+			CAPTURE(run);
+			SceneTestAssets assets;
+			Scene scene;
+			SceneCamera camera;
+			if (run < 2)
+			{
+				BuildSunRoom(scene, assets, DefaultRoom());
+				camera = RoomCamera();
+			}
+			else
+			{
+				BuildCornellBox(scene, assets);
+				camera = CornellCamera(static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y));
+			}
+			Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification(level, 1.0f));
+			renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+			ReadbackImage frames[2];
+			for (uint32_t frame = 1; frame <= 31; frame++)
+			{
+				REQUIRE(RenderGIFrame(*renderer, scene, camera, GIViewOptions()));
+				if (frame >= 30)
+					REQUIRE(Renderer::ReadTexture(renderer->GetHDRTexture(), frames[frame - 30]));
+			}
+			REQUIRE(frames[0].Pixels.size() == frames[1].Pixels.size());
+			REQUIRE_FALSE(frames[0].Pixels.empty());
+			size_t differing = 0;
+			for (size_t index = 0; index < frames[0].Pixels.size(); index++)
+				differing += frames[0].Pixels[index] != frames[1].Pixels[index] ? 1 : 0;
+			CHECK(differing == 0);
+			renderer.reset();
+			CollectReleases();
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("An emissive panel lights a dark room by bounces")
+	{
+		// 6.4: the sealed room without a sun, lit only by a 1 x 0.6 m panel of 2,000 nits on its west wall: the far (east) wall is
+		// brighter with every bounce than with one, and the room sees no sky (its open share 0).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SunRoomOptions dark;
+		dark.SunIlluminance = 0.0f;
+		dark.SealWindow = true;
+		const std::vector<RoomPoint> points = {
+			{ "east wall low", { -7.0f, 1.0f, -0.5f }, -c_East },
+			{ "east wall high", { -7.0f, 2.0f, -1.5f }, -c_East },
+		};
+		float values[2] = {};
+		for (uint32_t pass = 0; pass < 2; pass++)
+		{
+			const float bounceGain = pass == 0 ? 0.0f : 1.0f;
+			RoomRender render(dark, c_RoomSize, RoomSpecification(GlobalIlluminationLevel::High, bounceGain));
+			AddMesh(render.SceneData, BuiltinAssets::CubeMesh, render.Assets.AddMaterial(Emitting(2000.0f)), glm::vec3(-12.95f, 1.5f, -2.0f), "Panel")
+				.GetComponent<TransformComponent>().Scale = glm::vec3(0.1f, 0.6f, 1.0f);
+			values[pass] = MeanLuminance(render.Measure(RoomCamera(), points, bounceGain > 0.0f ? RenderData::c_GISettleFrames + 2 : 3));
+			if (pass == 1)
+			{
+				REQUIRE(RenderGIFrame(*render.Renderer, render.SceneData, RoomCamera(), GIViewOptions(SceneLightingView::OpenShare)));
+				const std::vector<glm::vec3> open = ReadPoints(*render.Renderer, RoomCamera(), points);
+				for (size_t index = 0; index < points.size(); index++)
+				{
+					INFO(points[index].Name);
+					CHECK(Luminance(open[index]) == 0.0f);
+				}
+			}
+		}
+		CollectReleases();
+		MESSAGE("the east wall's light from the panel: one bounce " << values[0] << ", every bounce " << values[1] << " (" << values[1] / values[0] << ")");
+		CHECK(values[0] > 0.0f);
+		CHECK(values[1] > 1.05f * values[0]);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

@@ -70,6 +70,7 @@ namespace Strata
 		UnvoxelizedSubmeshes = 0;
 		Pending = false;
 		Rebuilt = false;
+		Cut = false;
 		MaterialsChanged = false;
 	}
 
@@ -119,6 +120,7 @@ namespace Strata
 
 		// The frame's regions: changes first (a moved object never waits behind slabs), then slabs, then whole windows, each
 		// level 0 first, while their triangles fit the budget; at least one region.
+		outFrame.Cut = cut;
 		const uint32_t budget = cut ? settings.TrianglesOnCut : settings.TrianglesPerFrame;
 		std::vector<TakenRegion> taken;
 		uint64_t triangles = 0;

@@ -2046,6 +2046,9 @@ namespace Strata
 		void ReleaseGlobalIllumination(std::vector<nvrhi::ResourceHandle>& released);
 		// The frame's voxelization on the CPU (VoxelClipmap::BuildFrame, in Render.Extract) and the GI's constants.
 		void PrepareGlobalIllumination(const RenderScene& renderScene, const Ref<AssetManagerBase>& assets, const SceneCamera& camera);
+		// GlobalIlluminationSettled under re-injection, once the frame's sun and sky are known: not until c_GISettleFrames frames
+		// after the light's inputs or the bounce's source last changed.
+		void SettleGlobalIllumination(const RenderData::FrameConstants& frame);
 		// The GI's passes (GPU.RadianceCascades): the frame's voxelization batches, then the counters' copy. False (reported) when
 		// its resources could not be made or brought up to date: the frame's voxels were not written.
 		bool RecordGlobalIllumination(nvrhi::ICommandList* commandList);

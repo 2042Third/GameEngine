@@ -72,8 +72,9 @@ namespace Strata
 		// a readback 2-3 frames late sets the layout from the receivers, and a second one confirms it.
 		constexpr uint32_t c_MaxCaptureShadowFitFrames = 12;
 		// Frames a capture may render again while global illumination settles (SceneRendererStats::GlobalIlluminationSettled):
-		// the capture renderer voxelizes everything in its first frame, but meshes still uploading join the voxels as they arrive.
-		constexpr uint32_t c_MaxCaptureGIFrames = 16;
+		// the capture renderer voxelizes everything in its first frame, but meshes still uploading join the voxels as they arrive,
+		// and the bounces settle c_GISettleFrames frames after the last of them.
+		constexpr uint32_t c_MaxCaptureGIFrames = RenderData::c_GISettleFrames + 16;
 		// Polls a finished capture waits for its frame's GPU times (they are resolved 1-3 frames after the GPU finished it).
 		constexpr uint32_t c_MaxCaptureGPUStatsPolls = 8;
 		// The most frames one live capture records (viewport.capture {live, frames}).

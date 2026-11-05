@@ -39,6 +39,7 @@
 #define ST_GI_GATHER_NORMAL_BIAS 0.25     // c_GIGatherNormalBias
 #define ST_GI_GATHER_START_VOXELS 1.5     // c_GIGatherStartVoxels
 #define ST_GI_VISIBILITY_CUTOFF 0.05      // c_GIVisibilityCutoff
+#define ST_GI_MAX_BOUNCE_ALBEDO 0.9       // c_GIMaxBounceAlbedo
 
 // The octahedral direction of texel (u, v) of an a x a tile (GlobalIllumination::GetDirection): OctahedralDecode (Include/Scene.slang)
 // of the texel's center mapped to [-1, 1]^2. The same arithmetic, written out so this header needs nothing of Scene.slang.
@@ -92,6 +93,7 @@ struct GlobalIlluminationConstants
 	uint4 FieldGrid;    // xyz: cascade 0's probes per axis; w: the cascade count
 	float4 SolidAngleNorms; // The solid angle of a tile texel is this over |p|^3 (p its octahedron point): x cascade 0's tiles
 	float4 FaceWeights[2];  // 1 / C_f per face (+X, -X, +Y, -Y, +Z, -Z) over cascade 0's directions
+	float4 Bounce;          // x: the bounce's gain (0: one bounce); yzw: this frame's camera minus last frame's (VoxelInject)
 };
 
 ConstantBuffer<GlobalIlluminationConstants> u_GI : register(b1);

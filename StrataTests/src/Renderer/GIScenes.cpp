@@ -8,6 +8,7 @@
 #include "Strata/Renderer/Renderer.h"
 
 #include <glm/gtc/constants.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -573,6 +574,60 @@ namespace Strata::Tests
 		}
 
 		return voxels;
+	}
+
+	void BuildCornellBox(Scene& scene, SceneTestAssets& assets)
+	{
+		AddNeutralPostProcess(scene);
+		const auto diffuse = [&](const glm::vec3& albedo)
+		{
+			MaterialProperties properties;
+			properties.BaseColor = glm::vec4(albedo, 1.0f);
+			properties.Roughness = 0.9f;
+			properties.Metallic = 0.0f;
+			return assets.AddMaterial(properties);
+		};
+		const AssetHandle white = diffuse(c_CornellWhite);
+		constexpr float c_Half = 2.75f;
+		constexpr float c_Height = 5.5f;
+		constexpr float c_Wall = 0.2f;
+		AddBox(scene, white, { -c_Half - c_Wall, -c_Wall, -c_Half - c_Wall }, { c_Half + c_Wall, 0.0f, c_Half });          // Floor
+		AddBox(scene, white, { -c_Half - c_Wall, c_Height, -c_Half - c_Wall }, { c_Half + c_Wall, c_Height + c_Wall, c_Half }); // Ceiling
+		AddBox(scene, white, { -c_Half, 0.0f, -c_Half - c_Wall }, { c_Half, c_Height, -c_Half });                          // Back wall
+		AddBox(scene, diffuse(c_CornellRed), { -c_Half - c_Wall, 0.0f, -c_Half - c_Wall }, { -c_Half, c_Height, c_Half });  // Left wall
+		AddBox(scene, diffuse(c_CornellGreen), { c_Half, 0.0f, -c_Half - c_Wall }, { c_Half + c_Wall, c_Height, c_Half });  // Right wall
+		Entity tall = AddMesh(scene, BuiltinAssets::CubeMesh, white, glm::vec3(-1.05f, 1.6f, -1.0f), "Tall Box");
+		TransformComponent& tallTransform = tall.GetComponent<TransformComponent>();
+		tallTransform.Scale = glm::vec3(1.6f, 3.2f, 1.6f);
+		tallTransform.Rotation = glm::angleAxis(glm::radians(18.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		AddSphere(scene, white, glm::vec3(1.15f, 0.9f, -0.3f), 0.9f);
+		AddBox(scene, AddEmitter(assets, glm::vec3(c_CornellPanelLuminance)), { -0.65f, c_Height - 0.3f, -0.525f }, { 0.65f, c_Height, 0.525f });
+	}
+
+	SceneCamera CornellCamera(float aspectRatio)
+	{
+		return StrafeCamera(glm::vec3(0.0f, 2.75f, 4.6f), glm::vec3(0.0f, 2.4f, 0.0f), 70.0f, aspectRatio);
+	}
+
+	void BuildGlowingBox(Scene& scene, SceneTestAssets& assets, const glm::vec3& minimum, const glm::vec3& maximum, float albedo, float luminance)
+	{
+		AddNeutralPostProcess(scene);
+		MaterialProperties properties;
+		properties.BaseColor = glm::vec4(glm::vec3(albedo), 1.0f);
+		properties.Roughness = 1.0f;
+		properties.Metallic = 0.0f;
+		properties.EmissiveColor = glm::vec3(1.0f);
+		properties.EmissiveIntensity = luminance;
+		const AssetHandle material = assets.AddMaterial(properties);
+		constexpr float c_Wall = 0.2f;
+		const glm::vec3 low = minimum - c_Wall;
+		const glm::vec3 high = maximum + c_Wall;
+		AddBox(scene, material, low, { high.x, minimum.y, high.z });                           // Floor
+		AddBox(scene, material, { low.x, maximum.y, low.z }, high);                            // Ceiling
+		AddBox(scene, material, { low.x, minimum.y, low.z }, { minimum.x, maximum.y, high.z }); // West
+		AddBox(scene, material, { maximum.x, minimum.y, low.z }, { high.x, maximum.y, high.z }); // East
+		AddBox(scene, material, { minimum.x, minimum.y, low.z }, { maximum.x, maximum.y, minimum.z }); // North
+		AddBox(scene, material, { minimum.x, minimum.y, maximum.z }, { maximum.x, maximum.y, high.z }); // South
 	}
 
 	SceneCamera RoomStrafe(uint32_t frame, float aspectRatio)

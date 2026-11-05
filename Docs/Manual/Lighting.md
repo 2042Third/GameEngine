@@ -316,9 +316,11 @@ without TAA.
 ## Global illumination (experimental)
 
 The **Post Process**'s **Global Illumination** (off by default) adds bounce light traced in the world around the camera: a
-sunlit floor lights the walls and the ceiling, a red floor tints them, glowing surfaces light their surroundings, and a
-closed room stays dark, whether the source is on screen or not. The engine keeps a voxel copy of the scene around the
-camera, lights it with the sun every frame and gathers it in probes; moving the sun moves the bounce in the same frame.
+sunlit floor lights the walls and the ceiling, a red floor tints them, glowing surfaces light their surroundings, light
+goes on bouncing between the surfaces as it does in life (a room lit by a lamp in its ceiling has a lit ceiling, and
+colored walls tint the floor beside them), and a closed room stays dark, whether the source is on screen or not. The
+engine keeps a voxel copy of the scene around the camera, lights it with the sun every frame and gathers it in probes;
+moving the sun moves the bounce in the same frame.
 Nothing in it is blended over frames, so it does not smear behind a moving camera, but thin geometry can still crawl
 slightly in its light while the camera moves (see the list below).
 
@@ -328,14 +330,17 @@ slightly in its light while the camera moves (see the list below).
 - **Walls:** the voxels are 10 cm at High and 20 cm at Low. A wall thinner than two of them, 20 cm at High and 40 cm at
   Low, is lit from both sides at once: give rooms walls at least that thick, so that they stay lit from inside only.
 - **The first frames after a cut:** when the camera jumps (a cut, a teleport, a scene just opened), the voxels around the
-  new place are built first, and until they are the image shows the light without global illumination. The editor's
+  new place are built first, and until they are the image shows the light without global illumination. Then each further
+  bounce arrives a frame after the one before: rooms fill with light over about a quarter of a second (14 frames; white
+  rooms a few frames more), and so they do when the light changes (the sun moves, an object is placed). The editor's
   captures and the project's picture wait for it.
 - **Debug views** (the viewport's debug view chip): **GI** shows the bounce light on surfaces made white, **Open** the share
   of the sky each surface sees, **Voxels** the voxel copy of the scene (walls too thin in the error color) and **Probes**
   the probes, dead ones dark red.
 - It is experimental:
-  - One bounce only: rooms lit by a patch of sun stay darker than in life, and the east wall and the ceiling of a sunlit
-    room get about half of their bounce.
+  - The east wall and the ceiling of a sunlit room get about half of their first bounce.
+  - At Low, the corners where three walls of a closed room meet can let some outside light in, and rooms lit by glowing
+    panels come out brighter than at High.
   - A surface that sees none of the probes around it gets no indirect light at all, darker than without global
     illumination: gaps, recesses and ledges thinner than about two voxels (20 cm at High, 40 cm at Low) and the bases of
     walls beside bright patches can go nearly black. Outdoors this shows at the foot of large boxes on the ground and on

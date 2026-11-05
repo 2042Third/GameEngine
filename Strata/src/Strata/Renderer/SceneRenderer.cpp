@@ -3323,6 +3323,8 @@ namespace Strata
 		// The forward pass joins the field into the lit image (Include/IndirectLight.slang's GatherIndirectField) where the scene
 		// asked for GI and the frame's field is used (ran, not pending): ReflectionParams.y 1 and .z the intensity, clamped to
 		// [0, 4]. Otherwise the indirect light is Strata 0.7.0's, bit for bit (the views read the field without the join).
+		if (m_GIFrame)
+			SettleGlobalIllumination(frame);
 		if (giAsked && m_GIFrame && m_GIFieldConstants.FieldSize.w > 0.0f)
 		{
 			frame.ReflectionParams.y = 1.0f;
