@@ -223,6 +223,58 @@ namespace
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	// What re-injection (every bounce) adds to GPU.RadianceCascades in the sun room at 3840 x 2160 at High: two renderers of one
+	// scene, BounceGain 0 (one bounce) and 1, measured in interleaved blocks (A B, B A, A B) in one process, so the two sides share
+	// the binary, the device's clocks and the machine's load. Reported, not budgeted (GlobalIllumination4KSunRoom budgets the
+	// whole stage).
+	void MeasureGlobalIlluminationBounces4K()
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!Perf::MeasuresGPU())
+		{
+			MESSAGE("The bounces' cost: not measured, the device writes no timestamps");
+			return;
+		}
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+		constexpr uint32_t c_Width4K = 3840;
+		constexpr uint32_t c_Height4K = 2160;
+		Scene scene("GlobalIlluminationBounces4K");
+		SunRoomOptions room;
+		room.SunDirection = SunRoomDirection(-40.0f, 30.0f);
+		BuildSunRoom(scene, assets, room);
+		const SceneCamera camera = LookAt(glm::vec3(-9.0f, 1.5f, -4.5f), glm::vec3(-10.0f, 1.2f, 1.1f), static_cast<float>(c_Width4K) / static_cast<float>(c_Height4K));
+		GetPostProcess(scene).GlobalIllumination = true;
+		std::array<Scope<SceneRenderer>, 2> renderers;
+		for (uint32_t side = 0; side < 2; side++)
+		{
+			SceneRendererSpecification specification = Perf::MeasuredRendererSpecification();
+			specification.Quality = RendererQuality::GetPreset(RendererQualityPreset::High);
+			specification.GlobalIllumination.BounceGain = side == 0 ? 0.0f : 1.0f;
+			renderers[side] = CreateScope<SceneRenderer>(specification);
+			renderers[side]->SetViewportSize(c_Width4K, c_Height4K);
+		}
+		std::array<std::vector<double>, 2> blocks;
+		std::string order;
+		for (const uint32_t side : { 0u, 1u, 1u, 0u, 0u, 1u })
+		{
+			SceneRenderer& renderer = *renderers[side];
+			Perf::MeasureFrames(gpu, c_WarmupFrames, c_MeasuredFrames, [&] { REQUIRE(renderer.Render(scene, camera)); });
+			CHECK(renderer.GetStats().GlobalIllumination);
+			CHECK_FALSE(renderer.GetStats().GlobalIlluminationPending);
+			const double giMs = MedianGPUStageMs("GPU.RadianceCascades");
+			CHECK(giMs > 0.0);
+			blocks[side].push_back(giMs);
+			order += fmt::format("{}{} {:.3f}", order.empty() ? "" : ", ", side == 0 ? "one bounce" : "every bounce", giMs);
+		}
+		for (std::vector<double>& values : blocks)
+			std::sort(values.begin(), values.end());
+		MESSAGE("The bounces' cost at 3840x2160, High, the sun room: GPU.RadianceCascades median of the blocks ", blocks[0][1], " ms with one bounce, ",
+			blocks[1][1], " ms with every bounce (", blocks[1][1] - blocks[0][1], " ms); the blocks in order (ms): ", order);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	// Render100kCubes' scene with the post-processing's defaults but TAA under `preset`: its jitter, motion vectors, motion
 	// history and resolve, measured as `key` (its CPU median) and `key`GPU (the GPU's median busy time); with `reflections`,
 	// screen-space reflections traced from every surface (the maximum roughness 1).
@@ -504,6 +556,11 @@ TEST_SUITE("PerfGPU.Renderer")
 		// yard (provisional: the reference machine sets the budgets).
 		MeasureGlobalIllumination4K("PerfGPU.Renderer.GlobalIllumination4KSunRoom", false);
 		MeasureGlobalIllumination4K("PerfGPU.Renderer.GlobalIllumination4KYard", true);
+	}
+
+	TEST_CASE("Global illumination's bounces' cost at 3840x2160")
+	{
+		MeasureGlobalIlluminationBounces4K();
 	}
 
 	TEST_CASE("Motion blur's cost at 3840x2160")

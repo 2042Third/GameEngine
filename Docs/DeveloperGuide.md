@@ -5113,10 +5113,12 @@ probe-field levels and local lights follow.
   in the sun room (flag at 13), 15 in the Cornell box (18), 3 in the yard (17, its plaster 0.70: outdoors little light
   comes back) and 27 in a closed box glowing at the clamp (39). Captures wait at most `c_GIMaxSettleFrames + 16` frames
   for it, the project picture too. Still frames are identical to the bit (frame 30 against 31, the sun room and the
-  Cornell box): no rounding cycle showed, so the spec's 2^-10 grid is not used. Cost at 3840 x 2160 at High (three
-  interleaved pairs against main): `GPU.RadianceCascades` 3.96-4.01 ms in the sun room against 5.56-5.64 ms, 3.98-3.99
-  ms in the yard against 4.06-4.12 ms; the injection's gather costs nothing measurable, and why the sun room's stage got
-  faster was not found. Without GI nothing of it runs.
+  Cornell box): no rounding cycle showed, so the spec's 2^-10 grid is not used. Cost at 3840 x 2160 at High in the sun
+  room, inside one binary (`PerfGPU.Renderer`'s "Global illumination's bounces' cost at 3840x2160": the gain 0 against
+  1, three interleaved pairs a run, two runs): `GPU.RadianceCascades` 3.93-3.95 ms with one bounce, 4.01-4.04 ms with
+  every bounce, so the injection's gather costs 0.06-0.10 ms. An earlier A/B between main's binary and this one's put
+  main's stage at 5.6 ms in the sun room against 4.0 ms; that gap between binaries was not explained, and the in-process
+  figures replace it. Without GI nothing of it runs.
 - **The join** (`Scene/Forward.frag.slang`'s `ShadeLitSurface`, `Include/IndirectLight.slang`'s `GatherIndirectField`):
   where the scene asked and the frame's field is used (ran, not pending), `FrameConstants::ReflectionParams.y` is 1 and `.z`
   the intensity (clamped to [0, 4], non-finite 1). Every variant (opaque, alpha-blended, glass: no screen data is read)
@@ -5189,7 +5191,8 @@ probe-field levels and local lights follow.
   sealed room; strafes through the yard and the sun room flicker at most half again as much as with one bounce; Low's gain
   1 gives one bounce's light), `GlobalIlluminationRoom`'s "A sealed room stays dark" with the gain 1 at High and Low,
   `Renderer.GlobalIlluminationLayout`'s "High bounces on, Low once" and "Bounces settle by the scene's brightest albedo",
-  and `Renderer.VoxelClipmap`'s "The brightest albedo voxelized bounds the bounces".
+  `Renderer.VoxelClipmap`'s "The brightest albedo voxelized bounds the bounces", and `PerfGPU.Renderer`'s "Global
+  illumination's bounces' cost at 3840x2160" (the gain 0 against 1 in one process).
 - **What it cannot do** (so far): Low bounces once (`GlobalIlluminationLayout::Bounces` false, whatever the gain). With
   every bounce at Low, the sealed room moved by a quarter of a probe spacing lit its walls' pixels in the north-west
   three-wall corner through the walls (73 nits; 0.019 with one bounce, whose outside there is dark: the gather's

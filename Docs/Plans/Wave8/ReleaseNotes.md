@@ -201,8 +201,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   points' mean and every junction within 0.17% of the open room's light). At Low, light still bounces once: Low's
   coarser probes let bounced light into a closed room's three-wall corners. Look-dev: the Cornell box,
   `lookdev.cornell`.
-- Global illumination's cost does not change (3.96-4.01 ms at 3840 x 2160 at High in the sun room, 3.98-3.99 ms in the
-  yard), and scenes without it look exactly as before.
+- What the bounces cost: 0.06-0.10 ms of global illumination's 4 ms at 3840 x 2160 at High in the sun room (one bounce
+  against every bounce in one run). Scenes without global illumination look exactly as before.
 
 **Occlusion culling (cull fix)**
 
