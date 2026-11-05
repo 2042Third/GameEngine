@@ -111,8 +111,9 @@ float GetFieldTransmittance(SamplerState repeat, float3 from, float3 to)
 
 // A cascade-0 probe's distance to the first hit toward a direction (FieldReduce.comp's depth moments): the four texels of its tile
 // around the direction's octahedral point, bilinear, as the mixture of their distributions: x the mean distance, y its variance
-// (meters).
-float2 ReadProbeDepth(int3 probe, float3 direction)
+// (meters); z the nearest of the four texels' means less twice their spreads (a point nearer lies before every ray around it
+// hit anything).
+float3 ReadProbeDepth(int3 probe, float3 direction)
 {
 	float interior = float(ST_GI_FIELD_DEPTH_TEXELS - 2);
 	// Texel k of the tile spans [k, k + 1); the interior starts at 1, and bilinear reads are between texel centers.
@@ -129,20 +130,24 @@ float2 ReadProbeDepth(int3 probe, float3 direction)
 	float mean = dot(weights, float4(a.x, b.x, c.x, d.x));
 	float4 spread = float4(a.x, b.x, c.x, d.x) - mean;
 	float variance = dot(weights, float4(a.y, b.y, c.y, d.y) + spread * spread);
-	return float2(mean, variance);
+	float4 near = float4(a.x, b.x, c.x, d.x) - 2.0 * sqrt(float4(a.y, b.y, c.y, d.y));
+	return float3(mean, variance, min(min(near.x, near.y), min(near.z, near.w)));
 }
 
 // How much a probe sees a point (Chebyshev's bound on the probe's distances toward it, the test of DDGI, Majercik et al. 2019;
 // ideas only): 1 where the point lies no farther than the mean distance to the first hit; beyond it the share of the distribution
 // the bound leaves, cubed so the light falls off within the hit's spread rather than over its tail. Continuous: no step where a
-// probe stops seeing a point.
-float GetProbeVisibility(int3 probe, float3 probePosition, float3 target)
+// probe stops seeing a point. `clear` receives whether the point lies before every ray around it hit anything (the guard has
+// nothing to find there).
+float GetProbeVisibility(int3 probe, float3 probePosition, float3 target, out bool clear)
 {
 	float3 toTarget = target - probePosition;
 	float distance = length(toTarget);
-	if (distance <= 1e-5)
+	clear = distance <= 1e-5;
+	if (clear)
 		return 1.0;
-	float2 depth = ReadProbeDepth(probe, toTarget / distance);
+	float3 depth = ReadProbeDepth(probe, toTarget / distance);
+	clear = distance <= depth.z;
 	if (distance <= depth.x)
 		return 1.0;
 	float excess = distance - depth.x;
@@ -202,10 +207,13 @@ float4 SampleIrradianceField(SamplerState repeat, float3 position, float3 geomet
 		weight *= validity;
 		if (weight <= 0.0)
 			continue;
-		weight *= GetProbeVisibility(probe, probePosition, seen);
+		bool clear;
+		weight *= GetProbeVisibility(probe, probePosition, seen, clear);
 		if (weight <= 0.0)
 			continue;
-		weight *= GetFieldTransmittance(repeat, probePosition, seen);
+		// The guard marches only where the probe's rays around the point hit something before it.
+		if (!clear)
+			weight *= GetFieldTransmittance(repeat, probePosition, seen);
 		if (weight <= 0.0)
 			continue;
 		float4 cube = ReadAmbientCube(probe, shadingNormal);

@@ -5136,20 +5136,20 @@ probe-field levels and local lights follow.
   holds the sky's intensity. Specular is untouched. With `ReflectionParams.y` 0 the code is the old expression, so a frame
   without GI, or pending, is 0.7.0's to the bit; with a field weight of 0 the joined form is too (`x * 1`, `+ 0`).
   `viewport.capture` and the project picture (`ProjectThumbnail`, `c_MaxGIFrames`) wait for `GlobalIlluminationSettled`.
-- **The field in the forward pass** (`Include/GIField.slang`, the `gi` and `open` views and the join):
-  the eight cascade-0 probes around the point moved `c_GIGatherNormalBias` spacings along its geometric normal, each by its
-  trilinear weight (from its grid position), validity, whether it lies in front of the surface's plane (from where it
-  moved) and its visibility, then normalized. The visibility is continuous, so the light has no steps at cell borders and
-  no voxel staircase: Chebyshev's bound on the probe's depth moments toward the point (moved a further `c_GIGatherViewBias`
-  spacings toward the viewer, DDGI's view bias), cubed, times the guard: the transmittance through levels 0-2 along the
-  segment from the probe, `c_GIGatherGuardSteps` (16) samples at fixed fractions counting only voxels' solid cores
-  (`c_GIGatherGuardCore`, occupancy 0.6-0.72, so a surface's own soft layer never hides a probe), which a wall a voxel thick
-  always meets (Chebyshev's bound over 64 directions lets a thin wall seen at a grazing angle through; a probe that no level
-  holds together with the point is not visible). Where the live probes in front see less than `c_GIGatherMinVisible` (a
-  quarter) of the weight all the probes in front would give, dead ones included, the light fades with what they see instead
-  of renormalizing a vanishing weight (which stepped at the cells' borders); none visible: no field light, never the sky. A
-  point no level holds, beyond a valid box a scroll left short, takes today's light; within 2 m of the field's edge it fades
-  to today's light.
+- **The field in the forward pass** (`Include/GIField.slang`, the `gi` and `open` views and the join): the eight cascade-0
+  probes around the point moved `c_GIGatherNormalBias` spacings along its geometric normal, each by its trilinear weight (from
+  its grid position), validity, whether it lies in front of the surface's plane (from where it moved) and its visibility, then
+  normalized. The visibility is continuous, so the light has no steps at cell borders and no voxel staircase: Chebyshev's
+  bound on the probe's depth moments toward the point (moved a further `c_GIGatherViewBias` spacings toward the viewer, DDGI's
+  view bias), cubed, times the guard where the probe's rays around the point hit something before it (open space skips it, a
+  third of the gather's cost): the transmittance through levels 0-2 along the segment from the probe, `c_GIGatherGuardSteps`
+  (16) samples at fixed fractions counting only voxels' solid cores (`c_GIGatherGuardCore`, occupancy 0.6-0.72, so a surface's
+  own soft layer never hides a probe), which a wall a voxel thick always meets (Chebyshev's bound over 64 directions lets a
+  thin wall seen at a grazing angle through; a probe that no level holds together with the point is not visible). Where the
+  live probes in front see less than `c_GIGatherMinVisible` (a quarter) of the weight all the probes in front would give, dead
+  ones included, the light fades with what they see instead of renormalizing a vanishing weight (which stepped at the cells'
+  borders); none visible: no field light, never the sky. A point no level holds, beyond a valid box a scroll left short, takes
+  today's light; within 2 m of the field's edge it fades to today's light.
   `SceneLightingView::GlobalIllumination` (`gi`) shades white and returns the diffuse indirect light (the field inside,
   today's beyond, under the diffuse occlusion), `OpenShare` (`open`) the share of the sky a surface sees, as gray;
   `Probes` (`probes`, `GI/ProbeView.frag` in `GPU.Overlays`) draws cascade 0's probes over the image, live ones lit by

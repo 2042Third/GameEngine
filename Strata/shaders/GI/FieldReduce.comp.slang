@@ -31,6 +31,8 @@ Texture3D<float4> u_ParentAtlas : register(t60);
 groupshared float4 s_Faces[ST_GI_REDUCE_GROUP][6];
 // Each direction's distance moments: its mean and mean square (ST_GI_FIELD_DIRECTIONS directions, the layout's 8 x 8).
 groupshared float2 s_Distances[ST_GI_FIELD_DIRECTIONS];
+// Each direction itself, for the filter (computed once per group, not per texel and ray).
+groupshared float3 s_Directions[ST_GI_FIELD_DIRECTIONS];
 
 // A tile texel's solid angle (GlobalIllumination::GetSolidAngle): the octahedron's Jacobian 1 / |p|^3 at its center times the
 // tile's normalization.
@@ -104,6 +106,7 @@ void main(uint3 groupID : SV_GroupID, uint index : SV_GroupIndex)
 			float4 ray = MarchRay(origin, d, u_Pass.Interval.y, u_Pass.Interval.z, false, u_Pass.MinimumLevel, left, hit);
 			if (direction < ST_GI_FIELD_DIRECTIONS)
 			{
+				s_Directions[direction] = d;
 				float passed = max(1.0 - hit.z, 0.0);
 				s_Distances[direction] = (hit.xy + passed * float2(missDistance, missDistance * missDistance)) / max(hit.z + passed, 1e-6);
 			}
@@ -147,8 +150,11 @@ void main(uint3 groupID : SV_GroupID, uint index : SV_GroupIndex)
 			uint directions = min(a * a, ST_GI_FIELD_DIRECTIONS);
 			for (uint direction = 0u; direction < directions; direction++)
 			{
-				float cosine = dot(GetTileDirection(uint2(direction % a, direction / a), a), axis);
-				float weight = cosine > 0.0 ? pow(cosine, ST_GI_FIELD_DEPTH_SHARPNESS) : 0.0;
+				// max(0, cos)^8 (ST_GI_FIELD_DEPTH_SHARPNESS) by three squarings.
+				float weight = max(dot(s_Directions[direction], axis), 0.0);
+				weight *= weight;
+				weight *= weight;
+				weight *= weight;
 				sum += weight * float3(s_Distances[direction], 1.0);
 			}
 			float2 moments = sum.xy / max(sum.z, 1e-6);

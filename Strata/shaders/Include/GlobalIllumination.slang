@@ -45,7 +45,7 @@
 #define ST_GI_MAX_BOUNCE_ALBEDO 0.9       // c_GIMaxBounceAlbedo
 #define ST_GI_FIELD_DEPTH_TEXELS 10       // c_GIFieldDepthTexels
 #define ST_GI_FIELD_DIRECTIONS 64u        // c_GIFieldDirections
-#define ST_GI_FIELD_DEPTH_SHARPNESS 8.0   // c_GIFieldDepthSharpness
+#define ST_GI_FIELD_DEPTH_SHARPNESS 8.0   // c_GIFieldDepthSharpness (FieldReduce.comp squares three times: change both)
 
 // A probe's move off the surface it sits on (ProbeValidity.comp), stored in its validity texel's gba (RGBA8) as 128 + round(127 o)
 // over 255, o the move over half a spacing (so no move is stored exactly), and read back in meters.
