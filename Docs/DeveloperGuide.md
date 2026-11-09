@@ -197,10 +197,11 @@ Multi-Config with `cl`) from a developer environment (the Developer PowerShell, 
 the Windows SDK and Ninja.
 
 **CI** (`.github/workflows/ci.yml`) runs on pushes to `main`, on pull requests and on pushes to branches named
-`ci/<name>`: Windows (`windows-ninja` with sccache, MSVC), Linux (GCC 14 with ccache) and macOS (Apple
-Clang 15 with ccache) build and test Release, and Windows also Debug (`ctest -LE "gpu|perf" -j 4`, the only Debug
-build CI makes). Each job keeps its compiler cache in the GitHub Actions cache (keyed per job and commit, restored from
-the newest of its branch or main, saved even when tests fail; at most 250 MB for ccache and 1 GB for sccache per job).
+`ci/<name>`: Windows (`windows-ninja` with sccache, MSVC), Linux (GCC 14 with ccache) and macOS (`macos-15`, Apple
+Clang 17, with ccache; GitHub retired `macos-14` and its Apple Clang 15 in November 2026) build and test Release, and
+Windows also Debug (`ctest -LE "gpu|perf" -j 4`, the only Debug build CI makes). Each job keeps its compiler cache in
+the GitHub Actions cache (keyed per job and commit, restored from the newest of its branch or main, saved even when
+tests fail; at most 250 MB for ccache and 1 GB for sccache per job).
 Each ref keeps one entry per job: after the save, the job deletes its ref's older entries, so that main's set and the
 active branches' stay below GitHub's 10 GB, beyond which GitHub evicts the least recently used (main's first). A
 Dist build of every target on Windows uses the Visual Studio generator people build with, without a cache, and runs the
@@ -213,7 +214,11 @@ Homebrew's `molten-vk` is not pinned. Older compilers and other standard
 libraries reject code that the local ones accept (Apple Clang 15's libc++ has no floating-point `std::from_chars`;
 `size_t` and `uint64_t` are different types on macOS; GCC 14 warns where newer GCCs do not), so a branch that lands many
 changes (a wave's integration) is pushed as `ci/<name>` and waits for green CI before it moves `main`
-(`Tools/CompatLint.py` catches much of it before the push).
+(`Tools/CompatLint.py` catches much of it before the push; it stands in for Apple Clang 15, the oldest the engine
+supports, which CI no longer builds with). Compilers also miscompile: Apple Clang 17 (clang-1700.0.13.5, `-O2` and up,
+arm64) takes a value chosen by `std::abs(x) > 0 ? x : 0` for one that is never negative and drops a later `std::abs`
+of it, which made every gamepad axis held to its negative side read 0 in `InputActions` (CI run 42634304897). To pick
+the largest of several values, compare them with each other, not with a running value that starts at 0.
 
 ### Precompiled headers
 
@@ -3932,7 +3937,8 @@ mechanical, so a lighting bug in code nobody changed may be a conversion slip (i
    macOS job converts every module to Metal with MoltenVK's converter and compiles it (a lower bound of what MoltenVK does
    at run time): `c_KnownFailures` of `.github/scripts/convert_shaders_to_metal.sh` lists the entries the offline
    conversion refuses whatever compiled them (the bindless table's runtime array, which MoltenVK places in an argument
-   buffer at run time), and only shrinks.
+   buffer at run time), and only shrinks. Their lines read `known failure:`, not errors, so that CI's annotations (the
+   first few error lines of a failed job's logs) name the job's real failures.
 7. **A conversion slip.** The classes the conversion met: vector comparisons used as one bool, a multiplication across two
    lines, `texture()` in compute, a matrix column written alone, GLSL's `umulExtended` and the dispatch's size (the hand
    fixes), and the one that compiled and passed every GPU test: a `mul` of two vectors, which collapsed the local shadows'

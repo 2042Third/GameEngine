@@ -242,6 +242,14 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - `viewport.capture` and project thumbnails no longer wait for the cascades (no `shadowFitSettled`); `editor.perf` and
   `viewport.capture` drop `renderStats.shadowFit` and each cascade's `fitted`.
 
+**CI (macOS 15)**
+
+- Fixed: built on a Mac with Apple Clang 17 (clang-1700.0.13.5, the compiler of GitHub's macos-15 image), an Axis
+  action bound to a whole gamepad axis (`Gamepad/LeftX`, for one) read 0 whenever the first gamepad held it to the
+  negative side (left, down), while the positive side worked: the compiler dropped part of the comparison that picks
+  the gamepad pushing an axis furthest. 0.7.0's packages, built with Apple Clang 15, are not affected, and Vector2
+  actions on whole sticks never were.
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and
