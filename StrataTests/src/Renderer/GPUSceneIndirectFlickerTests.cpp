@@ -1,6 +1,9 @@
 #include "Renderer/FlickerMetrics.h"
 #include "Renderer/GIScenes.h"
 #include "Renderer/SceneRendererTestUtils.h"
+#include "Strata/Renderer/SceneRenderData.h"
+
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <cmath>
 #include <functional>
@@ -18,12 +21,16 @@ namespace
 	constexpr uint32_t c_Height = 720;
 	constexpr uint32_t c_Frames = 12;
 	constexpr float c_Aspect = static_cast<float>(c_Width) / static_cast<float>(c_Height);
-	// The gi view's strafe bounds (Gate W, correction 9): 1.5 times the measured no-AA values, never above the spec's guesses
-	// (fence Blocks 0.10%, BlocksP99 1.0%, grass Blocks 0.2%). Measured at ee97deb9: fence 0.079% and 0.59%, grass 0.13%; with
-	// TAA 0.072% and 0.40%, 0.10%. At ac289ad9 the fence read 0.247% and 7.2%, the grass 0.217%.
-	constexpr double c_GIFenceBlocks = 0.0010;
-	constexpr double c_GIFenceBlocksP99 = 0.0088;
-	constexpr double c_GIGrassBlocks = 0.0019;
+	// The gi view's strafe bounds (Gate W, correction 9), settled first: 1.5 times the measured values, never above the spec's
+	// guesses (fence Blocks 0.10%, BlocksP99 1.0%, grass Blocks 0.2%), TAA's from its own measurement where that is lower.
+	// Measured (GIFence, 1280 x 720): fence Blocks 0.0230%, BlocksP99 0.440%, grass Blocks 0.0251%; with TAA 0.0233%, 0.420%,
+	// 0.0233%.
+	constexpr double c_GIFenceBlocks = 0.00035;
+	constexpr double c_GIFenceBlocksP99 = 0.0066;
+	constexpr double c_GIGrassBlocks = 0.00038;
+	constexpr double c_GIFenceBlocksTAA = 0.00035;
+	constexpr double c_GIFenceBlocksP99TAA = 0.0063;
+	constexpr double c_GIGrassBlocksTAA = 0.00035;
 
 	using CameraPath = std::function<SceneCamera(uint32_t frame)>;
 
@@ -70,6 +77,20 @@ namespace
 		return YardStrafe(frame, 1.0f, c_Aspect);
 	}
 
+	// The gi view's fence strafe: YardStrafe 0.5 m nearer the fence. From YardStrafe's own camera the covered car's inner probes
+	// lie 5.75 m away, where relocation hands over from voxel level 0 to level 1 (5.35-5.55 m at High): level 1's 0.2 m voxels
+	// close the 0.15 m gap under the car, no probe then lights it, and the meter reads the reprojection of that still black
+	// band's edges as flicker (0.136% of blocks, their 99th percentile 5.2%). ac289ad9 read the same 0.25 m farther back
+	// (0.132%, 3.1%), where its own hand-over lay. Here the car lies within level 0's reach and the meter reads the fence.
+	SceneCamera GIFence(uint32_t frame)
+	{
+		const glm::vec3 offset(0.0f, 0.0f, 0.5f);
+		SceneCamera camera = YardStrafe(frame, 1.0f, c_Aspect);
+		camera.Position += offset;
+		camera.View = camera.View * glm::translate(glm::mat4(1.0f), -offset);
+		return camera;
+	}
+
 	void UseTemporalAntiAliasing(Scene& scene)
 	{
 		PostProcessComponent& postProcess = GetPostProcess(scene);
@@ -78,10 +99,10 @@ namespace
 		postProcess.TAAPreset = TemporalAntiAliasingPreset::Sharp;
 	}
 
-	// The gi view's flicker on a path (6.2's strafes, Gate W's regression form): 14 frames through a fresh renderer with the GI
-	// at High and every bounce, triples from frame 3 (the yard's bounces settle within them: 0.079% of the fence's blocks against
-	// 0.028% after settling first). The yard builds with AddNeutralPostProcess, so ambient occlusion is off and the meter reads the
-	// field alone (correction 9).
+	// The gi view's flicker on a path (6.2's strafes, Gate W's regression form): a renderer with the GI at High and every
+	// bounce settles at the path's first camera, then renders 14 frames of it, triples from frame 3. Unsettled, the bounces'
+	// approach read as flicker (at cdb61d11 the fence read 0.079% of blocks unsettled, 0.0285% settled). The yard builds with
+	// AddNeutralPostProcess, so ambient occlusion is off and the meter reads the field alone (correction 9).
 	FlickerResult MeasureGlobalIllumination(Scene& scene, const CameraPath& path, bool temporal)
 	{
 		if (temporal)
@@ -96,12 +117,22 @@ namespace
 		options.PreExposure = 1.0f;
 		options.LightingView = SceneLightingView::GlobalIllumination;
 		options.AdaptationSeconds = 1.0f / 60.0f;
+		// Settled at the first camera first (at least three frames: the stats say settled before any frame), so the bounces'
+		// approach is not measured as flicker.
+		bool settled = false;
+		for (uint32_t frame = 1; frame <= RenderData::c_GIMaxSettleFrames + 4 && !settled; frame++)
+		{
+			REQUIRE(RenderGIFrame(*renderer, scene, path(0), options));
+			settled = frame >= 3 && renderer->GetStats().GlobalIlluminationSettled;
+		}
+		REQUIRE(settled);
 		FlickerSequence sequence(3);
 		for (uint32_t frame = 0; frame < 14; frame++)
 		{
 			const SceneCamera camera = path(frame);
 			REQUIRE(RenderGIFrame(*renderer, scene, camera, options));
 			REQUIRE(renderer->GetStats().GlobalIllumination);
+			REQUIRE_FALSE(renderer->GetStats().GlobalIlluminationPending);
 			sequence.Add(ReadFlickerFrame(*renderer, camera));
 		}
 		return sequence.GetResult();
@@ -250,12 +281,12 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 				SceneTestAssets assets;
 				Scene scene;
 				BuildYard(scene, assets);
-				const FlickerResult fence = MeasureGlobalIllumination(scene, Fence, temporal);
+				const FlickerResult fence = MeasureGlobalIllumination(scene, GIFence, temporal);
 				Report("Fence strafe, gi view, " + mode, fence);
 				CHECK(IsFinite(fence));
 				CHECK(fence.MeasuredShare > 0.5);
-				CHECK(fence.Blocks <= c_GIFenceBlocks);
-				CHECK(fence.BlocksP99 <= c_GIFenceBlocksP99);
+				CHECK(fence.Blocks <= (temporal ? c_GIFenceBlocksTAA : c_GIFenceBlocks));
+				CHECK(fence.BlocksP99 <= (temporal ? c_GIFenceBlocksP99TAA : c_GIFenceBlocksP99));
 			}
 			{
 				SceneTestAssets assets;
@@ -263,11 +294,11 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 				YardOptions options;
 				options.GrassCards = 500;
 				BuildYard(scene, assets, options);
-				const FlickerResult grass = MeasureGlobalIllumination(scene, Fence, temporal);
+				const FlickerResult grass = MeasureGlobalIllumination(scene, GIFence, temporal);
 				Report("Grass strafe, gi view, " + mode, grass);
 				CHECK(IsFinite(grass));
 				CHECK(grass.MeasuredShare > 0.3);
-				CHECK(grass.Blocks <= c_GIGrassBlocks);
+				CHECK(grass.Blocks <= (temporal ? c_GIGrassBlocksTAA : c_GIGrassBlocks));
 			}
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);

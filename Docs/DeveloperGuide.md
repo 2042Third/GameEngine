@@ -4936,11 +4936,12 @@ rays through a voxel copy of the scene around the camera, lit by the sun, the sk
 the screen shows. No light comes from the screen (no depth-buffer tracing, no previous frame's image) and nothing is
 blended over frames: the light is a function of world data and of where the camera stands, never of where it stood (at
 one bounce a strafe's frame equals a fresh renderer's at its camera, bit for bit; every bounce takes the frame before's field
-by design). The camera inputs are continuous: the voxel levels' blends and the field's fade by distance, and the gather's
-visibility point moved toward the viewer. The last made a fence crawl while Chebyshev's bound weighed the probes (its cubed
-tail turned the view's turn into whole steps of a thin post's probe weights; 0.247% of blocks against Gate W's 0.10%); the
-voxels' guard does not (0.079%), and without the move toward the viewer the posts' light varied faster across the screen and
-crawled more (0.207%). Built in stages from
+by design). The camera inputs are continuous: the voxel levels' blends and the field's fade by distance, the probes' moves
+(each level's search reads its own voxels, and the moves blend by the levels' weights: below) and the gather's visibility
+point moved toward the viewer. The last made a fence crawl while Chebyshev's bound weighed the probes (its cubed tail turned
+the view's turn into whole steps of a thin post's probe weights; 0.247% of blocks against Gate W's 0.10%); the voxels' guard
+does not (0.0230% settled, 0.0216% at 3840 x 2160), and without the move toward the viewer the posts' light varied faster
+across the screen and crawled more. Built in stages from
 `Docs/Plans/Wave8/specs/radiance-cascades-world.md` (its review corrections win over its body); the sources are the
 radiance-cascades lab (Daniel Quevedo, MIT: the triangle-box test, the winding steps and the column fill, the emission's
 coverage), Akenine-Moller's triangle-box test and, as ideas, Split RC, EggyStudio and creikey's voxel cascades.
@@ -5079,7 +5080,16 @@ probe-field levels and local lights follow.
   still more than half inside a solid after that move is **relocated** (D18.7): it searches its cell for open space,
   `c_GIRelocationRings` (4) rings of the 26 directions `c_GIRelocationStep` (0.1) spacings apart per axis from 0.2 to half a
   spacing, for the lowest occupancy plus `c_GIRelocationRingCost` (0.05) a ring, so a probe inside an object over a contact or
-  inside a box beside a narrow gap serves the gather from the open side; deeper than half a spacing it stays dead), `ProbeWeights` (the
+  inside a box beside a narrow gap serves the gather from the open side; deeper than half a spacing it stays dead.
+  Cascade 0's move and relocation run per voxel level on that level's voxels alone (world data), and the levels' moves
+  blend by `GetLevelWeightWithin`: the levels' blend moved inward by the search's reach (half a spacing), since windows
+  snap down and ahead of the camera a level holds no more than the blend's margin. Searched in the occupancy blended by
+  the camera's distance, the hard choices (relocate or not, which candidate) flipped as a probe crossed a blend into
+  level 1's fatter surfaces, and probes about 5.5 m from a walking camera jumped up to 0.35 m in a frame; now a 2 cm step
+  moves one at most 0.021 m and changes its validity at most 0.12 (`Renderer`'s "Relocated probes move continuously
+  ..."). So level 0's relocation reaches 5.35 m from the camera at High (2.15 m up and down), and level 1's 0.2 m voxels
+  close gaps under objects beyond: no probe enters the yard's car's 0.15 m gap there, which takes no field light),
+  `ProbeWeights` (the
   eight parents' trilinear weights times their validity and the transmittance between the moved probes), `CascadeMarch`
   (cascades from the top down to 1, a thread per texel, fixed directions, each texel the mean of
   `ProbeCascadeLayout::SubRays` squared rays spread over it: 2 x 2 for the cascades between 0 and the top, whose texels are as
@@ -5177,7 +5187,7 @@ probe-field levels and local lights follow.
   (the back wall with the side walls and the ceiling, the ceiling with the side walls) no point within 0.2 m of the junction
   is darker than half of the point a voxel farther from it (0.58 at the least; without the push out of solids 0 at every
   junction). The floor the sphere overhangs (its last 0.3 m) and around the tall box's foot keep at least 0.06 and 0.2 of
-  their brightest neighbour (0.071 and 0.23; 0.021 and 0.10 before relocation and the guard visibility): half is a goal not
+  their brightest neighbour (0.083 and 0.233; 0.021 and 0.10 before relocation and the guard visibility): half is a goal not
   met. `Renderer`'s "Dead probes" checks relocation: in a 2 m block the probes 0.05 m inside a face move out, live, those
   deeper stay dead and are the ones counted.
 

@@ -219,16 +219,19 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 
 - A probe that falls inside an object or a wall moves into the open space of its cell, and a surface weighs the probes
   around it by whether the voxels between them leave it in sight, no longer by each probe's blurred distances. In the
-  owner's Cornell box at High, the black, ragged blotch under the sphere and the black notches at the tall box's foot
-  became soft shadows: the darkest floor point under the sphere against its neighbour 0.1 m away went from 0.021 to 0.071
-  of its light, at the tall box's foot from 0.10 to 0.23, and the corners keep at least 0.58 (0.53 before). Closed rooms
-  stay dark. Look-dev: `lookdev.cornell` (lit and GI view).
-- What it costs at 3840 x 2160 at High: 0.1-0.2 ms more in global illumination's own stage (the probes' search), the
-  opaque pass the same; no memory.
-- Fixed: a camera strafe along a fence no longer makes its light crawl in the GI view: 0.079% of the image's blocks change
-  from frame to frame (0.247% before; 0.10% is the bound), their 99th percentile 0.59% (7.2%), and grass 0.13% (0.22%).
-  The probes' blurred distances, read toward a point moved toward the viewer, changed a thin post's light in steps as the
-  view turned.
+  owner's Cornell box at High, the large black, ragged blotch under the sphere and the black slot at the tall box's foot are
+  gone: the darkest floor point under the sphere against its neighbour 0.1 m away went from 0.021 to 0.083 of its light, at
+  the tall box's foot from 0.10 to 0.23, and the corners keep at least 0.58 (0.53 before). A row of small hard-edged notches
+  remains at the sphere's foot (Known issues). Closed rooms stay dark. Look-dev: `lookdev.cornell` (lit and GI view).
+- A probe's move is a function of the world's voxels: as the camera walks, probes glide where the voxel levels hand over
+  (a 2 cm step moves one at most 0.021 m) instead of jumping up to 0.35 m in one frame in a ring about 5.5 m away.
+- What it costs at 3840 x 2160 at High: the probes' search takes 0.006 ms of global illumination's own stage, the opaque
+  pass the same; no memory.
+- Fixed: a camera strafe along a fence no longer makes its light crawl in the GI view: measured settled, 0.023% of the
+  image's blocks change from frame to frame at 1280 x 720 and 0.022% at 3840 x 2160 (0.10% is the bound), their 99th
+  percentile 0.44% and 0.34%, grass 0.025% and 0.024%; with TAA 0.023% and 0.022%, grass 0.023% and 0.024%. Before,
+  from a fresh renderer, 0.247% and 7.2%: the probes' blurred distances, read toward a point moved toward the viewer,
+  changed a thin post's light in steps as the view turned.
 
 **Occlusion culling (cull fix)**
 

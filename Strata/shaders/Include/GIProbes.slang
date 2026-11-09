@@ -158,6 +158,17 @@ float3 SampleSurfaceNormal(float3 position, uint minimumLevel)
 	return normal;
 }
 
+// One level's occupancy and surface normal at a camera-relative point (no blend: world data alone), for a point the level holds.
+float SampleLevelOccupancy(uint level, float3 position)
+{
+	return SampleGIMaterial(level, GetVoxelTextureCoordinate(level, position)).a;
+}
+
+float3 SampleLevelSurfaceNormal(uint level, float3 position)
+{
+	return SampleGINormal(level, GetVoxelTextureCoordinate(level, position)).xyz;
+}
+
 // A probe's position, camera-relative: the field's minimum corner plus (index + 0.5) spacings.
 float3 GetProbePosition(uint3 index, float spacing)
 {

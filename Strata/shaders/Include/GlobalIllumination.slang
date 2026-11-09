@@ -151,6 +151,23 @@ struct GlobalIlluminationConstants
 
 ConstantBuffer<GlobalIlluminationConstants> u_GI : register(b1);
 
+// GetLevelWeight (below) for reads up to `reach` meters from the point on every axis (a probe's search for open space): the same
+// blend moved inward by the reach, so wherever it is above 0 every read lies inside the level's valid box less its guard (windows
+// snap down to steps of ST_GI_SCROLL_VOXELS, so on an axis's positive side the blend's own margin is all the room there is).
+float GetLevelWeightWithin(uint level, float3 position, float reach)
+{
+	GIVoxelLevel data = u_GI.Levels[level];
+	if (data.Texel.w == 0)
+		return 0.0;
+	float voxel = data.Origin.w;
+	float inset = ST_GI_LEVEL_GUARD_VOXELS + reach / voxel;
+	float3 local = (position - data.Origin.xyz) / voxel;
+	if (any(local < float3(data.ValidMinimum.xyz) + inset) || any(local > float3(data.ValidMaximum.xyz) - inset))
+		return 0.0;
+	float3 margin = float3(u_GI.Dimensions.xyz) * (0.5 * voxel) - (ST_GI_SCROLL_VOXELS + ST_GI_LEVEL_GUARD_VOXELS) * voxel - reach - abs(position);
+	return saturate(min(margin.x, min(margin.y, margin.z)) / (ST_GI_LEVEL_BLEND_VOXELS * voxel));
+}
+
 // The weight with which a camera-relative point reads `level` rather than the coarser ones (GlobalIllumination::GetLevelWeight):
 // 0 outside its valid box less c_GILevelGuardVoxels (trilinear filtering reads a voxel beyond), else by the distance from the
 // camera: 1 within the window's half extent less (scroll + guard + blend) voxels on every axis, falling to 0 over the blend.

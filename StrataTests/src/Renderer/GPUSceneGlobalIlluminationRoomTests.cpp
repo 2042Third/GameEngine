@@ -884,6 +884,97 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Relocated probes move continuously as the camera walks through the voxel levels' blend")
+	{
+		// Relocation (D18.7) searched the occupancy blended over the voxel levels by the camera's distance, with a hard threshold
+		// and a hard choice of the best candidate, so a probe crossing the blend of level 0 into level 1 (whose 0.2 m voxels make
+		// surfaces fatter) flipped its choice and jumped 0.1-0.4 m in one frame: a ring of popping probes about 6 m around a
+		// moving camera at High. Each level searches its own voxels (world data) and the moves blend by the levels' weights, so a
+		// 2 cm step of the camera moves a probe and changes its validity by little. The block of "Dead probes": the probes 0.05 m
+		// inside its faces relocate out of it; the camera walks along x so that those inside its +x face cross level 0's edge
+		// (5.2 to 6 m away).
+		constexpr uint32_t c_Steps = 40;
+		constexpr float c_Step = 0.02f;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		MaterialProperties properties;
+		properties.BaseColor = glm::vec4(glm::vec3(0.58f), 1.0f);
+		const glm::vec3 minimum(0.3f);
+		const glm::vec3 maximum(2.3f);
+		AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(properties), 0.5f * (minimum + maximum), "Block").GetComponent<TransformComponent>().Scale =
+			maximum - minimum;
+		constexpr glm::uvec2 c_Size { 256, 256 };
+		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification());
+		renderer->SetViewportSize(c_Size.x, c_Size.y);
+		AssetManager::SetActive(assets.Manager);
+		// The 64 probes inside the block (0.75 to 2.25 m on each axis); the 37 with a coordinate at 2.25 m relocate.
+		std::vector<glm::vec3> probePositions;
+		for (int z = 0; z < 4; z++)
+		{
+			for (int y = 0; y < 4; y++)
+			{
+				for (int x = 0; x < 4; x++)
+					probePositions.push_back(glm::vec3(0.75f) + 0.5f * glm::vec3(x, y, z));
+			}
+		}
+		std::vector<glm::vec3> previousPositions;
+		std::vector<float> previousValidity;
+		float largestMove = 0.0f;
+		float largestValidityChange = 0.0f;
+		float largestJump = 0.0f;
+		for (uint32_t step = 0; step <= c_Steps; step++)
+		{
+			const float distance = 5.2f + c_Step * static_cast<float>(step);
+			const glm::vec3 eye(2.25f - distance, 1.3f, 1.3f);
+			const SceneCamera camera = MakeCamera(eye, eye + glm::vec3(1.0f, 0.0f, 0.0f), 70.0f, c_Size);
+			for (uint32_t frame = 0; frame < 100 && (frame < 2 || renderer->GetStats().PendingAssets > 0 || renderer->GetStats().DeferredProxies > 0); frame++)
+				REQUIRE(RenderGIFrame(*renderer, scene, camera, GIViewOptions()));
+			REQUIRE(renderer->GetStats().GlobalIllumination);
+			REQUIRE_FALSE(renderer->GetStats().GlobalIlluminationPending);
+			std::vector<uint8_t> validity;
+			REQUIRE(renderer->ReadGlobalIlluminationValidity(0, validity));
+			const ProbeCascadeLayout& probes = renderer->GetGlobalIlluminationLayout()->Cascades.front();
+			const glm::ivec3 grid(probes.Grid);
+			std::vector<glm::vec3> positions;
+			std::vector<float> values;
+			for (const glm::vec3& position : probePositions)
+			{
+				const glm::ivec3 probe = FindProbe(*renderer, camera, 0, position);
+				const uint8_t* texel = validity.data() + (static_cast<size_t>(probe.x) + grid.x * (static_cast<size_t>(probe.y) + static_cast<size_t>(grid.y) * probe.z)) * 4;
+				positions.push_back(position + (glm::vec3(texel[1], texel[2], texel[3]) - 128.0f) / 127.0f * (0.5f * probes.Spacing));
+				values.push_back(texel[0] / 255.0f);
+			}
+			if (!previousPositions.empty())
+			{
+				for (size_t index = 0; index < positions.size(); index++)
+				{
+					const float moved = glm::length(positions[index] - previousPositions[index]);
+					const float changed = std::abs(values[index] - previousValidity[index]);
+					if (moved > largestMove || changed > largestValidityChange)
+					{
+						const glm::vec3& probe = probePositions[index];
+						MESSAGE("step " << step << " (" << distance << " m), probe at " << probe.x << ", " << probe.y << ", " << probe.z << ": moved " << moved
+							<< " m, validity " << previousValidity[index] << " -> " << values[index]);
+					}
+					largestMove = std::max(largestMove, moved);
+					largestValidityChange = std::max(largestValidityChange, changed);
+				}
+			}
+			for (size_t index = 0; index < positions.size(); index++)
+				largestJump = std::max(largestJump, glm::length(positions[index] - probePositions[index]));
+			previousPositions = std::move(positions);
+			previousValidity = std::move(values);
+		}
+		MESSAGE("per 2 cm step: a probe moved at most " << largestMove << " m, its validity changed at most " << largestValidityChange);
+		CHECK(largestJump > 0.05f); // Probes relocated
+		CHECK(largestMove <= 0.035f);
+		CHECK(largestValidityChange <= 0.18f);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A strafe's gi view is a fresh renderer's at its camera")
 	{
 		// The field is a function of world data and of where the camera stands, never of where it stood: after a strafe along the
