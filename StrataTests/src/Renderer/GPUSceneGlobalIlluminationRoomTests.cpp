@@ -2967,4 +2967,84 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("A thin gap takes field light beyond the finest voxels")
+	{
+		// The yard's covered car stands 0.15 m off the ground. Seen from 4 m, voxel level 0 (0.1 m) holds its gap and probes
+		// relocate into it; from 6 m (beyond level 0's relocation, 5.35 m, within the field's full reach, 7.5 m) only level 1's
+		// 0.2 m voxels do, which close the gap: no probe lives there and none sees the ground under the car. The gi view of the
+		// ground the camera sees under the car's near edge, in bands of depth under it (0-0.2, 0.2-0.5 and 0.5-1 m), each band's
+		// median against the open ground's in front of the car: from 6 m the first band keeps at least c_MinEdge of the open
+		// ground's light, and every band at least c_MinShare of what it keeps from 4 m (from 6 m all three were black; from 4 m
+		// they are 0.41, 0.059 and 0.0047, near what an opening 0.15 m tall sends the ground under it: half of one minus d over
+		// the root of d^2 + 0.15^2, about 0.22, 0.04 and 0.01 at the bands' middles, and a little more by bounces in the gap).
+		// Every bounce, settled.
+		constexpr float c_MinEdge = 0.1f;
+		constexpr float c_MinShare = 0.5f;
+		constexpr uint32_t c_Bands = 3;
+		const float bandDepths[c_Bands + 1] = { 0.02f, 0.2f, 0.5f, 1.0f };
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		BuildYard(scene, assets);
+		float shares[2][c_Bands] = {};
+		for (uint32_t view = 0; view < 2; view++)
+		{
+			const float distance = view == 0 ? 4.0f : 6.0f;
+			CAPTURE(distance);
+			Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification(GlobalIlluminationLevel::High, 1.0f));
+			renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+			const SceneCamera camera = MakeCamera(glm::vec3(-3.0f, 0.5f, -4.0f - distance), glm::vec3(-3.0f, 0.05f, -4.0f), 30.0f, c_RoomSize);
+			RenderUntilSettled(*renderer, scene, camera, GIViewOptions(), RenderData::c_GIMaxSettleFrames + 4);
+			REQUIRE_FALSE(renderer->GetStats().GlobalIlluminationPending);
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer->GetHDRTexture(), image));
+			REQUIRE(image.Format == nvrhi::Format::RGBA16_FLOAT);
+			const std::vector<std::optional<glm::vec3>> positions = ReadRelativePositions(*renderer, camera);
+			std::vector<float> bands[c_Bands];
+			std::vector<float> open;
+			for (uint32_t y = 0; y < image.Height; y++)
+			{
+				for (uint32_t x = 0; x < image.Width; x++)
+				{
+					const std::optional<glm::vec3>& relative = positions[static_cast<size_t>(y) * image.Width + x];
+					if (!relative)
+						continue;
+					const glm::vec3 point = *relative + camera.Position;
+					if (point.y > 0.02f || point.x < -4.6f || point.x > -1.4f)
+						continue;
+					const float value = Luminance(glm::vec3(ReadHalfTexel(image, x, y))) / c_RoomPreExposure;
+					if (point.z > -4.7f && point.z < -4.3f)
+						open.push_back(value);
+					const float depth = point.z + 4.0f;
+					for (uint32_t band = 0; band < c_Bands; band++)
+					{
+						if (depth >= bandDepths[band] && depth < bandDepths[band + 1])
+							bands[band].push_back(value);
+					}
+				}
+			}
+			REQUIRE(open.size() > 50);
+			const float openMedian = Median(open);
+			REQUIRE(openMedian > 0.0f);
+			for (uint32_t band = 0; band < c_Bands; band++)
+			{
+				INFO("band " << band);
+				REQUIRE(bands[band].size() > 20);
+				shares[view][band] = Median(bands[band]) / openMedian;
+				MESSAGE("From " << distance << " m, " << bandDepths[band] << "-" << bandDepths[band + 1] << " m under the car: " << bands[band].size()
+					<< " points, their median " << shares[view][band] << " of the open ground's " << openMedian);
+			}
+			renderer.reset();
+			CollectReleases();
+		}
+		CHECK(shares[1][0] >= c_MinEdge);
+		for (uint32_t band = 0; band < c_Bands; band++)
+		{
+			INFO("band " << band);
+			CHECK(shares[1][band] >= c_MinShare * shares[0][band]);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }

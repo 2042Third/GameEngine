@@ -238,6 +238,10 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   ones). In the owner's Cornell box seen from half its height, the floor under the sphere's overhang no longer falls to
   black against its neighbour: the darkest point there keeps 0.54 of its neighbour's light 0.1 m away (0.083 before). No
   cost, no memory.
+- Thin gaps that the voxels close no longer go black: where the probes around a surface cannot see it, it takes the light
+  of the gap's opening as the camera sees it, darkened by how far in it lies. Under the yard's covered car (0.15 m off the
+  ground) seen from 6 m, the ground 0.2-0.5 m under its edge keeps 6% of the open ground's light and 0.5-1 m in 1% (it
+  was black; seen from 4 m, where the finest voxels hold the gap, 6% and 0.5%). Closed rooms stay dark.
 
 **Occlusion culling (cull fix)**
 
@@ -375,9 +379,9 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   the window (a glow up to 1.8 times too bright near the window's edges, falling off a metre away) and the dark band
   along its foot (the probes 0.15 m above the floor see the sunlit patch only at grazing angles, which their directions do
   not resolve).
-- Thin gaps under objects take no field light, and show black, beyond about 5.4 m from the camera at High (2.2 m up and
-  down): there probes move by voxel level 1, whose 0.2 m voxels close such gaps (the yard's covered car stands 0.15 m
-  off the ground). Nearer, they are lit.
+- The ground right at the edge of a thin gap beyond about 5.4 m from the camera at High (the first 0.2 m under the
+  yard's covered car) reads about twice as bright as from nearer: there the probes beside the object light it without
+  its overhang, since the 0.2 m voxels close the gap.
 - Global illumination's own stage at 3840 x 2160 reads about 4.4 ms in some runs and about 6.5 ms in others of the same
   build (the sun room, High): the difference lies in the pass that sums cascade 0's rays into the field (1.2 or 3.6 ms).
   Seen before this batch's last fix too; not explained yet.

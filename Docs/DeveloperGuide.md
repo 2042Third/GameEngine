@@ -5096,7 +5096,8 @@ probe-field levels and local lights follow.
   level 1's fatter surfaces, and probes about 5.5 m from a walking camera jumped up to 0.35 m in a frame; now a 2 cm step
   moves one at most 0.021 m and changes its validity at most 0.12 (`Renderer`'s "Relocated probes move continuously
   ..."). So level 0's relocation reaches 5.35 m from the camera at High (2.95 m down and 1.35 m up), and level 1's 0.2 m voxels
-  close gaps under objects beyond: no probe enters the yard's car's 0.15 m gap there, which takes no field light),
+  close gaps under objects beyond: no probe enters the yard's car's 0.15 m gap there, whose ground takes its opening's light
+  instead: the gather, below),
   `ProbeWeights` (the
   eight parents' trilinear weights times their validity and the transmittance between the moved probes), `CascadeMarch`
   (cascades from the top down to 1, a thread per texel, fixed directions, each texel the mean of
@@ -5182,8 +5183,19 @@ probe-field levels and local lights follow.
   step at probe-cell borders within 9% there). Where the live probes in front see less than `c_GIGatherMinVisible` (a
   quarter) of the weight they would give, the light fades with what they see instead of renormalizing a vanishing weight
   (which stepped at the cells' borders); dead probes take no part (a probe dead inside an object over a contact says nothing
-  about the floor beside it); none visible: no field light, never the sky. A point no level holds, beyond a valid box a
-  scroll left short, takes today's light; within 2 m of the field's edge it fades to today's light.
+  about the floor beside it); none visible: no field light, never the sky, but a drawn point whose probes see less than
+  `c_GIGatherMinVisible` of it (a gap its finest voxels close, thinner than about one and a half voxels) is blended, as they
+  see less, toward the light where the way to the camera leaves the closed voxels into open space (up to
+  `c_GIGatherExitSteps` (24) steps of half a voxel toward the viewer, to a sample below `c_GIGatherExitOccupancy` (0.2)
+  with the sample a voxel along the normal too: the gap's opening as the camera sees it, the probes around it gathered for
+  the point's own normal and plane), times `1 - d / sqrt(d^2 + g^2)` for the distance d travelled and a gap g of
+  `c_GIGatherGapVoxels` (0.75) voxels: what the ground under a gap that tall sees of its opening from that far in. The camera
+  sees the point, so the way is open in the scene: a sealed room's points never take light from beyond its walls (the
+  sealed cases hold). Under the yard's car (0.15 m off the ground) seen from 6 m, beyond level 0's reach, the ground 0-0.2,
+  0.2-0.5 and 0.5-1 m under its edge keeps 0.91, 0.057 and 0.012 of the open ground's light (black before; 0.41, 0.059 and
+  0.0047 from 4 m, where level 0's probes relocate into the gap; about 0.22, 0.04 and 0.01 by the opening's view factor).
+  Only drawn surfaces: re-injection's points inside walls would take a wall's far side. A point no level holds, beyond a
+  valid box a scroll left short, takes today's light; within 2 m of the field's edge it fades to today's light.
   `SceneLightingView::GlobalIllumination` (`gi`) shades white and returns the diffuse indirect light (the field inside,
   today's beyond, under the diffuse occlusion), `OpenShare` (`open`) the share of the sky a surface sees, as gray;
   `Probes` (`probes`, `GI/ProbeView.frag` in `GPU.Overlays`) draws cascade 0's probes over the image, live ones lit by
@@ -5197,8 +5209,10 @@ probe-field levels and local lights follow.
   is darker than half of the point a voxel farther from it (0.58 at the least; without the push out of solids 0 at every
   junction). The floor the sphere overhangs (its last 0.3 m) keeps half of its brightest neighbour too (0.54; 0.083 while
   the floor, 2.75 m below the camera, lay beyond level 0's weights, 0.021 before relocation and the guard visibility); around
-  the tall box's foot it keeps at least 0.2 (0.226; 0.10 before): half is a goal not met there. `Renderer`'s "Dead probes" checks relocation: in a 2 m block the probes 0.05 m inside a face move out, live, those
-  deeper stay dead and are the ones counted.
+  the tall box's foot it keeps at least 0.2 (0.226; 0.10 before): half is a goal not met there. "A thin gap takes field
+  light beyond the finest voxels" checks the yard's car from 4 and 6 m (above: from 6 m the band under its edge keeps 0.1 of
+  the open ground's light, and every band half of what it keeps from 4 m). `Renderer`'s "Dead probes" checks relocation: in
+  a 2 m block the probes 0.05 m inside a face move out, live, those deeper stay dead and are the ones counted.
 
 - **Sampling** (`Include/GlobalIllumination.slang`): a point reads the finest level whose valid box holds it with
   `c_GILevelGuardVoxels` to spare, blended into the next over `c_GILevelBlendVoxels` by its distance from the camera (not

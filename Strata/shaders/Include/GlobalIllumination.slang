@@ -47,6 +47,9 @@
 #define ST_GI_GATHER_GUARD_CORE float2(0.6, 0.72) // c_GIGatherGuardCore
 #define ST_GI_GATHER_PUSH_STEPS 2u        // c_GIGatherPushSteps
 #define ST_GI_GATHER_PUSH_OCCUPANCY float2(0.1, 0.3) // c_GIGatherPushOccupancy
+#define ST_GI_GATHER_EXIT_STEPS 24u       // c_GIGatherExitSteps
+#define ST_GI_GATHER_EXIT_OCCUPANCY 0.2   // c_GIGatherExitOccupancy
+#define ST_GI_GATHER_GAP_VOXELS 0.75      // c_GIGatherGapVoxels
 #define ST_GI_MAX_BOUNCE_ALBEDO 0.9       // c_GIMaxBounceAlbedo
 #define ST_GI_FIELD_DEPTH_TEXELS 10       // c_GIFieldDepthTexels
 #define ST_GI_FIELD_DIRECTIONS 64u        // c_GIFieldDirections

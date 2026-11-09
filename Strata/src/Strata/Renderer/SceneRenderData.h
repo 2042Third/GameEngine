@@ -748,6 +748,14 @@ namespace Strata
 		// whole voxel from the second.
 		constexpr uint32_t c_GIGatherPushSteps = 2;
 		constexpr glm::vec2 c_GIGatherPushOccupancy{ 0.1f, 0.3f };
+		// A drawn point the probes around it see too little of (a gap its finest voxels close: under the yard's car beyond level
+		// 0's reach) takes the light where the view ray leaves the closed voxels: at most this many steps of half a voxel toward
+		// the viewer, to the first sample below this occupancy with the sample a voxel along the normal too (open space, not the
+		// gap's own soft layer), darkened as the ground under a gap of this many voxels sees its opening from as far in
+		// (1 - d / sqrt(d^2 + g^2)): the voxels close gaps up to about one and a half voxels.
+		constexpr uint32_t c_GIGatherExitSteps = 24;
+		constexpr float c_GIGatherExitOccupancy = 0.2f;
+		constexpr float c_GIGatherGapVoxels = 0.75f;
 		constexpr uint32_t c_GIFieldFaces = 6;           // The field's faces per probe: +X, -X, +Y, -Y, +Z, -Z
 		// Each cascade-0 probe's distances to the first hit (GI/FieldReduce.comp): an octahedral tile of this many texels a side, a
 		// one-texel border around one texel per ray of its c_GIFieldDirections (8 x 8), of the mean distance and its variance
