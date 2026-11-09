@@ -781,9 +781,6 @@ namespace Strata
 		// whole voxel from the second.
 		constexpr uint32_t c_GIGatherPushSteps = 2;
 		constexpr glm::vec2 c_GIGatherPushOccupancy{ 0.1f, 0.3f };
-		// The probes' distances toward a point spread at least this many spacings in the gather's Chebyshev bound (half a voxel), so
-		// its weight falls continuously past the mean where every ray stored one distance.
-		constexpr float c_GIGatherMinDeviation = 0.1f;
 		constexpr uint32_t c_GIFieldFaces = 6;           // The field's faces per probe: +X, -X, +Y, -Y, +Z, -Z
 		// Each cascade-0 probe's distances to the first hit (GI/FieldReduce.comp): an octahedral tile of this many texels a side, a
 		// one-texel border around one texel per ray of its c_GIFieldDirections (8 x 8), of the mean distance and its variance
@@ -794,6 +791,12 @@ namespace Strata
 		// Cascade 0's probes that a surface covers move up to this many spacings off it (GI/ProbeValidity.comp; the others
 		// c_GIProbeMoveVoxels voxels): a wall on their plane beyond voxel level 0 lies in level 1's thicker voxels.
 		constexpr float c_GIFieldProbeMove = 0.5f;
+		// Probe relocation (GI/ProbeValidity.comp): a cascade-0 probe still more than half inside a solid after that move searches
+		// this many rings of the 26 directions, c_GIRelocationStep spacings apart per axis from twice that out to half a spacing,
+		// for the lowest occupancy plus c_GIRelocationRingCost a ring.
+		constexpr uint32_t c_GIRelocationRings = 4;
+		constexpr float c_GIRelocationStep = 0.1f;
+		constexpr float c_GIRelocationRingCost = 0.05f;
 		constexpr uint32_t c_GIFieldDirections = 64;
 		// Multi-bounce by re-injection (GI/VoxelInject.comp): a surface voxel adds its albedo, clamped below this so the series of
 		// bounces converges in every room, times last frame's field at it.

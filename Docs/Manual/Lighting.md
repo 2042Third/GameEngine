@@ -344,7 +344,8 @@ slightly in its light while the camera moves (see the list below).
   - A surface that sees none of the probes around it gets no indirect light at all, darker than without global
     illumination: gaps, recesses and ledges thinner than about two voxels (20 cm at High, 40 cm at Low) and the bases of
     walls beside bright patches can go nearly black. Outdoors this shows at the foot of large boxes on the ground and on
-    ThirdPerson's ledges and fence rails; indoors as a dark band where the floor meets a wall below a sunlit window.
+    ThirdPerson's ledges and fence rails; indoors as a dark band where the floor meets a wall below a sunlit window, and
+    under low overhangs (the floor under a ball's rim) and in narrow gaps between an object and a wall.
   - Thin geometry such as fence rails can crawl slightly in its light while the camera moves.
   - Low is too dark.
   - Its light fades out from 7.5 m to 9.5 m around the camera and from 5.5 m to 7.5 m above and below it at High

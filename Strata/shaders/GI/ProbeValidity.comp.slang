@@ -15,8 +15,9 @@
 // walls read three times their light on one side and a fifth on the other). Inside a solid no surface faces the probe (no
 // normal): it stays dead. Cascade 0's probes move too (probe relocation, DDGI's lesson): a room whose walls lie on a probe plane
 // keeps live probes beside them, and the forward gather reads a moved probe's light and visibility from where it moved (its
-// trilinear weight from its grid position). The move is stored in gba (EncodeProbeMove); the march and the weights start from
-// the moved probe.
+// trilinear weight from its grid position). Cascade 0's probes that stay more than half inside a solid search their cell for
+// open space (relocation, below). The move is stored in gba (EncodeProbeMove); the march and the weights start from the moved
+// probe.
 
 [vk::image_format("rgba8")] RWTexture3D<float4> o_Validity : register(u0);
 RWByteAddressBuffer o_Counters : register(u7);
@@ -55,6 +56,49 @@ void main(uint3 globalID : SV_DispatchThreadID, uint localIndex : SV_GroupIndex)
 					move = candidate;
 					occupancy = candidateOccupancy;
 				}
+			}
+		}
+		// Probe relocation (D18.7): a cascade-0 probe still more than half inside a solid where it moved (in an object over a
+		// contact, in a box beside a narrow gap) searches its cell for open space, so the gather there has a live probe beside
+		// the surfaces instead of a dead one whose weight the probes around cannot make up: ST_GI_RELOCATION_RINGS rings of the
+		// 26 directions, ST_GI_RELOCATION_STEP spacings apart per axis from twice that out to half a spacing, the lowest occupancy
+		// plus ST_GI_RELOCATION_RING_COST a ring (the nearest open space of several). A probe no ring frees stays dead: deep in a
+		// thick wall or a solid it says nothing about either side.
+		[branch]
+		if (u_Pass.Grid.w == 0u && occupancy * ST_GI_OCCUPANCY_GAIN > 0.5 && finest < ST_GI_MAX_VOXEL_LEVELS)
+		{
+			float bestScore = occupancy;
+			float3 bestMove = move;
+			// The outermost ring first: a probe it cannot free lies deeper than any ring reaches (most dead probes, deep in walls and
+			// floors), and the inner rings are skipped.
+			[loop]
+			for (uint pass = 0u; pass < ST_GI_RELOCATION_RINGS; pass++)
+			{
+				uint ring = ST_GI_RELOCATION_RINGS - pass;
+				float reach = ST_GI_RELOCATION_STEP * float(ring + 1u) * spacing;
+				[loop]
+				for (uint direction = 0u; direction < 27u; direction++)
+				{
+					int3 offset = int3(int(direction % 3u) - 1, int((direction / 3u) % 3u) - 1, int(direction / 9u) - 1);
+					if (all(offset == int3(0, 0, 0)))
+						continue;
+					// As the passes will read it.
+					float3 candidate = DecodeProbeMove(float4(0.0, EncodeProbeMove(float3(offset) * reach, spacing)), spacing);
+					uint candidateFinest;
+					float score = SampleOccupancy(position + candidate, u_Pass.MinimumLevel, candidateFinest) + ST_GI_RELOCATION_RING_COST * float(ring);
+					if (score < bestScore)
+					{
+						bestScore = score;
+						bestMove = candidate;
+					}
+				}
+			}
+			uint bestFinest;
+			float bestOccupancy = SampleOccupancy(position + bestMove, u_Pass.MinimumLevel, bestFinest);
+			if (bestOccupancy < occupancy)
+			{
+				move = bestMove;
+				occupancy = bestOccupancy;
 			}
 		}
 		float validity = 1.0 - saturate(occupancy * ST_GI_OCCUPANCY_GAIN);

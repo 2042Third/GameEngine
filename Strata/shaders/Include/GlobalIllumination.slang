@@ -28,6 +28,9 @@
 #define ST_GI_LEAD_IN_OCCUPANCY 0.3       // c_GILeadInOccupancy
 #define ST_GI_PROBE_MOVE_VOXELS 1.5       // c_GIProbeMoveVoxels
 #define ST_GI_FIELD_PROBE_MOVE 0.5        // c_GIFieldProbeMove
+#define ST_GI_RELOCATION_RINGS 4u         // c_GIRelocationRings
+#define ST_GI_RELOCATION_STEP 0.1        // c_GIRelocationStep
+#define ST_GI_RELOCATION_RING_COST 0.05  // c_GIRelocationRingCost
 #define ST_GI_REFRESH_OCCUPANCY 0.1       // c_GIRefreshOccupancy
 #define ST_GI_SHADOW_OFFSET_VOXELS 1.0    // c_GIShadowOffsetVoxels
 #define ST_GI_SHADOW_TILT_VOXELS 1.5      // c_GIShadowTiltVoxels
@@ -44,7 +47,6 @@
 #define ST_GI_GATHER_GUARD_CORE float2(0.6, 0.72) // c_GIGatherGuardCore
 #define ST_GI_GATHER_PUSH_STEPS 2u        // c_GIGatherPushSteps
 #define ST_GI_GATHER_PUSH_OCCUPANCY float2(0.1, 0.3) // c_GIGatherPushOccupancy
-#define ST_GI_GATHER_MIN_DEVIATION 0.1    // c_GIGatherMinDeviation
 #define ST_GI_MAX_BOUNCE_ALBEDO 0.9       // c_GIMaxBounceAlbedo
 #define ST_GI_FIELD_DEPTH_TEXELS 10       // c_GIFieldDepthTexels
 #define ST_GI_FIELD_DIRECTIONS 64u        // c_GIFieldDirections

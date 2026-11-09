@@ -109,54 +109,26 @@ float GetFieldTransmittance(SamplerState repeat, float3 from, float3 to)
 	return transmittance;
 }
 
-// A cascade-0 probe's distance to the first hit toward a direction (FieldReduce.comp's depth moments): the four texels of its tile
-// around the direction's octahedral point, bilinear, as the mixture of their distributions: x the mean distance, y its variance
-// (meters); z the nearest of the four texels' means less twice their spreads (a point nearer lies before every ray around it
-// hit anything).
-float3 ReadProbeDepth(int3 probe, float3 direction)
+// Whether a point lies before every ray of a cascade-0 probe around its direction hit anything (FieldReduce.comp's depth moments):
+// nearer than the nearest of the four texels of the probe's tile around the direction's octahedral point, each texel's mean
+// distance less twice its spread (meters). There the guard has nothing to find.
+bool LiesBeforeProbeHits(int3 probe, float3 probePosition, float3 target)
 {
+	float3 toTarget = target - probePosition;
+	float distance = length(toTarget);
+	if (distance <= 1e-5)
+		return true;
 	float interior = float(ST_GI_FIELD_DEPTH_TEXELS - 2);
-	// Texel k of the tile spans [k, k + 1); the interior starts at 1, and bilinear reads are between texel centers.
-	float2 coordinate = (EncodeOctahedral(direction) * 0.5 + 0.5) * interior + 0.5;
+	// Texel k of the tile spans [k, k + 1); the interior starts at 1, and the four texels are those around the point.
+	float2 coordinate = (EncodeOctahedral(toTarget / distance) * 0.5 + 0.5) * interior + 0.5;
 	int2 first = clamp(int2(floor(coordinate)), int2(0, 0), int2(ST_GI_FIELD_DEPTH_TEXELS - 2, ST_GI_FIELD_DEPTH_TEXELS - 2));
-	float2 fraction = saturate(coordinate - float2(first));
 	int2 origin = probe.xy * ST_GI_FIELD_DEPTH_TEXELS + first;
 	float2 a = UnpackHalf2x16(u_GIFieldDepth.Load(int4(origin, probe.z, 0)));
 	float2 b = UnpackHalf2x16(u_GIFieldDepth.Load(int4(origin + int2(1, 0), probe.z, 0)));
 	float2 c = UnpackHalf2x16(u_GIFieldDepth.Load(int4(origin + int2(0, 1), probe.z, 0)));
 	float2 d = UnpackHalf2x16(u_GIFieldDepth.Load(int4(origin + int2(1, 1), probe.z, 0)));
-	float4 weights = float4((1.0 - fraction.x) * (1.0 - fraction.y), fraction.x * (1.0 - fraction.y), (1.0 - fraction.x) * fraction.y,
-		fraction.x * fraction.y);
-	float mean = dot(weights, float4(a.x, b.x, c.x, d.x));
-	float4 spread = float4(a.x, b.x, c.x, d.x) - mean;
-	float variance = dot(weights, float4(a.y, b.y, c.y, d.y) + spread * spread);
-	float4 near = float4(a.x, b.x, c.x, d.x) - 2.0 * sqrt(float4(a.y, b.y, c.y, d.y));
-	return float3(mean, variance, min(min(near.x, near.y), min(near.z, near.w)));
-}
-
-// How much a probe sees a point (Chebyshev's bound on the probe's distances toward it, the test of DDGI, Majercik et al. 2019;
-// ideas only): 1 where the point lies no farther than the mean distance to the first hit; beyond it the share of the distribution
-// the bound leaves, cubed so the light falls off within the hit's spread rather than over its tail. Continuous: no step where a
-// probe stops seeing a point. `clear` receives whether the point lies before every ray around it hit anything (the guard has
-// nothing to find there).
-float GetProbeVisibility(int3 probe, float3 probePosition, float3 target, out bool clear)
-{
-	float3 toTarget = target - probePosition;
-	float distance = length(toTarget);
-	clear = distance <= 1e-5;
-	if (clear)
-		return 1.0;
-	float3 depth = ReadProbeDepth(probe, toTarget / distance);
-	clear = distance <= depth.z;
-	if (distance <= depth.x)
-		return 1.0;
-	float excess = distance - depth.x;
-	// The variance's floor keeps the bound continuous where every ray around the direction stored one distance (the march's end,
-	// a wall head-on): a variance of 0 would drop the weight from 1 to 0 at the mean.
-	float deviation = ST_GI_GATHER_MIN_DEVIATION * u_GIField.FieldOrigin.w;
-	float variance = max(depth.y, deviation * deviation);
-	float chebyshev = variance / (variance + excess * excess);
-	return chebyshev * chebyshev * chebyshev;
+	float4 nearest = float4(a.x, b.x, c.x, d.x) - 2.0 * sqrt(float4(a.y, b.y, c.y, d.y));
+	return distance <= min(min(nearest.x, nearest.y), min(nearest.z, nearest.w));
 }
 
 // The point the gather's probes are asked about, moved out of a solid it lies in: within about a voxel of a perpendicular wall,
@@ -191,16 +163,20 @@ float3 PushOutOfSolid(SamplerState repeat, float3 position)
 // The field's irradiance over pi at a camera-relative surface point for a shading normal (luminance, times
 // ST_GI_RADIANCE_SCALE), .a the field's weight there (0 outside it, while pending or where no voxel level holds the point). The
 // eight cascade-0 probes around the point moved ST_GI_GATHER_NORMAL_BIAS spacings along its geometric normal, each weighted
-// trilinearly, by its validity, by whether it lies in front of the surface's plane and by how much it sees the point
-// (GetProbeVisibility, at the moved point moved ST_GI_GATHER_VIEW_BIAS spacings more toward the viewer and out of any solid it
-// then lies in when pushOut, PushOutOfSolid: neither a surface's own voxels nor a perpendicular one's beside it hide it; times the transmittance of the voxels between them, GetFieldTransmittance), then normalized. Where the live
-// probes in front of the point see less of it than ST_GI_GATHER_MIN_VISIBLE of the weight all the probes in front would give it
-// (a contact, a junction, a cell of probes dead inside a solid), the light fades with what they see rather than giving the few
-// that see it full weight; a point no probe sees takes no field light (dark, never the sky). Every weight is continuous, so the
-// light is: no bands at cell borders, no staircase of voxels. openShare receives the cosine-weighted share of the sky it sees.
-// viewDirection points toward the viewer (the normal where there is none). pushOut moves the visibility point out of solids: drawn
-// surfaces only. Re-injection reads the field at voxels, some of them inside walls (the floor's face runs on under a wall), and
-// moved out of the solid such a point would take the light on the wall's far side into a sealed room.
+// trilinearly, by its validity, by whether it lies in front of the surface's plane and by whether the voxels between it and the
+// point let it see the point (GetFieldTransmittance, toward the moved point moved ST_GI_GATHER_VIEW_BIAS spacings more toward the
+// viewer and out of any solid it then lies in when pushOut, PushOutOfSolid: neither a surface's own voxels nor a perpendicular
+// one's beside it hide it; skipped where the point lies before every ray of the probe around it hit anything), then normalized.
+// The guard is the geometry itself: Chebyshev's bound on the probes' 64 depth directions blurred a contact's surfaces over 25
+// degrees and hid probes that see the point plainly (a floor point under the Cornell box's sphere, beside its tall box), and the
+// light there went black. Where the live probes in front of the point see less of it than ST_GI_GATHER_MIN_VISIBLE of the weight
+// they would give it (a junction, a wall between), the light fades with what they see rather than giving the few that see it
+// full weight; dead probes take no part (a probe inside an object over a contact says nothing about the floor beside it); a
+// point no probe sees takes no field light (dark, never the sky). Every weight is continuous, so the light is: no bands at cell
+// borders, no staircase of voxels. openShare receives the cosine-weighted share of the sky it sees. viewDirection points toward
+// the viewer (the normal where there is none). pushOut moves the visibility point out of solids: drawn surfaces only.
+// Re-injection reads the field at voxels, some of them inside walls (the floor's face runs on under a wall), and moved out of the
+// solid such a point would take the light on the wall's far side into a sealed room.
 float4 SampleIrradianceField(SamplerState repeat, float3 position, float3 geometricNormal, float3 shadingNormal, float3 viewDirection,
 	bool pushOut, out float openShare)
 {
@@ -239,17 +215,12 @@ float4 SampleIrradianceField(SamplerState repeat, float3 position, float3 geomet
 		float3 toProbe = probePosition - position;
 		float facing = smoothstep(-0.05, 0.25, dot(toProbe * rsqrt(max(dot(toProbe, toProbe), 1e-8)), geometricNormal));
 		float3 trilinear3 = select(offset != int3(0, 0, 0), fraction, 1.0 - fraction);
-		float weight = trilinear3.x * trilinear3.y * trilinear3.z * facing;
+		float weight = trilinear3.x * trilinear3.y * trilinear3.z * facing * validity;
 		reachable += weight;
-		weight *= validity;
-		if (weight <= 0.0)
-			continue;
-		bool clear;
-		weight *= GetProbeVisibility(probe, probePosition, seen, clear);
 		if (weight <= 0.0)
 			continue;
 		// The guard marches only where the probe's rays around the point hit something before it.
-		if (!clear)
+		if (!LiesBeforeProbeHits(probe, probePosition, seen))
 			weight *= GetFieldTransmittance(repeat, probePosition, seen);
 		if (weight <= 0.0)
 			continue;

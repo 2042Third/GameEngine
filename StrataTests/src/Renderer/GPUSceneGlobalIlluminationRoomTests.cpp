@@ -620,8 +620,10 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 	TEST_CASE("Dead probes")
 	{
 		// 6.2: cascade 0's probes inside a 2 m closed block are dead (validity 0: no march, no gather takes them), those 0.05 m from
-		// its faces partly valid (validity fades as a surface comes near), and GIDeadProbes counts exactly the probes whose centers
-		// lie inside it (nothing else is in the scene). The block's faces lie 0.05 m past the probe planes (0.25 m + 0.5 m k).
+		// its faces partly valid (validity fades as a surface comes near), and GIDeadProbes counts exactly the dead probes (nothing
+		// else is in the scene). The block's faces lie 0.05 m past the probe planes (0.25 m + 0.5 m k), so the probes 0.05 m inside
+		// its faces at 2.3 m find open space within their cells and move out of it, live (relocation, D18.7: a probe inside an
+		// object over a contact or beside a gap serves the gather from the open side); those deeper than half a spacing stay dead.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
@@ -658,6 +660,8 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		REQUIRE(validity.size() == static_cast<size_t>(grid.x) * grid.y * grid.z * 4);
 		const glm::vec3 origin = camera.Position + glm::vec3(renderer->GetGlobalIlluminationFieldConstants().FieldOrigin);
 		uint32_t inside = 0;
+		uint32_t dead = 0;
+		uint32_t relocated = 0;
 		uint32_t beside = 0;
 		for (int z = 0; z < grid.z; z++)
 		{
@@ -670,8 +674,23 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 					INFO("probe at " << position.x << ", " << position.y << ", " << position.z << ": validity " << value / 255.0f);
 					if (glm::all(glm::greaterThan(position, minimum)) && glm::all(glm::lessThan(position, maximum)))
 					{
-						CHECK(value == 0);
 						inside++;
+						const glm::vec3 depth = glm::min(position - minimum, maximum - position);
+						if (std::min({ depth.x, depth.y, depth.z }) < 0.5f * probes.Spacing - 0.1f)
+						{
+							// Moved out through the nearest face (GlobalIllumination.slang's DecodeProbeMove): live, outside the block.
+							const size_t texel = (x + grid.x * (y + grid.y * static_cast<size_t>(z))) * 4;
+							const glm::vec3 move = (glm::vec3(validity[texel + 1], validity[texel + 2], validity[texel + 3]) - 128.0f) / 127.0f * (0.5f * probes.Spacing);
+							const glm::vec3 moved = position + move;
+							CHECK(value > 0);
+							CHECK_FALSE((glm::all(glm::greaterThan(moved, minimum)) && glm::all(glm::lessThan(moved, maximum))));
+							relocated++;
+						}
+						else
+						{
+							CHECK(value == 0);
+							dead++;
+						}
 						continue;
 					}
 					// 0.05 m outside one of the block's faces, level with its middle on the other axes.
@@ -687,8 +706,10 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 			}
 		}
 		CHECK(inside == 64u);
+		CHECK(relocated == 64u - 27u); // Those with a coordinate at 2.25 m
+		CHECK(dead == 27u);
 		CHECK(beside == 3u * 16u); // The probes 0.05 m outside the three faces at 0.3 m
-		CHECK(counts.GIDeadProbes == inside);
+		CHECK(counts.GIDeadProbes == dead);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -2581,10 +2602,14 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
 		// it, two voxels: closer in, no visibility point fits between the floor's and the sphere's voxels). Points the camera does
 		// not see and neighbours under the objects are left out, and so are points whose brightest neighbour is darker than a
 		// fiftieth of the floor's median. At High around the sphere's footprint; the overhung rim and the tall box's foot (the gap
-		// between its back-left corner and the red wall) go dark within a voxel, which no probe of 0.5 m resolves: there no point
-		// may be black beside a lit neighbour, and the bound is a goal not met yet (DeveloperGuide, "Global illumination"). Low's 1 m
-		// probes are measured and reported: whole cells of them lie in the coarse voxels' solids beside the box and the sphere.
+		// between its back-left corner and the red wall) still fall faster than c_MinRatio a voxel, which no probe of 0.5 m resolves:
+		// there the darkest point keeps at least c_MinOverhangRatio and c_MinBoxFootRatio of its brightest neighbour (0.021 and 0.10
+		// before probe relocation and the gather's guard visibility: a dead probe in the sphere and Chebyshev's blurred depths left
+		// them black), and c_MinRatio is a goal not met yet (DeveloperGuide, "Global illumination"). Low's 1 m probes are measured
+		// and reported: whole cells of them lie in the coarse voxels' solids beside the box and the sphere.
 		constexpr float c_MinRatio = 0.5f;
+		constexpr float c_MinOverhangRatio = 0.06f;
+		constexpr float c_MinBoxFootRatio = 0.2f;
 		constexpr float c_ContactGap = 0.6f;
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -2661,10 +2686,8 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
 				MESSAGE(levelName << ", " << name << ": " << measured << " floor points, the darkest against its neighbours " << lowest
 					<< " of the brightest, at (" << lowestAt.x << ", 0, " << lowestAt.y << "); the floor's median " << floorMedian);
 				CHECK(measured > (area == 1 ? 50u : 200u));
-				if (level == GlobalIlluminationLevel::High && area == 0)
-					CHECK(lowest >= c_MinRatio);
-				else if (level == GlobalIlluminationLevel::High)
-					CHECK(lowest > 0.0f);
+				if (level == GlobalIlluminationLevel::High)
+					CHECK(lowest >= (area == 0 ? c_MinRatio : area == 1 ? c_MinOverhangRatio : c_MinBoxFootRatio));
 			}
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);

@@ -215,6 +215,17 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - What it costs at 3840 x 2160 at High: about 0.3 ms more in global illumination's own stage (4.3 ms in the sun room and
   the yard) and 0.25-0.3 ms more in the opaque pass; 35 MiB more memory per view at High (4.4 MiB at Low).
 
+**Global illumination: light at contacts (experimental).**
+
+- A probe that falls inside an object or a wall moves into the open space of its cell, and a surface weighs the probes
+  around it by whether the voxels between them leave it in sight, no longer by each probe's blurred distances. In the
+  owner's Cornell box at High, the black, ragged blotch under the sphere and the black notches at the tall box's foot
+  became soft shadows: the darkest floor point under the sphere against its neighbour 0.1 m away went from 0.021 to 0.071
+  of its light, at the tall box's foot from 0.10 to 0.23, and the corners keep at least 0.58 (0.53 before). Closed rooms
+  stay dark. Look-dev: `lookdev.cornell` (lit and GI view).
+- What it costs at 3840 x 2160 at High: 0.1-0.2 ms more in global illumination's own stage (the probes' search), the
+  opaque pass the same; no memory.
+
 **Occlusion culling (cull fix)**
 
 - Fixed: occlusion culling hid objects in plain view. Its depth pyramid was built a texel or more off where a level's
@@ -303,9 +314,10 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   vertical edges either side of the patch's light.
 - Its light ends at the probe field's edge around the camera (High: full within 7.5 m horizontally, 5.5 m up and down;
   Low: 7 m and 2.8 m; faded to the light without it over 2 m): outdoors the edge of a bubble can show.
-- The owner's Cornell box at High, with every bounce: the probes are 0.5 m apart (1 m at Low), and what none of them
-  sees still goes dark within a few centimetres: a dark rim where the floor shows under the sphere's overhang, and dark
-  notches in the gap between the tall box and the red wall. At Low, cells of probes beside the box and the sphere lie
+- The owner's Cornell box at High, with every bounce: the probes are 0.5 m apart (1 m at Low), and the light still
+  falls faster than it should where they cannot resolve it: the floor under the sphere's overhang falls to 0.07 of its
+  neighbour's light 0.1 m away (half is the goal), the floor in the gap between the tall box and the red wall to 0.23,
+  and that gap stays very dark. At Low, cells of probes beside the box and the sphere lie
   inside them, and the walls and floor there still show steps and black patches, and the ceiling darkens along its edges.
   Low bounces once: with every bounce its Cornell box would be about 1.8 times as bright as High's (its ceiling 165-235
   nits per unit of albedo against 89-142). In the sun room, the window wall keeps its dark vertical bands either side of

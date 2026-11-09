@@ -5071,7 +5071,11 @@ probe-field levels and local lights follow.
   cascade's minimum level (the same from every camera: voxels of the finest level holding it doubled the move as the camera went
   away, and the probe's light stepped), stored in its
   validity texel's gba: probe planes on a room's faces otherwise died, and their children took one surviving parent's view
-  from metres away, three times the patch's light on one side of the sun room and a fifth on the other), `ProbeWeights` (the
+  from metres away, three times the patch's light on one side of the sun room and a fifth on the other; a cascade-0 probe
+  still more than half inside a solid after that move is **relocated** (D18.7): it searches its cell for open space,
+  `c_GIRelocationRings` (4) rings of the 26 directions `c_GIRelocationStep` (0.1) spacings apart per axis from 0.2 to half a
+  spacing, for the lowest occupancy plus `c_GIRelocationRingCost` (0.05) a ring, so a probe inside an object over a contact or
+  inside a box beside a narrow gap serves the gather from the open side; deeper than half a spacing it stays dead), `ProbeWeights` (the
   eight parents' trilinear weights times their validity and the transmittance between the moved probes), `CascadeMarch`
   (cascades from the top down to 1, a thread per texel, fixed directions, each texel the mean of
   `ProbeCascadeLayout::SubRays` squared rays spread over it: 2 x 2 for the cascades between 0 and the top, whose texels are as
@@ -5138,24 +5142,25 @@ probe-field levels and local lights follow.
   `viewport.capture` and the project picture (`ProjectThumbnail`, `c_MaxGIFrames`) wait for `GlobalIlluminationSettled`.
 - **The field in the forward pass** (`Include/GIField.slang`, the `gi` and `open` views and the join): the eight cascade-0
   probes around the point moved `c_GIGatherNormalBias` spacings along its geometric normal, each by its trilinear weight (from
-  its grid position), validity, whether it lies in front of the surface's plane (from where it moved) and its visibility, then
-  normalized. The visibility is continuous, so the light has no steps at cell borders and no voxel staircase: Chebyshev's
-  bound on the probe's depth moments toward the point (moved a further `c_GIGatherViewBias` spacings toward the viewer, DDGI's
-  view bias, then out of any solid it lies in: within a voxel of a perpendicular wall, floor or object it lies in that
-  surface's voxels, where the guard and the grazing distances hid it from every probe and drew a black line along every
-  concave corner; `c_GIGatherPushSteps` (2) steps down the occupancy's gradient, each of up to a voxel by how far the
-  occupancy lies into `c_GIGatherPushOccupancy` (0.1-0.3); drawn surfaces only: re-injection reads the field at voxels inside
-  walls, which moved out would take the light of the wall's far side), with the distances' spread at least
-  `c_GIGatherMinDeviation` (0.1) spacings so the bound falls continuously where every ray stored one distance, cubed, times
-  the guard where the probe's rays around the point hit something before it (open space skips it, a
-  third of the gather's cost): the transmittance through levels 0-2 along the segment from the probe, `c_GIGatherGuardSteps`
-  (16) samples at fixed fractions counting only voxels' solid cores (`c_GIGatherGuardCore`, occupancy 0.6-0.72, so a surface's
-  own soft layer never hides a probe), which a wall a voxel thick always meets (Chebyshev's bound over 64 directions lets a
-  thin wall seen at a grazing angle through; a probe that no level holds together with the point is not visible). Where the
-  live probes in front see less than `c_GIGatherMinVisible` (a quarter) of the weight all the probes in front would give, dead
-  ones included, the light fades with what they see instead of renormalizing a vanishing weight (which stepped at the cells'
-  borders); none visible: no field light, never the sky. A point no level holds, beyond a valid box a scroll left short, takes
-  today's light; within 2 m of the field's edge it fades to today's light.
+  its grid position), validity, whether it lies in front of the surface's plane (from where it moved) and whether it sees the
+  point, then normalized. Seeing is the guard: the transmittance through levels 0-2 along the segment from the probe to the
+  point (moved a further `c_GIGatherViewBias` spacings toward the viewer, DDGI's view bias, then out of any solid it lies in:
+  within a voxel of a perpendicular wall, floor or object it lies in that surface's voxels, where the grazing distances hid
+  it from every probe and drew a black line along every concave corner; `c_GIGatherPushSteps` (2) steps down the occupancy's
+  gradient, each of up to a voxel by how far the occupancy lies into `c_GIGatherPushOccupancy` (0.1-0.3); drawn surfaces only:
+  re-injection reads the field at voxels inside walls, which moved out would take the light of the wall's far side),
+  `c_GIGatherGuardSteps` (16) samples at fixed fractions counting only voxels' solid cores (`c_GIGatherGuardCore`, occupancy
+  0.6-0.72, so a surface's own soft layer never hides a probe), which a wall a voxel thick always meets; continuous, so the
+  light has no steps at cell borders and no voxel staircase; skipped where the point lies before every ray of the probe
+  around it hit anything (its **depth moments**, below: open space skips it, a third of the gather's cost); a probe that no
+  level holds together with the point is not visible. Chebyshev's bound on the depth moments (DDGI's test) weighed the
+  probes before: its 64 directions, filtered over 25 degrees, put a contact's surfaces in front of points the probes see
+  plainly, and the floor under the Cornell box's sphere and beside its tall box went black (the guard alone keeps every
+  step at probe-cell borders within 9% there). Where the live probes in front see less than `c_GIGatherMinVisible` (a
+  quarter) of the weight they would give, the light fades with what they see instead of renormalizing a vanishing weight
+  (which stepped at the cells' borders); dead probes take no part (a probe dead inside an object over a contact says nothing
+  about the floor beside it); none visible: no field light, never the sky. A point no level holds, beyond a valid box a
+  scroll left short, takes today's light; within 2 m of the field's edge it fades to today's light.
   `SceneLightingView::GlobalIllumination` (`gi`) shades white and returns the diffuse indirect light (the field inside,
   today's beyond, under the diffuse occlusion), `OpenShare` (`open`) the share of the sky a surface sees, as gray;
   `Probes` (`probes`, `GI/ProbeView.frag` in `GPU.Overlays`) draws cascade 0's probes over the image, live ones lit by
@@ -5163,12 +5168,14 @@ probe-field levels and local lights follow.
   `GISurfaceVoxels`; `ReadGlobalIlluminationValidity`, `ReadGlobalIlluminationField` and `ReadGlobalIlluminationFieldDepth`
   read the probes (blocking). `GPU.SceneRenderer.GlobalIlluminationStitching` checks the depth moments against a probe's
   known distances and the Cornell box's gi view at High: across every probe plane on its walls, ceiling and floor the light
-  steps at most 10% beyond its slope (the old on/off gather: 25% on the red wall), and the floor around the sphere's foot
-  has no point darker than half its brightest neighbour a voxel away (it was 0.31), and along the far corners (the back wall
-  with the side walls and the ceiling, the ceiling with the side walls) no point within 0.2 m of the junction is darker than
-  half of the point a voxel farther from it (0.53 at the least; without the push out of solids 0 at every junction). The
-  floor the sphere overhangs (its last 0.3 m) and around the tall box's foot have no black point beside a lit neighbour, but
-  fall to 0.02 and 0.1 of it: reported, a goal not met.
+  steps at most 10% beyond its slope (the old on/off gather: 25% on the red wall; 8.9% at most now), and the floor around
+  the sphere's foot has no point darker than half its brightest neighbour a voxel away (0.65), and along the far corners
+  (the back wall with the side walls and the ceiling, the ceiling with the side walls) no point within 0.2 m of the junction
+  is darker than half of the point a voxel farther from it (0.58 at the least; without the push out of solids 0 at every
+  junction). The floor the sphere overhangs (its last 0.3 m) and around the tall box's foot keep at least 0.06 and 0.2 of
+  their brightest neighbour (0.071 and 0.23; 0.021 and 0.10 before relocation and the guard visibility): half is a goal not
+  met. `Renderer`'s "Dead probes" checks relocation: in a 2 m block the probes 0.05 m inside a face move out, live, those
+  deeper stay dead and are the ones counted.
 
 - **Sampling** (`Include/GlobalIllumination.slang`): a point reads the finest level whose valid box holds it with
   `c_GILevelGuardVoxels` to spare, blended into the next over `c_GILevelBlendVoxels` by its distance from the camera (not
@@ -5222,9 +5229,13 @@ probe-field levels and local lights follow.
   `Renderer.VoxelClipmap`'s "The brightest albedo voxelized bounds the bounces", and `PerfGPU.Renderer`'s "Global
   illumination's bounces' cost at 3840x2160" (the gain 0 against 1 in one process).
 - **What it cannot do** (so far): the field resolves no more than its probes, 0.5 m apart at High and 1 m at Low. In the
-  Cornell box at High the visible rim of the floor the sphere overhangs and the gap between the tall box's back-left corner
-  and the red wall still fall to a tenth of their neighbours' light within a voxel (no probe sees them; the stitching case
-  reports them), and at Low whole cells of probes beside the box and the sphere lie in the coarse voxels' solids, so the floor
+  Cornell box at High the visible rim of the floor the sphere overhangs still falls to 0.07 of its neighbour's light within
+  a voxel and the gap between the tall box's back-left corner and the red wall to 0.23 (the stitching case reports them):
+  under the sphere the free space is two voxels tall, and the probes' rays in and beside it meet
+  the soft layers of the floor and the sphere, and the box's gap lies in the panel's shadow beside a lit cell, whose 17
+  times brighter probe the trilinear weights blend in linearly. Neither denser probes (a 0.25 m cascade 0, measured: no
+  better there, and steps and corners worse with 10 cm voxels) nor a per-pixel march through the voxels (measured: 0.16-0.24
+  at the rim, junction speckles, 1.6-2.2 ms more at 3840 x 2160) met the goal; at Low whole cells of probes beside the box and the sphere lie in the coarse voxels' solids, so the floor
   and walls there still step and go black, and its ceiling's junctions with the walls darken within a voxel. Low bounces once:
   with every bounce its Cornell box is about 1.8 times as bright as High's (ceiling 165-235 nits per albedo against 89-142).
   Denser probes near surfaces are the next step. Walls thinner than two voxels go two-sided
