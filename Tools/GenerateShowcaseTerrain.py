@@ -70,8 +70,8 @@ pictures  writes the command script that retakes the sample's pictures after a c
           of shot 2) and, by a scene.save at Golden (the scene's camera stands at shot 2's key), the project's thumbnail
           (.strata/Thumbnail.png), which is then copied to Picture.png. Run it on the sample in place after bake.
 setup     prints a station's edit-mode steps: the GoldenHour preset turned to its sun, the sun's intensity and shadow
-          distance, the fog, the exposure, the local lights, the embers and wicks, and its probes on (LookDev Setup
-          entries naming entities, or command steps that find them).
+          distance, the fog, the exposure, the local lights (their intensity and source radius), the embers and wicks, and
+          its probes on (LookDev Setup entries naming entities, or command steps that find them).
 checkshots reads a LookDev capture: the brightest 0.1% of shot 2's letterboard within 40 px of the computed highlight, the
           brightest column of shot 3's tank within 30 px of the computed streak, and the shell beside the streak with
           and without the yard's probe (at least 8 codes apart; at 1920 x 1080 with TAA); with --live the highlights' shimmer in the live shots (the
@@ -1533,8 +1533,9 @@ PROBES = (
     ("Hut", hut_point(HUT_PROBE_BOX[0]), HUT["yaw"], HUT_PROBE_BOX[1], 0.2, 2, False,
      (hut_point(HUT_PROBE_CAPTURE), HUT_PROBE_BAKE_EXTENTS)),
 )
-# The local lights at dusk (candela) and the glowing embers and wicks, which only burn at dusk.
-LOCAL_LIGHTS = (("Fire", 400.0), ("LanternA.Light", 40.0), ("LanternB.Light", 25.0))
+# The local lights: their candela at dusk and their source radius (m: the flames' size, which widens only their highlights;
+# the Manual's fire pit 0.2-0.3, lantern 0.03-0.06), and the glowing embers and wicks, which only burn at dusk.
+LOCAL_LIGHTS = (("Fire", 400.0, 0.25), ("LanternA.Light", 40.0, 0.04), ("LanternB.Light", 25.0, 0.04))
 GLOWS = ("FirePit.Embers", "LanternA.Wick", "LanternB.Wick")
 FOG = {"BaseHeight": -8.0, "HeightFalloff": 0.10, "StartDistance": 80.0, "MaxOpacity": 0.7, "ColorFromSky": True, "SunScattering": 0.6}
 EYE_HEIGHT = 1.6
@@ -1667,7 +1668,7 @@ def station_steps(name, script_form):
                 parameters = dict({"entityName": entity}, **parameters)
             steps.append({"Command": command, "Parameters": parameters})
 
-    names = ["Sun", "Fog", "Post Process"] + [light for light, _ in LOCAL_LIGHTS] + list(GLOWS)
+    names = ["Sun", "Fog", "Post Process"] + [light for light, *_ in LOCAL_LIGHTS] + list(GLOWS)
     names += ["Probe.%s.%s" % (s[0], part[0]) for s in STATIONS for part in PROBES]
     if script_form:
         for entity in names:
@@ -1679,8 +1680,8 @@ def station_steps(name, script_form):
     step("component.set", "Sun", {"component": "DirectionalLight", "values": {"Intensity": SUN_LUX * scale, "ShadowDistance": shadow}})
     step("component.set", "Fog", {"component": "HeightFog", "values": {"Density": fog}})
     step("component.set", "Post Process", {"component": "PostProcess", "values": {"Exposure": exposure}})
-    for light, candela in LOCAL_LIGHTS:
-        step("component.set", light, {"component": "PointLight", "values": {"Intensity": candela if local else 0.0}})
+    for light, candela, radius in LOCAL_LIGHTS:
+        step("component.set", light, {"component": "PointLight", "values": {"Intensity": candela if local else 0.0, "SourceRadius": radius}})
     for glow in GLOWS:
         step("entity.setActive", glow, {"active": local})
     for other in STATIONS:
@@ -1903,7 +1904,7 @@ def layout_script(world):
     s.add("entity.setActive", {"entities": [{"$ref": "Fade"}, {"$ref": "Caption"}], "active": False})
 
     # The director, and the flicker of the fire's and the lanterns' flames.
-    for light, _ in LOCAL_LIGHTS:
+    for light, *_ in LOCAL_LIGHTS:
         s.add("script.add", {"entity": s.find(light, "flicker_" + bind_name(light)), "class": "Flicker"})
     fields = {"Sun": s.find("Sun"), "Fog": {"$ref": "Fog"}, "PostProcess": s.find("Post Process", "PostProcess"),
               "Player": player, "Eye": eye, "FadeImage": {"$ref": "Fade"}, "Caption": {"$ref": "Caption"},

@@ -148,6 +148,12 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   view, focus, f-number, depth of field, the quality preset and anti-aliasing, seven bookmarks), H hides the UI.
 - Samples: a showcase may hold six screenshots in 8 MB (the others three in 3 MB).
 - Manual, Lighting: "Times of day with baked probes".
+- The showcase adopts this wave's reflections: its six probes are baked again without the sun's disk and highlights (the
+  golden-hour yard's capture peaked at 5.5e8, now 4.6e4), so their light no longer reaches what lies in the sun's
+  shadow (at dusk the fuel tank's half in the bus's shadow is dark now, not lit green); the fire and the lanterns have
+  the size of their flames for their highlights (Source Radius 0.25 and 0.04 m); the puddles are water (IOR 1.33).
+  `GenerateShowcaseTerrain.py pictures` retakes the screenshots, the icon and the launcher's picture after a change to
+  its look.
 
 **Global illumination (stage 1: the voxels).**
 
