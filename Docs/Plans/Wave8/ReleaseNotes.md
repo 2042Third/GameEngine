@@ -320,15 +320,23 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
 - Its light ends at the probe field's edge around the camera (High: full within 7.5 m horizontally, 5.5 m up and down;
   Low: 7 m and 2.8 m; faded to the light without it over 2 m): outdoors the edge of a bubble can show.
 - The owner's Cornell box at High, with every bounce: the probes are 0.5 m apart (1 m at Low), and the light still
-  falls faster than it should where they cannot resolve it: the floor under the sphere's overhang falls to 0.07 of its
-  neighbour's light 0.1 m away (half is the goal), the floor in the gap between the tall box and the red wall to 0.23,
-  and that gap stays very dark. At Low, cells of probes beside the box and the sphere lie
+  falls faster than it should where they cannot resolve it. Where the sphere meets the floor a row of small hard-edged
+  black notches remains (the voxels' edges): the darkest floor point under its overhang keeps 0.083 of its neighbour's
+  light 0.1 m away (0.071 before the probes' moves were made continuous; half is the goal), and the floor at the sphere's
+  left shows soft lighter streaks where a jagged lighter staircase was. The floor in the gap between the tall box and the
+  red wall falls to 0.23 (0.232), and that gap stays very dark. At Low, cells of probes beside the box and the sphere lie
   inside them, and the walls and floor there still show steps and black patches, and the ceiling darkens along its edges.
   Low bounces once: with every bounce its Cornell box would be about 1.8 times as bright as High's (its ceiling 165-235
   nits per unit of albedo against 89-142). In the sun room, the window wall keeps its dark vertical bands either side of
   the window (a glow up to 1.8 times too bright near the window's edges, falling off a metre away) and the dark band
   along its foot (the probes 0.15 m above the floor see the sunlit patch only at grazing angles, which their directions do
   not resolve).
+- Thin gaps under objects take no field light, and show black, beyond about 5.4 m from the camera at High (2.2 m up and
+  down): there probes move by voxel level 1, whose 0.2 m voxels close such gaps (the yard's covered car stands 0.15 m
+  off the ground). Nearer, they are lit.
+- Global illumination's own stage at 3840 x 2160 reads about 4.4 ms in some runs and about 6.5 ms in others of the same
+  build (the sun room, High): the difference lies in the pass that sums cascade 0's rays into the field (1.2 or 3.6 ms).
+  Seen before this batch's last fix too; not explained yet.
 - With every bounce, rooms take frames to fill after a cut, by their brightest surface: the sun room's gi view changes
   by less than 0.25% a frame from frame 11 (it is reported settled at 13), the Cornell box's from 15 (18), a closed
   white box's from 27 (39). Until then a game's cut shows the light rising.

@@ -172,8 +172,9 @@ float3 PushOutOfSolid(SamplerState repeat, float3 position)
 // light there went black. Where the live probes in front of the point see less of it than ST_GI_GATHER_MIN_VISIBLE of the weight
 // they would give it (a junction, a wall between), the light fades with what they see rather than giving the few that see it
 // full weight; dead probes take no part (a probe inside an object over a contact says nothing about the floor beside it); a
-// point no probe sees takes no field light (dark, never the sky). Every weight is continuous, so the light is: no bands at cell
-// borders, no staircase of voxels. openShare receives the cosine-weighted share of the sky it sees. viewDirection points toward
+// point no probe sees takes no field light (dark, never the sky). Every weight is continuous, so the light has no bands at cell
+// borders; where the probes cannot resolve a contact the voxels' edges still show (under the Cornell box's sphere a row of small
+// hard-edged dark notches, with lighter streaks beside them). openShare receives the cosine-weighted share of the sky it sees. viewDirection points toward
 // the viewer (the normal where there is none). pushOut moves the visibility point out of solids: drawn surfaces only.
 // Re-injection reads the field at voxels, some of them inside walls (the floor's face runs on under a wall), and moved out of the
 // solid such a point would take the light on the wall's far side into a sealed room.

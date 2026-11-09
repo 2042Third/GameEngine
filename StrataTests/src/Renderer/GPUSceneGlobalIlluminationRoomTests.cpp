@@ -2595,8 +2595,9 @@ namespace
 		return values[values.size() / 2];
 	}
 
-	// A cascade-0 probe's depth moments toward a direction as Include/GIField.slang's ReadProbeDepth reads them (bilinear between the
-	// four texels around the direction's octahedral point, as their mixture): the mean distance to the first hit and its variance.
+	// A cascade-0 probe's depth moments toward a direction, bilinear between the four texels of its tile around the direction's
+	// octahedral point (the texels Include/GIField.slang's LiesBeforeProbeHits reads), as their mixture: the mean distance to the
+	// first hit and its variance.
 	glm::vec2 ReadProbeDepth(const SceneRenderer& renderer, const std::vector<uint8_t>& depth, const glm::ivec3& probe, const glm::vec3& direction)
 	{
 		const glm::ivec3 grid(renderer.GetGlobalIlluminationLayout()->Cascades.front().Grid);
@@ -2920,7 +2921,8 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
 
 	TEST_CASE("A probe's depth moments hold its distances to the surfaces around it")
 	{
-		// Cascade 0's probes keep each direction's distance to the first hit (FieldReduce.comp), what the gather's visibility reads.
+		// Cascade 0's probes keep each direction's distance to the first hit (FieldReduce.comp); the gather reads them only to
+		// skip its guard where a point lies before every ray around it hit anything (LiesBeforeProbeHits).
 		// In the Cornell box, a probe a known height over the open floor finds the floor straight down within a voxel and a half
 		// (the voxels' soft surface and the filter over neighbouring rays), its spread within two voxels, and nothing up to the
 		// march's end straight up (the ceiling lies farther): the distances are the march's, in meters.

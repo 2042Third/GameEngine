@@ -5165,9 +5165,10 @@ probe-field levels and local lights follow.
   re-injection reads the field at voxels inside walls, which moved out would take the light of the wall's far side),
   `c_GIGatherGuardSteps` (16) samples at fixed fractions counting only voxels' solid cores (`c_GIGatherGuardCore`, occupancy
   0.6-0.72, so a surface's own soft layer never hides a probe), which a wall a voxel thick always meets; continuous, so the
-  light has no steps at cell borders and no voxel staircase; skipped where the point lies before every ray of the probe
-  around it hit anything (its **depth moments**, below: open space skips it, a third of the gather's cost); a probe that no
-  level holds together with the point is not visible. Chebyshev's bound on the depth moments (DDGI's test) weighed the
+  light has no steps at cell borders (where no probe resolves a contact the voxels' edges still show: "What it cannot do",
+  below); skipped where the point lies before every ray of the probe around it hit anything (its **depth moments**,
+  below: open space skips it, a third of the gather's cost); a probe that no level holds together with the point is not
+  visible. Chebyshev's bound on the depth moments (DDGI's test) weighed the
   probes before: its 64 directions, filtered over 25 degrees, put a contact's surfaces in front of points the probes see
   plainly, and the floor under the Cornell box's sphere and beside its tall box went black (the guard alone keeps every
   step at probe-cell borders within 9% there). Where the live probes in front see less than `c_GIGatherMinVisible` (a
@@ -5246,8 +5247,10 @@ probe-field levels and local lights follow.
   `Renderer.VoxelClipmap`'s "The brightest albedo voxelized bounds the bounces", and `PerfGPU.Renderer`'s "Global
   illumination's bounces' cost at 3840x2160" (the gain 0 against 1 in one process).
 - **What it cannot do** (so far): the field resolves no more than its probes, 0.5 m apart at High and 1 m at Low. In the
-  Cornell box at High the visible rim of the floor the sphere overhangs still falls to 0.07 of its neighbour's light within
-  a voxel and the gap between the tall box's back-left corner and the red wall to 0.23 (the stitching case reports them):
+  Cornell box at High the visible rim of the floor the sphere overhangs still falls to 0.083 of its neighbour's light within
+  a voxel, where a row of small hard-edged black notches (the voxels' edges) remains under the sphere with soft lighter
+  streaks at its left, and the gap between the tall box's back-left corner and the red wall to 0.23 (the stitching case
+  reports them):
   under the sphere the free space is two voxels tall, and the probes' rays in and beside it meet
   the soft layers of the floor and the sphere, and the box's gap lies in the panel's shadow beside a lit cell, whose 17
   times brighter probe the trilinear weights blend in linearly. Neither denser probes (a 0.25 m cascade 0, measured: no
