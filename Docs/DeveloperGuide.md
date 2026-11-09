@@ -6518,4 +6518,7 @@ the dawn cascades at 550 m and the hut a third of the yard's light (the yard's E
 measures it again); `StrataRuntime.ShowcaseWindowed` checks the exported game's shot 2 in a window. The LookDev project
 `Showcase` holds the `showcase.*` shots ([Look-dev harness](#look-dev-harness)), and `PerfGPU.Samples` measures the tour at
 High and Ultra ([Perf tests](#perf-tests)). A change to the showcase's look retakes its screenshots, `Picture.png`, its
-icon and its look-dev shots.
+icon and its look-dev shots: `GenerateShowcaseTerrain.py pictures` writes the command script that captures the six shots
+and the icon, each at its station from its look-dev shot's camera, saves the scene at Golden and waits for the
+project's thumbnail (the scene's camera stands at shot 2's key); run it on the sample in place after `bake`, then copy
+`.strata/Thumbnail.png` to `Picture.png`.

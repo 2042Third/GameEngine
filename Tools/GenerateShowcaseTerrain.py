@@ -12,6 +12,7 @@ The outputs are committed and a CTest (StrataTools.ShowcaseTerrain) keeps them e
     python3 -I Tools/GenerateShowcaseTerrain.py controls --output <Controls.json>
     python3 -I Tools/GenerateShowcaseTerrain.py dress --output <Dress.json>
     python3 -I Tools/GenerateShowcaseTerrain.py bake --output <Bake.json>
+    python3 -I Tools/GenerateShowcaseTerrain.py pictures --output <Pictures.json>
     python3 -I Tools/GenerateShowcaseTerrain.py setup --station Dawn|Golden|Dusk --format lookdev|script [--output <file>]
     python3 -I Tools/GenerateShowcaseTerrain.py checkshots --capture <LookDev output directory> [--live]
 
@@ -64,6 +65,10 @@ dress     writes the command script of the dressing, run once on the laid-out sc
           the rim framing shot 1.
 bake     writes the command script that bakes the six probes: per station (Dawn, Dusk, Golden last, the saved one) its
           edit-mode steps with only its two probes on, then lighting.bakeProbes of them twice (the second adds a bounce).
+pictures  writes the command script that retakes the sample's pictures after a change to its look: Screenshots/Shot1.png
+          to Shot6.png (960 x 540 at High, each shot's key camera at its station, no overlays), Assets/Icon.png (256 x 256
+          of shot 2) and, by a scene.save at Golden (the scene's camera stands at shot 2's key), the project's thumbnail
+          (.strata/Thumbnail.png), which is then copied to Picture.png. Run it on the sample in place after bake.
 setup     prints a station's edit-mode steps: the GoldenHour preset turned to its sun, the sun's intensity and shadow
           distance, the fog, the exposure, the local lights, the embers and wicks, and its probes on (LookDev Setup
           entries naming entities, or command steps that find them).
@@ -2057,6 +2062,80 @@ def bake_script():
     return steps
 
 
+PICTURE_SIZE = (960, 540)  # Screenshots/Shot<N>.png
+ICON_SIZE = 256            # Assets/Icon.png, of shot 2
+# The project's thumbnail renders over the frames after a save (at most about 200: ProjectThumbnail's c_MaxFrames,
+# c_MaxTemporalFrames, c_MaxExposureFrames, c_MaxGIFrames and its readback), then is written in the background; a script
+# that quits right after its scene.save leaves none.
+THUMBNAIL_FRAMES = 600
+
+
+def pictures_script(world):
+    """The pictures' retake (D14's pictures): each shot's key camera at its station, captured at High without overlays into
+    Screenshots/Shot<N>.png, shot 2 also into Assets/Icon.png (256 x 256; the asset keeps its handle), then Golden, the
+    saved station, and a scene.save, after which the editor renders the project's thumbnail (.strata/Thumbnail.png,
+    480 x 270, from the scene's camera, which the layout stands at shot 2's key) that Picture.png copies. Nothing pending
+    may show in a picture."""
+    complete = {"/pendingAssets": {"equals": 0}, "/reflectionProbesPending": {"equals": 0}}
+    steps = [{"command": "scene.open", "parameters": {"scene": SCENE}}]
+    for shot in shots(world):
+        camera = {"position": rounded(shot["key"], 3), "target": rounded(shot["look"], 3), "fov": shot["fov"]}
+        steps += station_steps(shot["station"], True)
+        pictures = [("Screenshots/Shot%d.png" % shot["shot"], PICTURE_SIZE)]
+        if shot["shot"] == 2:
+            pictures.append(("Assets/Icon.png", (ICON_SIZE, ICON_SIZE)))
+        for picture, (width, height) in pictures:
+            parameters = dict(camera, width=width, height=height, quality="high", overlays=False, path=picture, overwrite=True)
+            steps.append({"command": "viewport.capture", "parameters": parameters, "expect": complete})
+    steps += station_steps("Golden", True)
+    steps.append({"command": "scene.save"})
+    steps.append({"command": "editor.wait", "parameters": {"frames": THUMBNAIL_FRAMES}})
+    return steps
+
+
+def check_pictures(world, shots_file):
+    """The pictures script against the shots: each screenshot (and the icon, of shot 2) is taken after its station's steps
+    from the camera of its LookDev shot (shots_file's showcase.shot<N>), and the script ends at Golden with a scene.save
+    and the wait for the thumbnail it starts. Returns the failures."""
+    failures = []
+    with open(shots_file, encoding="utf-8") as file:
+        lookdev = {shot["Name"]: shot for shot in json.load(file)["Shots"]}
+    stations = {row[4]: row[0] for row in STATIONS}
+    expected = {"Screenshots/Shot%d.png" % shot["shot"]: shot for shot in shots(world)}
+    expected["Assets/Icon.png"] = expected["Screenshots/Shot2.png"]
+    station = None
+    taken = []
+    steps = pictures_script(world)
+    for step in steps:
+        parameters = step.get("parameters", {})
+        if step["command"] == "lighting.applySkyPreset":
+            station = stations.get(parameters.get("sunAzimuth"))
+        if step["command"] != "viewport.capture":
+            continue
+        path = parameters.get("path")
+        taken.append(path)
+        shot = expected.get(path)
+        if shot is None:
+            failures.append("the pictures script captures %s, which is no picture of the sample" % path)
+            continue
+        if station != shot["station"]:
+            failures.append("%s is taken at %s, not at shot %d's %s" % (path, station, shot["shot"], shot["station"]))
+        reference = lookdev.get("showcase.shot%d" % shot["shot"])
+        if reference is None:
+            failures.append("%s has no LookDev shot showcase.shot%d" % (shots_file, shot["shot"]))
+            continue
+        camera = list(parameters["position"]) + list(parameters["target"]) + [parameters["fov"]]
+        wanted = list(reference["Position"]) + list(reference["Target"]) + [reference["Fov"]]
+        if any(abs(a - b) > 1e-3 for a, b in zip(camera, wanted)):
+            failures.append("%s looks from %s, LookDev's showcase.shot%d from %s" % (path, camera, shot["shot"], wanted))
+    if sorted(taken) != sorted(expected):
+        failures.append("the pictures script captures %s, not %s" % (sorted(taken), sorted(expected)))
+    ending = [step["command"] for step in steps[-2:]]
+    if station != "Golden" or ending != ["scene.save", "editor.wait"]:
+        failures.append("the pictures script does not end at Golden with a scene.save and the wait for its thumbnail")
+    return failures
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Checking captured shots (LookDev's output)
 
@@ -2306,6 +2385,10 @@ def command_selftest(arguments):
     station_failures = check_station_rows(arguments.stations)
     print("Stations.h: %s" % ("; ".join(station_failures) if station_failures else "its c_Stations rows equal the generator's"))
     failures += station_failures
+    shots_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "LookDev", "Shots.json")
+    picture_failures = check_pictures(world, shots_file)
+    print("pictures: %s" % ("; ".join(picture_failures) if picture_failures else "each taken at its station from its LookDev shot's camera"))
+    failures += picture_failures
     print("FAIL: %s" % "; ".join(failures) if failures else "PASS")
     return 1 if failures else 0
 
@@ -2417,6 +2500,11 @@ def command_bake(arguments):
     return 0
 
 
+def command_pictures(arguments):
+    write_steps(pictures_script(World()), arguments.output)
+    return 0
+
+
 def command_setup(arguments):
     steps = station_steps(arguments.station, arguments.format == "script")
     if arguments.output:
@@ -2455,6 +2543,8 @@ def main():
     dress.add_argument("--output", required=True, help="The command script to write (.json)")
     bake = commands.add_parser("bake", help="Write the command script that bakes the six probes")
     bake.add_argument("--output", required=True, help="The command script to write (.json)")
+    pictures = commands.add_parser("pictures", help="Write the command script that retakes the screenshots, the icon and the thumbnail")
+    pictures.add_argument("--output", required=True, help="The command script to write (.json)")
     setup = commands.add_parser("setup", help="Print a station's edit-mode steps")
     setup.add_argument("--station", required=True, choices=[row[0] for row in STATIONS])
     setup.add_argument("--format", required=True, choices=("lookdev", "script"), help="LookDev Setup entries or command steps")
@@ -2466,7 +2556,7 @@ def main():
     try:
         return {"terrain": command_terrain, "check": command_check, "stations": command_stations,
                 "selftest": command_selftest, "layout": command_layout, "controls": command_controls, "dress": command_dress,
-                "bake": command_bake, "setup": command_setup,
+                "bake": command_bake, "pictures": command_pictures, "setup": command_setup,
                 "checkshots": command_checkshots}[arguments.command](arguments)
     except CheckFailed as error:
         print("FAIL: %s" % error)
