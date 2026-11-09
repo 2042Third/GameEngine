@@ -42,11 +42,11 @@
 #define ST_CULL_SHADOW_BUCKETS         64u
 #define ST_CULL_SHADOW_ALPHA_MASK_BUCKET 16u // MakeShadowBucket's alpha-masked bit
 #define ST_CULL_SHADOW_SECOND_PHASE_BUCKET 32u // MakeShadowBucket's second-phase bit
-#define ST_CULL_FIRST_LOCAL_BUCKET     288u // c_CullFirstLocalShadowBucket
+#define ST_CULL_FIRST_LOCAL_BUCKET     352u // c_CullFirstLocalShadowBucket
 #define ST_CULL_LOCAL_BUCKETS          32u  // c_CullLocalShadowBucketsPerView
 #define ST_CULL_MAX_LOCAL_VIEWS        12u  // c_CullMaxLocalShadowViews
-#define ST_CULL_BUCKETS                672u // c_CullBuckets: the bucket table's bucket -> dense index part
-#define ST_CULL_MAX_CASCADES           4u
+#define ST_CULL_BUCKETS                736u // c_CullBuckets: the bucket table's bucket -> dense index part
+#define ST_CULL_MAX_CASCADES           5u   // RenderData::c_CullMaxCascades
 #define ST_VISIBILITY_CASCADE_SHIFT    2u   // RenderData::c_VisibilityCascadeShift
 #define ST_CULL_NONE                   0xFFFFFFFFu
 
@@ -101,8 +101,8 @@ struct CullConstants
 	float4x4 LightView;
 	float4x4 ViewProjection;     // The view's (camera-relative), for the occlusion test's screen rectangles
 	float4 OcclusionParameters; // xy: depth buffer size in pixels, z: depth pyramid levels, w: 1 when occlusion culled
-	float4 CascadeBoxes[4];    // Light view space: min.xy, max.xy
-	float4 CascadeParameters[4]; // x: far side z, y: smallest light-space extent drawn
+	float4 CascadeBoxes[5];    // Light view space: min.xy, max.xy (ST_CULL_MAX_CASCADES)
+	float4 CascadeParameters[5]; // x: far side z, y: smallest light-space extent drawn
 	uint ProxyCount;
 	uint CascadeCount;
 	uint LODCapacity;

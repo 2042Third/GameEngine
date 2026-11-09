@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 using namespace Strata;
@@ -121,25 +122,98 @@ TEST_SUITE("Renderer.ShadowCascades")
 		}
 	}
 
+	TEST_CASE("Five cascades put one before the four, within arm's reach, and keep the four's texels")
+	{
+		for (const float shadowDistance : { 80.0f, 200.0f })
+		{
+			for (const float fov : { 30.0f, 60.0f, 70.0f, 100.0f })
+			{
+				CAPTURE(shadowDistance);
+				CAPTURE(fov);
+				ShadowCascadeView four = MakeView(glm::vec3(0.2f, -0.3f, -1.0f), shadowDistance, 8192);
+				four.TanHalfFOV = std::tan(glm::radians(0.5f * fov));
+				ShadowCascadeView five = four;
+				five.CascadeCount = 5;
+				const ShadowCascadeLayout fourLayout = ShadowCascades::GetLayout(four);
+				const ShadowCascadeLayout fiveLayout = ShadowCascades::GetLayout(five);
+				REQUIRE(fiveLayout.CascadeCount == 5);
+				// The near cascade ends at c_SplitStart, nearer where its sphere would exceed c_MaxNearRadius.
+				const ShadowCascadeSlice& nearSlice = fiveLayout.Cascades[0];
+				CHECK(nearSlice.SliceNear == 0.1f);
+				CHECK(nearSlice.SliceFar == std::min(ShadowCascades::c_SplitStart, ShadowCascades::GetRadiusLimit(five, ShadowCascades::c_MaxNearRadius)));
+				CHECK(nearSlice.Radius <= ShadowCascades::c_MaxNearRadius);
+				// The other four end where the four of a four-cascade layout do, and the first of them (where casters 4-6 m away
+				// such as grass blades fall) keeps their first one's sphere and texels at the usual lenses: its sphere sits at its
+				// far end.
+				for (uint32_t cascade = 0; cascade < 4; cascade++)
+					CHECK(fiveLayout.Cascades[cascade + 1].SliceFar == fourLayout.Cascades[cascade].SliceFar);
+				// The third starts at the second's band, the last tenth of [the near split, its split] rather than of [0, its split]:
+				// 5.34 m instead of 5.18 m at 80 m. The ones after it are the four's.
+				for (uint32_t cascade = 3; cascade < 5; cascade++)
+					CHECK(fiveLayout.Cascades[cascade] == fourLayout.Cascades[cascade - 1]);
+				CHECK(fiveLayout.Cascades[1].SliceNear == doctest::Approx(0.9f * nearSlice.SliceFar));
+				CHECK(fiveLayout.Cascades[1].Radius <= fourLayout.Cascades[0].Radius);
+				CHECK(fiveLayout.Cascades[2].Radius <= fourLayout.Cascades[1].Radius);
+				if (fov >= 60.0f)
+				{
+					for (uint32_t cascade = 1; cascade < 3; cascade++)
+					{
+						CHECK(fiveLayout.Cascades[cascade].WorldPerTexel == fourLayout.Cascades[cascade - 1].WorldPerTexel);
+						CHECK(fiveLayout.Cascades[cascade].SphereCenter == fourLayout.Cascades[cascade - 1].SphereCenter);
+					}
+				}
+			}
+		}
+
+		// At 70 degrees and 16:9 (the showcase's shot 5): the near cascade ends at 1.4 m, a 2 m sphere (0.49 mm texels at
+		// 8192), where the next one, to 7.5 m, has 2.65 mm.
+		ShadowCascadeView wide = MakeView(glm::vec3(0.0f, -0.1f, -1.0f), 200.0f, 8192);
+		wide.TanHalfFOV = std::tan(glm::radians(35.0f));
+		wide.CascadeCount = 5;
+		const ShadowCascadeLayout wideLayout = ShadowCascades::GetLayout(wide);
+		CHECK(wideLayout.Cascades[0].SliceFar == doctest::Approx(1.400f).epsilon(0.001));
+		CHECK(wideLayout.Cascades[0].Radius == 2.0f);
+		CHECK(wideLayout.Cascades[0].WorldPerTexel == doctest::Approx(0.000492).epsilon(0.001));
+		CHECK(wideLayout.Cascades[1].SliceFar == ShadowCascades::c_MaxFirstSplit);
+		CHECK(wideLayout.Cascades[1].WorldPerTexel == doctest::Approx(0.002646).epsilon(0.001));
+
+		// A wide orthographic view's thinnest slice exceeds the near radius: the cap cannot hold, and the split is c_SplitStart.
+		ShadowCascadeView orthographic = MakeView(glm::vec3(0.0f, -1.0f, 0.001f), 80.0f, 8192);
+		orthographic.Orthographic = true;
+		orthographic.OrthographicHeight = 30.0f;
+		orthographic.CascadeCount = 5;
+		CHECK(ShadowCascades::GetRadiusLimit(orthographic, ShadowCascades::c_MaxNearRadius) == std::numeric_limits<float>::infinity());
+		const ShadowCascadeLayout orthographicLayout = ShadowCascades::GetLayout(orthographic);
+		CHECK(orthographicLayout.Cascades[0].SliceFar == ShadowCascades::c_SplitStart);
+		CHECK(orthographicLayout.Cascades[1].SliceFar == doctest::Approx(ShadowCascades::GetSplit(ShadowCascades::c_SplitStart, 80.0f, 0.9f, 0, 4)));
+	}
+
 	TEST_CASE("A turning camera keeps every cascade's slice, sphere and texels")
 	{
-		const ShadowCascadeLayout reference = ShadowCascades::GetLayout(MakeView(glm::vec3(0.0f, 0.0f, -1.0f)));
-		for (const glm::vec3& forward : { glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.3f, -0.8f, 0.2f), glm::vec3(-0.7f, 0.4f, 0.6f), glm::vec3(0.0f, -1.0f, 0.001f) })
+		for (const uint32_t count : { 4u, 5u })
 		{
-			CAPTURE(forward);
-			const ShadowCascadeView view = MakeView(forward);
-			const ShadowCascadeLayout layout = ShadowCascades::GetLayout(view);
-			REQUIRE(layout.CascadeCount == reference.CascadeCount);
-			for (uint32_t cascade = 0; cascade < layout.CascadeCount; cascade++)
+			CAPTURE(count);
+			ShadowCascadeView front = MakeView(glm::vec3(0.0f, 0.0f, -1.0f));
+			front.CascadeCount = count;
+			const ShadowCascadeLayout reference = ShadowCascades::GetLayout(front);
+			for (const glm::vec3& forward : { glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.3f, -0.8f, 0.2f), glm::vec3(-0.7f, 0.4f, 0.6f), glm::vec3(0.0f, -1.0f, 0.001f) })
 			{
-				const ShadowCascadeSlice& slice = layout.Cascades[cascade];
-				CHECK(slice.SliceNear == reference.Cascades[cascade].SliceNear);
-				CHECK(slice.SliceFar == reference.Cascades[cascade].SliceFar);
-				CHECK(slice.Radius == reference.Cascades[cascade].Radius);
-				CHECK(slice.WorldPerTexel == reference.Cascades[cascade].WorldPerTexel);
-				// The sphere turns with the camera: along the view, as far as before.
-				CHECK(glm::length(slice.SphereCenter) == doctest::Approx(glm::length(reference.Cascades[cascade].SphereCenter)).epsilon(1e-5));
-				CHECK(glm::dot(glm::normalize(slice.SphereCenter), view.CameraRotation * glm::vec3(0.0f, 0.0f, -1.0f)) == doctest::Approx(1.0f).epsilon(1e-5));
+				CAPTURE(forward);
+				ShadowCascadeView view = MakeView(forward);
+				view.CascadeCount = count;
+				const ShadowCascadeLayout layout = ShadowCascades::GetLayout(view);
+				REQUIRE(layout.CascadeCount == reference.CascadeCount);
+				for (uint32_t cascade = 0; cascade < layout.CascadeCount; cascade++)
+				{
+					const ShadowCascadeSlice& slice = layout.Cascades[cascade];
+					CHECK(slice.SliceNear == reference.Cascades[cascade].SliceNear);
+					CHECK(slice.SliceFar == reference.Cascades[cascade].SliceFar);
+					CHECK(slice.Radius == reference.Cascades[cascade].Radius);
+					CHECK(slice.WorldPerTexel == reference.Cascades[cascade].WorldPerTexel);
+					// The sphere turns with the camera: along the view, as far as before.
+					CHECK(glm::length(slice.SphereCenter) == doctest::Approx(glm::length(reference.Cascades[cascade].SphereCenter)).epsilon(1e-5));
+					CHECK(glm::dot(glm::normalize(slice.SphereCenter), view.CameraRotation * glm::vec3(0.0f, 0.0f, -1.0f)) == doctest::Approx(1.0f).epsilon(1e-5));
+				}
 			}
 		}
 	}
@@ -182,7 +256,8 @@ TEST_SUITE("Renderer.ShadowCascades")
 		for (const uint32_t mapSize : { 1024u, 4096u, 8192u })
 		{
 			CAPTURE(mapSize);
-			const ShadowCascadeView view = MakeView(glm::vec3(0.2f, -0.3f, -1.0f), 80.0f, mapSize);
+			ShadowCascadeView view = MakeView(glm::vec3(0.2f, -0.3f, -1.0f), 80.0f, mapSize);
+			view.CascadeCount = mapSize >= 4096 ? 5u : 4u; // High and Ultra lay out five
 			const ShadowCascadeLayout layout = ShadowCascades::GetLayout(view);
 			for (uint32_t cascade = 0; cascade < layout.CascadeCount; cascade++)
 			{

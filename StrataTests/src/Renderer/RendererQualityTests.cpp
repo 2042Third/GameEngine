@@ -30,7 +30,7 @@ namespace
 	// Medium, High, Ultra): the test's own copy of RendererQuality.cpp's rows, so a knob GetPreset or the section's
 	// conversions leave out fails in every column that differs from Medium's.
 	constexpr std::array<ShadowMapResolution, 4> c_ShadowResolution = { ShadowMapResolution::Size1024, ShadowMapResolution::Size2048, ShadowMapResolution::AutoFine, ShadowMapResolution::Size8192 };
-	constexpr std::array<uint32_t, 4> c_ShadowCascades = { 3, 4, 4, 4 };
+	constexpr std::array<uint32_t, 4> c_ShadowCascades = { 3, 4, 5, 5 };
 	constexpr std::array<uint32_t, 4> c_LocalShadowAtlasSize = { 2048, 4096, 4096, 8192 };
 	constexpr std::array<uint32_t, 4> c_LocalShadowMaxTile = { 512, 1024, 1024, 2048 };
 	constexpr std::array<uint32_t, 4> c_MaxShadowedLocalLights = { 4, 16, 16, 16 };
@@ -233,9 +233,9 @@ TEST_SUITE("Renderer.Quality")
 
 	TEST_CASE("High is Medium below 1440 rows but for the rows that differ at every size")
 	{
-		// High's sun shadow map size and filter taps, ambient occlusion (3 x 8 samples), prefiltered sky (512 per face),
-		// screen-space reflections (Spatial) and motion blur samples differ from Medium's (Strata 0.6.0's costs) at every size;
-		// the other knobs equal Medium's below 1440 rows.
+		// High's sun shadow map size, cascades and filter taps, ambient occlusion (3 x 8 samples), prefiltered sky (512 per
+		// face), screen-space reflections (Spatial) and motion blur samples differ from Medium's (Strata 0.6.0's costs) at every
+		// size; the other knobs equal Medium's below 1440 rows.
 		const RendererQualitySettings high = RendererQuality::GetPreset(RendererQualityPreset::High);
 		const RendererQualitySettings medium = RendererQuality::GetPreset(RendererQualityPreset::Medium);
 		for (const uint32_t rows : { 720u, 1080u, 1439u })
@@ -246,6 +246,10 @@ TEST_SUITE("Renderer.Quality")
 			CHECK(RendererQuality::ResolveShadowMapSize(medium.ShadowResolution, rows) == 2048);
 			RendererQualitySettings resolved = high;
 			resolved.ShadowResolution = medium.ShadowResolution;
+			// And a fifth cascade near the camera (Renderer/ShadowCascades.h).
+			CHECK(resolved.ShadowCascades == 5);
+			CHECK(medium.ShadowCascades == 4);
+			resolved.ShadowCascades = medium.ShadowCascades;
 			// High's wide penumbrae take more taps at every size (the rows streams add that differ below 1440 rows).
 			CHECK(resolved.ShadowFilterQuality == 24);
 			resolved.ShadowFilterQuality = medium.ShadowFilterQuality;
@@ -299,7 +303,7 @@ TEST_SUITE("Renderer.Quality")
 			CHECK_FALSE(error.empty());
 		};
 		refused({ { "Preset", "Extreme" } });
-		refused({ { "ShadowCascades", 5 } });
+		refused({ { "ShadowCascades", RenderData::c_MaxCascades + 1 } });
 		refused({ { "ShadowCascades", 0 } });
 		refused({ { "ShadowResolution", "3000" } });
 		refused({ { "LocalShadowMaxTile", "4096" } });
@@ -743,11 +747,11 @@ TEST_SUITE("Renderer.Quality")
 		const RendererQualitySettings medium = RendererQuality::GetPreset(RendererQualityPreset::Medium);
 		const RendererQualitySettings high = RendererQuality::GetPreset(RendererQualityPreset::High);
 		const RendererQualitySettings ultra = RendererQuality::GetPreset(RendererQualityPreset::Ultra);
-		CHECK(MemoryMiB(high, { 3840, 2160 }, "ShadowResolution") == 1024);
+		CHECK(MemoryMiB(high, { 3840, 2160 }, "ShadowResolution") == 1280);
 		CHECK(MemoryMiB(high, { 3840, 2160 }, "LocalShadowAtlasSize") == 64);
-		CHECK(MemoryMiB(high, { 1920, 1080 }, "ShadowResolution") == 256);
-		CHECK(MemoryMiB(ultra, { 3840, 2160 }, "ShadowResolution") == 1024);
-		CHECK(MemoryMiB(ultra, { 1920, 1080 }, "ShadowResolution") == 1024);
+		CHECK(MemoryMiB(high, { 1920, 1080 }, "ShadowResolution") == 320);
+		CHECK(MemoryMiB(ultra, { 3840, 2160 }, "ShadowResolution") == 1280);
+		CHECK(MemoryMiB(ultra, { 1920, 1080 }, "ShadowResolution") == 1280);
 		CHECK(MemoryMiB(ultra, { 3840, 2160 }, "LocalShadowAtlasSize") == 256);
 		CHECK(MemoryMiB(medium, { 1920, 1080 }, "ShadowResolution") == 64);
 		CHECK(MemoryMiB(medium, { 1920, 1080 }, "LocalShadowAtlasSize") == 64);

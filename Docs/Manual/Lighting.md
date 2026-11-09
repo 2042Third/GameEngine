@@ -124,7 +124,8 @@ the ground while the camera moves past them; nothing in the scene, such as a thr
 Distribution** (0 to 1, 0.9 by default) decides how the cascades share the distances from 1.5 m to the Shadow Distance:
 0 evenly, 1 each cascade the same ratio farther than the previous one; higher puts more of the detail near the camera. At
 the default and a Shadow Distance of 80 m the four cascades end at about 5.8, 14, 33 and 80 m; the first one ends within
-7.5 m at any Shadow Distance.
+7.5 m at any Shadow Distance. The High and Ultra presets add a fifth cascade before them, for what lies within about 1.5 m
+of the camera (1.4 m with a 70 degree lens), whose shadows are about four times sharper.
 
 **Angular Diameter** is the light's apparent size in degrees: 0.53 is the sun's (the default; scenes saved with another
 value keep it). It sizes the sun's highlight too (see Lights and their units). Shadows are sharp where an object touches the ground and soften with the distance from their caster as a

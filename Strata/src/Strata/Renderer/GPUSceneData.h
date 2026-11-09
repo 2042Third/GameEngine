@@ -122,7 +122,7 @@ namespace Strata::RenderData
 	constexpr uint32_t c_CullGeometrySkinned = 2;      // Skinned arena, posed: the skinned pipelines
 	constexpr uint32_t c_CullViewBuckets = 32;
 	constexpr uint32_t c_CullShadowBucketsPerCascade = 64;
-	constexpr uint32_t c_CullMaxCascades = 4;
+	constexpr uint32_t c_CullMaxCascades = 5; // RenderData::c_MaxCascades
 	constexpr uint32_t c_CullLocalShadowBucketsPerView = 32;
 	constexpr uint32_t c_CullMaxLocalShadowViews = 12; // A batch of views: frames that draw more cull them a batch at a time
 	constexpr uint32_t c_CullFirstLocalShadowBucket = c_CullViewBuckets + c_CullMaxCascades * c_CullShadowBucketsPerCascade;
@@ -219,7 +219,7 @@ namespace Strata::RenderData
 		uint32_t Reserved1 = 0;
 		uint32_t Reserved2 = 0;
 	};
-	static_assert(sizeof(CullConstants) == 6 * 16 + 3 * 16 + 64 + 64 + 16 + 8 * 16 + 64 + 2 * 16);
+	static_assert(sizeof(CullConstants) == 6 * 16 + 3 * 16 + 64 + 64 + 16 + 2 * c_CullMaxCascades * 16 + 64 + 2 * 16);
 
 	// What a frame's culling counted (read back frames later: SceneRendererGPUStats).
 	struct CullCounters

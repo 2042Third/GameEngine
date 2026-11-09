@@ -34,9 +34,10 @@ namespace Strata
 		template<typename T>
 		using PresetRow = std::array<T, c_RendererQualityPresetCount>; // Low, Medium (0.6.0), High, Ultra
 
-		// High and Ultra buy back with texels the detail the stable cascades' spheres give up against squares fitted to the receivers.
+		// High and Ultra buy back with texels, and a fifth cascade near the camera, the detail the stable cascades' spheres give up
+		// against squares fitted to the receivers.
 		constexpr PresetRow<ShadowMapResolution> c_ShadowResolutionRow = { ShadowMapResolution::Size1024, ShadowMapResolution::Size2048, ShadowMapResolution::AutoFine, ShadowMapResolution::Size8192 };
-		constexpr PresetRow<uint32_t> c_ShadowCascadesRow = { 3, 4, 4, 4 };
+		constexpr PresetRow<uint32_t> c_ShadowCascadesRow = { 3, 4, 5, 5 };
 		constexpr PresetRow<uint32_t> c_LocalShadowAtlasSizeRow = { 2048, 4096, 4096, 8192 };
 		constexpr PresetRow<uint32_t> c_LocalShadowMaxTileRow = { 512, 1024, 1024, 2048 };
 		constexpr PresetRow<uint32_t> c_MaxShadowedLocalLightsRow = { 4, 16, 16, 16 };
@@ -735,7 +736,8 @@ namespace Strata
 				"cascade's far end); AutoFine: 4096 and 8192. Memory per view: cascades x size x size x 4 bytes (4 x 4096: 256 MiB).",
 				std::move(resolutions), ShadowResolutionToString(high.ShadowResolution)));
 			section.Fields.push_back(NumberField("ShadowCascades", "Shadow cascades", "Sun shadow cascades: fewer cost less GPU time and memory but "
-				"spread the same texels over the shadow distance.", SettingsFieldType::Int, 1, RenderData::c_MaxCascades, high.ShadowCascades));
+				"spread the same texels over the shadow distance; a fifth one sharpens the shadows within about 1.5 m of the camera.",
+				SettingsFieldType::Int, 1, RenderData::c_MaxCascades, high.ShadowCascades));
 			section.Fields.push_back(EnumField("LocalShadowAtlasSize", "Point and spot shadow atlas", "Texels each way of the shadow atlas point and "
 				"spot lights share: sharper shadows of those lights for more GPU memory (4096: 64 MiB per view).", SizeOptions(c_AtlasSizeOptions),
 				std::to_string(high.LocalShadowAtlasSize)));

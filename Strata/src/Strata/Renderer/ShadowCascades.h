@@ -69,9 +69,19 @@ namespace Strata
 		// clip): at most half the shadow distance. 1.5 m ends the first cascade where 0.7.0's fit to a person's view did (5.8 m
 		// at a shadow distance of 80 m), so thin casters a few meters away keep its finest texels.
 		constexpr float c_SplitStart = 1.5f;
-		// The first cascade ends at most this far: a long shadow distance's uniform share would otherwise push it out (9.7 m at
+		// The cascades the logarithmic share splits; a layout of more (five: High and Ultra) puts the others before them, near the
+		// camera (c_MaxNearRadius).
+		constexpr uint32_t c_SharedCascades = 4;
+		// The share's first cascade ends at most this far: a long shadow distance's share would otherwise push it out (9.7 m at
 		// 200 m) and coarsen the shadows nearest the camera, where curved surfaces at a grazing sun show the texels as stripes.
+		// (Capping it by its sphere's radius as well, 7 m, was measured and left out: at 70 degrees and 200 m it ended it at
+		// 4.9 m and drew 4.9-7.5 m with the next cascade's 3.4 times coarser texels, which changed the penumbrae there; the
+		// near cascade sharpens what lies within arm's reach instead.)
 		constexpr float c_MaxFirstSplit = 7.5f;
+		// A near cascade (the fifth) ends at c_SplitStart, or nearer where its sphere would exceed this radius (meters): at 8192
+		// texels at most 0.49 mm for what lies within arm's reach (1.5 m and 0.45 mm at 60 degrees, 1.4 m at 70). The share's
+		// first cascade keeps its sphere (wide views center it at its far end), so nothing beyond the near one changes.
+		constexpr float c_MaxNearRadius = 2.0f;
 		// How far inside its square's edges a cascade holds a receiver, in its texels (Include/Shadows.slang,
 		// c_ShadowCascadeMarginTexels): the shadow filter's reach, so a receiver it holds is filtered from its own square. Each
 		// square covers its sphere by this and the texel its snapping may move it.
@@ -82,9 +92,14 @@ namespace Strata
 		ShadowCascadeLayout GetLayout(const ShadowCascadeView& view);
 		// Split `index` (its far end) of `count` slices over [rangeNear, rangeFar] with a logarithmic share `distribution`.
 		float GetSplit(float rangeNear, float rangeFar, float distribution, uint32_t index, uint32_t count);
-		// Split `index` of a view's layout: GetSplit over [c_SplitStart, ShadowDistance] by the view's Distribution, the first one
-		// at most c_MaxFirstSplit, the last one the shadow distance.
+		// Split `index` of a view's layout. The last c_SharedCascades slices (all of fewer) share [c_SplitStart, ShadowDistance] by
+		// GetSplit with the view's Distribution, the first of them ending at most at c_MaxFirstSplit; a cascade before them ends
+		// at c_SplitStart, at most at GetRadiusLimit(c_MaxNearRadius); the last one ends at the shadow distance.
 		float GetSplit(const ShadowCascadeView& view, uint32_t index);
+		// The farthest view distance (at most the shadow distance) whose slice from the near clip has a sphere of at most `radius`:
+		// the lens's alone, so the cap never changes as the camera turns. Infinity where even the thinnest slice's is larger (a
+		// wide orthographic view), which no cap can hold.
+		float GetRadiusLimit(const ShadowCascadeView& view, float radius);
 		// The smallest sphere around the view's slice [sliceNear, sliceFar], relative to the camera (radius rounded up to 1/16).
 		void GetSliceSphere(const ShadowCascadeView& view, float sliceNear, float sliceFar, glm::vec3& center, float& radius);
 		// A cascade's square for a camera at `cameraLight` (its position in light view space, in double): the sphere's center on

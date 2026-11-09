@@ -23,11 +23,12 @@ namespace
 		return Renderer::GetGraphicsDevice().GetInfo().SupportsDrawIndirectFirstInstance;
 	}
 
-	SceneRendererSpecification CascadeSpecification(GPUDrivenMode mode = GPUDrivenMode::Off)
+	// Medium's four cascades, or High's and Ultra's five (a near one before the four).
+	SceneRendererSpecification CascadeSpecification(GPUDrivenMode mode = GPUDrivenMode::Off, uint32_t cascades = 4)
 	{
 		SceneRendererSpecification specification = ExactSpecification();
 		specification.GPUDriven = mode;
-		specification.Quality.ShadowCascades = 4;
+		specification.Quality.ShadowCascades = cascades;
 		specification.Quality.ShadowResolution = ShadowMapResolution::Size2048;
 		return specification;
 	}
@@ -252,39 +253,43 @@ TEST_SUITE("GPU.SceneRenderer.ShadowCascades")
 		std::vector<GPUDrivenMode> modes = { GPUDrivenMode::Off };
 		if (DeviceDrawsGPUDriven())
 			modes.push_back(GPUDrivenMode::Auto);
-		for (const GPUDrivenMode mode : modes)
+		for (const uint32_t cascades : { 4u, 5u })
 		{
-			CAPTURE(static_cast<int>(mode));
-			SceneRenderer renderer(CascadeSpecification(mode));
-			renderer.SetViewportSize(width, height);
-			const SceneCamera camera = YardCamera(width, height, 0.0f);
-			for (int frame = 0; frame < 10; frame++)
-				RenderHDR(renderer, scene, camera);
-
-			// A quarter turn, in one frame and in six frames of 15 degrees.
-			for (const int steps : { 1, 6 })
+			for (const GPUDrivenMode mode : modes)
 			{
-				CAPTURE(steps);
-				const float startYaw = steps == 1 ? 0.0f : 90.0f;
-				SceneCamera turned = camera;
-				for (int step = 1; step <= steps; step++)
+				CAPTURE(cascades);
+				CAPTURE(static_cast<int>(mode));
+				SceneRenderer renderer(CascadeSpecification(mode, cascades));
+				renderer.SetViewportSize(width, height);
+				const SceneCamera camera = YardCamera(width, height, 0.0f);
+				for (int frame = 0; frame < 10; frame++)
+					RenderHDR(renderer, scene, camera);
+	
+				// A quarter turn, in one frame and in six frames of 15 degrees.
+				for (const int steps : { 1, 6 })
 				{
-					turned = YardCamera(width, height, startYaw + 90.0f * static_cast<float>(step) / static_cast<float>(steps));
-					RenderHDR(renderer, scene, turned);
+					CAPTURE(steps);
+					const float startYaw = steps == 1 ? 0.0f : 90.0f;
+					SceneCamera turned = camera;
+					for (int step = 1; step <= steps; step++)
+					{
+						turned = YardCamera(width, height, startYaw + 90.0f * static_cast<float>(step) / static_cast<float>(steps));
+						RenderHDR(renderer, scene, turned);
+					}
+					const ReadbackImage first = RenderHDR(renderer, scene, turned);
+					SceneRenderer fresh(CascadeSpecification(mode, cascades));
+					fresh.SetViewportSize(width, height);
+					const ReadbackImage reference = RenderHDR(fresh, scene, turned);
+					CHECK(renderer.GetStats().Cascades == fresh.GetStats().Cascades);
+					CHECK(CountDifferentPixels(first, reference) == 0);
+					// Nothing settles afterwards: the still view's later frames are the first one.
+					for (int frame = 0; frame < 8; frame++)
+					{
+						CAPTURE(frame);
+						CHECK(CountDifferentPixels(RenderHDR(renderer, scene, turned), first) == 0);
+					}
+					CHECK(renderer.GetStats().Cascades == fresh.GetStats().Cascades);
 				}
-				const ReadbackImage first = RenderHDR(renderer, scene, turned);
-				SceneRenderer fresh(CascadeSpecification(mode));
-				fresh.SetViewportSize(width, height);
-				const ReadbackImage reference = RenderHDR(fresh, scene, turned);
-				CHECK(renderer.GetStats().Cascades == fresh.GetStats().Cascades);
-				CHECK(CountDifferentPixels(first, reference) == 0);
-				// Nothing settles afterwards: the still view's later frames are the first one.
-				for (int frame = 0; frame < 8; frame++)
-				{
-					CAPTURE(frame);
-					CHECK(CountDifferentPixels(RenderHDR(renderer, scene, turned), first) == 0);
-				}
-				CHECK(renderer.GetStats().Cascades == fresh.GetStats().Cascades);
 			}
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -458,32 +463,37 @@ TEST_SUITE("GPU.SceneRenderer.ShadowCascades")
 		Scene& scene = playground.SceneData;
 		constexpr uint32_t width = 192;
 		constexpr uint32_t height = 108;
-		SceneRenderer cpu(CascadeSpecification(GPUDrivenMode::Off));
-		SceneRenderer gpuDriven(CascadeSpecification(GPUDrivenMode::Auto));
-		cpu.SetViewportSize(width, height);
-		gpuDriven.SetViewportSize(width, height);
-		REQUIRE(gpuDriven.IsGPUDriven());
-		SceneCamera camera = PlaygroundCamera(width, height);
-
-		const auto compare = [&]()
+		for (const uint32_t cascades : { 4u, 5u })
 		{
-			const ReadbackImage cpuImage = RenderToImage(cpu, scene, camera, StepOptions());
-			const ReadbackImage gpuImage = RenderToImage(gpuDriven, scene, camera, StepOptions());
-			gpuDriven.ResolveGPUStats(true);
-			CHECK(cpu.GetStats().Cascades == gpuDriven.GetStats().Cascades);
-			CHECK(cpuImage.Pixels == gpuImage.Pixels);
-		};
-		for (int frame = 0; frame < 6; frame++)
-			compare();
-
-		// Panning 0.5 m a frame: the squares move texel by texel, and the GPU path's requests still come from its visibility
-		// feedback (every cascade gets the slots of every caster the feedback saw).
-		for (int frame = 0; frame < 10; frame++)
-		{
-			camera.Position.x += 0.5f;
-			camera.View = glm::lookAt(camera.Position, glm::vec3(camera.Position.x, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-			compare();
-			CHECK(gpuDriven.GetStats().FeedbackRequests);
+			CAPTURE(cascades);
+			SceneRenderer cpu(CascadeSpecification(GPUDrivenMode::Off, cascades));
+			SceneRenderer gpuDriven(CascadeSpecification(GPUDrivenMode::Auto, cascades));
+			cpu.SetViewportSize(width, height);
+			gpuDriven.SetViewportSize(width, height);
+			REQUIRE(gpuDriven.IsGPUDriven());
+			SceneCamera camera = PlaygroundCamera(width, height);
+	
+			const auto compare = [&]()
+			{
+				const ReadbackImage cpuImage = RenderToImage(cpu, scene, camera, StepOptions());
+				const ReadbackImage gpuImage = RenderToImage(gpuDriven, scene, camera, StepOptions());
+				gpuDriven.ResolveGPUStats(true);
+				CHECK(cpu.GetStats().Cascades == gpuDriven.GetStats().Cascades);
+				CHECK(cpuImage.Pixels == gpuImage.Pixels);
+			};
+			for (int frame = 0; frame < 6; frame++)
+				compare();
+	
+			// Panning 0.5 m a frame: the squares move texel by texel, and the GPU path's requests still come from its visibility
+			// feedback (every cascade gets the slots of every caster the feedback saw).
+			for (int frame = 0; frame < 10; frame++)
+			{
+				camera.Position.x += 0.5f;
+				camera.View = glm::lookAt(camera.Position, glm::vec3(camera.Position.x, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+				compare();
+				CHECK(gpuDriven.GetStats().FeedbackRequests);
+			}
+			CHECK(cpu.GetStats().CascadeCount == cascades);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

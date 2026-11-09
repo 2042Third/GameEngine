@@ -11,6 +11,7 @@
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/RenderSceneGPU.h"
 #include "Strata/Renderer/Renderer.h"
+#include "Strata/Renderer/SceneDrawKey.h"
 #include "Strata/Renderer/TextureTable.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -111,27 +112,6 @@ namespace Strata
 		constexpr uint32_t c_MaterialTransparent = 1u << 3;
 		static_assert(c_MaterialAvailable == RenderData::c_CullMaterialAvailable && c_MaterialDoubleSided == RenderData::c_CullMaterialDoubleSided
 			&& c_MaterialAlphaMask == RenderData::c_CullMaterialAlphaMask && c_MaterialTransparent == RenderData::c_CullMaterialTransparent);
-
-		// The sort key of a view's draws: pipeline state, then mesh, submesh and level of detail (SceneRendererExtraction.cpp's
-		// layout below the cascade bits, which a view's own list does not need).
-		constexpr uint32_t c_KeyAlphaMaskShift = 61;
-		constexpr uint32_t c_KeyMirroredShift = 60;
-		constexpr uint32_t c_KeyDoubleSidedShift = 59;
-		constexpr uint32_t c_KeySkinnedShift = 58;
-		constexpr uint32_t c_KeyMeshShift = 38;
-		constexpr uint32_t c_KeySubmeshShift = 22;
-		constexpr uint32_t c_KeyLODShift = 17;
-		constexpr uint32_t c_KeyMaterialBits = 17;
-		constexpr uint32_t c_MaxKeySubmeshes = 1u << 16;
-		constexpr uint32_t c_MaxKeyLODs = 1u << 5;
-
-		uint64_t MakeLocalDrawKey(bool alphaMask, bool mirrored, bool doubleSided, bool skinned, uint32_t meshSlot, uint32_t submesh, uint32_t lod, uint32_t material)
-		{
-			return (static_cast<uint64_t>(alphaMask) << c_KeyAlphaMaskShift) | (static_cast<uint64_t>(mirrored) << c_KeyMirroredShift)
-				| (static_cast<uint64_t>(doubleSided) << c_KeyDoubleSidedShift) | (static_cast<uint64_t>(skinned) << c_KeySkinnedShift)
-				| (static_cast<uint64_t>(meshSlot) << c_KeyMeshShift) | (static_cast<uint64_t>(submesh) << c_KeySubmeshShift)
-				| (static_cast<uint64_t>(lod) << c_KeyLODShift) | static_cast<uint64_t>(material & ((1u << c_KeyMaterialBits) - 1));
-		}
 
 		// What one light's job finds: the proxies within its range (their bounds are followed), and per drawn view of it the
 		// casters, with the marks and animators they add.
@@ -751,12 +731,12 @@ namespace Strata
 					if ((materialFlags & c_MaterialAvailable) == 0 || (materialFlags & c_MaterialTransparent) != 0)
 						continue;
 					const uint32_t lod = LODSelection::SelectLOD(submeshes[submeshIndex], mesh->GetBounds(), caster.Fraction, drawView.LOD);
-					if (submeshIndex >= c_MaxKeySubmeshes || lod >= c_MaxKeyLODs)
+					if (submeshIndex >= SceneDrawKey::c_MaxSubmeshes || lod >= SceneDrawKey::c_MaxLODs)
 					{
 						skipped++;
 						continue;
 					}
-					draws.push_back(SortItem { MakeLocalDrawKey((materialFlags & c_MaterialAlphaMask) != 0, mirrored, (materialFlags & c_MaterialDoubleSided) != 0, skinned,
+					draws.push_back(SortItem { SceneDrawKey::Make(0, (materialFlags & c_MaterialAlphaMask) != 0, mirrored, (materialFlags & c_MaterialDoubleSided) != 0, skinned,
 						meshSlot, submeshIndex, lod, batchAcrossMaterials ? 0u : materialSlot), instance, 0 });
 				}
 			}
@@ -776,7 +756,7 @@ namespace Strata
 		m_Stats.LocalShadowDrawCalls = static_cast<uint32_t>(m_LocalShadowBatches.size());
 		if (skipped > 0)
 			m_Errors.Report(fmt::format("{} shadow caster instances of point and spot lights were not drawn: more than {} submeshes or {} levels of detail in a mesh",
-				skipped, c_MaxKeySubmeshes, c_MaxKeyLODs));
+				skipped, SceneDrawKey::c_MaxSubmeshes, SceneDrawKey::c_MaxLODs));
 	}
 
 	void SceneRenderer::BuildLocalShadowData(const SceneCamera& camera)

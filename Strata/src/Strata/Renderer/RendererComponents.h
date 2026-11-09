@@ -34,7 +34,8 @@ namespace Strata
 		// (when the quality's RendererQualitySettings::ContactShadows has steps: Custom only); 0 turns them off for this light.
 		float ContactShadowLength = 0.3f;
 		// How the shadow cascades share the distances from 1.5 m (ShadowCascades::c_SplitStart) to ShadowDistance: 0 evenly, 1
-		// each cascade the same ratio farther than the previous one. Higher puts more of the shadows' detail near the camera.
+		// each cascade the same ratio farther than the previous one. Higher puts more of the shadows' detail near the camera. A
+		// fifth cascade (High, Ultra) covers the view before 1.5 m.
 		float CascadeDistribution = 0.9f;
 
 		// At most half of a slice: a cascade's band then never reaches back into the previous one's, so a pixel blends two

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace Strata
 {
@@ -19,6 +20,39 @@ namespace Strata
 			return distribution * logarithmic + (1.0f - distribution) * uniform;
 		}
 
+		float GetRadiusLimit(const ShadowCascadeView& view, float radius)
+		{
+			// In the terms GetLayout uses: a float split, whose slice from the near clip GetSliceSphere rounds up to 1/16, so the
+			// cascade that ends at the distance found has a sphere of at most `radius`.
+			const auto sphereRadius = [&view](float sliceFar)
+			{
+				glm::vec3 center(0.0f);
+				float rounded = 0.0f;
+				GetSliceSphere(view, view.Near, sliceFar, center, rounded);
+				return rounded;
+			};
+			const float shadowDistance = std::max(view.ShadowDistance, view.Near);
+			if (!(sphereRadius(view.Near) <= radius))
+				return std::numeric_limits<float>::infinity();
+			if (sphereRadius(shadowDistance) <= radius)
+				return shadowDistance;
+			// The sphere grows with the slice's far end: bisect for the farthest end within the radius (until the floats meet, so
+			// the same lens always gives the same distance).
+			float inside = view.Near;
+			float outside = shadowDistance;
+			for (int step = 0; step < 64; step++)
+			{
+				const float middle = inside + 0.5f * (outside - inside);
+				if (middle <= inside || middle >= outside)
+					break;
+				if (sphereRadius(middle) <= radius)
+					inside = middle;
+				else
+					outside = middle;
+			}
+			return inside;
+		}
+
 		float GetSplit(const ShadowCascadeView& view, uint32_t index)
 		{
 			const uint32_t count = std::clamp(view.CascadeCount, 1u, RenderData::c_MaxCascades);
@@ -27,9 +61,13 @@ namespace Strata
 			// From a fixed distance rather than the near clip, which would move every split with the camera's lens (a near clip of
 			// 1 cm against one of 10 cm halves the first split).
 			const float rangeNear = std::min(std::max(c_SplitStart, view.Near), 0.5f * view.ShadowDistance);
+			const uint32_t nearCascades = count > c_SharedCascades ? count - c_SharedCascades : 0;
+			if (index < nearCascades)
+				return std::min(rangeNear, GetRadiusLimit(view, c_MaxNearRadius));
 			const float distribution = std::isfinite(view.Distribution) ? std::clamp(view.Distribution, 0.0f, 1.0f) : 0.9f;
-			const float split = GetSplit(rangeNear, view.ShadowDistance, distribution, index, count);
-			return index == 0 ? std::min(split, c_MaxFirstSplit) : split;
+			const uint32_t shared = index - nearCascades;
+			const float split = GetSplit(rangeNear, view.ShadowDistance, distribution, shared, count - nearCascades);
+			return shared == 0 ? std::min(split, c_MaxFirstSplit) : split;
 		}
 
 		void GetSliceSphere(const ShadowCascadeView& view, float sliceNear, float sliceFar, glm::vec3& center, float& radius)

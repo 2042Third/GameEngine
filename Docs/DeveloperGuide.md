@@ -3286,7 +3286,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (`GetPropertyGroups`). Probes `Inspector.<Component>.Section.<Section>`. Directional Light has Light and Shadows, Post
   Process Tone and color, Exposure, Bloom, Ambient occlusion, Anti-aliasing, Reflections and Lens; every property of both
   has a description with its unit (`Renderer.Components` checks it). The sun's section ends with what its shadow maps are
-  (`Inspector.DirectionalLight.ShadowQuality`: "Shadow maps: 4 x 4096 (Graphics Quality: High)" from the Scene view's
+  (`Inspector.DirectionalLight.ShadowQuality`: "Shadow maps: 5 x 8192 (Graphics Quality: High)" from the Scene view's
   latest frame, `SceneRendererStats::ShadowMapSize`, named after the quality that frame was drawn with: the view's own
   preset for the editor camera when it has one, through the scene's camera the game's (`ViewportRenderStamp::FromScene`;
   "through the scene's camera (Low, the player's; ...)" when a player chose it); the project's quality at 1080 rows
@@ -4008,8 +4008,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 | Knob | Low | Medium (0.6.0) | High | Ultra |
 | --- | --- | --- | --- | --- |
-| `ShadowResolution` (each sun cascade) | 1024 | 2048 | Auto: 2048, 4096 from 1440 rows | AutoFine: 4096, 8192 from 1440 rows |
-| `ShadowCascades` | 3 | 4 | 4 | 4 |
+| `ShadowResolution` (each sun cascade) | 1024 | 2048 | AutoFine: 4096, 8192 from 1440 rows | 8192 |
+| `ShadowCascades` (the fifth near the camera) | 3 | 4 | 5 | 5 |
 | `LocalShadowAtlasSize` (point and spot lights) | 2048 | 4096 | 4096 | 8192 |
 | `LocalShadowMaxTile` | 512 | 1024 | 1024 | 2048 |
 | `MaxShadowedLocalLights` | 4 | 16 | 16 | 16 |
@@ -4023,7 +4023,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | `ReflectionProbeResolution` (reflection probes' cubes per face) | 128 | 128 | 256 | 256 |
 | `GlobalIllumination` (experimental: the layout for scenes whose Post Process asks for it; "Global illumination") | Off | Off | High | High |
 | `AntiAliasing`, `MotionBlur`, `DepthOfField`, `FilmGrain`, `ChromaticAberration` (players' rows, under every preset: they only turn off what a scene uses) | Scene | Scene | Scene | Scene |
-| Cascades' memory per view (D32) | 12 MiB | 64 MiB | 64 MiB, 256 MiB from 1440 rows | 256 MiB, 1 GiB from 1440 rows |
+| Cascades' memory per view (D32) | 12 MiB | 64 MiB | 320 MiB, 1.25 GiB from 1440 rows | 1.25 GiB |
 | Atlas memory per view | 16 MiB | 64 MiB | 64 MiB | 256 MiB |
 | Prefiltered sky per set of maps (RGBA16F, six levels; the atmosphere keeps two sets) | 4 MiB | 4 MiB | 16 MiB | 16 MiB |
 | Screen-space reflections' targets per view (scenes that ask for them; "Reflections") | none | 20 MiB, 79 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows |
@@ -4033,8 +4033,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
   High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for rows that cost at every
-  size (`ShadowFilterQuality`, `AmbientOcclusionQuality`, `EnvironmentResolution`, `Reflections`, and
-  `MotionBlurQuality` and `GlobalIllumination` for scenes that use them; `Renderer.Quality` checks it).
+  size (`ShadowResolution`, 4096 against 2048, and `ShadowCascades`, five against four: the stable cascades' detail;
+  `ShadowFilterQuality`, `AmbientOcclusionQuality`, `EnvironmentResolution`, `Reflections`, and `MotionBlurQuality`,
+  `ReflectionProbeResolution` and `GlobalIllumination` for scenes that use them; `Renderer.Quality` checks it).
   Custom is the section's fields (High's values by default). `RendererQuality::Clamp` keeps every knob in its range.
 - **Auto by rows:** `RendererQuality::ResolveShadowMapSize` resolves Auto and AutoFine for the renderer's viewport rows
   (its output: the Scene and Game views' panel pixels, the window's back buffer, a capture's image), limited to
@@ -4522,11 +4523,11 @@ lights, Post Process and the sky), and never a resolution below the output's.
 - Cascade blending (`DirectionalLightComponent::CascadeBlend`, 0 to 0.5, 0.1 by default and for scenes saved before
   it): each cascade's band is the last `CascadeBlend` of its slice's depth range, before its split (the first slice's
   range counted from the camera). `Include/Shadows.slang` (`CascadeBlendWeight`) mixes a band's pixels with the next
-  cascade where that one holds them (a fitted square may not: "Sun shadows"), and the last cascade's with no shadow, so no
+  cascade where that one holds them (a position the normal offset moved off its square may not: "Sun shadows"), and the last cascade's with no shadow, so no
   seam shows between cascades and shadows fade out by the shadow distance instead of stopping. `FindShadowCasters` starts each next slice at the previous band before fitting
   its sphere, so the next square covers the band; the CPU's caster test, the GPU's `CullConstants::CascadeBoxes`, the
   fit and the cascade cache's keys all read those boxes. Its cost: a second filter evaluation in the bands' pixels, and
-  slightly larger squares (lower texel density, more casters) for cascades 1 to 3. 0 switches cascades at once, as 0.5.0
+  slightly larger squares (lower texel density, more casters) for every cascade after the first. 0 switches cascades at once, as 0.5.0
   did (`GPU.SceneRenderer.Shadows`: the seam, the bands' coverage at 0.5, the fade).
 - HDR targets are RGBA16F: shaders writing them clamp with `SanitizeHDR` (Inf and NaN would turn
   black after tone mapping). Instances with a mirroring transform (negative determinant) use
@@ -4633,14 +4634,24 @@ lights, Post Process and the sky), and never a resolution below the output's.
   the cascades to the receivers a readback of the prepass depth saw, and wave 8's holds made them sharpen over a second
   after a turn; both went in 0.8.0, and with them the cause of the Physics Playground's ball-shot jumps (a ball near the
   camera re-cut the slices). Rules, in order:
-  - **Splits by distance:** the quality's `RendererQualitySettings::ShadowCascades` slices (3 at Low, 4 above) from the near
-    clip to the light's `ShadowDistance` `D`, split by `ShadowCascades::GetSplit` from `c_SplitStart` (1.5 m, at most `D /
-    2`; never from the near clip, whose lens would move every split; 1.5 m ends the first cascade where 0.7.0's fit to a
-    person's view did, so thin casters a few meters away keep its finest texels) with the light's `CascadeDistribution` as
-    the logarithmic share (0.9 by default: at 80 m 5.76, 13.93 and 32.68 m; Low's three at 80 m 7.5 and 24.51 m), the
-    first one at most `c_MaxFirstSplit` (7.5 m: at 200 m 7.5, 25.66 and 68.01 m, where the share alone would end the first
-    cascade at 9.7 m and coarsen the nearest shadows enough that curved surfaces a step from the camera under a grazing
-    sun showed its texels as stripes: the showcase's shot 5). Each slice from the second on starts at the band before the previous split (`CascadeBlend`).
+  - **Splits by distance:** the quality's `RendererQualitySettings::ShadowCascades` slices (3 at Low, 4 at Medium, 5 at
+    High and Ultra) from the near clip to the light's `ShadowDistance` `D` (`ShadowCascades::GetSplit`). The last four (all
+    of fewer, `c_SharedCascades`) share `[c_SplitStart, D]` (1.5 m, at most `D / 2`; never from the near clip, whose lens
+    would move every split; 1.5 m ends the first of them where 0.7.0's fit to a person's view did, so thin casters a few
+    meters away keep its finest texels) with the light's `CascadeDistribution` as the logarithmic share (0.9 by default: at
+    80 m 5.76, 13.93 and 32.68 m; Low's three at 80 m 7.5 and 24.51 m), the first of them at most `c_MaxFirstSplit` (7.5
+    m: at 200 m 7.5, 25.66 and 68.01 m, where the share alone would end the first cascade at 9.7 m and coarsen the nearest
+    shadows enough that curved surfaces a step from the camera under a grazing sun showed its texels as stripes). Capping
+    it by its sphere's radius as well (7 m) was measured and left out: at 70 degrees and 200 m it ended it at 4.9 m and drew
+    4.9-7.5 m with the next cascade's 3.4 times coarser texels, which changed the penumbrae there (the showcase's shot 5:
+    the edges of the sun patches on its far wall moved by a pixel or two). **The fifth cascade** (High, Ultra) comes
+    before them, from the near clip to `c_SplitStart`, nearer where its sphere would exceed `c_MaxNearRadius` (2 m;
+    `GetRadiusLimit`, the lens's alone, so a turn never moves it: at 8192 texels 0.45 mm to 1.5 m at 60 degrees, 0.49 mm
+    to 1.4 m at 70), so what lies within arm's reach gets texels near 0.7.0's fitted ones while the four keep theirs: wide
+    views center the next cascade's sphere at its far end, so it keeps the four's first sphere and texels (the grass
+    blades 4-6 m away keep theirs), and the ones after it are the four's. Each slice from the second on starts at the band
+    before the previous split (`CascadeBlend`; the second's band, the last tenth of [1.5 m, its split], is a little
+    narrower than the four's first's).
   - **Spheres:** each cascade covers the smallest sphere around its slice of the view, centered on the view axis where the
     slice's near and far corners are equally far, or at its far end where they cannot be (wide views: 1.178 times the split
     at 60 degrees and 16:9, 4-8% under the corners' centroid sphere of 0.6.0), radius rounded up to 1/16 m. Its size depends
@@ -4656,16 +4667,20 @@ lights, Post Process and the sky), and never a resolution below the output's.
     the position 33 texels inside its square (the last one to its edge, as 0.6.0) and in its depth range. Every point of a
     slice is held by its own cascade; the test keeps positions the normal offset moved off a square from reading outside
     it. A band blends into the next cascade only where that one holds the pixel. The debug view selects alike.
-  - **Resolution** is bought with the maps' size, per quality level (`ShadowResolution`): High `AutoFine` (4096 below 1440
-    rows, 8192 from them), Ultra 8192, Medium 0.6.0's 2048 (its costs), Low 1024. At 2160 rows, 60 degrees and 8192 texels
-    (80 m) a texel spans 0.54 screen pixels at each split, about 1.4 at the near end of every slice but the first and 3.1
-    at 1 m (0.6.0's 2048: 2.2 at every split). The shadows debug view over 42 look-dev shots at 3840x2160 and High
-    measured a median of 0.77 times 0.7.0's fitted pixels per texel (finer); coarser where 0.7.0's fit had crowded the
-    receivers (the Physics Playground's high view: 0.57 to 0.96, still under a pixel) and in close-ups with a long shadow
-    distance (the showcase's shot 5: 0.88 to 2.28, its near door post a little duller; the macro shot, whose visible
-    shadows did not change). The cost is memory: four 8192 layers take 1 GiB, with 85 MiB of depth ranges beside; in time
-    the 100,000-cube 4K perf case redraws every cascade in 2.47 ms at High (0.7.0's fit at 4096: 2.67) and 0.36 ms at
-    Medium (1.80: the fit spread all four cascades over the grid; the spheres hold only its near part in the first ones).
+  - **Resolution** is bought with the maps' size, per quality level (`ShadowResolution`), and at High and Ultra with the
+    fifth cascade: High `AutoFine` (4096 below 1440 rows, 8192 from them), Ultra 8192, Medium 0.6.0's 2048 (its costs),
+    Low 1024. At 2160 rows, 60 degrees and 8192 texels (80 m) a texel spans 0.54 screen pixels at each split, 0.83 at 1 m
+    (four cascades: 3.1), 2.3 at the second cascade's near end (1.35 m) and about 1.4 at the near end of the later ones
+    (0.6.0's 2048: 2.2 at every split). The shadows debug view over the look-dev shots at 3840x2160 and High measured a
+    median of 0.77 times 0.7.0's fitted pixels per texel (finer), and nowhere coarser than four cascades; coarser than
+    0.7.0 where its fit had crowded a few receivers: the Physics Playground's and Third-Person's high editor views (0.57
+    and 0.31 to 0.96, still under a pixel), the showcase's shot 5 past a door post 0.3 m away (0.88 to 1.48, p90 1.24 to
+    2.09; four cascades: 2.28 and 9.93) and its macro shot of what lies within 0.5 m at 30 degrees (1.24 to 8.35; four
+    cascades: 15.3; no shadow edge shows in it). The cost is memory: five 8192 layers take 1.25 GiB, with about 106 MiB
+    of depth ranges beside; in time the 100,000-cube 4K perf case redraws every cascade in 2.81 ms at High (four
+    cascades: 2.49; 0.7.0's fit at 4096: 2.68; the near cascade's clear, depth ranges and casters cost the 0.32 ms) and
+    0.36 ms at Medium (1.80: the fit spread all four cascades over the grid; the spheres hold only its near part in the
+    first ones).
   - **Caching:** the cascade cache's keys hold the camera, the light and the boxes (`PrepareShadowCache`), so a moving camera
     draws its layers again (their squares moved, and the casters' levels of detail follow the camera) and a still one keeps
     them (TAA's jitter is in the projection, which the keys do not hold). Squares moving texel by texel keep the visibility
@@ -4673,10 +4688,12 @@ lights, Post Process and the sky), and never a resolution below the output's.
     every caster of every receiver.
   Stats: `SceneRendererStats::Cascades` (each slice's near, far and texel size); `editor.perf`'s and every
   `viewport.capture` result's `renderStats.cascades`. Tests: `Renderer.ShadowCascades` (the layout alone),
-  `GPU.SceneRenderer.ShadowCascades` (turns and changes against fresh renderers, the strafe, the ball, both paths). The
-  look-dev's `tp.live.turn90` shots (TAA, `.fxaa`, `.off`) turn the Third-Person camera a quarter turn in 34 steps
-  and capture the four frames right after it, `.later` and `.later.off` a second on (the attract mode's camera drifts:
-  compare two builds frame for frame).
+  `GPU.SceneRenderer.ShadowCascades` (turns and changes against fresh renderers, the strafe, the ball, both paths; the
+  turns and both paths with four and five cascades). The look-dev's `tp.live.turn90` shots (TAA, `.fxaa`, `.off`) turn
+  the Third-Person camera a quarter turn in 34 steps and capture the four frames right after it, `.later` and
+  `.later.off` a second on (the attract mode's camera drifts: compare two builds frame for frame).
+  The CPU path's draw key (`Renderer/SceneDrawKey.h`, shared by the cascades' and the point and spot lights' lists) gives
+  the cascade three bits: a cascade beyond them would draw into another's layer.
 - **Costs** (look-dev A/B against cc9524a1, three interleaved pairs, medians, the samples' scene cameras with TAA; RTX
   5090, after the wave's perf pass): at 3840x2160 0.7.0's High, which drew contact shadows, `GPU.ScreenShadows` is
   0.35-0.52 ms (mask, contact shadows, blur and 0.7.0's fit's reduction, which went with the stable cascades) while `GPU.Opaque` loses the filter; at 1920x1080

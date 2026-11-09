@@ -230,6 +230,12 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   the ground. Nothing is read back from the GPU any more, so nothing in the scene (a thrown ball) moves them either.
 - High and Ultra buy the detail back with larger shadow maps: High 4096 below 1440 rows and 8192 from them (was 2048 and
   4096), Ultra 8192 at every size (was 4096 below 1440 rows). Medium keeps 0.6.0's 2048 and costs.
+- High and Ultra add a fifth cascade before the four, for what lies within 1.5 m of the camera (less with a wide lens:
+  its sphere stays within 2 m, 0.49 mm texels at 8192), so close-ups keep fine shadows: the showcase's shot 5, which
+  looks past a door post 0.3 m away, measures a median of 1.48 screen pixels per shadow texel (0.7.0 0.88) where four
+  cascades gave 2.28, and none of its pixels above 4 (48.8% with four). The four keep their texels, so the grass
+  blades' thin shadows 4-6 m away do not change. It costs 0.32 ms of GPU time where every cascade is drawn again (the
+  100,000-cube 4K case: 2.81 ms against 2.49) and 256 MiB per view at 8192 texels.
 - The soft tips of long shadows are the same width in every cascade: the penumbra's search distance follows the
   receiver's distance (5 m plus 0.3 of it) instead of each cascade's size, so no step shows where two cascades meet. The
   contact-hardening look (sharp at the caster, soft at the tip) is unchanged.
@@ -251,6 +257,7 @@ projects, the template and scenes or projects without the value get.
 | A directional light's highlight | a point's | its Angular Diameter's disk (0.53 degrees by default) | reflections R2 |
 | Sun shadow resolution of the High and Ultra presets | High 2048 / 4096 from 1440 rows, Ultra 4096 / 8192 | High 4096 / 8192 from 1440 rows, Ultra 8192 | stable cascades |
 | Sun cascade splits | fitted to the receivers the GPU read back (0.6.0's from the near clip until then) | fixed: from 1.5 m to the shadow distance by Cascade Distribution | stable cascades |
+| Sun shadow cascades of the High and Ultra presets | 4 | 5 (a near one within 1.5 m) | stable cascades |
 
 ## Upgrading from 0.7.0
 
@@ -393,9 +400,12 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
 
 - Medium (2048 texels) draws the sun's shadows as 0.6.0 did: at 3840x2160 a texel spans about 2.2 screen pixels at each
   split and more nearer the camera, coarser than 0.7.0's Medium, whose cascades were fitted to what the view showed.
-  High and Ultra are as fine as 0.7.0's or finer.
-- A high camera looking down over a level (the Physics Playground's) gets no finer shadows than any other view at the same
-  distances: 0.7.0 fitted the cascades to where its surfaces were (still finer than a pixel per texel at High, 4K).
-- A surface a step from the camera under a long shadow distance gets coarser texels than 0.7.0's fit gave it: the
-  showcase's shot 5 looks past a door post 0.3 m away, whose sunlit speckles are a little duller.
+- High and Ultra are finer than 0.7.0's in most views (the shadows debug view over the look-dev shots at 3840x2160 and
+  High: a median of 0.77 times 0.7.0's screen pixels per shadow texel), but coarser where 0.7.0 fitted its cascades to a
+  few close or crowded surfaces. Medians of screen pixels per texel, 0.7.0 against 0.8.0 (under 1 is finer than a pixel):
+  the showcase's shot 5, past a door post 0.3 m away, 0.88 against 1.48 (p90 1.24 against 2.09; the door post's pixels
+  match 0.7.0's within 2 codes without anti-aliasing and with TAA); the showcase's macro shot, everything within 0.5 m
+  at 30 degrees, 1.24 against 8.35 (p90 1.48 against 9.93; no shadow edge shows in it); the look-dev sun room seen from
+  behind, 0.88 against 1.61; the Third-Person and Physics Playground editor views from high above, 0.31 and 0.57
+  against 0.96, still under a pixel.
 

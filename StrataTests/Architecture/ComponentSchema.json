@@ -576,7 +576,7 @@
 					"Name": "CascadeDistribution",
 					"Section": "Shadows",
 					"Speed": 0.0,
-					"Tooltip": "How the cascades share the distance from the nearest to the farthest surface the camera sees: 0 evenly, 1 each cascade the same ratio farther than the previous. Higher puts more detail near the camera",
+					"Tooltip": "How the cascades share the distance from 1.5 m to the Shadow Distance: 0 evenly, 1 each cascade the same ratio farther than the previous. Higher puts more detail near the camera",
 					"Type": "Float"
 				}
 			]

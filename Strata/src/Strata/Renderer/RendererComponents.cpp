@@ -309,8 +309,8 @@ namespace Strata
 					"shadows ground objects smaller than the shadow cascades' texels, when Graphics Quality's Contact Shadows has steps (Custom; "
 					"no preset draws them); 0 off"))
 			.Property("CascadeDistribution", &DirectionalLightComponent::CascadeDistribution,
-				WithTooltip(Slider(0.0f, 1.0f), "How the cascades share the distance from the nearest to the farthest surface the camera sees: "
-					"0 evenly, 1 each cascade the same ratio farther than the previous. Higher puts more detail near the camera"));
+				WithTooltip(Slider(0.0f, 1.0f), "How the cascades share the distance from 1.5 m to the Shadow Distance: 0 evenly, 1 each "
+					"cascade the same ratio farther than the previous. Higher puts more detail near the camera"));
 		SetInactiveReasons<DirectionalLightComponent>({ "ShadowDistance", "ShadowBias", "ShadowNormalBias", "CascadeBlend", "ContactShadowLength",
 			"CascadeDistribution" }, &WithShadows<DirectionalLightComponent>);
 

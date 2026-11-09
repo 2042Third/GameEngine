@@ -11,6 +11,7 @@
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/RenderSceneGPU.h"
 #include "Strata/Renderer/Renderer.h"
+#include "Strata/Renderer/SceneDrawKey.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureStreamer.h"
 #include "Strata/Renderer/TextureTable.h"
@@ -70,34 +71,6 @@ namespace Strata
 		// A shadow caster is drawn into a cascade only while its light-space extent (the larger of x and y) covers at least this
 		// many of the cascade's texels: smaller casters only flicker in and out of texels (SceneRendererStats::SubTexelCasters).
 		constexpr float c_MinCasterTexels = 1.0f;
-
-		// The sort key of a draw: pipeline state first (cascade, alpha mask, winding, culling, skinning), then mesh, submesh
-		// and level of detail, which together make a batch; the material in the lowest bits only when batches are split by
-		// material.
-		constexpr uint32_t c_KeyCascadeShift = 62;
-		constexpr uint32_t c_KeyAlphaMaskShift = 61;
-		constexpr uint32_t c_KeyMirroredShift = 60;
-		constexpr uint32_t c_KeyDoubleSidedShift = 59;
-		constexpr uint32_t c_KeySkinnedShift = 58;
-		constexpr uint32_t c_KeyMeshShift = 38;
-		constexpr uint32_t c_KeySubmeshShift = 22;
-		constexpr uint32_t c_KeyLODShift = 17;
-		constexpr uint32_t c_KeyMeshBits = 20;     // Mesh slots: at most one per entity (Scene::c_MaxEntities)
-		constexpr uint32_t c_KeySubmeshBits = 16;
-		constexpr uint32_t c_KeyLODBits = 5;
-		constexpr uint32_t c_KeyMaterialBits = 17; // Material slots beyond this share keys: their batches merge, which is still correct
-		constexpr uint32_t c_MaxKeySubmeshes = 1u << c_KeySubmeshBits;
-		constexpr uint32_t c_MaxKeyLODs = 1u << c_KeyLODBits;
-
-		uint64_t MakeDrawKey(uint32_t cascade, bool alphaMask, bool mirrored, bool doubleSided, bool skinned, uint32_t meshSlot, uint32_t submesh, uint32_t lod,
-			uint32_t material)
-		{
-			return (static_cast<uint64_t>(cascade) << c_KeyCascadeShift) | (static_cast<uint64_t>(alphaMask) << c_KeyAlphaMaskShift)
-				| (static_cast<uint64_t>(mirrored) << c_KeyMirroredShift) | (static_cast<uint64_t>(doubleSided) << c_KeyDoubleSidedShift)
-				| (static_cast<uint64_t>(skinned) << c_KeySkinnedShift) | (static_cast<uint64_t>(meshSlot) << c_KeyMeshShift)
-				| (static_cast<uint64_t>(submesh) << c_KeySubmeshShift) | (static_cast<uint64_t>(lod) << c_KeyLODShift)
-				| static_cast<uint64_t>(material & ((1u << c_KeyMaterialBits) - 1));
-		}
 
 		// Whether a proxy's instances are drawn skinned: posed, with a mesh that has its skin stream on the GPU.
 		bool IsDrawnSkinned(const RenderScene& renderScene, uint32_t proxy, const Mesh& mesh)
@@ -490,7 +463,7 @@ namespace Strata
 			box.RelativeSphereNearZ = relativeCenter.z + radius;
 			box.WorldPerTexel = static_cast<float>(slice.WorldPerTexel);
 			box.Radius = radius;
-			frame.CascadeSplits[cascade] = slice.SliceFar;
+			frame.CascadeSplits[cascade / 4][cascade % 4] = slice.SliceFar;
 			m_Stats.Cascades[cascade] = ShadowCascadeStats { slice.SliceNear, slice.SliceFar, box.WorldPerTexel };
 		}
 		m_CascadeCount = cascadeCount;
@@ -879,14 +852,14 @@ namespace Strata
 			{
 				batchKey = draw.Key;
 				SceneDrawBatch batch;
-				batch.MeshSlot = static_cast<uint32_t>((draw.Key >> c_KeyMeshShift) & ((1ull << c_KeyMeshBits) - 1));
-				batch.SubmeshIndex = static_cast<uint32_t>((draw.Key >> c_KeySubmeshShift) & (c_MaxKeySubmeshes - 1));
-				batch.LOD = static_cast<uint32_t>((draw.Key >> c_KeyLODShift) & (c_MaxKeyLODs - 1));
-				batch.DoubleSided = ((draw.Key >> c_KeyDoubleSidedShift) & 1) != 0;
-				batch.Mirrored = ((draw.Key >> c_KeyMirroredShift) & 1) != 0;
-				batch.Skinned = ((draw.Key >> c_KeySkinnedShift) & 1) != 0;
-				batch.AlphaMask = ((draw.Key >> c_KeyAlphaMaskShift) & 1) != 0;
-				batch.Cascade = static_cast<uint32_t>(draw.Key >> c_KeyCascadeShift);
+				batch.MeshSlot = static_cast<uint32_t>((draw.Key >> SceneDrawKey::c_MeshShift) & ((1ull << SceneDrawKey::c_MeshBits) - 1));
+				batch.SubmeshIndex = static_cast<uint32_t>((draw.Key >> SceneDrawKey::c_SubmeshShift) & (SceneDrawKey::c_MaxSubmeshes - 1));
+				batch.LOD = static_cast<uint32_t>((draw.Key >> SceneDrawKey::c_LODShift) & (SceneDrawKey::c_MaxLODs - 1));
+				batch.DoubleSided = ((draw.Key >> SceneDrawKey::c_DoubleSidedShift) & 1) != 0;
+				batch.Mirrored = ((draw.Key >> SceneDrawKey::c_MirroredShift) & 1) != 0;
+				batch.Skinned = ((draw.Key >> SceneDrawKey::c_SkinnedShift) & 1) != 0;
+				batch.AlphaMask = ((draw.Key >> SceneDrawKey::c_AlphaMaskShift) & 1) != 0;
+				batch.Cascade = static_cast<uint32_t>(draw.Key >> SceneDrawKey::c_CascadeShift);
 				batch.FirstInstance = static_cast<uint32_t>(outDrawList.size());
 				outBatches.push_back(batch);
 			}
@@ -936,7 +909,7 @@ namespace Strata
 				if ((materialFlags & c_MaterialAvailable) == 0 || (materialFlags & (c_MaterialTransparent | c_MaterialTransmissive)) == c_MaterialTransparent)
 					continue;
 				const uint32_t lod = SelectLOD(*mesh, submeshes[submeshIndex], fraction);
-				if (submeshIndex >= c_MaxKeySubmeshes || lod >= c_MaxKeyLODs)
+				if (submeshIndex >= SceneDrawKey::c_MaxSubmeshes || lod >= SceneDrawKey::c_MaxLODs)
 					continue;
 				SceneDrawBatch batch;
 				batch.MeshSlot = meshSlot;
@@ -1020,7 +993,7 @@ namespace Strata
 					if ((materialFlags & c_MaterialAvailable) == 0)
 						continue;
 					const uint32_t lod = SelectLOD(*mesh, submeshes[submeshIndex], fraction);
-					if (submeshIndex >= c_MaxKeySubmeshes || lod >= c_MaxKeyLODs)
+					if (submeshIndex >= SceneDrawKey::c_MaxSubmeshes || lod >= SceneDrawKey::c_MaxLODs)
 					{
 						skipped++;
 						continue;
@@ -1061,14 +1034,14 @@ namespace Strata
 								instances[instance].EntityID, fadeFrame, true);
 							m_LODFades[instance] = fade.State;
 						}
-						output.Draws.push_back(SortItem { MakeDrawKey(0, false, mirrored, doubleSided, skinned, meshSlot, submeshIndex, lod, keyMaterial),
+						output.Draws.push_back(SortItem { SceneDrawKey::Make(0, false, mirrored, doubleSided, skinned, meshSlot, submeshIndex, lod, keyMaterial),
 							RenderData::MakeDrawEntry(instance, fade.Code), 0 });
 						// Both levels while the fade is under way, the old one on the pixels the new one leaves (faded levels are at most
 						// 15, within the key's).
-						static_assert(c_MaxKeyLODs > 15);
+						static_assert(SceneDrawKey::c_MaxLODs > 15);
 						if (fade.Code != 0)
 						{
-							output.Draws.push_back(SortItem { MakeDrawKey(0, false, mirrored, doubleSided, skinned, meshSlot, submeshIndex, fade.From, keyMaterial),
+							output.Draws.push_back(SortItem { SceneDrawKey::Make(0, false, mirrored, doubleSided, skinned, meshSlot, submeshIndex, fade.From, keyMaterial),
 								RenderData::MakeDrawEntry(instance, fade.Code + RenderData::c_LODFadeOutgoing), 0 });
 						}
 					}
@@ -1099,7 +1072,7 @@ namespace Strata
 			m_Stats.SizeCulledProxies += output.SizeCulled;
 		}
 		if (skipped > 0)
-			m_Errors.Report(fmt::format("{} submesh instances were not drawn: more than {} submeshes or {} levels of detail in a mesh", skipped, c_MaxKeySubmeshes, c_MaxKeyLODs));
+			m_Errors.Report(fmt::format("{} submesh instances were not drawn: more than {} submeshes or {} levels of detail in a mesh", skipped, SceneDrawKey::c_MaxSubmeshes, SceneDrawKey::c_MaxLODs));
 
 		const auto sortStart = std::chrono::steady_clock::now();
 		RadixSort(m_Draws, m_SortScratch);
@@ -1174,8 +1147,7 @@ namespace Strata
 			// Camera-relative: the shaders' positions are.
 			const CascadeBox& box = m_Cascades[cascade];
 			fit.Boxes[cascade] = glm::vec4(box.RelativeMin, box.RelativeMax);
-			fit.Depths[cascade] = glm::vec4(box.RelativeFarZ, box.RelativeSphereNearZ, box.WorldPerTexel, 0.0f);
-			fit.CasterNearZ[cascade] = box.RelativeSphereNearZ;
+			fit.Depths[cascade] = glm::vec4(box.RelativeFarZ, box.RelativeSphereNearZ, box.WorldPerTexel, box.RelativeSphereNearZ);
 		}
 		const float mapSize = static_cast<float>(m_ShadowMapSize);
 		const float halfAngle = glm::radians(std::clamp(m_ShadowLight.Softness, 0.0f, 10.0f)) * 0.5f;
@@ -1232,7 +1204,7 @@ namespace Strata
 					if ((materialFlags & c_MaterialAvailable) == 0 || (materialFlags & c_MaterialTransparent) != 0)
 						continue;
 					const uint32_t lod = SelectLOD(*mesh, submeshes[submeshIndex], fraction);
-					if (submeshIndex >= c_MaxKeySubmeshes || lod >= c_MaxKeyLODs)
+					if (submeshIndex >= SceneDrawKey::c_MaxSubmeshes || lod >= SceneDrawKey::c_MaxLODs)
 					{
 						skipped++;
 						continue;
@@ -1243,7 +1215,7 @@ namespace Strata
 					{
 						if ((caster.CascadeMask & (1u << cascade)) != 0)
 						{
-							output.Draws.push_back(SortItem { MakeDrawKey(cascade, alphaMask, mirrored, doubleSided, skinned, meshSlot, submeshIndex, lod,
+							output.Draws.push_back(SortItem { SceneDrawKey::Make(cascade, alphaMask, mirrored, doubleSided, skinned, meshSlot, submeshIndex, lod,
 								batchAcrossMaterials ? 0u : materialSlot), instance, 0 });
 						}
 					}
@@ -1266,12 +1238,12 @@ namespace Strata
 			skipped += output.Skipped;
 		}
 		if (skipped > 0)
-			m_Errors.Report(fmt::format("{} shadow caster instances were not drawn: more than {} submeshes or {} levels of detail in a mesh", skipped, c_MaxKeySubmeshes, c_MaxKeyLODs));
+			m_Errors.Report(fmt::format("{} shadow caster instances were not drawn: more than {} submeshes or {} levels of detail in a mesh", skipped, SceneDrawKey::c_MaxSubmeshes, SceneDrawKey::c_MaxLODs));
 
 		// The depth range reaches from the far side of the slice's sphere to the nearest caster (CascadeFit.comp clamps it),
 		// found in absolute light space.
 		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
-			fit.CasterNearZ[cascade] = static_cast<float>(static_cast<double>(casterNearZ[cascade]) - m_CameraLightPosition.z);
+			fit.Depths[cascade].w = static_cast<float>(static_cast<double>(casterNearZ[cascade]) - m_CameraLightPosition.z);
 
 		const auto sortStart = std::chrono::steady_clock::now();
 		RadixSort(m_ShadowDraws, m_SortScratch);

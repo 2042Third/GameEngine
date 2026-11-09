@@ -14,7 +14,7 @@ what each one costs:
 | Setting | Low | Medium | High (default) | Ultra |
 | --- | --- | --- | --- | --- |
 | Sun shadow resolution (each cascade) | 1024 | 2048 | Auto fine: 4096 below 1440 rows, 8192 from 1440 | 8192 |
-| Sun shadow cascades | 3 | 4 | 4 | 4 |
+| Sun shadow cascades | 3 | 4 | 5 | 5 |
 | Point and spot shadow atlas | 2048 | 4096 | 4096 | 8192 |
 | Largest point and spot shadow tile | 512 | 1024 | 1024 | 2048 |
 | Point and spot lights with shadows | 4 | 16 | 16 | 16 |
@@ -28,11 +28,12 @@ what each one costs:
 | Motion blur samples (scenes with motion blur) | Off | 8 | 12 | 16 |
 | Reflection probe resolution (per face) | 128 | 128 | 256 | 256 |
 | Global illumination (experimental; scenes that use it) | Off | Off | High | High |
-| Memory of one view, 1920 x 1080 (see below) | 48 MiB | 192 MiB | 405 MiB | 789 MiB |
-| Memory of one view, 3840 x 2160 | 48 MiB | 325 MiB | 844 MiB | 1.76 GiB |
+| Memory of one view, 1920 x 1080 (see below) | 48 MiB | 192 MiB | 696 MiB | 1.81 GiB |
+| Memory of one view, 3840 x 2160 | 48 MiB | 325 MiB | 1.86 GiB | 2.05 GiB |
 
 - **Medium** keeps Strata 0.6.0's shadow map sizes and sample counts. **High**, the default, adds smoother wide sun
-  penumbrae at every size, and sharper sun shadows from 1440 rows on.
+  penumbrae at every size, and sharper sun shadows at every size: twice Medium's shadow map size each way below 1440
+  rows and four times from 1440 rows on, with a fifth cascade for what lies within about 1.5 m of the camera.
   **Ultra** is for large GPUs; **Low** for older and integrated ones.
 - **Sun shadow filter taps** smooth the sun's soft shadow edges where they are wider than a shadow texel, and
   **contact shadows** ground small objects the shadow maps are too coarse for (Custom only: no preset turns them on,

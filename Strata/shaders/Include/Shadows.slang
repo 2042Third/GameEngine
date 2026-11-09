@@ -36,6 +36,12 @@ static const float c_ShadowCascadeMarginTexels = 33.0;
 static const float c_ShadowSearchBase = 5.0;
 static const float c_ShadowSearchPerMeter = 0.3;
 
+// The view distance where a cascade ends (FrameConstants::CascadeSplits).
+float GetCascadeSplit(int cascade)
+{
+	return u_Frame.CascadeSplits[cascade >> 2][cascade & 3];
+}
+
 // Whether a cascade holds a camera-relative position: within its square by `margin` (in uv) and within its depth range.
 bool ShadowCascadeHolds(int cascade, float3 relativePosition, float margin)
 {
@@ -61,7 +67,7 @@ int SelectShadowCascade(float viewDepth, float3 relativePosition)
 	int cascadeCount = int(u_Frame.ShadowParams.w);
 	for (int cascade = 0; cascade < cascadeCount; cascade++)
 	{
-		if (viewDepth < u_Frame.CascadeSplits[cascade] && ShadowCascadeHolds(cascade, relativePosition))
+		if (viewDepth < GetCascadeSplit(cascade) && ShadowCascadeHolds(cascade, relativePosition))
 			return cascade;
 	}
 	return -1;
@@ -74,8 +80,8 @@ int SelectShadowCascade(float viewDepth, float3 relativePosition)
 // cascade does not blend into it (0).
 float CascadeBlendWeight(int cascade, float viewDepth, float3 relativePosition)
 {
-	float split = u_Frame.CascadeSplits[cascade];
-	float previousSplit = cascade > 0 ? u_Frame.CascadeSplits[cascade - 1] : 0.0;
+	float split = GetCascadeSplit(cascade);
+	float previousSplit = cascade > 0 ? GetCascadeSplit(cascade - 1) : 0.0;
 	float band = u_Frame.ShadowParams.z * (split - previousSplit);
 	if (!(band > 0.0))
 		return 0.0;

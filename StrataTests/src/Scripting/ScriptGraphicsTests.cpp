@@ -136,7 +136,7 @@ TEST_SUITE("Scripting.Graphics")
 		CHECK(probe.Get<int32_t>("Source") == StrataScriptGraphicsOptionSource_Project);
 		CHECK(probe.Get<int32_t>("Preset") == 2);
 		probe.Ask(0, "ShadowCascades");
-		CHECK(probe.Get<std::string>("Effective") == "4");
+		CHECK(probe.Get<std::string>("Effective") == "5"); // High's five cascades
 		probe.CheckScriptChecks();
 		CHECK(CountAllWarnings(log.GetEntries()) == 0);
 	}
@@ -210,7 +210,7 @@ TEST_SUITE("Scripting.Graphics")
 		refused(c_SetInt, "ShadowResolution", {}, 2, 0.0f, "GraphicsSetOption", "'ShadowResolution' takes the name of a choice");
 		refused(c_SetChoice, "ShadowResolution", "3000", 0, 0.0f, "GraphicsSetOption", "ShadowResolution: 'ShadowResolution' must be one of");
 		refused(c_SetFloat, "ShadowCascades", {}, 0, 2.0f, "GraphicsSetOption", "'ShadowCascades' takes an Int");
-		refused(c_SetInt, "ShadowCascades", {}, 9, 0.0f, "GraphicsSetOption", "ShadowCascades: 'ShadowCascades' must be a whole number from 1 to 4");
+		refused(c_SetInt, "ShadowCascades", {}, 9, 0.0f, "GraphicsSetOption", "ShadowCascades: 'ShadowCascades' must be a whole number from 1 to 5");
 		refused(c_SetChoice, "Preset", "Epic", 0, 0.0f, "GraphicsSetOption", "Preset: 'Preset' must be one of");
 		refused(c_SetChoice, "Resolution", "1080", 0, 0.0f, "GraphicsSetOption", "there is no graphics option 'Resolution'");
 		// A preset the SDK does not know is refused before any call.

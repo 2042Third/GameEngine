@@ -12,9 +12,10 @@
 struct CascadeFitBuffer
 {
 	float4x4 LightView;
-	float4 Boxes[4];       // Light view space: min.xy, max.xy
-	float4 Depths[4];      // x: the far side's z, y: the sphere's near side's z, z: world units per texel, w: 0
-	float4 CasterNearZ;    // Per cascade: the nearest drawn caster's z, as the CPU found it
+	float4 Boxes[5];       // Light view space: min.xy, max.xy (RenderData::c_MaxCascades)
+	// x: the far side's z, y: the sphere's near side's z, z: world units per texel, w: the nearest drawn caster's z, as the CPU
+	// found it
+	float4 Depths[5];
 	uint CascadeCount;
 	uint CasterDepthsFromGPU;
 	float MaxCasterDistance;
@@ -47,7 +48,7 @@ void st_Main()
 	}
 	else
 	{
-		casterNearZ = max(casterNearZ, u_Fit.CasterNearZ[cascade]);
+		casterNearZ = max(casterNearZ, depths.w);
 	}
 	float nearZ = clamp(casterNearZ, depths.y, depths.y + u_Fit.MaxCasterDistance);
 	float nearPlane = -nearZ;
@@ -71,7 +72,7 @@ void st_Main()
 }
 
 // --- Entry point ---
-[numthreads(4, 1, 1)]
+[numthreads(5, 1, 1)]
 void main(uint3 globalID : SV_DispatchThreadID, uint3 localID : SV_GroupThreadID, uint3 groupID : SV_GroupID, uint localIndex : SV_GroupIndex)
 {
 	st_GlobalInvocationID = globalID;

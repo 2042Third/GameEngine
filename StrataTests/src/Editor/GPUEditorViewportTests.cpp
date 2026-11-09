@@ -2762,19 +2762,19 @@ TEST_SUITE("GPU.Editor.GameGraphics")
 		};
 
 		// The project's quality: what S6 promises at High in a view of 1440 rows.
-		CHECK(drawLine() == "Shadow maps: 4 x 8192 (Graphics Quality: High)");
+		CHECK(drawLine() == "Shadow maps: 5 x 8192 (Graphics Quality: High)");
 		// A preset of the view's own.
 		harness.Run("viewport.setSettings", { { "quality", "low" } });
 		CHECK(drawLine() == "Shadow maps: 3 x 1024 in the Scene view (Low; the project: High)");
 		// Through the scene's camera the view draws at the game's quality, which the view's own preset does not change: the
 		// project's, and while playing the player's choice.
 		harness.Run("viewport.setSettings", { { "pilotGameCamera", true } });
-		CHECK(drawLine() == "Shadow maps: 4 x 8192 (Graphics Quality: High)");
+		CHECK(drawLine() == "Shadow maps: 5 x 8192 (Graphics Quality: High)");
 		harness.Run("play.start", { { "build", false } });
 		REQUIRE(context.GetGameGraphics().SetOption("Preset", "Medium"));
 		CHECK(drawLine() == "Shadow maps: 4 x 2048 through the scene's camera (Medium, the player's; the project: High)");
 		harness.Run("play.stop");
-		CHECK(drawLine() == "Shadow maps: 4 x 8192 (Graphics Quality: High)");
+		CHECK(drawLine() == "Shadow maps: 5 x 8192 (Graphics Quality: High)");
 		scene.OnDetach(panelContext);
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
