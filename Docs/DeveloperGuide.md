@@ -3933,7 +3933,8 @@ mechanical, so a lighting bug in code nobody changed may be a conversion slip (i
    macOS job converts every module to Metal with MoltenVK's converter and compiles it (a lower bound of what MoltenVK does
    at run time): `c_KnownFailures` of `.github/scripts/convert_shaders_to_metal.sh` lists the entries the offline
    conversion refuses whatever compiled them (the bindless table's runtime array, which MoltenVK places in an argument
-   buffer at run time), and only shrinks.
+   buffer at run time), and only shrinks. Their lines read `known failure:`, not errors, so that CI's annotations (the
+   first few error lines of a failed job's logs) name the job's real failures.
 7. **A conversion slip.** The classes the conversion met: vector comparisons used as one bool, a multiplication across two
    lines, `texture()` in compute, a matrix column written alone, GLSL's `umulExtended` and the dispatch's size (the hand
    fixes), and the one that compiled and passed every GPU test: a `mul` of two vectors, which collapsed the local shadows'
