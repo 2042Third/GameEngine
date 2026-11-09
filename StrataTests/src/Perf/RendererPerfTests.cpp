@@ -923,6 +923,53 @@ TEST_SUITE("PerfGPU.Renderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Render cost of 100,000 cubes under 64 shadowed point lights at High, every view drawn each frame and cached")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+		// The 16-light case's scene under 64 shadowed point lights, 8 by 8 over the grid, at the High preset (64 shadowed lights,
+		// 24 views a frame; provisional: the reference machine sets the budgets): uncached, all 384 views drawn and culled every
+		// frame, and cached, a still scene's steady state.
+		constexpr size_t c_Count = 100'000;
+		Scene scene("ShadowedLampCubes64");
+		Perf::AddCameraAndLight(scene);
+		Perf::CreateCubeGrid(scene, c_Count);
+		Perf::CreateShadowedLampGrid(scene, 64, 30.0f);
+		const bool measuresGPU = Perf::MeasuresGPU();
+		for (const bool cached : { false, true })
+		{
+			CAPTURE(cached);
+			SceneRendererSpecification specification = Perf::MeasuredRendererSpecification();
+			specification.Quality = RendererQuality::GetPreset(RendererQualityPreset::High);
+			specification.CacheLocalShadows = cached;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_Width, c_Height);
+			const std::string key = cached ? "PerfGPU.Renderer.LocalShadows64LightsHighCached" : "PerfGPU.Renderer.LocalShadows64LightsHigh";
+			std::vector<std::string> keys = { key };
+			if (measuresGPU)
+				keys.push_back(key + "GPU");
+			Perf::CheckBudgetsConfirmed(keys, [&]
+			{
+				const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(c_Count),
+					cached ? "100k cubes under 64 cached shadowed lamps at High" : "100k cubes under 64 shadowed lamps at High, every view drawn");
+				const SceneRendererStats& stats = renderer.GetStats();
+				CHECK(stats.LocalShadowLights == 64);
+				CHECK(stats.LocalShadowViewsDrawn == (cached ? 0u : 384u));
+				std::string stages;
+				for (const GPUStageTime& stage : renderer.GetGPUStats().StageMs)
+					stages += fmt::format(" {} {:.3f} ms", FrameProfiler::Get().GetStageName(stage.Stage), stage.Milliseconds);
+				MESSAGE("GPU stages of the latest frame:", stages);
+				Perf::MetricValues values { { key, measurement.CPU.MedianMs } };
+				if (measuresGPU)
+					values.emplace(key + "GPU", Perf::MeasureGPU(measurement));
+				return values;
+			});
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Render cost of 100,000 cubes under 16 shadowed point lights, every view drawn each frame and cached")
 	{
 		GPUContext gpu;

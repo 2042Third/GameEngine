@@ -326,7 +326,6 @@ namespace Strata
 		m_RequestedShadowMapSize = ResolveShadowMapSize(m_Specification.Quality);
 		m_ShadowMapSize = m_RequestedShadowMapSize;
 		m_Specification.MaxLights = std::max(m_Specification.MaxLights, 1u);
-		m_Specification.LocalShadowViewsPerFrame = std::max(m_Specification.LocalShadowViewsPerFrame, 1u);
 		m_LocalShadowAllocator.Reset(m_Specification.Quality.LocalShadowAtlasSize, 128);
 		glm::uvec3& grid = m_Specification.LightClusterGrid;
 		grid = glm::clamp(grid, glm::uvec3(1), glm::uvec3(c_MaxClusterGridSize));
@@ -466,8 +465,9 @@ namespace Strata
 		dummyAtlasDesc.dimension = nvrhi::TextureDimension::Texture2D;
 		dummyAtlasDesc.debugName = m_Specification.DebugName + ".NoLocalShadows";
 		m_DummyLocalShadowAtlas = m_Device->createTexture(dummyAtlasDesc);
+		// Sixteen slots to begin with (8 KiB); grown with the frame's shadowed lights (Render).
 		m_LocalShadowBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
-			.setByteSize(RenderData::c_MaxShadowedLocalLights * sizeof(RenderData::LocalShadowData))
+			.setByteSize(16 * sizeof(RenderData::LocalShadowData))
 			.setStructStride(sizeof(RenderData::LocalShadowData))
 			.setInitialState(nvrhi::ResourceStates::ShaderResource)
 			.setKeepInitialState(true)
@@ -3191,13 +3191,24 @@ namespace Strata
 		// The CPU's lights name their shadow slots (the GPU-driven path's light culling reads them from a table).
 		if (!m_GPULightsFrame && !m_LocalShadowLights.empty())
 		{
+			// Through a table by light record, filled for the frame's shadowed lights and cleared after.
+			if (m_LocalShadowRecordSlots.size() < renderScene.GetLights().GetCount())
+				m_LocalShadowRecordSlots.resize(renderScene.GetLights().GetCount(), 0u);
+			for (uint32_t slot = 0; slot < m_LocalShadowLights.size(); slot++)
+			{
+				if (m_LocalShadowLights[slot].Strength > 0.0f && m_LocalShadowLights[slot].Record < m_LocalShadowRecordSlots.size())
+					m_LocalShadowRecordSlots[m_LocalShadowLights[slot].Record] = slot + 1;
+			}
 			for (size_t index = 0; index < m_Lights.size(); index++)
 			{
-				for (uint32_t slot = 0; slot < m_LocalShadowLights.size(); slot++)
-				{
-					if (m_LocalShadowLights[slot].Record == m_LightRecordIndices[index] && m_LocalShadowLights[slot].Strength > 0.0f)
-						m_Lights[index].SpotAngles.z = static_cast<float>(slot + 1);
-				}
+				const uint32_t record = m_LightRecordIndices[index];
+				if (record < m_LocalShadowRecordSlots.size() && m_LocalShadowRecordSlots[record] != 0)
+					m_Lights[index].SpotAngles.z = static_cast<float>(m_LocalShadowRecordSlots[record]);
+			}
+			for (const LocalShadowLight& light : m_LocalShadowLights)
+			{
+				if (light.Record < m_LocalShadowRecordSlots.size())
+					m_LocalShadowRecordSlots[light.Record] = 0;
 			}
 		}
 		ResolveAssets(renderScene);
@@ -3258,6 +3269,7 @@ namespace Strata
 				BufferKind::StructuredUAV)
 			&& EnsureBufferCapacity(m_LightBoundsBuffer, m_GPULightsFrame ? m_GPULightRecords : m_LightBounds.size(), sizeof(RenderData::LightBounds), "LightBounds",
 				buffersRecreated, BufferKind::StructuredUAV)
+			&& EnsureBufferCapacity(m_LocalShadowBuffer, m_LocalShadowData.size(), sizeof(RenderData::LocalShadowData), "LocalShadows", buffersRecreated)
 			&& EnsureBufferCapacity(m_DrawArgumentBuffer, m_DrawArgumentsBuild.size(), sizeof(nvrhi::DrawIndexedIndirectArguments), "DrawArguments", drawListsRecreated,
 				BufferKind::IndirectArguments);
 		buffersRecreated = buffersRecreated || drawListsRecreated || cullRecreated;

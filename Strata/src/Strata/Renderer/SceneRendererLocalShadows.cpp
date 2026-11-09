@@ -20,13 +20,18 @@
 #include <cmath>
 #include <limits>
 
-// Shadows of point and spot lights (RendererQualitySettings::LocalShadowAtlasSize). The most relevant shadowed lights in
-// view get tiles of the renderer's depth atlas: a spot light one perspective view, a point light six (a cube's faces), each
-// view widened by a guard band of what its lookups reach (the normal bias and the filter) so that they never leave the face
-// they sample. A view is drawn again only when what it shows changed (its key, a caster reaching it, what casters are drawn
-// with), at most LocalShadowViewsPerFrame of them per frame (nearest lights first) where SpreadLightingUpdates spreads them; a
-// light casts its shadow once all its views hold content, from the matrices they were drawn with. Which views are drawn is
-// the CPU's decision on both paths; what each draws is decided by the CPU path here and by the GPU path's culling.
+// Shadows of point and spot lights (RendererQualitySettings::LocalShadowAtlasSize). The shadowed lights in view that matter
+// most (GetLocalShadowImportance, with a margin for those holding a shadow) get tiles of the renderer's depth atlas, as many
+// as MaxShadowedLocalLights allows and the atlas holds: a spot light one perspective view, a point light six (a cube's faces),
+// each view widened by a guard band of what its lookups reach (the normal bias and the filter) so that they never leave the
+// face they sample. Tiles follow the light's size on screen, stepped down for the less important lights while they do not
+// fit seven eighths of the atlas; a light whose tiles change size keeps sampling its old tiles until the new ones are drawn,
+// and at most two lights change at a time. A view is drawn again only when what it shows changed (its key, a caster reaching
+// it, what casters are drawn with), at most LocalShadowViewsPerFrame of them per frame where SpreadLightingUpdates spreads
+// them (views without content first, a quarter to the views that waited longest, the rest by waiting times importance); a
+// light casts its shadow once all its views hold content, from the matrices they were drawn with, and fades it in, or out
+// once it lost its shadow while in view. Which views are drawn is the CPU's decision on both paths; what each draws is decided
+// by the CPU path here and by the GPU path's culling.
 
 namespace Strata
 {
@@ -42,9 +47,23 @@ namespace Strata
 		// size it has, so sizes do not toggle while the camera moves.
 		constexpr float c_TileGrowRatio = 1.25f;
 		constexpr float c_TileShrinkRatio = 0.4f;
-		// The lights ranked just above the most relevant one left out fade their shadows over this fraction of their
-		// relevance's margin over it (SpreadLightingUpdates), so a light entering the ranks does not pop.
-		constexpr float c_LocalShadowRankMargin = 0.25f;
+		// A light holding a shadow ranks as if it mattered this much more, and in the order sizes are fitted in a light passes one
+		// it matters this much more than: lights near the cut or near each other do not trade places every frame.
+		constexpr float c_LocalShadowKeepRatio = 1.25f;
+		// The projected size of a light's range, r / (d - r), saturates at 1 / this where the camera nears the range.
+		constexpr float c_NearCoverageDistance = 0.1f;
+		// Tiles are fitted into this share of the atlas (in eighths): the rest is room for lights whose tiles change size, which
+		// keep their old tiles until the new ones are drawn.
+		constexpr uint64_t c_LocalShadowAtlasEighths = 7;
+		// At most this many lights sample old tiles while their new ones are drawn (SpreadLightingUpdates; without it every light
+		// takes its size at once).
+		constexpr uint32_t c_MaxLocalShadowTransitions = 2;
+		// The share of the views drawn per frame (1 / this, at least one) given to the views that waited longest.
+		constexpr uint32_t c_LocalShadowAgedShare = 4;
+		// The change tracking's grid: a light or a proxy's bounds spanning more cells than this is tested without it.
+		constexpr uint64_t c_LocalShadowGridMaxCells = 64;
+		constexpr int32_t c_LocalShadowGridBias = 1 << 20;
+		constexpr uint32_t c_NoLocalShadowLight = ~0u;
 		// A spot light's view covers at most this half angle (radians, 80 degrees): one perspective tile cannot show a
 		// hemisphere. Wider cones are shadowed within it.
 		constexpr float c_MaxSpotShadowHalfAngle = 1.3962634f;
@@ -82,6 +101,42 @@ namespace Strata
 			while (static_cast<float>(result) < value && result < (1u << 30))
 				result <<= 1;
 			return result;
+		}
+
+		// The change tracking grid's cell of a coordinate, within the 21 bits per axis of a cell key.
+		int32_t GetGridCell(float coordinate, float cellSize)
+		{
+			const float cell = std::floor(coordinate / cellSize);
+			if (std::isnan(cell))
+				return 0;
+			return static_cast<int32_t>(std::clamp(cell, -static_cast<float>(c_LocalShadowGridBias), static_cast<float>(c_LocalShadowGridBias - 1)));
+		}
+
+		uint64_t GetGridKey(int32_t x, int32_t y, int32_t z)
+		{
+			return (static_cast<uint64_t>(x + c_LocalShadowGridBias) << 42) | (static_cast<uint64_t>(y + c_LocalShadowGridBias) << 21)
+				| static_cast<uint64_t>(z + c_LocalShadowGridBias);
+		}
+
+		// The cells a box spans, each way.
+		struct GridRange
+		{
+			glm::ivec3 Min = glm::ivec3(0);
+			glm::ivec3 Max = glm::ivec3(-1);
+
+			uint64_t GetCellCount() const
+			{
+				const glm::i64vec3 extent = glm::i64vec3(Max) - glm::i64vec3(Min) + glm::i64vec3(1);
+				return extent.x <= 0 || extent.y <= 0 || extent.z <= 0 ? 0 : static_cast<uint64_t>(extent.x * extent.y * extent.z);
+			}
+		};
+
+		GridRange GetGridRange(const glm::vec3& boxMin, const glm::vec3& boxMax, float cellSize)
+		{
+			GridRange range;
+			range.Min = glm::ivec3(GetGridCell(boxMin.x, cellSize), GetGridCell(boxMin.y, cellSize), GetGridCell(boxMin.z, cellSize));
+			range.Max = glm::ivec3(GetGridCell(boxMax.x, cellSize), GetGridCell(boxMax.y, cellSize), GetGridCell(boxMax.z, cellSize));
+			return range;
 		}
 
 		// Whether a box reaches into a sphere (the closest point of the box to the center is within the radius).
@@ -141,11 +196,58 @@ namespace Strata
 	{
 		for (uint32_t view = 0; view < light.ViewCount; view++)
 		{
+			LocalShadowView& state = light.Views[view];
+			// A view whose light's tiles changed size may still hold its content in its old tile.
+			if (state.HasContent && state.DrawnKey.Tile != light.Tiles[view])
+				m_LocalShadowAllocator.Free(state.DrawnKey.Tile);
 			m_LocalShadowAllocator.Free(light.Tiles[view]);
 			light.Tiles[view] = {};
-			light.Views[view].HasContent = false;
+			state.HasContent = false;
+			state.Drawing = false;
 		}
 		light.TileSize = 0;
+	}
+
+	bool SceneRenderer::ResizeLocalShadowTiles(LocalShadowLight& light, uint32_t size)
+	{
+		std::array<ShadowAtlasTile, RenderData::c_LocalShadowFaces> fresh = {};
+		for (uint32_t view = 0; view < light.ViewCount; view++)
+		{
+			fresh[view] = m_LocalShadowAllocator.Allocate(size);
+			if (fresh[view].IsValid())
+				continue;
+			for (uint32_t taken = 0; taken < view; taken++)
+				m_LocalShadowAllocator.Free(fresh[taken]);
+			return false;
+		}
+		for (uint32_t view = 0; view < light.ViewCount; view++)
+		{
+			// The tile holding the view's content stays until the view is drawn into the new one (CommitLocalShadows frees it); a
+			// tile that holds nothing yet goes back now.
+			const LocalShadowView& state = light.Views[view];
+			if (!(state.HasContent && state.DrawnKey.Tile == light.Tiles[view]))
+				m_LocalShadowAllocator.Free(light.Tiles[view]);
+			light.Tiles[view] = fresh[view];
+		}
+		light.TileSize = size;
+		return true;
+	}
+
+	float SceneRenderer::GetLocalShadowImportance(const SceneCamera& camera, const RenderData::LightRecord& record)
+	{
+		const glm::vec4 bounds = record.Bounds;
+		const float radius = std::max(bounds.w, 1e-4f);
+		float coverage = radius;
+		if (!camera.Orthographic)
+		{
+			// The projected size of the range's sphere, r / (d - r), saturating where the camera nears it; within it, up to twice
+			// that at its center (the lights around the camera first, the nearer the more).
+			const float distance = glm::length(glm::vec3(bounds) - camera.Position) / radius;
+			coverage = distance >= 1.0f ? 1.0f / std::max(distance - 1.0f, c_NearCoverageDistance) : (2.0f - distance) / c_NearCoverageDistance;
+		}
+		// A dim light's shadow shows less: the square root of its luminous intensity (color times intensity, as the record holds it).
+		const float luminance = glm::dot(glm::vec3(record.Color), glm::vec3(0.2126f, 0.7152f, 0.0722f));
+		return coverage * std::sqrt(std::max(luminance, 1e-6f));
 	}
 
 	void SceneRenderer::ResetLocalShadows()
@@ -176,38 +278,32 @@ namespace Strata
 		ResetLocalShadows();
 	}
 
-	void SceneRenderer::FindLocalShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, bool exactCasters, bool markCasters)
+	uint32_t SceneRenderer::RankLocalShadowLights(const RenderLights& lights, const SceneCamera& camera, const Frustum& frustum, bool spread)
 	{
-		ST_PROFILE_FUNCTION();
-		ST_PROFILE_STAGE("Render.Extract");
-		m_LocalShadowViews.clear();
-		m_LocalShadowCasters.clear();
-		m_LocalShadowCandidates.clear();
-		// The atlas holds the shadows of one render scene: another one (also a clone, entering Play) starts without them.
-		if (renderScene.GetId() != m_LocalShadowSceneId)
+		// The lights holding a shadow by (entity, type), for a lookup per shadowed light in view.
+		const auto keyOf = [](entt::entity entity, uint32_t type) { return (static_cast<uint64_t>(entt::to_integral(entity)) << 8) | (type & 0xFFu); };
+		m_LocalShadowLightIndex.clear();
+		for (uint32_t index = 0; index < m_LocalShadowLights.size(); index++)
+			m_LocalShadowLightIndex.emplace_back(keyOf(m_LocalShadowLights[index].Entity, m_LocalShadowLights[index].Type), index);
+		std::sort(m_LocalShadowLightIndex.begin(), m_LocalShadowLightIndex.end());
+		const auto findHeld = [&](entt::entity entity, uint32_t type)
 		{
-			ResetLocalShadows();
-			m_LocalShadowSceneId = renderScene.GetId();
-			m_LocalShadowProxyVersion = renderScene.GetProxyVersion();
-		}
-		const RenderLights& lights = renderScene.GetLights();
-		const std::span<const uint32_t> shadowed = lights.GetShadowedRecords();
-		if (shadowed.empty() && m_LocalShadowLights.empty())
-		{
-			// Nothing casts: nothing to follow either.
-			m_LocalShadowProxyVersion = renderScene.GetProxyVersion();
-			m_LocalShadowBounds.clear();
-			return;
-		}
+			const uint64_t key = keyOf(entity, type);
+			const auto it = std::lower_bound(m_LocalShadowLightIndex.begin(), m_LocalShadowLightIndex.end(), std::pair<uint64_t, uint32_t>(key, 0u));
+			return it != m_LocalShadowLightIndex.end() && it->first == key ? it->second : c_NoLocalShadowLight;
+		};
 
-		// The shadowed lights in view, ranked as the light clusters rank lights: those whose range holds the camera first, then by
-		// the projected size of their range (registry order between equals).
+		// The shadowed lights in view by importance, those holding a shadow ranked as if they mattered c_LocalShadowKeepRatio more
+		// (registry order between equals).
 		struct Candidate
 		{
 			uint32_t Record = 0;
-			float Relevance = 0.0f;
+			float Importance = 0.0f;
+			float Rank = 0.0f;
+			uint32_t Held = c_NoLocalShadowLight;
 		};
 		std::vector<Candidate> candidates;
+		const std::span<const uint32_t> shadowed = lights.GetShadowedRecords();
 		candidates.reserve(shadowed.size());
 		const std::span<const RenderData::LightRecord> records = lights.GetRecords();
 		for (const uint32_t record : shadowed)
@@ -215,138 +311,197 @@ namespace Strata
 			const glm::vec4 bounds = records[record].Bounds;
 			if (!frustum.IsSphereVisible(glm::vec3(bounds), bounds.w))
 				continue;
-			const float distance = glm::length(glm::vec3(bounds) - camera.Position);
-			float relevance = 0.0f;
-			if (camera.Orthographic)
-				relevance = bounds.w;
-			else if (distance <= bounds.w)
-				relevance = std::numeric_limits<float>::max();
-			else
-				relevance = bounds.w / (distance - bounds.w);
-			candidates.push_back(Candidate { record, relevance });
+			const float importance = GetLocalShadowImportance(camera, records[record]);
+			const uint32_t held = findHeld(lights.GetEntity(record), lights.GetType(record));
+			candidates.push_back(Candidate { record, importance, held != c_NoLocalShadowLight ? importance * c_LocalShadowKeepRatio : importance, held });
 		}
 		std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b)
 		{
-			return a.Relevance != b.Relevance ? a.Relevance > b.Relevance : a.Record < b.Record;
+			return a.Rank != b.Rank ? a.Rank > b.Rank : a.Record < b.Record;
 		});
-		// Spread over frames, with fades, only where the cache keeps views: without it every view is drawn every frame, so
-		// nothing waits and nothing fades.
-		const bool spread = m_Specification.SpreadLightingUpdates && m_Specification.CacheLocalShadows;
-		const size_t kept = std::min<size_t>(candidates.size(), m_Specification.Quality.MaxShadowedLocalLights);
-		const std::optional<float> firstLeftOut = kept < candidates.size() ? std::optional<float>(candidates[kept].Relevance) : std::nullopt;
 
-		// The lights keep their state (tiles, views, sizes) by entity and type; those that left the ranks give their tiles back.
+		// As many as the quality allows and the atlas holds at its smallest tiles in the share tiles are fitted into, counted
+		// before the ranks are cut: lights the atlas cannot hold lose their shadows as those beyond the quality's count do, fading.
+		const uint32_t atlasSize = m_LocalShadowAllocator.GetAtlasSize();
+		const uint64_t tilesEachWay = atlasSize / std::max(std::min(c_MinLocalShadowTile, atlasSize), 1u);
+		const uint64_t capacity = tilesEachWay * tilesEachWay * c_LocalShadowAtlasEighths / 8;
+		size_t kept = 0;
+		uint64_t views = 0;
+		while (kept < candidates.size() && kept < m_Specification.Quality.MaxShadowedLocalLights)
+		{
+			const uint64_t viewCount = lights.GetType(candidates[kept].Record) == RenderData::c_LightPoint ? RenderData::c_LocalShadowFaces : 1u;
+			if (views + viewCount > capacity)
+				break;
+			views += viewCount;
+			kept++;
+		}
+
+		// What becomes of each light holding a shadow: ranked again, in view without a rank (it fades out), or gone.
+		enum class Fate : uint8_t
+		{
+			Gone = 0,
+			Unranked,
+			Ranked
+		};
+		std::vector<Fate> fates(m_LocalShadowLights.size(), Fate::Gone);
+		for (size_t rank = 0; rank < candidates.size(); rank++)
+		{
+			const Candidate& candidate = candidates[rank];
+			if (candidate.Held == c_NoLocalShadowLight)
+				continue;
+			LocalShadowLight& light = m_LocalShadowLights[candidate.Held];
+			light.Record = candidate.Record;
+			light.Importance = candidate.Importance;
+			fates[candidate.Held] = rank < kept ? Fate::Ranked : Fate::Unranked;
+		}
+		// The ranked lights: those that held a shadow in their previous order (the order their sizes are fitted in), then the new
+		// ones. A light then moves up past those it matters c_LocalShadowKeepRatio more than, so the order follows importance
+		// without trading places between near equals.
 		m_LocalShadowScratch.clear();
+		for (uint32_t index = 0; index < m_LocalShadowLights.size(); index++)
+		{
+			if (fates[index] != Fate::Ranked)
+				continue;
+			m_LocalShadowScratch.push_back(std::move(m_LocalShadowLights[index]));
+			m_LocalShadowScratch.back().Ranked = true;
+		}
 		for (size_t rank = 0; rank < kept; rank++)
 		{
-			const uint32_t record = candidates[rank].Record;
-			const entt::entity entity = lights.GetEntity(record);
-			const uint32_t type = lights.GetType(record);
-			auto previous = std::find_if(m_LocalShadowLights.begin(), m_LocalShadowLights.end(), [&](const LocalShadowLight& light)
-			{
-				return light.Entity == entity && light.Type == type;
-			});
-			if (previous != m_LocalShadowLights.end())
-			{
-				m_LocalShadowScratch.push_back(std::move(*previous));
-				previous->Entity = entt::null; // Taken
-			}
-			else
-			{
-				m_LocalShadowScratch.emplace_back();
-				m_LocalShadowScratch.back().Entity = entity;
-				m_LocalShadowScratch.back().Type = type;
-				m_LocalShadowScratch.back().ViewCount = type == RenderData::c_LightPoint ? RenderData::c_LocalShadowFaces : 1u;
-			}
-			LocalShadowLight& light = m_LocalShadowScratch.back();
-			light.Record = record;
-			light.Relevance = candidates[rank].Relevance;
-			light.RankFade = 1.0f;
-			if (spread && firstLeftOut && light.Relevance < std::numeric_limits<float>::max())
-				light.RankFade = std::clamp((light.Relevance - *firstLeftOut) / (c_LocalShadowRankMargin * light.Relevance), 0.0f, 1.0f);
+			const Candidate& candidate = candidates[rank];
+			if (candidate.Held != c_NoLocalShadowLight)
+				continue;
+			LocalShadowLight& light = m_LocalShadowScratch.emplace_back();
+			light.Entity = lights.GetEntity(candidate.Record);
+			light.Type = lights.GetType(candidate.Record);
+			light.ViewCount = light.Type == RenderData::c_LightPoint ? RenderData::c_LocalShadowFaces : 1u;
+			light.Record = candidate.Record;
+			light.Importance = candidate.Importance;
+			light.Ranked = true;
 		}
-		for (LocalShadowLight& light : m_LocalShadowLights)
+		for (size_t index = 1; index < m_LocalShadowScratch.size(); index++)
 		{
-			if (light.Entity != entt::null)
-				FreeLocalShadowTiles(light);
+			for (size_t place = index; place > 0; place--)
+			{
+				if (!(m_LocalShadowScratch[place].Importance > m_LocalShadowScratch[place - 1].Importance * c_LocalShadowKeepRatio))
+					break;
+				std::swap(m_LocalShadowScratch[place], m_LocalShadowScratch[place - 1]);
+			}
+		}
+		// Lights still in view that lost their rank fade their shadows out where lighting updates are spread (keeping their tiles
+		// meanwhile); the others give their tiles back now. A light out of view lights nothing the view shows, so its shadow goes
+		// at once.
+		const float step = 1.0f / static_cast<float>(c_LocalShadowFadeFrames);
+		for (uint32_t index = 0; index < m_LocalShadowLights.size(); index++)
+		{
+			if (fates[index] == Fate::Ranked)
+				continue;
+			LocalShadowLight& light = m_LocalShadowLights[index];
+			if (fates[index] == Fate::Unranked && spread && light.Fade > step)
+			{
+				m_LocalShadowScratch.push_back(std::move(light));
+				m_LocalShadowScratch.back().Ranked = false;
+				continue;
+			}
+			FreeLocalShadowTiles(light);
 		}
 		m_LocalShadowLights.swap(m_LocalShadowScratch);
+		return static_cast<uint32_t>(candidates.size());
+	}
 
-		// Tile sizes: as large as the light looks (with hysteresis), stepped down from the least relevant light while they do not
-		// fit; lights that do not fit even at the smallest size go without shadows.
+	void SceneRenderer::PlaceLocalShadowTiles(const RenderLights& lights, const SceneCamera& camera, bool spread)
+	{
+		// Tile sizes: as large as the light looks (with hysteresis), stepped down from the least important light while they do
+		// not fit the share of the atlas tiles are fitted into (RankLocalShadowLights kept no more than it holds at the smallest).
+		const std::span<const RenderData::LightRecord> records = lights.GetRecords();
 		const uint32_t atlasSize = m_LocalShadowAllocator.GetAtlasSize();
 		const uint32_t maxTile = std::min(m_Specification.Quality.LocalShadowMaxTile, atlasSize);
 		const uint32_t minTile = std::min(c_MinLocalShadowTile, maxTile);
 		const float viewportHeight = static_cast<float>(m_ViewportSize.y);
-		std::vector<uint32_t> sizes;
-		std::vector<uint32_t> tileCounts;
-		for (LocalShadowLight& light : m_LocalShadowLights)
+		size_t ranked = 0;
+		while (ranked < m_LocalShadowLights.size() && m_LocalShadowLights[ranked].Ranked)
+			ranked++;
+		std::vector<uint32_t> sizes(ranked);
+		std::vector<uint32_t> tileCounts(ranked);
+		for (size_t index = 0; index < ranked; index++)
 		{
+			LocalShadowLight& light = m_LocalShadowLights[index];
 			const glm::vec4 bounds = records[light.Record].Bounds;
 			const float pixels = GetScreenFraction(camera, glm::vec3(bounds), bounds.w) * viewportHeight * 0.5f;
 			uint32_t wanted = std::clamp(CeilPowerOfTwo(pixels), minTile, maxTile);
 			if (light.WantedSize != 0 && pixels > static_cast<float>(light.WantedSize) * c_TileShrinkRatio
 				&& pixels <= static_cast<float>(light.WantedSize) * c_TileGrowRatio)
-				wanted = light.WantedSize;
+				wanted = std::clamp(light.WantedSize, minTile, maxTile);
 			light.WantedSize = wanted;
-			sizes.push_back(wanted);
-			tileCounts.push_back(light.ViewCount);
+			sizes[index] = wanted;
+			tileCounts[index] = light.ViewCount;
 		}
-		const size_t fit = ShadowAtlasAllocator::FitTileSizes(sizes, tileCounts, atlasSize, minTile);
-		while (m_LocalShadowLights.size() > fit)
+		const uint64_t budget = static_cast<uint64_t>(atlasSize) * atlasSize / 8 * c_LocalShadowAtlasEighths;
+		const size_t fit = ShadowAtlasAllocator::FitTileSizes(sizes, tileCounts, atlasSize, minTile, budget);
+		for (size_t index = fit; index < ranked; index++)
+			sizes[index] = minTile; // Only if the atlas shrank since the ranking: they take what is free
+
+		// Changes, within the frame's limits: shrinks first (the largest tiles first), then the new lights (at their size, else a
+		// smaller one: never a new layout of the atlas), then grows (the most important first). A light whose tiles change size
+		// keeps sampling its old tiles until its views are drawn into the new ones; at most c_MaxLocalShadowTransitions lights
+		// do at a time where lighting updates are spread, and one still changing waits for the next frame. When the atlas has no
+		// room, a light keeps its size.
+		const auto inTransition = [](const LocalShadowLight& light)
 		{
-			FreeLocalShadowTiles(m_LocalShadowLights.back());
-			m_LocalShadowLights.pop_back();
-		}
-		std::vector<uint32_t> allocationOrder;
-		for (uint32_t index = 0; index < m_LocalShadowLights.size(); index++)
-		{
-			LocalShadowLight& light = m_LocalShadowLights[index];
-			if (light.TileSize != sizes[index])
-				FreeLocalShadowTiles(light);
-			if (light.TileSize == 0)
-				allocationOrder.push_back(index);
-		}
-		// New tiles largest first; when the free space is too fragmented for them, every light's tiles are laid out again from
-		// an empty atlas (largest first, which always fits: ShadowAtlasAllocator).
-		const auto bySize = [&sizes](uint32_t a, uint32_t b) { return sizes[a] != sizes[b] ? sizes[a] > sizes[b] : a < b; };
-		std::sort(allocationOrder.begin(), allocationOrder.end(), bySize);
-		const auto allocate = [&](const std::vector<uint32_t>& order)
+			for (uint32_t view = 0; view < light.ViewCount; view++)
+			{
+				if (light.Views[view].HasContent && light.Views[view].DrawnKey.Tile != light.Tiles[view])
+					return true;
+			}
+			return false;
+		};
+		const uint32_t limit = spread ? c_MaxLocalShadowTransitions : std::numeric_limits<uint32_t>::max();
+		uint32_t transitions = 0;
+		for (const LocalShadowLight& light : m_LocalShadowLights)
+			transitions += inTransition(light) ? 1u : 0u;
+		const auto resize = [&](const std::vector<uint32_t>& order)
 		{
 			for (const uint32_t index : order)
 			{
 				LocalShadowLight& light = m_LocalShadowLights[index];
-				for (uint32_t view = 0; view < light.ViewCount; view++)
-				{
-					light.Tiles[view] = m_LocalShadowAllocator.Allocate(sizes[index]);
-					if (!light.Tiles[view].IsValid())
-						return false;
-				}
-				light.TileSize = sizes[index];
+				if (transitions >= limit)
+					break;
+				if (inTransition(light) || !ResizeLocalShadowTiles(light, sizes[index]))
+					continue;
+				transitions += inTransition(light) ? 1u : 0u;
 			}
-			return true;
 		};
-		if (!allocate(allocationOrder))
+		std::vector<uint32_t> order;
+		for (uint32_t index = 0; index < ranked; index++)
 		{
-			m_LocalShadowAllocator.Clear();
-			allocationOrder.clear();
-			for (uint32_t index = 0; index < m_LocalShadowLights.size(); index++)
-			{
-				LocalShadowLight& light = m_LocalShadowLights[index];
-				light.Tiles = {};
-				light.TileSize = 0;
-				for (LocalShadowView& view : light.Views)
-					view.HasContent = false;
-				allocationOrder.push_back(index);
-			}
-			std::sort(allocationOrder.begin(), allocationOrder.end(), bySize);
-			const bool laidOut = allocate(allocationOrder);
-			ST_CORE_VERIFY(laidOut, "SceneRenderer: fitted shadow tiles did not fit an empty atlas");
+			if (m_LocalShadowLights[index].TileSize > sizes[index])
+				order.push_back(index);
 		}
+		std::sort(order.begin(), order.end(), [this](uint32_t a, uint32_t b)
+		{
+			const uint32_t sizeA = m_LocalShadowLights[a].TileSize;
+			const uint32_t sizeB = m_LocalShadowLights[b].TileSize;
+			return sizeA != sizeB ? sizeA > sizeB : a > b;
+		});
+		resize(order);
+		for (uint32_t index = 0; index < ranked; index++)
+		{
+			LocalShadowLight& light = m_LocalShadowLights[index];
+			for (uint32_t size = sizes[index]; light.TileSize == 0 && size >= minTile && size > 0; size /= 2)
+				ResizeLocalShadowTiles(light, size);
+		}
+		order.clear();
+		for (uint32_t index = 0; index < ranked; index++)
+		{
+			if (m_LocalShadowLights[index].TileSize != 0 && m_LocalShadowLights[index].TileSize < sizes[index])
+				order.push_back(index);
+		}
+		resize(order);
 
 		// Each view's key this frame.
 		for (LocalShadowLight& light : m_LocalShadowLights)
 		{
+			if (light.TileSize == 0)
+				continue;
 			const RenderData::LightRecord& record = records[light.Record];
 			const LightShadowSettings& settings = lights.GetShadowSettings(light.Record);
 			light.ShadowSettings = glm::vec3(settings.Bias, settings.NormalBias, settings.FilterRadius);
@@ -372,7 +527,11 @@ namespace Strata
 				key.Tile = light.Tiles[view];
 			}
 		}
+	}
 
+	void SceneRenderer::TrackLocalShadowChanges(RenderScene& renderScene)
+	{
+		const std::span<const RenderData::LightRecord> records = renderScene.GetLights().GetRecords();
 		// What every view's content depends on beyond the casters: a change redraws them all.
 		LocalShadowContent content;
 		content.RenderSceneId = renderScene.GetId();
@@ -387,38 +546,21 @@ namespace Strata
 		const bool contentChanged = !(content == m_LocalShadowContent);
 		m_LocalShadowContent = content;
 
-		// The views whose content a proxy's change reaches: its bounds before (as followed) or after reach the light's range and
-		// the view's frustum as the view was drawn.
 		bool anyContent = false;
+		// Bounds of proxies not followed are known not to have reached a view while every view with content was drawn since the
+		// following started over (each drawing follows every proxy within its light's range).
+		bool followed = true;
 		for (LocalShadowLight& light : m_LocalShadowLights)
 		{
 			for (uint32_t view = 0; view < light.ViewCount; view++)
 			{
-				anyContent = anyContent || light.Views[view].HasContent;
+				LocalShadowView& state = light.Views[view];
+				anyContent = anyContent || state.HasContent;
+				followed = followed && (!state.HasContent || state.DrawnEpoch == m_LocalShadowEpoch);
 				if (contentChanged)
-					light.Views[view].Dirty = true;
+					state.Dirty = true;
 			}
 		}
-		const auto dirtyReached = [this](const AABB& bounds)
-		{
-			if (!bounds.IsValid())
-				return;
-			for (LocalShadowLight& light : m_LocalShadowLights)
-			{
-				for (uint32_t index = 0; index < light.ViewCount; index++)
-				{
-					LocalShadowView& view = light.Views[index];
-					if (!view.HasContent || view.Dirty)
-						continue;
-					// A margin of a hundredth of the range for the rounding of what the CPU or the GPU took.
-					const float margin = view.DrawnKey.Range * 0.01f;
-					const glm::vec3 boxMin = bounds.Min - margin;
-					const glm::vec3 boxMax = bounds.Max + margin;
-					if (BoxReachesSphere(boxMin, boxMax, view.DrawnKey.Position, view.DrawnKey.Range) && BoxInPlanes(boxMin, boxMax, view.DrawnPlanes))
-						view.Dirty = true;
-				}
-			}
-		};
 		const auto dirtyAll = [this]()
 		{
 			for (LocalShadowLight& light : m_LocalShadowLights)
@@ -427,14 +569,6 @@ namespace Strata
 					light.Views[index].Dirty = true;
 			}
 		};
-		// Bounds of proxies not followed are known not to have reached a view while every view with content was drawn since the
-		// following started over (each drawing follows every proxy within its light's range).
-		bool followed = true;
-		for (const LocalShadowLight& light : m_LocalShadowLights)
-		{
-			for (uint32_t index = 0; index < light.ViewCount; index++)
-				followed = followed && (!light.Views[index].HasContent || light.Views[index].DrawnEpoch == m_LocalShadowEpoch);
-		}
 		const uint64_t proxyVersion = renderScene.GetProxyVersion();
 		if (!anyContent)
 		{
@@ -450,29 +584,139 @@ namespace Strata
 				m_LocalShadowBounds.clear();
 				m_LocalShadowEpoch++;
 			}
-			else
+			else if (!m_LocalShadowChanges.empty())
 			{
+				// A grid of the lights' reach (their ranges now and as their views were drawn) finds the few lights a change can
+				// reach; cells twice the median range wide.
+				const float marginScale = 1.01f;
+				std::vector<float> ranges;
+				ranges.reserve(m_LocalShadowLights.size());
+				for (const LocalShadowLight& light : m_LocalShadowLights)
+					ranges.push_back(records[light.Record].PositionRange.w);
+				std::nth_element(ranges.begin(), ranges.begin() + static_cast<std::ptrdiff_t>(ranges.size() / 2), ranges.end());
+				m_LocalShadowCellSize = std::max(ranges.empty() ? 1.0f : ranges[ranges.size() / 2] * 2.0f, 0.5f);
+				m_LocalShadowGrid.clear();
+				m_LocalShadowLargeLights.clear();
+				for (uint32_t index = 0; index < m_LocalShadowLights.size(); index++)
+				{
+					const LocalShadowLight& light = m_LocalShadowLights[index];
+					const glm::vec4 position = records[light.Record].PositionRange;
+					glm::vec3 reachMin = glm::vec3(position) - position.w * marginScale;
+					glm::vec3 reachMax = glm::vec3(position) + position.w * marginScale;
+					for (uint32_t view = 0; view < light.ViewCount; view++)
+					{
+						const LocalShadowViewKey& drawn = light.Views[view].DrawnKey;
+						if (!light.Views[view].HasContent)
+							continue;
+						reachMin = glm::min(reachMin, drawn.Position - drawn.Range * marginScale);
+						reachMax = glm::max(reachMax, drawn.Position + drawn.Range * marginScale);
+					}
+					const GridRange cells = GetGridRange(reachMin, reachMax, m_LocalShadowCellSize);
+					if (cells.GetCellCount() > c_LocalShadowGridMaxCells)
+					{
+						m_LocalShadowLargeLights.push_back(index);
+						continue;
+					}
+					for (int32_t x = cells.Min.x; x <= cells.Max.x; x++)
+					{
+						for (int32_t y = cells.Min.y; y <= cells.Max.y; y++)
+						{
+							for (int32_t z = cells.Min.z; z <= cells.Max.z; z++)
+								m_LocalShadowGrid.emplace_back(GetGridKey(x, y, z), index);
+						}
+					}
+				}
+				std::sort(m_LocalShadowGrid.begin(), m_LocalShadowGrid.end());
+				m_LocalShadowStamps.resize(m_LocalShadowLights.size(), 0u);
+				// The lights whose reach a box may touch, each once (m_LocalShadowQueried).
+				const auto query = [&](const AABB& bounds)
+				{
+					m_LocalShadowQueried.clear();
+					if (!bounds.IsValid())
+						return;
+					const GridRange cells = GetGridRange(bounds.Min, bounds.Max, m_LocalShadowCellSize);
+					if (cells.GetCellCount() > c_LocalShadowGridMaxCells)
+					{
+						for (uint32_t index = 0; index < m_LocalShadowLights.size(); index++)
+							m_LocalShadowQueried.push_back(index);
+						return;
+					}
+					if (++m_LocalShadowStamp == 0)
+					{
+						std::fill(m_LocalShadowStamps.begin(), m_LocalShadowStamps.end(), 0u);
+						m_LocalShadowStamp = 1;
+					}
+					m_LocalShadowQueried.insert(m_LocalShadowQueried.end(), m_LocalShadowLargeLights.begin(), m_LocalShadowLargeLights.end());
+					for (int32_t x = cells.Min.x; x <= cells.Max.x; x++)
+					{
+						for (int32_t y = cells.Min.y; y <= cells.Max.y; y++)
+						{
+							for (int32_t z = cells.Min.z; z <= cells.Max.z; z++)
+							{
+								const uint64_t key = GetGridKey(x, y, z);
+								auto it = std::lower_bound(m_LocalShadowGrid.begin(), m_LocalShadowGrid.end(), std::pair<uint64_t, uint32_t>(key, 0u));
+								for (; it != m_LocalShadowGrid.end() && it->first == key; ++it)
+								{
+									if (m_LocalShadowStamps[it->second] == m_LocalShadowStamp)
+										continue;
+									m_LocalShadowStamps[it->second] = m_LocalShadowStamp;
+									m_LocalShadowQueried.push_back(it->second);
+								}
+							}
+						}
+					}
+				};
+				// The views whose content a proxy's change reaches: its bounds before (as followed) or after reach the light's
+				// range and the view's frustum as the view was drawn.
+				const auto markReached = [this](const AABB& bounds)
+				{
+					for (const uint32_t index : m_LocalShadowQueried)
+					{
+						LocalShadowLight& light = m_LocalShadowLights[index];
+						for (uint32_t face = 0; face < light.ViewCount; face++)
+						{
+							LocalShadowView& view = light.Views[face];
+							if (!view.HasContent || view.Dirty)
+								continue;
+							// A margin of a hundredth of the range for the rounding of what the CPU or the GPU took.
+							const float margin = view.DrawnKey.Range * 0.01f;
+							const glm::vec3 boxMin = bounds.Min - margin;
+							const glm::vec3 boxMax = bounds.Max + margin;
+							if (BoxReachesSphere(boxMin, boxMax, view.DrawnKey.Position, view.DrawnKey.Range) && BoxInPlanes(boxMin, boxMax, view.DrawnPlanes))
+								view.Dirty = true;
+						}
+					}
+				};
 				for (const uint32_t proxy : m_LocalShadowChanges)
 				{
 					const bool alive = proxy < renderScene.GetProxyCapacity() && renderScene.GetEntity(proxy) != entt::null;
 					const AABB bounds = alive ? renderScene.GetWorldBounds(proxy) : AABB();
 					auto it = m_LocalShadowBounds.find(proxy);
 					if (it != m_LocalShadowBounds.end())
-						dirtyReached(it->second);
+					{
+						query(it->second);
+						markReached(it->second);
+					}
 					else if (!followed)
+					{
 						dirtyAll();
-					dirtyReached(bounds);
+					}
+					query(bounds);
+					markReached(bounds);
 					// Followed while within a shadowed light's range.
 					bool inRange = false;
-					for (const LocalShadowLight& light : m_LocalShadowLights)
+					for (const uint32_t index : m_LocalShadowQueried)
 					{
+						const LocalShadowLight& light = m_LocalShadowLights[index];
 						const glm::vec4 position = records[light.Record].PositionRange;
-						inRange = inRange || (bounds.IsValid() && BoxReachesSphere(bounds.Min, bounds.Max, glm::vec3(position), position.w));
-						for (uint32_t index = 0; index < light.ViewCount && !inRange; index++)
+						inRange = inRange || BoxReachesSphere(bounds.Min, bounds.Max, glm::vec3(position), position.w);
+						for (uint32_t face = 0; face < light.ViewCount && !inRange; face++)
 						{
-							const LocalShadowView& view = light.Views[index];
-							inRange = view.HasContent && bounds.IsValid() && BoxReachesSphere(bounds.Min, bounds.Max, view.DrawnKey.Position, view.DrawnKey.Range);
+							const LocalShadowView& view = light.Views[face];
+							inRange = view.HasContent && BoxReachesSphere(bounds.Min, bounds.Max, view.DrawnKey.Position, view.DrawnKey.Range);
 						}
+						if (inRange)
+							break;
 					}
 					if (inRange)
 						m_LocalShadowBounds[proxy] = bounds;
@@ -488,64 +732,171 @@ namespace Strata
 			m_LocalShadowBounds.clear();
 			m_LocalShadowEpoch++;
 		}
+	}
 
-		// The views the frame draws: those not up to date (every view without the cache), the nearest lights' first, at most
-		// LocalShadowViewsPerFrame of them where lighting updates are spread.
-		const bool cache = m_Specification.CacheLocalShadows;
-		const uint32_t budget = spread ? std::max(m_Specification.LocalShadowViewsPerFrame, 1u) : std::numeric_limits<uint32_t>::max();
-		std::vector<uint32_t> byDistance(m_LocalShadowLights.size());
-		for (uint32_t index = 0; index < byDistance.size(); index++)
-			byDistance[index] = index;
-		std::vector<float> distances(m_LocalShadowLights.size());
-		for (uint32_t index = 0; index < distances.size(); index++)
+	uint32_t SceneRenderer::ScheduleLocalShadowViews(bool spread)
+	{
+		// The views not up to date (every view without the cache). The lights fading their shadows out keep what they hold.
+		struct Waiting
 		{
-			const glm::vec3 offset = glm::vec3(records[m_LocalShadowLights[index].Record].PositionRange) - camera.Position;
-			distances[index] = glm::dot(offset, offset);
-		}
-		std::sort(byDistance.begin(), byDistance.end(), [&distances](uint32_t a, uint32_t b) { return distances[a] != distances[b] ? distances[a] < distances[b] : a < b; });
-		uint32_t pending = 0;
-		for (const uint32_t index : byDistance)
+			uint32_t Light = 0;
+			uint32_t Face = 0;
+			bool Empty = false;  // No content yet: its light casts no shadow until it is drawn
+			uint32_t Waited = 0; // Frames
+			float Score = 0.0f;  // Frames waited (and this one) times its light's importance
+		};
+		std::vector<Waiting> waiting;
+		const bool cache = m_Specification.CacheLocalShadows;
+		for (uint32_t index = 0; index < m_LocalShadowLights.size(); index++)
 		{
 			LocalShadowLight& light = m_LocalShadowLights[index];
 			for (uint32_t face = 0; face < light.ViewCount; face++)
 			{
-				const LocalShadowView& view = light.Views[face];
-				const bool upToDate = cache && view.HasContent && !view.Dirty && view.Key == view.DrawnKey;
-				if (upToDate)
+				LocalShadowView& view = light.Views[face];
+				view.Drawing = false;
+				if (light.TileSize == 0)
 					continue;
-				if (m_LocalShadowViews.size() >= budget)
+				if (cache && view.HasContent && !view.Dirty && view.Key == view.DrawnKey)
 				{
-					pending++;
+					view.WaitedFrames = 0;
 					continue;
 				}
-				LocalShadowDrawView drawView;
-				drawView.Light = index;
-				drawView.Face = face;
-				m_LocalShadowViews.push_back(drawView);
+				if (!light.Ranked)
+					continue;
+				waiting.push_back(Waiting { index, face, !view.HasContent, view.WaitedFrames, light.Importance * static_cast<float>(view.WaitedFrames + 1) });
 			}
 		}
-
-		// A light casts its shadow once every view holds content (drawn now, or kept from before, possibly from where it was);
-		// where lighting updates are spread it then fades in, and lights near the end of the ranks fade by their margin.
-		std::vector<uint8_t> drawnNow(static_cast<size_t>(m_LocalShadowLights.size()) * RenderData::c_LocalShadowFaces, 0);
-		for (const LocalShadowDrawView& view : m_LocalShadowViews)
-			drawnNow[static_cast<size_t>(view.Light) * RenderData::c_LocalShadowFaces + view.Face] = 1;
-		for (uint32_t index = 0; index < m_LocalShadowLights.size(); index++)
+		std::vector<uint8_t> chosen(waiting.size(), 1);
+		const uint32_t budget = std::max(m_Specification.Quality.LocalShadowViewsPerFrame, 1u);
+		if (spread && waiting.size() > budget)
 		{
-			LocalShadowLight& light = m_LocalShadowLights[index];
-			light.Complete = true;
+			// The views with content that waited longest take a share of the budget, so that none starves while nearer lights
+			// change every frame; the rest go to views without content (the lights' order, a light's views together), then by
+			// waiting times importance.
+			std::fill(chosen.begin(), chosen.end(), 0);
+			std::vector<uint32_t> order;
+			for (uint32_t index = 0; index < waiting.size(); index++)
+			{
+				if (!waiting[index].Empty)
+					order.push_back(index);
+			}
+			std::sort(order.begin(), order.end(), [&waiting](uint32_t a, uint32_t b)
+			{
+				const Waiting& first = waiting[a];
+				const Waiting& second = waiting[b];
+				if (first.Waited != second.Waited)
+					return first.Waited > second.Waited;
+				return first.Score != second.Score ? first.Score > second.Score : a < b;
+			});
+			const uint32_t aged = std::max(budget / c_LocalShadowAgedShare, 1u);
+			uint32_t taken = 0;
+			for (size_t place = 0; place < order.size() && taken < aged; place++, taken++)
+				chosen[order[place]] = 1;
+			order.resize(waiting.size());
+			for (uint32_t index = 0; index < waiting.size(); index++)
+				order[index] = index;
+			std::sort(order.begin(), order.end(), [&waiting](uint32_t a, uint32_t b)
+			{
+				const Waiting& first = waiting[a];
+				const Waiting& second = waiting[b];
+				if (first.Empty != second.Empty)
+					return first.Empty;
+				if (!first.Empty && first.Score != second.Score)
+					return first.Score > second.Score;
+				return a < b; // The lights' order, then their faces
+			});
+			for (size_t place = 0; place < order.size() && taken < budget; place++)
+			{
+				if (chosen[order[place]] != 0)
+					continue;
+				chosen[order[place]] = 1;
+				taken++;
+			}
+		}
+		// Drawn in the lights' order, so that a light's drawn views are consecutive (one caster query per light).
+		uint32_t pending = 0;
+		for (uint32_t index = 0; index < waiting.size(); index++)
+		{
+			LocalShadowView& view = m_LocalShadowLights[waiting[index].Light].Views[waiting[index].Face];
+			if (chosen[index] == 0)
+			{
+				view.WaitedFrames++;
+				pending++;
+				continue;
+			}
+			view.Drawing = true;
+			LocalShadowDrawView drawView;
+			drawView.Light = waiting[index].Light;
+			drawView.Face = waiting[index].Face;
+			m_LocalShadowViews.push_back(drawView);
+		}
+		return pending;
+	}
+
+	void SceneRenderer::FindLocalShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, bool exactCasters, bool markCasters)
+	{
+		ST_PROFILE_FUNCTION();
+		ST_PROFILE_STAGE("Render.Extract");
+		m_LocalShadowViews.clear();
+		m_LocalShadowCasters.clear();
+		m_LocalShadowCandidates.clear();
+		// The atlas holds the shadows of one render scene: another one (also a clone, entering Play) starts without them.
+		if (renderScene.GetId() != m_LocalShadowSceneId)
+		{
+			ResetLocalShadows();
+			m_LocalShadowSceneId = renderScene.GetId();
+			m_LocalShadowProxyVersion = renderScene.GetProxyVersion();
+		}
+		const RenderLights& lights = renderScene.GetLights();
+		if (lights.GetShadowedRecords().empty() && m_LocalShadowLights.empty())
+		{
+			// Nothing casts: nothing to follow either.
+			m_LocalShadowProxyVersion = renderScene.GetProxyVersion();
+			m_LocalShadowBounds.clear();
+			return;
+		}
+
+		// Spread over frames, with fades, only where the cache keeps views: without it every view is drawn every frame, so
+		// nothing waits and nothing fades.
+		const bool spread = m_Specification.SpreadLightingUpdates && m_Specification.CacheLocalShadows;
+		const uint32_t requested = RankLocalShadowLights(lights, camera, frustum, spread);
+		PlaceLocalShadowTiles(lights, camera, spread);
+		TrackLocalShadowChanges(renderScene);
+		const uint32_t pending = ScheduleLocalShadowViews(spread);
+
+		// A light casts its shadow once every view holds content (drawn now, or kept from before, possibly from where it was or
+		// in its old tiles); where lighting updates are spread it then fades in by a step a frame, and a light that lost its rank
+		// fades out as fast.
+		const float step = 1.0f / static_cast<float>(c_LocalShadowFadeFrames);
+		m_Stats.LocalShadowRequested = requested;
+		m_Stats.LocalShadowLights = 0;
+		m_Stats.LocalShadowFading = 0;
+		m_Stats.LocalShadowTileSizes = {};
+		m_Stats.LocalShadowSizeCounts = {};
+		for (LocalShadowLight& light : m_LocalShadowLights)
+		{
+			light.Complete = light.TileSize > 0;
 			for (uint32_t face = 0; face < light.ViewCount; face++)
-				light.Complete = light.Complete && (light.Views[face].HasContent || drawnNow[static_cast<size_t>(index) * RenderData::c_LocalShadowFaces + face] != 0);
+				light.Complete = light.Complete && (light.Views[face].HasContent || light.Views[face].Drawing);
 			if (!light.Complete)
 				light.Strength = 0.0f;
 			else if (!spread)
 				light.Strength = 1.0f;
 			else
-				light.Strength = std::min(static_cast<float>(light.FadeFrames + 1) / static_cast<float>(c_LocalShadowFadeFrames), 1.0f) * light.RankFade;
+				light.Strength = light.Ranked ? std::min(light.Fade + step, 1.0f) : std::max(light.Fade - step, 0.0f);
+			if (!light.Ranked)
+			{
+				m_Stats.LocalShadowFading++;
+				continue;
+			}
+			if (light.TileSize == 0)
+				continue;
+			if (m_Stats.LocalShadowLights < m_Stats.LocalShadowTileSizes.size())
+				m_Stats.LocalShadowTileSizes[m_Stats.LocalShadowLights] = static_cast<uint16_t>(std::min(light.TileSize, 65535u));
+			m_Stats.LocalShadowLights++;
+			const uint32_t sizeClass = static_cast<uint32_t>(std::countr_zero(std::max(light.TileSize / c_MinLocalShadowTile, 1u)));
+			m_Stats.LocalShadowSizeCounts[std::min<size_t>(sizeClass, m_Stats.LocalShadowSizeCounts.size() - 1)]++;
 		}
-		m_Stats.LocalShadowLights = static_cast<uint32_t>(m_LocalShadowLights.size());
-		for (size_t index = 0; index < m_LocalShadowLights.size() && index < m_Stats.LocalShadowTileSizes.size(); index++)
-			m_Stats.LocalShadowTileSizes[index] = static_cast<uint16_t>(m_LocalShadowLights[index].TileSize);
 		m_Stats.LocalShadowViewsDrawn = static_cast<uint32_t>(m_LocalShadowViews.size());
 		m_Stats.LocalShadowViewsPending = pending;
 		if (m_LocalShadowViews.empty())
@@ -562,6 +913,7 @@ namespace Strata
 			drawView.LOD = LODCriteria { m_Specification.LODThreshold, LODSelection::GetErrorThreshold(m_Specification.Quality.LODErrorPixels, height), height };
 		}
 
+		const std::span<const RenderData::LightRecord> records = lights.GetRecords();
 		// The casters of each light with drawn views: one job per light queries the proxies within its range (followed from now
 		// on) and, on the CPU path, tests them against each of its drawn views; merged in the views' order.
 		std::vector<std::pair<uint32_t, uint32_t>> lightGroups; // (first drawn view, count): a light's drawn views are consecutive
@@ -766,19 +1118,18 @@ namespace Strata
 			return;
 		const glm::dvec3 origin(camera.Position);
 		const float atlasSize = static_cast<float>(m_LocalShadowAllocator.GetAtlasSize());
-		std::array<bool, RenderData::c_MaxShadowedLocalLights * RenderData::c_LocalShadowFaces> drawn = {};
-		for (const LocalShadowDrawView& view : m_LocalShadowViews)
-			drawn[view.Light * RenderData::c_LocalShadowFaces + view.Face] = true;
 		for (uint32_t slot = 0; slot < m_LocalShadowLights.size(); slot++)
 		{
 			const LocalShadowLight& light = m_LocalShadowLights[slot];
 			RenderData::LocalShadowData& data = m_LocalShadowData[slot];
 			data = {};
+			if (light.TileSize == 0)
+				continue; // Waits for its tiles: no views, strength 0 (no light names the slot)
 			for (uint32_t face = 0; face < light.ViewCount; face++)
 			{
 				// What the tile holds: drawn now with its key, else what it was drawn with.
 				const LocalShadowView& view = light.Views[face];
-				const LocalShadowViewKey& key = drawn[slot * RenderData::c_LocalShadowFaces + face] || !view.HasContent ? view.Key : view.DrawnKey;
+				const LocalShadowViewKey& key = view.Drawing || !view.HasContent ? view.Key : view.DrawnKey;
 				data.ViewProjection[face] = GetLocalShadowViewProjection(key, origin);
 				const float tileSize = static_cast<float>(std::max(key.Tile.Size, 1u));
 				data.Tiles[face] = glm::vec4(static_cast<float>(key.Tile.X) / atlasSize, static_cast<float>(key.Tile.Y) / atlasSize, tileSize / atlasSize,
@@ -896,24 +1247,25 @@ namespace Strata
 
 	void SceneRenderer::CommitLocalShadows()
 	{
-		std::array<bool, RenderData::c_MaxShadowedLocalLights * RenderData::c_LocalShadowFaces> drawn = {};
-		for (const LocalShadowDrawView& view : m_LocalShadowViews)
-			drawn[view.Light * RenderData::c_LocalShadowFaces + view.Face] = true;
-		for (uint32_t slot = 0; slot < m_LocalShadowLights.size(); slot++)
+		for (LocalShadowLight& light : m_LocalShadowLights)
 		{
-			LocalShadowLight& light = m_LocalShadowLights[slot];
 			for (uint32_t face = 0; face < light.ViewCount; face++)
 			{
-				if (!drawn[slot * RenderData::c_LocalShadowFaces + face])
-					continue;
 				LocalShadowView& view = light.Views[face];
+				if (!view.Drawing)
+					continue;
+				// A view drawn into its light's new tiles gives the old one back: nothing samples it from now on.
+				if (view.HasContent && view.DrawnKey.Tile != view.Key.Tile)
+					m_LocalShadowAllocator.Free(view.DrawnKey.Tile);
 				view.DrawnKey = view.Key;
 				view.DrawnPlanes = Frustum(GetLocalShadowViewProjection(view.Key, glm::dvec3(0.0))).GetPlanes();
 				view.DrawnEpoch = m_LocalShadowDrawEpoch;
 				view.HasContent = true;
 				view.Dirty = false;
+				view.Drawing = false;
+				view.WaitedFrames = 0;
 			}
-			light.FadeFrames = light.Complete ? std::min(light.FadeFrames + 1, c_LocalShadowFadeFrames) : 0u;
+			light.Fade = light.Strength;
 		}
 	}
 

@@ -2434,6 +2434,10 @@ TEST_SUITE("GPU.Editor.Viewport")
 		const DecodedImage captured = harness.CaptureLoaded({ { "camera", "scene" }, { "width", size.x }, { "height", size.y }, { "overlays", false } }, &result);
 		CHECK(result["renderStats"]["localShadowLights"] == 1);
 		CHECK(result["renderStats"]["localShadowTileSizes"] == nlohmann::json::array({ gameStats.LocalShadowTileSizes[0] }));
+		// The shadowed lights in view that asked for a shadow, those fading one out, and the tiles by size.
+		CHECK(result["renderStats"]["localShadowRequested"] == 1);
+		CHECK(result["renderStats"]["localShadowFading"] == 0);
+		CHECK(result["renderStats"]["localShadowTileSizeCounts"] == nlohmann::json { { std::to_string(gameStats.LocalShadowTileSizes[0]), 1 } });
 		CHECK(result["renderStats"]["quality"] == RendererQuality::ToSectionValue(game->GetSceneRenderer().GetQuality()));
 		REQUIRE(captured.Width == static_cast<int>(gameImage.Width));
 		REQUIRE(captured.Height == static_cast<int>(gameImage.Height));

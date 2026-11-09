@@ -4018,7 +4018,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | `ShadowCascades` (the fifth near the camera) | 3 | 4 | 5 | 5 |
 | `LocalShadowAtlasSize` (point and spot lights) | 2048 | 4096 | 4096 | 8192 |
 | `LocalShadowMaxTile` | 512 | 1024 | 1024 | 2048 |
-| `MaxShadowedLocalLights` | 4 | 16 | 16 | 16 |
+| `MaxShadowedLocalLights` | 4 | 16 | 64 | 256 |
+| `LocalShadowViewsPerFrame` (point and spot views drawn again per frame) | 12 | 12 | 24 | 48 |
 | `LODErrorPixels` / `MinProjectedPixels` | 2 / 1 | 1 / 0.5 | 1 / 0.5 | 0.5 / 0.25 |
 | `ShadowFilterQuality` (taps of the sun's wide penumbrae) | 8 | 16 | 24 | 32 |
 | `ContactShadows` (steps of the sun's contact shadows; 0 off) | 0 | 0 | 0 | 0 |
@@ -4041,7 +4042,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
   High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for rows that cost at every
   size (`ShadowResolution`, 4096 against 2048, and `ShadowCascades`, five against four: the stable cascades' detail;
   `ShadowFilterQuality`, `AmbientOcclusionQuality`, `EnvironmentResolution`, `Reflections`, and `MotionBlurQuality`,
-  `ReflectionProbeResolution` and `GlobalIllumination` for scenes that use them; `Renderer.Quality` checks it).
+  `ReflectionProbeResolution`, `GlobalIllumination`, `MaxShadowedLocalLights` and `LocalShadowViewsPerFrame` for scenes
+  that use them; `Renderer.Quality` checks it).
   Custom is the section's fields (High's values by default). `RendererQuality::Clamp` keeps every knob in its range.
 - **Auto by rows:** `RendererQuality::ResolveShadowMapSize` resolves Auto and AutoFine for the renderer's viewport rows
   (its output: the Scene and Game views' panel pixels, the window's back buffer, a capture's image), limited to
@@ -4407,10 +4409,11 @@ lights, Post Process and the sky), and never a resolution below the output's.
   where it calls `ResetExposureAdaptation`). It is counted in frames, never in time: slow frames never reset it. Tests
   may render many frames back to back without device frames: the renderer waits for its own oldest frames before its
   frame constants' versions run out (`SceneRenderer::ReserveFrameConstantVersions`; Architecture rules, NVRHI pitfalls).
-- With TAA, the local lights' shadow filter and the Checkerboard screen-space reflections turn their per-pixel noise by the
-  golden ratio's fraction of a turn per frame of the history (`TemporalParams.z`, counted from the reset so captures are
-  deterministic), and the history averages it; without TAA the turn is 0 and the images are unchanged. The sun's shadow
-  filter turns nothing: a fixed blue-noise tile, whose grain the shadow mask's blur takes in the frame ("Sun shadows").
+- With TAA, the Checkerboard screen-space reflections turn their per-pixel noise by the golden ratio's fraction of a turn
+  per frame of the history (`TemporalParams.z`, counted from the reset so captures are deterministic), and the history
+  averages it; without TAA the turn is 0 and the images are unchanged. The shadow filters turn nothing: the sun's a fixed
+  blue-noise tile, whose grain the shadow mask's blur takes in the frame ("Sun shadows"), the local lights' a fixed
+  interleaved gradient noise per pixel ("Local light shadows"; `GPU.SceneRenderer.TAA` checks it holds still).
   Ambient occlusion never turns either: it resolves its pattern within the frame ("Ambient occlusion").
 - Renderers of single images settle or turn TAA off: `viewport.capture` and the project's picture render their still view
   again until the history holds `c_TemporalSettleFrames` (8) complete frames (a frame still incomplete for another reason
@@ -4743,50 +4746,73 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 - Point and spot lights cast shadows with `CastShadows` (off by default, so scenes saved before it render as they did), with
   `ShadowBias` and `ShadowNormalBias` (texels of the light's tiles) and `ShadowFilterRadius` (texels, at most 8). A renderer
-  gives the `Quality.MaxShadowedLocalLights` most relevant shadowed lights in view (16, at most `RenderData::
-  c_MaxShadowedLocalLights`; ranked as the light clusters rank lights) tiles of one D32 atlas
-  (`RendererQualitySettings::LocalShadowAtlasSize`: 4096 texels, 64 MiB; made with the first shadowed light it draws,
-  released with its render targets, `GetLocalShadowAtlas`): a spot light one perspective view (at most 80 degrees each way
-  from its axis), a point light six, a cube's faces, which the shader picks by the major axis toward the pixel. Each view
-  is widened by a guard band of what its lookups reach (`ceil(ShadowFilterRadius + 1.42 ShadowNormalBias) + 1` texels: the
-  normal bias moves a lookup by up to sqrt(2) times its texels across the view), so neither the offset nor the filter
-  leaves the face it samples and faces meet without a seam. Tiles are 128 to `RendererQualitySettings::LocalShadowMaxTile`
-  texels (1024 at Medium, at most the atlas) from a quadtree (`ShadowAtlasAllocator`), sized by the light's range on screen
-  with hysteresis; while they do not fit, the least relevant lights' tiles step down first, in rounds (`FitTileSizes`), and
-  lights that do not fit even at 128 cast none (`SceneRendererStats::LocalShadowTileSizes`: each shadowed light's tile).
+  gives tiles of one D32 atlas (`RendererQualitySettings::LocalShadowAtlasSize`: 4096 texels, 64 MiB; made with the first
+  shadowed light it draws, released with its render targets, `GetLocalShadowAtlas`) to the shadowed lights in view that
+  matter most, as many as `Quality.MaxShadowedLocalLights` allows (4, 16, 64, 256 by preset; the setting's ceiling
+  `RenderData::c_MaxShadowedLocalLights`, 4096) and the atlas holds at 128-texel tiles in seven eighths of its area (about 37,
+  149 and 597 point lights in a 2048, 4096 and 8192 atlas, six times as many spot lights): a spot light one perspective view
+  (at most 80 degrees each way from its axis), a point light six, a cube's faces, which the shader picks by the major axis
+  toward the pixel. The light and view buffers grow with the frame's lights and views (`EnsureBufferCapacity`), and the
+  GPU's culling takes a batch's first view in 16 bits of its mode (`GetLocalShadowCullMode`), so one frame may draw
+  thousands of views (a capture of 200 point lights draws 1200).
+- **Importance** (`SceneRenderer::GetLocalShadowImportance`): the projected size of the light's range `r / (d - r)`,
+  saturating at 10 where the camera nears it and rising to 20 at its center (the lights around the camera first, the
+  nearer the more), times the square root of its luminous intensity (the record's color times intensity, as luminance).
+  Lights holding a shadow rank as if they mattered a quarter more (`c_LocalShadowKeepRatio`), so a light near the cut
+  does not trade places every frame; the order their tiles are fitted in is the previous frame's, a light moving up only
+  past one it matters a quarter more than. A light that loses its rank while in view keeps its tiles and fades its
+  shadow out, then gives the tiles back; one that leaves the view loses it at once (it lights nothing the view shows).
+- **Tiles** are 128 to `RendererQualitySettings::LocalShadowMaxTile` texels (1024 at Medium, at most the atlas) from a
+  quadtree (`ShadowAtlasAllocator`, a bit per free node per level), each light's sized by its range on screen with
+  hysteresis; while they do not fit seven eighths of the atlas, the least important lights' tiles step down first, in
+  rounds (`FitTileSizes` with an area budget). A light whose tiles change size keeps sampling its old tiles until its
+  views are drawn into the new ones (`LocalShadowView::DrawnKey.Tile` holds them, `CommitLocalShadows` frees them), so a
+  resize never blanks a shadow; the eighth kept free is its room. Changes run shrinks first (largest first), then new
+  lights (at their size, else a smaller one), then grows; at most two lights are between sizes at a time
+  (`c_MaxLocalShadowTransitions`) where lighting updates are spread, and a light the atlas has no room for keeps its size
+  (or waits, if new) instead of the atlas being laid out again. `SceneRendererStats::LocalShadowRequested`,
+  `LocalShadowLights`, `LocalShadowFading`, `LocalShadowTileSizes` (the first 64 by rank) and `LocalShadowSizeCounts` (how
+  many have each size) say what a frame chose; the Scene view's statistics and `editor.perf`'s `renderStats`
+  (`localShadowRequested`, `localShadowLights`, `localShadowFading`, `localShadowTileSizes`, `localShadowTileSizeCounts`)
+  show them.
 - Views are cached like the cascades: a view is drawn again only when its key changes (the light's position, direction,
   range and cone, its tile, its guard band), when what casters are drawn with changes (`LocalShadowContent`: the scene's
   GPU copy's tables and deferred proxies, the geometry pool's content, the texture table's entries while materials are
   alpha-masked, read through `TextureTable::GetEntryVersion` so renderers of one scene decide alike), or when a proxy whose
-  bounds before or after its change reach the view changes. The bounds of every proxy within a light's range are recorded
-  when its views are drawn, so even a caster's first move redraws only the views it reaches; beyond 65,536 followed
-  proxies the following starts over. The camera is not part of a view's key: the matrices that draw and sample a tile are
-  made relative to the frame's camera in double from what the tile was drawn with, so a light that moved keeps its old
-  shadow until its views are drawn again.
-- `SpreadLightingUpdates` (on by default) draws at most `LocalShadowViewsPerFrame` (12) views per frame, the nearest
-  lights' first; a light casts its shadow once all its views hold content and then fades it in over
-  `SceneRenderer::c_LocalShadowFadeFrames` frames, and the lights ranked just above the most relevant one left out fade by
-  their margin over it. Off (renderers of single images: the editor's capture renderer, which also draws the project's
-  picture at the quality of the view it shows, and the thumbnails' renderer with a 2048 atlas, 16 MiB), every view that
-  is not up to date is drawn in the frame and nothing fades; captures and the project's picture still count views left
-  pending as incomplete.
-  `CacheLocalShadows` off draws every view of every shadowed light every frame (the perf tests' worst case), and nothing
-  fades. `SceneRendererStats::LocalShadowLights`, `LocalShadowViewsDrawn` and `LocalShadowViewsPending` say what a frame
-  did.
-- Which views a frame draws is the CPU's decision on both paths (`FindLocalShadowCasters`, one job per drawn light: a
-  sphere query of its range, then the exact tests per view on the CPU path); what each view draws is decided twice
+  bounds before or after its change reach the view changes. A grid of the lights' reach (cells twice the median range,
+  rebuilt in frames with changes; lights or bounds spanning more than 64 cells are tested without it) finds the lights a
+  change can reach. The bounds of every proxy within a light's range are recorded when its views are drawn, so even a
+  caster's first move redraws only the views it reaches; beyond 65,536 followed proxies the following starts over. The
+  camera is not part of a view's key: the matrices that draw and sample a tile are made relative to the frame's camera in
+  double from what the tile was drawn with, so a light that moved keeps its old shadow until its views are drawn again.
+- `SpreadLightingUpdates` (on by default) draws at most `Quality.LocalShadowViewsPerFrame` views per frame (12, 12, 24, 48
+  by preset): views without content first (a light casts nothing until all its views hold content; in the lights'
+  order, a light's views together), a quarter of the budget to the views with content that waited longest
+  (`c_LocalShadowAgedShare`), so none starves while nearer lights change every frame, and the rest by frames waited times
+  importance. A light that gains a shadow fades it in over `SceneRenderer::c_LocalShadowFadeFrames` frames once all its
+  views hold content, one that loses it fades it out as fast: a shadow changes by at most an eighth a frame. Off
+  (renderers of single images: the editor's capture renderer, which also draws the project's picture at the quality of
+  the view it shows, and the thumbnails' renderer with a 2048 atlas, 16 MiB), every view that is not up to date is drawn
+  in the frame, every light takes its size at once and nothing fades; captures and the project's picture still count
+  views left pending as incomplete. `CacheLocalShadows` off draws every view of every shadowed light every frame (the perf
+  tests' worst case), and nothing fades. `SceneRendererStats::LocalShadowViewsDrawn` and `LocalShadowViewsPending` say
+  what a frame drew and left waiting.
+- Which views a frame draws is the CPU's decision on both paths (`FindLocalShadowCasters`: `RankLocalShadowLights`,
+  `PlaceLocalShadowTiles`, `TrackLocalShadowChanges`, `ScheduleLocalShadowViews`, then one job per drawn light: a sphere
+  query of its range, then the exact tests per view on the CPU path); what each view draws is decided twice
   ("GPU-driven path"). The views draw in `GPU.Shadows` with `Scene/LocalShadowMesh(Skinned).vert` (perspective, no
   pancaking) from `RenderData::LocalShadowData` (scene set SRV 13, a slot per light: six camera-relative matrices, the
   tiles, the biases and the light's strength); a redrawn tile is first cleared by a quad at depth 0, since a clear would
   also clear the cached tiles. The forward passes sample the atlas (SRV 8; the shadow passes bind a dummy) through the
   cascades' comparison sampler, 16 taps kept inside the tile (`c_LocalShadowPoissonDisk`, turned per pixel by
-  `LocalShadowSampleRotation`, which still turns with the TAA frame: the sun's filter no longer does), for lights whose
-  `LightData::SpotAngles.z` names their
-  slot plus one: the CPU path writes it with the frame's lights, `Scene/LightCompact.comp` from the renderer's slot table per
-  light record (light-culling SRV 21). The depth bias moves the lookup toward the light and the normal bias off the surface,
-  both in texels at the surface's depth.
+  `LocalShadowSampleRotation`'s interleaved gradient noise, fixed as the sun's filter's is: nothing that needs TAA), for
+  lights whose `LightData::SpotAngles.z` names their slot plus one: the CPU path writes it with the frame's lights through
+  a table by light record, `Scene/LightCompact.comp` from the renderer's slot table per light record (light-culling SRV 21).
+  The depth bias moves the lookup toward the light and the normal bias off the surface, both in texels at the surface's
+  depth. A light behind a surface without a clear coat (N.L <= 0, where `EvaluateLightWeighted` adds nothing, glass too)
+  is skipped before its shadow's taps.
 - Cost: the views drawn (none in a still scene), their casters' culling (a sphere query per drawn light on the CPU, or the
-  GPU's tests per view), and 16 comparison taps per pixel for each shadowed light reaching it.
+  GPU's tests per view), and 16 comparison taps per pixel for each shadowed light in front of it.
 
 ### Lighting
 

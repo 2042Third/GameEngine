@@ -268,6 +268,25 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   the gamepad pushing an axis furthest. 0.7.0's packages, built with Apple Clang 15, are not affected, and Vector2
   actions on whole sticks never were.
 
+**local-lights**
+
+- Many point and spot lights cast shadows at once: 64 at High and 256 at Ultra (16 at Medium, 4 at Low, as before), and
+  Custom any number the shadow atlas holds (about 149 point lights at 4096 texels, 597 at 8192). The shadows go to the
+  lights that matter most (near, large on screen, bright); a light that gains or loses its shadow fades it in or out over
+  eight frames, and one near the cut keeps it until another clearly matters more: shadows no longer pop or blink while the
+  camera moves.
+- A light whose shadow map changes size keeps its old shadow until the new one is drawn (0.7.0 showed it unshadowed for a
+  frame or more), and the atlas is never laid out again all at once.
+- No light's shadow waits long for an update while nearer lights move every frame: a quarter of each frame's shadow
+  updates goes to those that waited longest. Graphics Quality's new **Point and spot shadow updates per frame** (12, 12,
+  24, 48) sets how many views are drawn again per frame.
+- The point and spot shadows' filter noise no longer turns from frame to frame under TAA: it looked right only with TAA
+  and could crawl without it; images without TAA are unchanged to the bit.
+- Lights behind a surface skip their shadow's taps: less GPU time for many shadowed lights.
+- The Scene view's statistics and `editor.perf` report how many shadowed lights in view asked for a shadow
+  (`localShadowRequested`), got one (`localShadowLights`), are fading theirs out (`localShadowFading`) and how many tiles
+  of each size they have (`localShadowTileSizeCounts`).
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and
@@ -284,6 +303,9 @@ projects, the template and scenes or projects without the value get.
 | Sun shadow resolution of the High and Ultra presets | High 2048 / 4096 from 1440 rows, Ultra 4096 / 8192 | High 4096 / 8192 from 1440 rows, Ultra 8192 | stable cascades |
 | Sun cascade splits | fitted to the receivers the GPU read back (0.6.0's from the near clip until then) | fixed: from 1.5 m to the shadow distance by Cascade Distribution | stable cascades |
 | Sun shadow cascades of the High and Ultra presets | 4 | 5 (a near one within 1.5 m) | stable cascades |
+| Shadowed point and spot lights of the High and Ultra presets | 16 | High 64, Ultra 256 | local-lights |
+| Point and spot shadow views drawn again per frame | 12 (renderer specification) | the presets' row: 12, 12, 24, 48 | local-lights |
+| Point and spot shadows' filter noise under TAA | turns every frame | fixed | local-lights |
 
 ## Upgrading from 0.7.0
 
@@ -328,6 +350,11 @@ projects, the template and scenes or projects without the value get.
 | `SceneRendererStats::ShadowFit*`, `ShadowCascadeStats::Fitted`; `renderStats.shadowFit`, `cascades[].fitted`, `viewport.capture`'s `shadowFitSettled` | The fit's state | Removed | Command scripts drop expectations of `shadowFitSettled` |
 | Video memory of the sun's shadow maps at High | 256 MiB at 3840x2160 | 1 GiB at 3840x2160 (256 MiB at 1920x1080) | Graphics Quality Custom with Shadow Resolution 4096, or Medium |
 | A light's Cascade Distribution | shared the receivers' range of distances once fitted | shares 1.5 m to the shadow distance (0.6.0 shared the near clip to it with 0.8) | 0.9 stays the default; scenes keep their value |
+| **local-lights** | | | |
+| `SceneRendererSpecification::LocalShadowViewsPerFrame` | The renderer's redraw budget (12) | Removed: `RendererQualitySettings::LocalShadowViewsPerFrame`, a Graphics Quality row (`Renderer.Quality` section version 7) | Set the row in the specification's `Quality` |
+| `SceneRendererStats::LocalShadowTileSizes` | 16 entries, every shadowed light's | The first 64 lights' by rank; `LocalShadowSizeCounts` counts every light's sizes | Read `LocalShadowSizeCounts` for more than 64 lights |
+| `RenderData::c_MaxShadowedLocalLights` | 16, the lights a view shadows | 4096, the ceiling of the quality row (buffers grow with the frame's lights) | Read `RendererQualitySettings::MaxShadowedLocalLights` |
+| Shadowed lights at High and Ultra | 16 | 64 and 256: more GPU time in scenes with many shadowed lights | Graphics Quality Custom with **Shadowed point and spot lights** 16 |
 
 ## Known issues
 

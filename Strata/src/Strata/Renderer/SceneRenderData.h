@@ -278,9 +278,11 @@ namespace Strata
 		// LightRecord::SpotAngles.w of a drawn light that casts shadows (its component's CastShadows).
 		constexpr float c_LightRecordShadowed = 1.0f;
 
-		// Shadows of point and spot lights (SceneRenderer's local shadows): at most this many lights per view have them, a spot
-		// light with one view of the light's atlas, a point light with six (a cube's faces: +X, -X, +Y, -Y, +Z, -Z).
-		constexpr uint32_t c_MaxShadowedLocalLights = 16;
+		// Shadows of point and spot lights (SceneRenderer's local shadows): a spot light has one view of the lights' atlas, a point
+		// light six (a cube's faces: +X, -X, +Y, -Y, +Z, -Z). RendererQualitySettings::MaxShadowedLocalLights is at most this many;
+		// the atlas is the real ceiling (at 128-texel tiles with an eighth kept free, about 37, 149 and 597 point lights in a
+		// 2048, 4096 and 8192 atlas, six times as many spot lights). The buffers grow with the lights and views a frame has.
+		constexpr uint32_t c_MaxShadowedLocalLights = 4096;
 		constexpr uint32_t c_LocalShadowFaces = 6;
 		// A shadowed light as the shaders read it (u_LocalShadows, Include/LocalShadows.slang), by its shadow slot: the shadow
 		// pass draws view `slot * c_LocalShadowFaces + face` with its matrix, the forward pass samples the views' tiles.

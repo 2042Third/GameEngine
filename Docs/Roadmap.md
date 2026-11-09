@@ -939,7 +939,7 @@ Open items and deferrals later waves own:
   recede fast, and Original stays soft in slow pans; probes are baked, so a moving sun does not relight them; at most 16
   shadowed point and spot lights per view. Left for later (also in "Later" below): MSAA (rendering below native
   resolution and temporal upscaling are ruled out: the owner's direction of 2026-10-26, in "Later"); layered shadow
-  rendering, occlusion culling of local shadow views, more than 16 shadowed lights, sized local lights' diffuse light and
+  rendering, occlusion culling of local shadow views, more than 16 shadowed lights (wave 8: 64 at High, 256 at Ultra), sized local lights' diffuse light and
   shadows (PCSS; their highlights take `SourceRadius` since wave 8) and their contact shadows (wave 7 gave the sun both); run-time probe capture, cube texture assets and clustered probe lists; SSR
   for transparent surfaces; volumetric fog and light shafts, the atmosphere from altitude (wave 7 added aerial
   perspective); thickness maps, sheen, specular, iridescence and anisotropy, EXR import and area lights; shadows of a
@@ -1620,6 +1620,12 @@ the previous frame's lit color, as screen-space reflections' is.
 - **`local-lights`: many shadowed lights.** No fixed limit, 64 at High and 256 at Ultra at the same atlas sizes; tiles
   that keep their shadow while they resize, no global layouts, a scheduler that starves nothing, a grid for change
   tracking, the filter on fixed noise. Below the cut: a time governor.
+  Landed on its branch (2026-11-09): the shadows go to the lights that matter most (screen size, distance, brightness)
+  with hysteresis and fade in and out over eight frames; resized lights keep their old tiles until the new ones are
+  drawn; a quarter of the views per frame (the new row 12, 12, 24, 48) goes to the views that waited longest; the light
+  and view buffers grow; lights behind a surface skip their shadow's taps. Still below its cut: the time governor (a
+  GPU.LocalShadows stage scaling the views per frame), tap counts by rank, retained tiles for lights that left the view,
+  and the cached rotation-projection per view.
 
 **Tranche 3, wave 9 unless usage remains:**
 
