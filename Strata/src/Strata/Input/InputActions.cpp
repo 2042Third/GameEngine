@@ -406,14 +406,17 @@ namespace Strata
 				}
 				case InputControlType::GamepadAxis:
 				{
-					float value = 0.0f;
-					for (uint32_t gamepad = 0; gamepad < c_MaxGamepads; gamepad++)
+					// The gamepads are compared with each other, not with a running value that starts at 0: Apple Clang 17
+					// (clang-1700.0.13.5, -O2 and above, arm64) took that value, chosen by "|first| > 0 ? first : 0", for
+					// one that is never negative and dropped its std::abs in the next comparison, so a first gamepad held
+					// to the negative side lost to an idle second one and the axis read 0.
+					uint32_t furthest = 0;
+					for (uint32_t gamepad = 1; gamepad < c_MaxGamepads; gamepad++)
 					{
-						const float axis = gamepads.Axes[gamepad][control.Code];
-						if (std::abs(axis) > std::abs(value))
-							value = axis;
+						if (std::abs(gamepads.Axes[gamepad][control.Code]) > std::abs(gamepads.Axes[furthest][control.Code]))
+							furthest = gamepad;
 					}
-					return std::clamp(value, -1.0f, 1.0f);
+					return std::clamp(gamepads.Axes[furthest][control.Code], -1.0f, 1.0f);
 				}
 				case InputControlType::GamepadStick:
 					return 0.0f; // Read as a vector (ReadStick)

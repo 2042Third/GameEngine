@@ -215,7 +215,10 @@ libraries reject code that the local ones accept (Apple Clang 15's libc++ has no
 `size_t` and `uint64_t` are different types on macOS; GCC 14 warns where newer GCCs do not), so a branch that lands many
 changes (a wave's integration) is pushed as `ci/<name>` and waits for green CI before it moves `main`
 (`Tools/CompatLint.py` catches much of it before the push; it stands in for Apple Clang 15, the oldest the engine
-supports, which CI no longer builds with).
+supports, which CI no longer builds with). Compilers also miscompile: Apple Clang 17 (clang-1700.0.13.5, `-O2` and up,
+arm64) takes a value chosen by `std::abs(x) > 0 ? x : 0` for one that is never negative and drops a later `std::abs`
+of it, which made every gamepad axis held to its negative side read 0 in `InputActions` (CI run 42634304897). To pick
+the largest of several values, compare them with each other, not with a running value that starts at 0.
 
 ### Precompiled headers
 

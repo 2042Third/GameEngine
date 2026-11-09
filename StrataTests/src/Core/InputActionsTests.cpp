@@ -559,6 +559,41 @@ TEST_SUITE("Core.InputActions")
 		CHECK(glm::length(InputActions::GetValue("Move")) == doctest::Approx(1.0f));
 	}
 
+	// Built with Apple Clang 17, the first gamepad's negative values read 0 here (macOS 15 CI, run 42634304897).
+	TEST_CASE("A whole axis reads the gamepad pushing it furthest, either way")
+	{
+		ActionsProject project(MakeGameplayActions());
+		const auto steer = [](float first, float other, uint32_t gamepad)
+		{
+			for (uint32_t index = 0; index < c_MaxGamepads; index++)
+				Input::SimulateGamepadAxis(index, GamepadAxis::LeftX, index == 0 ? first : (index == gamepad ? other : 0.0f));
+			Step();
+			return InputActions::GetValue("Steer").x;
+		};
+		const float farRead = (0.8f - 0.15f) / 0.85f; // 0.8 beyond the dead zone
+		const float nearRead = (0.575f - 0.15f) / 0.85f;
+
+		// The first gamepad alone, either way, the others idle: the dead zone rescales both sides alike.
+		CHECK(steer(-1.0f, 0.0f, 1) == doctest::Approx(-1.0f));
+		CHECK(steer(-0.575f, 0.0f, 1) == doctest::Approx(-nearRead));
+		CHECK(steer(0.575f, 0.0f, 1) == doctest::Approx(nearRead));
+		CHECK(steer(-0.1f, 0.0f, 1) == 0.0f);
+
+		// Several gamepads: the one pushed furthest, whatever its side and its place.
+		for (uint32_t gamepad = 1; gamepad < c_MaxGamepads; gamepad++)
+		{
+			CAPTURE(gamepad);
+			CHECK(steer(-0.8f, 0.3f, gamepad) == doctest::Approx(-farRead));
+			CHECK(steer(-0.8f, -0.3f, gamepad) == doctest::Approx(-farRead));
+			CHECK(steer(0.3f, -0.8f, gamepad) == doctest::Approx(-farRead));
+			CHECK(steer(-0.3f, 0.8f, gamepad) == doctest::Approx(farRead));
+			CHECK(steer(0.0f, -1.0f, gamepad) == doctest::Approx(-1.0f));
+			// A tie keeps the lower-numbered gamepad's side.
+			CHECK(steer(-0.8f, 0.8f, gamepad) == doctest::Approx(-farRead));
+			CHECK(steer(0.8f, -0.8f, gamepad) == doctest::Approx(farRead));
+		}
+	}
+
 	TEST_CASE("Half axes press at 0.5 and release at 0.35")
 	{
 		ActionsProject project(MakeGameplayActions());
