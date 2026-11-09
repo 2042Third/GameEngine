@@ -197,10 +197,11 @@ Multi-Config with `cl`) from a developer environment (the Developer PowerShell, 
 the Windows SDK and Ninja.
 
 **CI** (`.github/workflows/ci.yml`) runs on pushes to `main`, on pull requests and on pushes to branches named
-`ci/<name>`: Windows (`windows-ninja` with sccache, MSVC), Linux (GCC 14 with ccache) and macOS (Apple
-Clang 15 with ccache) build and test Release, and Windows also Debug (`ctest -LE "gpu|perf" -j 4`, the only Debug
-build CI makes). Each job keeps its compiler cache in the GitHub Actions cache (keyed per job and commit, restored from
-the newest of its branch or main, saved even when tests fail; at most 250 MB for ccache and 1 GB for sccache per job).
+`ci/<name>`: Windows (`windows-ninja` with sccache, MSVC), Linux (GCC 14 with ccache) and macOS (`macos-15`, Apple
+Clang 17, with ccache; GitHub retired `macos-14` and its Apple Clang 15 in November 2026) build and test Release, and
+Windows also Debug (`ctest -LE "gpu|perf" -j 4`, the only Debug build CI makes). Each job keeps its compiler cache in
+the GitHub Actions cache (keyed per job and commit, restored from the newest of its branch or main, saved even when
+tests fail; at most 250 MB for ccache and 1 GB for sccache per job).
 Each ref keeps one entry per job: after the save, the job deletes its ref's older entries, so that main's set and the
 active branches' stay below GitHub's 10 GB, beyond which GitHub evicts the least recently used (main's first). A
 Dist build of every target on Windows uses the Visual Studio generator people build with, without a cache, and runs the
@@ -213,7 +214,8 @@ Homebrew's `molten-vk` is not pinned. Older compilers and other standard
 libraries reject code that the local ones accept (Apple Clang 15's libc++ has no floating-point `std::from_chars`;
 `size_t` and `uint64_t` are different types on macOS; GCC 14 warns where newer GCCs do not), so a branch that lands many
 changes (a wave's integration) is pushed as `ci/<name>` and waits for green CI before it moves `main`
-(`Tools/CompatLint.py` catches much of it before the push).
+(`Tools/CompatLint.py` catches much of it before the push; it stands in for Apple Clang 15, the oldest the engine
+supports, which CI no longer builds with).
 
 ### Precompiled headers
 

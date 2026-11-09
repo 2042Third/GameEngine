@@ -8,8 +8,9 @@ compilers and standard libraries reject is found before a push (AGENTS.md, "CI b
 
 - GCC 14 stands in for CI's Linux compiler (and its libstdc++), with CI's warnings as errors. On macOS it compiles the
   macOS branches of `src/Platform`; CI builds the Linux and Windows ones.
-- LLVM 16 with its own libc++ stands in for CI's Apple Clang 15 and its libc++ (which, for one, has no floating-point
-  `std::from_chars`).
+- LLVM 16 with its own libc++ stands in for Apple Clang 15 and its libc++ (which, for one, has no floating-point
+  `std::from_chars`): the oldest the engine supports, which CI built with until GitHub retired its macos-14 image (CI's
+  macOS job now builds with macos-15's Apple Clang 17).
 
 Each file is compiled with the exact command of the Debug build (a Ninja Multi-Config build tree: the macos and linux
 presets), its compiler swapped and the precompiled header dropped, as in a build configured with
