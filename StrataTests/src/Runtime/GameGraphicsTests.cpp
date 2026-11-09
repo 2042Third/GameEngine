@@ -266,7 +266,7 @@ TEST_SUITE("Runtime.GameGraphics")
 		REQUIRE(service.GetEffectiveValue()["Preset"] == "Custom");
 		REQUIRE(service.ResetOptions("ShadowCascades"));
 		CHECK(service.GetPlayerOptions()["ShadowCascades"] == 4);
-		CHECK(service.GetPlayerOptions()["ShadowResolution"] == "AutoFine");
+		CHECK(service.GetPlayerOptions()["ShadowResolution"] == "8192"); // Ultra's
 		CHECK(service.GetEffectiveValue()["Preset"] == "Custom");
 		CHECK(service.GetSource("ShadowCascades") == GameGraphicsSource::Player);
 
@@ -528,7 +528,7 @@ TEST_SUITE("Runtime.GameGraphics")
 		service.LoadPlayerOptions();
 		REQUIRE(service.GetPlayerOptions() == nlohmann::json { { "ShadowCascades", 2 } });
 		// Under High the member does nothing: High's cascades, the project's.
-		CHECK(service.GetEffectiveValue()["ShadowCascades"] == 4);
+		CHECK(service.GetEffectiveValue()["ShadowCascades"] == 5);
 		CheckSources(service, project.GetSection(), GameGraphicsSource::Project);
 		// Under the project's Custom it is in effect: the player's.
 		project.Set({ { "Preset", "Custom" }, { "ShadowCascades", 3 } });

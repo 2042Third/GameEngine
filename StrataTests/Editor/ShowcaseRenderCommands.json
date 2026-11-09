@@ -31,8 +31,8 @@
 	{"command": "entity.setActive", "parameters": {"active": false, "entity": {"$ref": "station_Probe.Golden.Hut"}}},
 	{"command": "entity.setActive", "parameters": {"active": false, "entity": {"$ref": "station_Probe.Dusk.Yard"}}},
 	{"command": "entity.setActive", "parameters": {"active": false, "entity": {"$ref": "station_Probe.Dusk.Hut"}}},
-	{"command": "viewport.capture", "parameters": {"position": [-29.7, 25.811, -58.0], "target": [40.0, 0.0, 40.0], "fov": 50.0, "width": 960, "height": 540, "quality": "high"}, "expect": {"/pendingAssets": {"equals": 0}, "/reflectionProbesPending": {"equals": 0}, "/shadowFitSettled": {"equals": true}}},
-	{"command": "viewport.capture", "parameters": {"position": [-29.7, 25.811, -58.0], "target": [40.0, 0.0, 40.0], "fov": 50.0, "width": 960, "height": 540, "quality": "high", "debugView": "shadows"}, "expect": {"/debugView/shadows/cascades/3/far": {"min": 550}}},
+	{"command": "viewport.capture", "parameters": {"position": [-29.7, 25.811, -58.0], "target": [40.0, 0.0, 40.0], "fov": 50.0, "width": 960, "height": 540, "quality": "high"}, "expect": {"/pendingAssets": {"equals": 0}, "/reflectionProbesPending": {"equals": 0}}},
+	{"command": "viewport.capture", "parameters": {"position": [-29.7, 25.811, -58.0], "target": [40.0, 0.0, 40.0], "fov": 50.0, "width": 960, "height": 540, "quality": "high", "debugView": "shadows"}, "expect": {"/debugView/shadows/cascades/4/far": {"min": 550}}},
 	{"command": "viewport.capture", "parameters": {"position": [-15.7067, 1.5, -17.2222], "target": [-19.2423, 0.6, -20.7577], "fov": 30.0, "width": 960, "height": 540, "quality": "high", "debugView": "lighting"}, "expect": {"/debugView/lighting/surfaceEv100/p50": {"min": 12.0}}},
 	{"command": "entity.find", "parameters": {"name": "Sun"}, "bind": {"station_Sun": "/entities/0"}},
 	{"command": "entity.find", "parameters": {"name": "Fog"}, "bind": {"station_Fog": "/entities/0"}},
@@ -65,10 +65,10 @@
 	{"command": "entity.setActive", "parameters": {"active": true, "entity": {"$ref": "station_Probe.Golden.Hut"}}},
 	{"command": "entity.setActive", "parameters": {"active": false, "entity": {"$ref": "station_Probe.Dusk.Yard"}}},
 	{"command": "entity.setActive", "parameters": {"active": false, "entity": {"$ref": "station_Probe.Dusk.Hut"}}},
-	{"command": "viewport.capture", "parameters": {"position": [19.03, 1.6, -5.91], "target": [13.02, 2.493, 0.1], "fov": 40.0, "width": 960, "height": 540, "quality": "high"}, "expect": {"/pendingAssets": {"equals": 0}, "/reflectionProbesPending": {"equals": 0}, "/shadowFitSettled": {"equals": true}}},
-	{"command": "viewport.capture", "parameters": {"position": [14.957, 1.7, 6.915], "target": [2.7, 3.6, 17.2], "fov": 45.0, "width": 960, "height": 540, "quality": "high"}, "expect": {"/pendingAssets": {"equals": 0}, "/reflectionProbesPending": {"equals": 0}, "/shadowFitSettled": {"equals": true}}},
-	{"command": "viewport.capture", "parameters": {"position": [-10.0, 0.75, -10.0], "target": [12.98, 2.0, 9.28], "fov": 55.0, "width": 960, "height": 540, "quality": "high"}, "expect": {"/pendingAssets": {"equals": 0}, "/reflectionProbesPending": {"equals": 0}, "/shadowFitSettled": {"equals": true}}},
-	{"command": "viewport.capture", "parameters": {"position": [-20.656, 1.5, -15.525], "target": [-24.121, 0.9, -18.99], "fov": 70.0, "width": 960, "height": 540, "quality": "high"}, "expect": {"/pendingAssets": {"equals": 0}, "/reflectionProbesPending": {"equals": 0}, "/shadowFitSettled": {"equals": true}}},
+	{"command": "viewport.capture", "parameters": {"position": [19.03, 1.6, -5.91], "target": [13.02, 2.493, 0.1], "fov": 40.0, "width": 960, "height": 540, "quality": "high"}, "expect": {"/pendingAssets": {"equals": 0}, "/reflectionProbesPending": {"equals": 0}}},
+	{"command": "viewport.capture", "parameters": {"position": [14.957, 1.7, 6.915], "target": [2.7, 3.6, 17.2], "fov": 45.0, "width": 960, "height": 540, "quality": "high"}, "expect": {"/pendingAssets": {"equals": 0}, "/reflectionProbesPending": {"equals": 0}}},
+	{"command": "viewport.capture", "parameters": {"position": [-10.0, 0.75, -10.0], "target": [12.98, 2.0, 9.28], "fov": 55.0, "width": 960, "height": 540, "quality": "high"}, "expect": {"/pendingAssets": {"equals": 0}, "/reflectionProbesPending": {"equals": 0}}},
+	{"command": "viewport.capture", "parameters": {"position": [-20.656, 1.5, -15.525], "target": [-24.121, 0.9, -18.99], "fov": 70.0, "width": 960, "height": 540, "quality": "high"}, "expect": {"/pendingAssets": {"equals": 0}, "/reflectionProbesPending": {"equals": 0}}},
 	{"command": "viewport.capture", "parameters": {"position": [-9.5, 1.5, -9.5], "target": [-12.0, 0.116, -12.0], "fov": 25.0, "width": 960, "height": 540, "quality": "high", "debugView": "lighting"}, "expect": {"/debugView/lighting/surfaceEv100/p50": {"min": 13.5, "max": 14.5}}},
 	{"command": "viewport.capture", "parameters": {"position": [-22.2828, 1.5, -15.5958], "target": [-24.7931, 0.6, -17.6111], "fov": 15.0, "width": 960, "height": 540, "quality": "high", "debugView": "lighting"}, "expect": {"/debugView/lighting/surfaceEv100/p50": {"max": 12.42}}},
 	{"command": "entity.find", "parameters": {"name": "Sun"}, "bind": {"station_Sun": "/entities/0"}},
@@ -102,5 +102,5 @@
 	{"command": "entity.setActive", "parameters": {"active": false, "entity": {"$ref": "station_Probe.Golden.Hut"}}},
 	{"command": "entity.setActive", "parameters": {"active": true, "entity": {"$ref": "station_Probe.Dusk.Yard"}}},
 	{"command": "entity.setActive", "parameters": {"active": true, "entity": {"$ref": "station_Probe.Dusk.Hut"}}},
-	{"command": "viewport.capture", "parameters": {"position": [-2.0, 1.6, -2.0], "target": [-16.0, 1.2, -16.0], "fov": 50.0, "width": 960, "height": 540, "quality": "high"}, "expect": {"/pendingAssets": {"equals": 0}, "/reflectionProbesPending": {"equals": 0}, "/shadowFitSettled": {"equals": true}}}
+	{"command": "viewport.capture", "parameters": {"position": [-2.0, 1.6, -2.0], "target": [-16.0, 1.2, -16.0], "fov": 50.0, "width": 960, "height": 540, "quality": "high"}, "expect": {"/pendingAssets": {"equals": 0}, "/reflectionProbesPending": {"equals": 0}}}
 ]

@@ -31,9 +31,6 @@ namespace
 		SceneRendererSpecification specification;
 		specification.TextureStreaming = false;
 		specification.GPUDriven = path;
-		// Frames of renderers that drew different numbers of frames are compared: the sun's cascades must not follow the view
-		// (a renderer's first frame keeps the fallback layout, its later frames take the fitted one).
-		specification.FitShadowsToView = false;
 		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(specification);
 		renderer->SetViewportSize(c_Size, c_Size);
 		return renderer;

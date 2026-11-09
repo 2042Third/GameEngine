@@ -282,7 +282,6 @@ TEST_SUITE("GPU.RenderScene")
 		// finishes.
 		SceneRendererSpecification specification;
 		specification.GPUDriven = GPUDrivenMode::Off;
-		specification.FitShadowsToView = false;
 		SceneRenderer reference(specification);
 		reference.SetViewportSize(c_Size, c_Size);
 		REQUIRE(reference.Render(scene, camera));

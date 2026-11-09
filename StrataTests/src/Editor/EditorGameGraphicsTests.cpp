@@ -208,7 +208,7 @@ TEST_SUITE("Editor.GameGraphics")
 		REQUIRE(harness.Graphics().SetOption("Preset", "Ultra"));
 		graphics = status();
 		CHECK(graphics["playerOptions"] == nlohmann::json { { "Preset", "Ultra" } });
-		CHECK(graphics["effective"]["ShadowResolution"] == "AutoFine");
+		CHECK(graphics["effective"]["ShadowResolution"] == "8192");
 		harness.Run("play.stop");
 
 		// A file that is no options file (read again when a session ends): its problem, and no options.

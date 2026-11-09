@@ -40,6 +40,8 @@ namespace Strata
 		constexpr uint32_t c_CullModeResetLocal = 16;
 		// A cascade's depth pyramid starts at a quarter of its shadow map each way (an eighth of the memory a half would take).
 		constexpr uint32_t c_ShadowPyramidReduction = 4;
+		// Cull.comp tests, buckets and records every cascade the layout makes (Include/Culling.slang, ST_CULL_MAX_CASCADES).
+		static_assert(RenderData::c_CullMaxCascades == RenderData::c_MaxCascades);
 		// The cascades' occlusion culling costs GPU time (their pyramids, a second culling pass over the proxies, and the wait
 		// for the first phase's shadow maps) that only hidden casters pay back: it runs while the latest frame that ran it found
 		// at least 1 / c_ShadowOcclusionPaysShare of the cascades' casters hidden, and otherwise every

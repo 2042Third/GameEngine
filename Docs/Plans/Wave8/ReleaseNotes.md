@@ -42,12 +42,10 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 
 **Lane Render**
 
-- Contact shadows are off in every Graphics Quality preset: they shimmered while the camera moved. The fitted sun cascades
+- Contact shadows are off in every Graphics Quality preset: they shimmered while the camera moved. The sun's cascades
   ground small objects near the camera.
-- The sun's shadows no longer jump while something passes close to the camera (a ball thrown from it, a bird): the
-  cascades follow a near object that holds less than a tenth of the view only once it has stayed for half a second (an
-  eighth while the camera moves), and shrink only after half a second. Something that stays close still moves them once.
-  `editor.perf` and `viewport.capture` report the fit's layout `changes` and whether a growth is `holding`.
+- The sun's shadows no longer jump while something passes close to the camera (a ball thrown from it, a bird): see
+  **Sun shadows (stable cascades)**, which replaced this lane's waits.
 
 **Platform: GLFW sealed behind the window (S0.8).**
 
@@ -240,6 +238,36 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   sealed window, seen straight on, vanished and showed the ground behind it. Each level now covers exactly the pixels the
   culling reads it for, its last row and column included.
 
+**Sun shadows (stable cascades)**
+
+- The sun's shadows are final in the first frame after the camera turns, moves or cuts: no more coarse shadows that
+  sharpen over a second, and no shadows "going in and out of existence" while looking around. The cascades are the
+  industry's stable cascaded shadow maps: fixed splits by distance (from 1.5 m to the Shadow Distance, shared by the
+  light's Cascade Distribution: at 80 m the four end at 5.8, 14, 33 and 80 m), each the smallest sphere around its slice of
+  the view, whose size a turn never changes, snapped to whole shadow texels as the camera moves, so shadows stay still on
+  the ground. Nothing is read back from the GPU any more, so nothing in the scene (a thrown ball) moves them either.
+- High and Ultra buy the detail back with larger shadow maps: High 4096 below 1440 rows and 8192 from them (was 2048 and
+  4096), Ultra 8192 at every size (was 4096 below 1440 rows). Medium keeps 0.6.0's 2048 and costs.
+- High and Ultra add a fifth cascade before the four, for what lies within 1.5 m of the camera (less with a wide lens:
+  its sphere stays within 2 m, 0.49 mm texels at 8192), so close-ups keep fine shadows: the showcase's shot 5, which
+  looks past a door post 0.3 m away, measures a median of 1.48 screen pixels per shadow texel (0.7.0 0.88) where four
+  cascades gave 2.28, and none of its pixels above 4 (48.8% with four). The four keep their texels, so the grass
+  blades' thin shadows 4-6 m away do not change. It costs 0.32 ms of GPU time where every cascade is drawn again (the
+  100,000-cube 4K case: 2.81 ms against 2.49) and 256 MiB per view at 8192 texels.
+- The soft tips of long shadows are the same width in every cascade: the penumbra's search distance follows the
+  receiver's distance (5 m plus 0.3 of it) instead of each cascade's size, so no step shows where two cascades meet. The
+  contact-hardening look (sharp at the caster, soft at the tip) is unchanged.
+- `viewport.capture` and project thumbnails no longer wait for the cascades (no `shadowFitSettled`); `editor.perf` and
+  `viewport.capture` drop `renderStats.shadowFit` and each cascade's `fitted`.
+
+**CI (macOS 15)**
+
+- Fixed: built on a Mac with Apple Clang 17 (clang-1700.0.13.5, the compiler of GitHub's macos-15 image), an Axis
+  action bound to a whole gamepad axis (`Gamepad/LeftX`, for one) read 0 whenever the first gamepad held it to the
+  negative side (left, down), while the positive side worked: the compiler dropped part of the comparison that picks
+  the gamepad pushing an axis furthest. 0.7.0's packages, built with Apple Clang 15, are not affected, and Vector2
+  actions on whole sticks never were.
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and
@@ -253,6 +281,9 @@ projects, the template and scenes or projects without the value get.
 | What games, Play and Simulate draw | each body's last fixed pose | between its last two fixed poses, a step behind the clock | physics-timing |
 | Reflection probe resolution of the High and Ultra presets | 128 | 256 | reflections R2 |
 | A directional light's highlight | a point's | its Angular Diameter's disk (0.53 degrees by default) | reflections R2 |
+| Sun shadow resolution of the High and Ultra presets | High 2048 / 4096 from 1440 rows, Ultra 4096 / 8192 | High 4096 / 8192 from 1440 rows, Ultra 8192 | stable cascades |
+| Sun cascade splits | fitted to the receivers the GPU read back (0.6.0's from the near clip until then) | fixed: from 1.5 m to the shadow distance by Cascade Distribution | stable cascades |
+| Sun shadow cascades of the High and Ultra presets | 4 | 5 (a near one within 1.5 m) | stable cascades |
 
 ## Upgrading from 0.7.0
 
@@ -292,6 +323,11 @@ projects, the template and scenes or projects without the value get.
 | Reflection probes' resolution at High and Ultra | 128 texels per face (17 MiB per view with probes) | 256 (68 MiB) | Graphics Quality Custom with **Reflection probe resolution** 128 |
 | A non-metal's reflectance (F0) | 0.04 whatever its IOR | From its IOR: 1.5 (the default) exactly 0.04 as before, water 1.33 0.02, 2 0.11, 1 none | Set the IOR to 1.5 (it also bends what transmissive materials show) |
 | Directional Light **Shadow Softness** | In the Shadows section, inactive without shadows | **Angular Diameter**, with the light's own settings, active with and without shadows; stored, scripted and set by commands as `ShadowSoftness` | Nothing to do |
+| **Sun shadows (stable cascades)** | | | |
+| `SceneRendererSpecification::FitShadowsToView`, `ShadowFitHolds`, `SceneRenderer::ResetShadowFit`, `ShadowFitTracker` (`Renderer/ShadowFit.h`) | The cascades' fit to the view | Removed: the cascades are the view's alone (`Renderer/ShadowCascades.h`) | Nothing to keep: code that turned the fit off for single pictures drops the line |
+| `SceneRendererStats::ShadowFit*`, `ShadowCascadeStats::Fitted`; `renderStats.shadowFit`, `cascades[].fitted`, `viewport.capture`'s `shadowFitSettled` | The fit's state | Removed | Command scripts drop expectations of `shadowFitSettled` |
+| Video memory of the sun's shadow maps at High | 256 MiB at 3840x2160 | 1 GiB at 3840x2160 (256 MiB at 1920x1080) | Graphics Quality Custom with Shadow Resolution 4096, or Medium |
+| A light's Cascade Distribution | shared the receivers' range of distances once fitted | shares 1.5 m to the shadow distance (0.6.0 shared the near clip to it with 0.8) | 0.9 stays the default; scenes keep their value |
 
 ## Known issues
 
@@ -365,8 +401,6 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
 
 **Lane Render**
 
-- An object that stays close to the camera still re-fits the cascades once, coarsening far shadows; one that covers under
-  a tenth of the view waits up to half a second in a coarser cascade.
 - With contact shadows off, a thin object's shadow near the camera (a 5 cm plate on the floor) stays solid at High, but
   its edge shows the shadow map's texel steps, as Medium's did in 0.7.0. Graphics Quality Custom with Contact Shadows 12
   smooths it again, at the cost of shimmer in motion.
@@ -396,4 +430,17 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
 - A frame that runs a fixed step costs more with interpolation, bound by memory: with 100,000 moving roots 5.5 ms
   against 2.6 ms without it on the development machine (`Perf.Scene.InterpolatedStepFrame100k.Ratio` 2.1 against the 1.5
   aimed at), while a real scene in the editor paid about 0.05 ms. Interpolation off removes the cost.
+
+**Sun shadows (stable cascades)**
+
+- Medium (2048 texels) draws the sun's shadows as 0.6.0 did: at 3840x2160 a texel spans about 2.2 screen pixels at each
+  split and more nearer the camera, coarser than 0.7.0's Medium, whose cascades were fitted to what the view showed.
+- High and Ultra are finer than 0.7.0's in most views (the shadows debug view over the look-dev shots at 3840x2160 and
+  High: a median of 0.77 times 0.7.0's screen pixels per shadow texel), but coarser where 0.7.0 fitted its cascades to a
+  few close or crowded surfaces. Medians of screen pixels per texel, 0.7.0 against 0.8.0 (under 1 is finer than a pixel):
+  the showcase's shot 5, past a door post 0.3 m away, 0.88 against 1.48 (p90 1.24 against 2.09; the door post's pixels
+  match 0.7.0's within 2 codes without anti-aliasing and with TAA); the showcase's macro shot, everything within 0.5 m
+  at 30 degrees, 1.24 against 8.35 (p90 1.48 against 9.93; no shadow edge shows in it); the look-dev sun room seen from
+  behind, 0.88 against 1.61; the Third-Person and Physics Playground editor views from high above, 0.31 and 0.57
+  against 0.96, still under a pixel.
 

@@ -368,8 +368,6 @@ namespace
 		post.AntiAliasingMethod = antiAliasing == StrafeAntiAliasing::TAA ? AntiAliasingMode::TAA : AntiAliasingMode::FXAA;
 		SceneRendererSpecification specification = ExactSpecification();
 		specification.Quality.Reflections = reflections;
-		// The cascades stay where they are: the measure is the reflections', not the sun's fit following the camera.
-		specification.FitShadowsToView = false;
 		specification.DebugName = "Strafe";
 		SceneRenderer renderer(specification);
 		renderer.SetViewportSize(c_StrafeWidth, c_StrafeHeight);

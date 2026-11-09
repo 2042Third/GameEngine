@@ -526,9 +526,7 @@ TEST_SUITE("GPU.SceneRenderer.PostProcess")
 			CAPTURE(sky);
 			Scene scene;
 			build(scene, sky);
-			// Frames are compared pixel by pixel: the sun's cascades must not follow the view between them.
 			SceneRendererSpecification specification;
-			specification.FitShadowsToView = false;
 			SceneRenderer renderer(specification);
 			renderer.SetViewportSize(c_Size, c_Size);
 			const ReadbackImage eight = RenderPreExposed(renderer, scene, camera, 8.0f);

@@ -11,11 +11,14 @@
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/RenderSceneGPU.h"
 #include "Strata/Renderer/Renderer.h"
+#include "Strata/Renderer/SceneDrawKey.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureStreamer.h"
 #include "Strata/Renderer/TextureTable.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneServices.h"
+
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -68,50 +71,6 @@ namespace Strata
 		// A shadow caster is drawn into a cascade only while its light-space extent (the larger of x and y) covers at least this
 		// many of the cascade's texels: smaller casters only flicker in and out of texels (SceneRendererStats::SubTexelCasters).
 		constexpr float c_MinCasterTexels = 1.0f;
-
-		// A lower bound of the view depth of any point of `bounds` the camera sees: the nearest of its corners' depths, and for a
-		// perspective view its distance from the camera times `cosHalfDiagonal` (a point in view lies within the view's half
-		// diagonal of its direction), which a large box around the camera (a sea's water) keeps from reaching the camera.
-		float GetNearestViewDepth(const SceneCamera& camera, const AABB& bounds, float cosHalfDiagonal)
-		{
-			float nearest = std::numeric_limits<float>::infinity();
-			for (uint32_t corner = 0; corner < 8; corner++)
-			{
-				const glm::vec3 point((corner & 1) != 0 ? bounds.Max.x : bounds.Min.x, (corner & 2) != 0 ? bounds.Max.y : bounds.Min.y,
-					(corner & 4) != 0 ? bounds.Max.z : bounds.Min.z);
-				nearest = std::min(nearest, -(camera.View * glm::vec4(point, 1.0f)).z);
-			}
-			const glm::vec3 closest = glm::clamp(camera.Position, bounds.Min, bounds.Max);
-			return std::max(nearest, glm::length(closest - camera.Position) * cosHalfDiagonal);
-		}
-
-		// The sort key of a draw: pipeline state first (cascade, alpha mask, winding, culling, skinning), then mesh, submesh
-		// and level of detail, which together make a batch; the material in the lowest bits only when batches are split by
-		// material.
-		constexpr uint32_t c_KeyCascadeShift = 62;
-		constexpr uint32_t c_KeyAlphaMaskShift = 61;
-		constexpr uint32_t c_KeyMirroredShift = 60;
-		constexpr uint32_t c_KeyDoubleSidedShift = 59;
-		constexpr uint32_t c_KeySkinnedShift = 58;
-		constexpr uint32_t c_KeyMeshShift = 38;
-		constexpr uint32_t c_KeySubmeshShift = 22;
-		constexpr uint32_t c_KeyLODShift = 17;
-		constexpr uint32_t c_KeyMeshBits = 20;     // Mesh slots: at most one per entity (Scene::c_MaxEntities)
-		constexpr uint32_t c_KeySubmeshBits = 16;
-		constexpr uint32_t c_KeyLODBits = 5;
-		constexpr uint32_t c_KeyMaterialBits = 17; // Material slots beyond this share keys: their batches merge, which is still correct
-		constexpr uint32_t c_MaxKeySubmeshes = 1u << c_KeySubmeshBits;
-		constexpr uint32_t c_MaxKeyLODs = 1u << c_KeyLODBits;
-
-		uint64_t MakeDrawKey(uint32_t cascade, bool alphaMask, bool mirrored, bool doubleSided, bool skinned, uint32_t meshSlot, uint32_t submesh, uint32_t lod,
-			uint32_t material)
-		{
-			return (static_cast<uint64_t>(cascade) << c_KeyCascadeShift) | (static_cast<uint64_t>(alphaMask) << c_KeyAlphaMaskShift)
-				| (static_cast<uint64_t>(mirrored) << c_KeyMirroredShift) | (static_cast<uint64_t>(doubleSided) << c_KeyDoubleSidedShift)
-				| (static_cast<uint64_t>(skinned) << c_KeySkinnedShift) | (static_cast<uint64_t>(meshSlot) << c_KeyMeshShift)
-				| (static_cast<uint64_t>(submesh) << c_KeySubmeshShift) | (static_cast<uint64_t>(lod) << c_KeyLODShift)
-				| static_cast<uint64_t>(material & ((1u << c_KeyMaterialBits) - 1));
-		}
 
 		// Whether a proxy's instances are drawn skinned: posed, with a mesh that has its skin stream on the GPU.
 		bool IsDrawnSkinned(const RenderScene& renderScene, uint32_t proxy, const Mesh& mesh)
@@ -426,6 +385,36 @@ namespace Strata
 		MarkMeshesWithoutBounds(renderScene);
 	}
 
+	void SceneRenderer::LayOutShadowCascades(const SceneCamera& camera)
+	{
+		ST_PROFILE_FUNCTION();
+		m_ShadowCascadeLayout = {};
+		if (!m_ShadowLight.Enabled)
+			return;
+
+		// The light's view: light view space looks along the light (FindShadowCasters casts the cascades in it).
+		const glm::vec3 lightDirection = m_ShadowLight.Direction;
+		const glm::vec3 up = std::abs(lightDirection.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
+		m_LightView = glm::lookAt(glm::vec3(0.0f), lightDirection, up);
+		m_CameraLightPosition = glm::dmat3(glm::mat3(m_LightView)) * glm::dvec3(camera.Position);
+
+		// The frame's view alone decides the layout (stable cascades: Renderer/ShadowCascades.h), so a turned or moved camera's
+		// first frame has its final cascades.
+		ShadowCascadeView view;
+		view.CameraRotation = glm::mat3(glm::inverse(camera.View));
+		view.Near = std::max(camera.Near, 0.01f);
+		view.ShadowDistance = std::clamp(m_ShadowLight.Distance, view.Near + 0.1f, std::max(camera.Far, view.Near + 0.1f));
+		view.Orthographic = camera.Orthographic;
+		view.TanHalfFOV = camera.Orthographic ? 0.0f : std::tan(camera.VerticalFOV * 0.5f);
+		view.OrthographicHeight = camera.Orthographic ? camera.VerticalFOV : 0.0f;
+		view.Aspect = static_cast<float>(m_ViewportSize.x) / static_cast<float>(m_ViewportSize.y);
+		view.CascadeCount = std::clamp(m_Specification.Quality.ShadowCascades, 1u, RenderData::c_MaxCascades);
+		view.MapSize = m_ShadowMapSize;
+		view.CascadeBlend = m_ShadowLight.CascadeBlend;
+		view.Distribution = m_ShadowLight.Distribution;
+		m_ShadowCascadeLayout = ShadowCascades::GetLayout(view);
+	}
+
 	void SceneRenderer::FindShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, RenderData::FrameConstants& frame, bool findCasters)
 	{
 		ST_PROFILE_FUNCTION();
@@ -436,11 +425,10 @@ namespace Strata
 		if (!m_ShadowLight.Enabled)
 			return;
 
-		// The frame's layout (UpdateShadowFit: the light's view and the slices, spheres and fitted squares of ShadowFitTracker),
-		// applied here once: the CPU's caster test, the GPU's culling (CullConstants::CascadeBoxes), the depth fit
-		// (GatherShadowDraws) and the cascade cache's keys all read m_Cascades, so both paths cull, fit and draw the same cascades
-		// and a cascade is drawn again exactly when its square or slice changed.
-		const ShadowFitLayout& layout = m_ShadowFitLayout;
+		// The frame's layout (LayOutShadowCascades), placed here once: the CPU's caster test, the GPU's culling
+		// (CullConstants::CascadeBoxes), the depth fit (GatherShadowDraws) and the cascade cache's keys all read m_Cascades, so
+		// both paths cull, fit and draw the same cascades.
+		const ShadowCascadeLayout& layout = m_ShadowCascadeLayout;
 		const uint32_t cascadeCount = layout.CascadeCount;
 		const float nearClip = std::max(camera.Near, 0.01f);
 		const float farClip = std::clamp(m_ShadowLight.Distance, nearClip + 0.1f, std::max(camera.Far, nearClip + 0.1f));
@@ -450,31 +438,19 @@ namespace Strata
 		const glm::mat3 cameraRotation(inverseView);
 		const glm::vec3 lightDirection = m_ShadowLight.Direction;
 		const glm::dmat3 lightRotation = glm::dmat3(glm::mat3(m_LightView));
-		const double mapSize = static_cast<double>(m_ShadowMapSize);
 
-		// Each cascade's square covers its slice's bounding sphere, or the receivers' square the tracker fitted (its depth stays
-		// the sphere's, so every point of the slice is within it); its depth range toward the light is fitted to the casters
-		// (GatherShadowDraws). Placed in absolute light space in double, so the texel snapping stays stable however far the
-		// camera is from the origin: a sphere's center on whole texels of its square here, a fitted square's by the tracker.
+		// Each cascade's square covers its slice's sphere by the filter's reach, centered on whole texels of absolute light space
+		// (ShadowCascades::GetSquare, in double: the snapping stays stable however far the camera is from the origin), so it
+		// moves texel by texel with the camera; its depth range toward the light is fitted to the casters (GatherShadowDraws).
 		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
 		{
-			const ShadowFitCascade& slice = layout.Cascades[cascade];
+			const ShadowCascadeSlice& slice = layout.Cascades[cascade];
 			const float radius = slice.Radius;
-			const glm::dvec3 sphereCenter = m_CameraLightPosition + lightRotation * glm::dvec3(slice.SphereCenter);
-			double halfSide = static_cast<double>(radius);
-			glm::dvec2 squareCenter = glm::dvec2(sphereCenter);
-			if (slice.Fitted)
-			{
-				halfSide = 0.5 * static_cast<double>(slice.Side);
-				squareCenter = slice.Center;
-			}
-			const double worldPerTexel = 2.0 * halfSide / mapSize;
-			if (!slice.Fitted)
-				squareCenter = glm::floor(squareCenter / worldPerTexel) * worldPerTexel;
-			const glm::dvec3 lightCenter(squareCenter, sphereCenter.z);
+			const ShadowCascadeSquare square = ShadowCascades::GetSquare(slice, m_CameraLightPosition, lightRotation, m_ShadowMapSize);
+			const glm::dvec3 lightCenter(square.Center, square.SphereZ);
 			const glm::vec3 relativeCenter(lightCenter - m_CameraLightPosition);
 			const glm::vec3 absoluteCenter(lightCenter);
-			const float half = static_cast<float>(halfSide);
+			const float half = static_cast<float>(square.HalfSide);
 
 			CascadeBox& box = m_Cascades[cascade];
 			box.Min = glm::vec2(absoluteCenter) - half;
@@ -485,16 +461,15 @@ namespace Strata
 			box.RelativeMax = glm::vec2(relativeCenter) + half;
 			box.RelativeFarZ = relativeCenter.z - radius;
 			box.RelativeSphereNearZ = relativeCenter.z + radius;
-			box.WorldPerTexel = static_cast<float>(worldPerTexel);
+			box.WorldPerTexel = static_cast<float>(slice.WorldPerTexel);
 			box.Radius = radius;
-			frame.CascadeSplits[cascade] = slice.SliceFar;
-			m_Stats.Cascades[cascade] = ShadowCascadeStats { slice.SliceNear, slice.SliceFar, box.WorldPerTexel, slice.Fitted };
+			frame.CascadeSplits[cascade / 4][cascade % 4] = slice.SliceFar;
+			m_Stats.Cascades[cascade] = ShadowCascadeStats { slice.SliceNear, slice.SliceFar, box.WorldPerTexel };
 		}
 		m_CascadeCount = cascadeCount;
 		m_Stats.CascadeCount = cascadeCount;
 
-		// The box around the part of the view the cascades cover, from the near clip to the shadow distance (receivers nearer
-		// than a fitted layout's first slice are shaded by containment too).
+		// The box around the part of the view the cascades cover, from the near clip to the shadow distance.
 		AABB shadowedView;
 		for (float distance : { nearClip, farClip })
 		{
@@ -877,14 +852,14 @@ namespace Strata
 			{
 				batchKey = draw.Key;
 				SceneDrawBatch batch;
-				batch.MeshSlot = static_cast<uint32_t>((draw.Key >> c_KeyMeshShift) & ((1ull << c_KeyMeshBits) - 1));
-				batch.SubmeshIndex = static_cast<uint32_t>((draw.Key >> c_KeySubmeshShift) & (c_MaxKeySubmeshes - 1));
-				batch.LOD = static_cast<uint32_t>((draw.Key >> c_KeyLODShift) & (c_MaxKeyLODs - 1));
-				batch.DoubleSided = ((draw.Key >> c_KeyDoubleSidedShift) & 1) != 0;
-				batch.Mirrored = ((draw.Key >> c_KeyMirroredShift) & 1) != 0;
-				batch.Skinned = ((draw.Key >> c_KeySkinnedShift) & 1) != 0;
-				batch.AlphaMask = ((draw.Key >> c_KeyAlphaMaskShift) & 1) != 0;
-				batch.Cascade = static_cast<uint32_t>(draw.Key >> c_KeyCascadeShift);
+				batch.MeshSlot = static_cast<uint32_t>((draw.Key >> SceneDrawKey::c_MeshShift) & ((1ull << SceneDrawKey::c_MeshBits) - 1));
+				batch.SubmeshIndex = static_cast<uint32_t>((draw.Key >> SceneDrawKey::c_SubmeshShift) & (SceneDrawKey::c_MaxSubmeshes - 1));
+				batch.LOD = static_cast<uint32_t>((draw.Key >> SceneDrawKey::c_LODShift) & (SceneDrawKey::c_MaxLODs - 1));
+				batch.DoubleSided = ((draw.Key >> SceneDrawKey::c_DoubleSidedShift) & 1) != 0;
+				batch.Mirrored = ((draw.Key >> SceneDrawKey::c_MirroredShift) & 1) != 0;
+				batch.Skinned = ((draw.Key >> SceneDrawKey::c_SkinnedShift) & 1) != 0;
+				batch.AlphaMask = ((draw.Key >> SceneDrawKey::c_AlphaMaskShift) & 1) != 0;
+				batch.Cascade = static_cast<uint32_t>(draw.Key >> SceneDrawKey::c_CascadeShift);
 				batch.FirstInstance = static_cast<uint32_t>(outDrawList.size());
 				outBatches.push_back(batch);
 			}
@@ -934,7 +909,7 @@ namespace Strata
 				if ((materialFlags & c_MaterialAvailable) == 0 || (materialFlags & (c_MaterialTransparent | c_MaterialTransmissive)) == c_MaterialTransparent)
 					continue;
 				const uint32_t lod = SelectLOD(*mesh, submeshes[submeshIndex], fraction);
-				if (submeshIndex >= c_MaxKeySubmeshes || lod >= c_MaxKeyLODs)
+				if (submeshIndex >= SceneDrawKey::c_MaxSubmeshes || lod >= SceneDrawKey::c_MaxLODs)
 					continue;
 				SceneDrawBatch batch;
 				batch.MeshSlot = meshSlot;
@@ -961,10 +936,6 @@ namespace Strata
 		const float viewportHeight = static_cast<float>(m_ViewportSize.y);
 		const bool batchAcrossMaterials = m_Specification.BatchAcrossMaterials;
 		const TextureStreamingPolicy::ViewScale viewScale = TextureStreamingPolicy::GetViewScale(camera, viewportHeight);
-		// Every point in view lies within the view's half diagonal of its direction (perspective views).
-		const float tanHalfFOV = std::tan(camera.VerticalFOV * 0.5f);
-		const float aspect = static_cast<float>(m_ViewportSize.x) / static_cast<float>(std::max(m_ViewportSize.y, 1u));
-		const float cosHalfDiagonal = camera.Orthographic ? 0.0f : 1.0f / std::sqrt(1.0f + tanHalfFOV * tanHalfFOV * (1.0f + aspect * aspect));
 		const bool skins = renderScene.HasSkinProxies(); // Scenes without skinned meshes skip the per-proxy checks
 		// Mesh renderers smaller than this many pixels on screen are not drawn (the GPU's culling leaves out the same ones).
 		const float minPixels = m_Specification.Quality.MinProjectedPixels;
@@ -986,7 +957,6 @@ namespace Strata
 			std::array<uint32_t, SceneRendererStats::c_LODStatCount> instancesPerLOD = {};
 			uint32_t skipped = 0;
 			uint32_t skinnedInstances = 0;
-			float nearestTransparent = std::numeric_limits<float>::infinity();
 			const uint32_t end = std::min(visible, (chunk + 1) * c_ExtractionChunkSize);
 			for (uint32_t item = chunk * c_ExtractionChunkSize; item < end; item++)
 			{
@@ -1023,7 +993,7 @@ namespace Strata
 					if ((materialFlags & c_MaterialAvailable) == 0)
 						continue;
 					const uint32_t lod = SelectLOD(*mesh, submeshes[submeshIndex], fraction);
-					if (submeshIndex >= c_MaxKeySubmeshes || lod >= c_MaxKeyLODs)
+					if (submeshIndex >= SceneDrawKey::c_MaxSubmeshes || lod >= SceneDrawKey::c_MaxLODs)
 					{
 						skipped++;
 						continue;
@@ -1051,8 +1021,6 @@ namespace Strata
 					{
 						output.Transparent.push_back(TransparentDraw { viewDepth, renderScene.GetEntityID(proxy), submeshIndex, instance, meshSlot, lod, doubleSided, mirrored, skinned,
 							(materialFlags & c_MaterialTransmissive) != 0 });
-						// Transparent surfaces are not in the depth the cascades' fit measures: their nearest point bounds its near end.
-						nearestTransparent = std::min(nearestTransparent, GetNearestViewDepth(camera, bounds, cosHalfDiagonal));
 						continue;
 					}
 					if (opaqueDraws)
@@ -1066,14 +1034,14 @@ namespace Strata
 								instances[instance].EntityID, fadeFrame, true);
 							m_LODFades[instance] = fade.State;
 						}
-						output.Draws.push_back(SortItem { MakeDrawKey(0, false, mirrored, doubleSided, skinned, meshSlot, submeshIndex, lod, keyMaterial),
+						output.Draws.push_back(SortItem { SceneDrawKey::Make(0, false, mirrored, doubleSided, skinned, meshSlot, submeshIndex, lod, keyMaterial),
 							RenderData::MakeDrawEntry(instance, fade.Code), 0 });
 						// Both levels while the fade is under way, the old one on the pixels the new one leaves (faded levels are at most
 						// 15, within the key's).
-						static_assert(c_MaxKeyLODs > 15);
+						static_assert(SceneDrawKey::c_MaxLODs > 15);
 						if (fade.Code != 0)
 						{
-							output.Draws.push_back(SortItem { MakeDrawKey(0, false, mirrored, doubleSided, skinned, meshSlot, submeshIndex, fade.From, keyMaterial),
+							output.Draws.push_back(SortItem { SceneDrawKey::Make(0, false, mirrored, doubleSided, skinned, meshSlot, submeshIndex, fade.From, keyMaterial),
 								RenderData::MakeDrawEntry(instance, fade.Code + RenderData::c_LODFadeOutgoing), 0 });
 						}
 					}
@@ -1082,17 +1050,14 @@ namespace Strata
 			output.InstancesPerLOD = instancesPerLOD;
 			output.Skipped = skipped;
 			output.SkinnedInstances = skinnedInstances;
-			output.NearestTransparent = nearestTransparent;
 		});
 
 		m_Draws.clear();
 		m_Transparent.clear();
-		m_NearestTransparent = std::numeric_limits<float>::infinity(); // For the next frame's fit (UpdateShadowFit)
 		uint32_t skipped = 0;
 		for (uint32_t chunk = 0; chunk < chunks; chunk++)
 		{
 			const ExtractionChunk& output = m_Chunks[chunk];
-			m_NearestTransparent = std::min(m_NearestTransparent, output.NearestTransparent);
 			m_Draws.insert(m_Draws.end(), output.Draws.begin(), output.Draws.end());
 			m_Transparent.insert(m_Transparent.end(), output.Transparent.begin(), output.Transparent.end());
 			for (size_t lod = 0; lod < output.InstancesPerLOD.size(); lod++)
@@ -1107,7 +1072,7 @@ namespace Strata
 			m_Stats.SizeCulledProxies += output.SizeCulled;
 		}
 		if (skipped > 0)
-			m_Errors.Report(fmt::format("{} submesh instances were not drawn: more than {} submeshes or {} levels of detail in a mesh", skipped, c_MaxKeySubmeshes, c_MaxKeyLODs));
+			m_Errors.Report(fmt::format("{} submesh instances were not drawn: more than {} submeshes or {} levels of detail in a mesh", skipped, SceneDrawKey::c_MaxSubmeshes, SceneDrawKey::c_MaxLODs));
 
 		const auto sortStart = std::chrono::steady_clock::now();
 		RadixSort(m_Draws, m_SortScratch);
@@ -1182,8 +1147,7 @@ namespace Strata
 			// Camera-relative: the shaders' positions are.
 			const CascadeBox& box = m_Cascades[cascade];
 			fit.Boxes[cascade] = glm::vec4(box.RelativeMin, box.RelativeMax);
-			fit.Depths[cascade] = glm::vec4(box.RelativeFarZ, box.RelativeSphereNearZ, box.WorldPerTexel, box.Radius);
-			fit.CasterNearZ[cascade] = box.RelativeSphereNearZ;
+			fit.Depths[cascade] = glm::vec4(box.RelativeFarZ, box.RelativeSphereNearZ, box.WorldPerTexel, box.RelativeSphereNearZ);
 		}
 		const float mapSize = static_cast<float>(m_ShadowMapSize);
 		const float halfAngle = glm::radians(std::clamp(m_ShadowLight.Softness, 0.0f, 10.0f)) * 0.5f;
@@ -1240,7 +1204,7 @@ namespace Strata
 					if ((materialFlags & c_MaterialAvailable) == 0 || (materialFlags & c_MaterialTransparent) != 0)
 						continue;
 					const uint32_t lod = SelectLOD(*mesh, submeshes[submeshIndex], fraction);
-					if (submeshIndex >= c_MaxKeySubmeshes || lod >= c_MaxKeyLODs)
+					if (submeshIndex >= SceneDrawKey::c_MaxSubmeshes || lod >= SceneDrawKey::c_MaxLODs)
 					{
 						skipped++;
 						continue;
@@ -1251,7 +1215,7 @@ namespace Strata
 					{
 						if ((caster.CascadeMask & (1u << cascade)) != 0)
 						{
-							output.Draws.push_back(SortItem { MakeDrawKey(cascade, alphaMask, mirrored, doubleSided, skinned, meshSlot, submeshIndex, lod,
+							output.Draws.push_back(SortItem { SceneDrawKey::Make(cascade, alphaMask, mirrored, doubleSided, skinned, meshSlot, submeshIndex, lod,
 								batchAcrossMaterials ? 0u : materialSlot), instance, 0 });
 						}
 					}
@@ -1274,12 +1238,12 @@ namespace Strata
 			skipped += output.Skipped;
 		}
 		if (skipped > 0)
-			m_Errors.Report(fmt::format("{} shadow caster instances were not drawn: more than {} submeshes or {} levels of detail in a mesh", skipped, c_MaxKeySubmeshes, c_MaxKeyLODs));
+			m_Errors.Report(fmt::format("{} shadow caster instances were not drawn: more than {} submeshes or {} levels of detail in a mesh", skipped, SceneDrawKey::c_MaxSubmeshes, SceneDrawKey::c_MaxLODs));
 
 		// The depth range reaches from the far side of the slice's sphere to the nearest caster (CascadeFit.comp clamps it),
 		// found in absolute light space.
 		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
-			fit.CasterNearZ[cascade] = static_cast<float>(static_cast<double>(casterNearZ[cascade]) - m_CameraLightPosition.z);
+			fit.Depths[cascade].w = static_cast<float>(static_cast<double>(casterNearZ[cascade]) - m_CameraLightPosition.z);
 
 		const auto sortStart = std::chrono::steady_clock::now();
 		RadixSort(m_ShadowDraws, m_SortScratch);

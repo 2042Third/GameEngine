@@ -808,11 +808,11 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("The project's picture waits for the sun's cascades to fit its view")
+	TEST_CASE("The project's picture takes its first complete frame with the sun's shadows")
 	{
 		Tests::GPUContext gpu;
 		REQUIRE(gpu.IsValid());
-		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GPUThumbnailShadowFit") / "Game";
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GPUThumbnailShadows") / "Game";
 		EditorContext context { EditorContextSpecification { false } };
 		EditorCommandRegistry commands;
 		const auto run = [&](std::string_view name, const nlohmann::json& parameters)
@@ -834,8 +834,8 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
 		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
 
-		// Nothing else to wait for (a fixed exposure, no temporal anti-aliasing, built-in meshes): only the fit keeps the picture
-		// from its first frame, whose cascades no readback has fitted yet.
+		// Nothing to wait for (a fixed exposure, no temporal anti-aliasing, built-in meshes, stable cascades): the picture is its
+		// first frame's.
 		Scene& scene = *context.GetActiveScene();
 		Entity postProcessEntity = scene.FindEntityByName("Post Process");
 		if (!postProcessEntity)
@@ -864,8 +864,8 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		ViewportRenderer* captureRenderer = context.GetViewport().GetCaptureRenderer();
 		REQUIRE(captureRenderer);
 		CHECK_FALSE(captureRenderer->GetStats().TemporalAntiAliasing);
-		CHECK(captureRenderer->GetStats().ShadowFit);
-		CHECK(captureRenderer->GetStats().ShadowFitSettled);
+		CHECK(captureRenderer->GetStats().CascadeCount > 0);
+		CHECK(captureRenderer->GetStats().ScreenShadows);
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

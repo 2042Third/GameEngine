@@ -9,9 +9,14 @@
 
 Texture2D<float4> u_Depth : register(t22);
 
+// RenderData::c_MaxCascades rows of RenderData::c_ShadowViewBins, more than the group's 256 threads: each clears and adds the
+// entries whose index modulo 256 is its own.
+static const uint c_ShadowViewCountBins = 5u * 64u;
+static const uint c_ShadowViewGroupThreads = 256u;
+
 struct ShadowViewCountBuffer
 {
-	uint Bins[4 * 64]; // RenderData::c_MaxCascades rows of RenderData::c_ShadowViewBins
+	uint Bins[c_ShadowViewCountBins];
 	uint SurfacePixels;
 	uint SkyPixels;
 	uint UncoveredPixels;
@@ -20,7 +25,7 @@ struct ShadowViewCountBuffer
 RWStructuredBuffer<ShadowViewCountBuffer> st_o_Counts : register(u0);
 #define o_Counts st_o_Counts[0]
 
-groupshared uint s_Bins[4 * 64]; // One entry per thread of the group
+groupshared uint s_Bins[c_ShadowViewCountBins];
 groupshared uint s_Surface;
 groupshared uint s_Sky;
 groupshared uint s_Uncovered;
@@ -28,7 +33,8 @@ groupshared uint s_Uncovered;
 void st_Main()
 {
 	uint thread = st_LocalInvocationIndex;
-	s_Bins[thread] = 0u;
+	for (uint bin = thread; bin < c_ShadowViewCountBins; bin += c_ShadowViewGroupThreads)
+		s_Bins[bin] = 0u;
 	if (thread == 0u)
 	{
 		s_Surface = 0u;
@@ -55,8 +61,11 @@ void st_Main()
 	}
 	GroupMemoryBarrierWithGroupSync();
 
-	if (s_Bins[thread] != 0u)
-		InterlockedAdd(o_Counts.Bins[thread], s_Bins[thread]);
+	for (uint bin = thread; bin < c_ShadowViewCountBins; bin += c_ShadowViewGroupThreads)
+	{
+		if (s_Bins[bin] != 0u)
+			InterlockedAdd(o_Counts.Bins[bin], s_Bins[bin]);
+	}
 	if (thread == 0u)
 	{
 		if (s_Surface != 0u)

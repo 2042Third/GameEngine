@@ -116,7 +116,6 @@ TEST_SUITE("Editor.ProbeBake")
 		CHECK_FALSE(specification.SpreadLightingUpdates);
 		CHECK_FALSE(specification.FadeTextureLevels);
 		CHECK_FALSE(specification.FadeLevelsOfDetail);
-		CHECK_FALSE(specification.FitShadowsToView); // Single pictures: no readback could fit their cascades
 	}
 
 	TEST_CASE("A bake's staging folder is removed only once the jobs writing and reading it completed")

@@ -12,9 +12,10 @@
 struct CascadeFitBuffer
 {
 	float4x4 LightView;
-	float4 Boxes[4];       // Light view space: min.xy, max.xy
-	float4 Depths[4];      // x: the far side's z, y: the sphere's near side's z, z: world units per texel, w: the sphere's radius
-	float4 CasterNearZ;    // Per cascade: the nearest drawn caster's z, as the CPU found it
+	float4 Boxes[5];       // Light view space: min.xy, max.xy (RenderData::c_MaxCascades)
+	// x: the far side's z, y: the sphere's near side's z, z: world units per texel, w: the nearest drawn caster's z, as the CPU
+	// found it
+	float4 Depths[5];
 	uint CascadeCount;
 	uint CasterDepthsFromGPU;
 	float MaxCasterDistance;
@@ -47,7 +48,7 @@ void st_Main()
 	}
 	else
 	{
-		casterNearZ = max(casterNearZ, u_Fit.CasterNearZ[cascade]);
+		casterNearZ = max(casterNearZ, depths.w);
 	}
 	float nearZ = clamp(casterNearZ, depths.y, depths.y + u_Fit.MaxCasterDistance);
 	float nearPlane = -nearZ;
@@ -64,14 +65,14 @@ void st_Main()
 	projection[1][3] = -(box.w + box.y) / (box.w - box.y);
 	projection[2][3] = -zNear / (zFar - zNear);
 	u_Cascades[cascade].ViewProjection = mul(projection, u_Fit.LightView);
-	// Penumbrae are searched for blockers up to this distance from the receiver (world units).
-	float searchDistance = 0.2 * depths.w + 5.0;
-	// w: the near plane's light view z, for the cascades' occlusion culling (Cull.comp's IsOccludedInCascade).
-	u_Cascades[cascade].Parameters = float4(depths.z, farPlane - nearPlane, searchDistance, nearZ);
+	// z: 0 (the penumbra's search distance follows the receiver's view distance alike in every cascade: Include/Shadows.slang,
+	// ShadowSearchDistance); w: the near plane's light view z, for the cascades' occlusion culling (Cull.comp's
+	// IsOccludedInCascade).
+	u_Cascades[cascade].Parameters = float4(depths.z, farPlane - nearPlane, 0.0, nearZ);
 }
 
 // --- Entry point ---
-[numthreads(4, 1, 1)]
+[numthreads(5, 1, 1)]
 void main(uint3 globalID : SV_DispatchThreadID, uint3 localID : SV_GroupThreadID, uint3 groupID : SV_GroupID, uint localIndex : SV_GroupIndex)
 {
 	st_GlobalInvocationID = globalID;

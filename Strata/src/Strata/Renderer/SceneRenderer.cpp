@@ -245,8 +245,6 @@ namespace Strata
 		// every shadow view of every shadowed point and spot light is drawn in the frame (into a smaller atlas).
 		specification.TemporalAntiAliasing = false;
 		specification.SpreadLightingUpdates = false;
-		// A single frame has no readback to fit its cascades to: Strata 0.6.0's layout, the same for every thumbnail.
-		specification.FitShadowsToView = false;
 		// A thumbnail's few objects are culled and drawn by the CPU, which draws the same pixels: the GPU-driven path's fixed
 		// costs per frame (its culling dispatches, the occlusion pyramid, the counters' readbacks) and per scene (its culling
 		// binding set) buy nothing for a scene this small, and every thumbnail is a new scene.
@@ -272,7 +270,6 @@ namespace Strata
 		specification.SpreadLightingUpdates = false;
 		specification.FadeTextureLevels = false;
 		specification.FadeLevelsOfDetail = false;
-		specification.FitShadowsToView = false;
 		RendererQualitySettings& quality = specification.Quality;
 		quality = RendererQuality::GetPreset(RendererQualityPreset::Medium);
 		quality.Preset = RendererQualityPreset::Custom;
@@ -2300,8 +2297,6 @@ namespace Strata
 		// The shadows debug view's binding sets name the depth (its buffers and readbacks stay with the renderer).
 		release(m_ShadowViewBindingSet);
 		release(m_ShadowViewCountBindingSet);
-		// So does the cascades' fit's (its buffer and readbacks stay with the renderer, like its layout).
-		release(m_ShadowFitSet);
 		// The lighting views' bindings name the HDR target and the depth.
 		release(m_LightingOverlayBindingSet);
 		release(m_LightingStatsBindingSet);
@@ -3164,10 +3159,10 @@ namespace Strata
 			m_LODFadeFrame++;         // And so do level-of-detail fades: a frame skipped draws every level at once
 		}
 		m_LODFadeFrame++;
-		// The sun's cascades' layout: fitted to the receivers a readback of an earlier frame saw, else Strata 0.6.0's. Layout
-		// changes keep the visibility feedback: on feedback frames every cascade gets the slots of every caster the feedback saw,
-		// and the last cascade, which reaches the shadow distance, holds every caster of every receiver.
-		UpdateShadowFit(renderScene, camera, cameraCut, options);
+		// The sun's cascades' layout, the frame's view's alone (stable cascades). Their squares move texel by texel with the
+		// camera, which keeps the visibility feedback: on feedback frames every cascade gets the slots of every caster the
+		// feedback saw, and the last cascade, which reaches the shadow distance, holds every caster of every receiver.
+		LayOutShadowCascades(camera);
 		m_FeedbackFrame = UsesFeedback(renderScene);
 		m_Stats.FeedbackRequests = m_FeedbackFrame;
 		if (m_FeedbackFrame)
@@ -3451,9 +3446,6 @@ namespace Strata
 			gpuTimer.Next(gpuStages.ScreenShadows);
 			commandList->beginMarker("ScreenShadows");
 			RenderScreenShadows(commandList, frame);
-			// The receivers of the complete prepass depth, for a later frame's cascades (SceneRendererSpecification::FitShadowsToView).
-			if (m_ShadowFitActive && !RecordShadowFit(commandList, camera))
-				degraded = true;
 			commandList->endMarker();
 			m_Stats.ScreenShadows = true;
 		}
@@ -3577,7 +3569,6 @@ namespace Strata
 			ExecuteFrame(commandList);
 			if (m_GPUDrivenFrame)
 				SubmitCullReadback();
-			SubmitShadowFitReadback();
 			CommitShadowCache();
 			CommitLocalShadows();
 			if (m_TemporalResolved)
@@ -3669,7 +3660,6 @@ namespace Strata
 				SubmitCullReadback();
 			SubmitExposureReadback();
 			SubmitShadowViewReadback();
-			SubmitShadowFitReadback();
 			m_Stats = {};
 			return false;
 		}
@@ -3745,7 +3735,6 @@ namespace Strata
 			SubmitCullReadback();
 		SubmitExposureReadback();
 		SubmitShadowViewReadback();
-		SubmitShadowFitReadback();
 		SubmitLightingViewReadback();
 		SubmitGlobalIlluminationReadback();
 		CommitShadowCache();

@@ -119,8 +119,7 @@ namespace
 			SceneRenderOptions options;
 			options.MotionVectors = true;
 			options.PreExposure = 1.0f; // Both paths' images at one scale, whatever each one metered
-			// Both paths step the same time: the sun cascades' fit counts its holds in it (ShadowFitTracker), so neither path's
-			// layout follows its own frame times.
+			// Both paths step the same time, so neither path's automatic exposure follows its own frame times.
 			options.AdaptationSeconds = 1.0f / 60.0f;
 			REQUIRE(renderer.Render(scene, camera, nullptr, options));
 			REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), frame.Color));

@@ -7,9 +7,11 @@
 // comparison, and otherwise estimate the blockers' distance, whose penumbra is filtered at the physical half-width
 // separation * tan(the sun's angular radius): a fixed tent of four bilinear comparisons where the penumbra is narrower than
 // about a texel, and a Vogel disk of ShadowBias.z taps turned by a fixed blue-noise tile where it is wider. Nothing turns
-// with the frame, so a still view is the same in every frame. Each cascade blends into the next one over a band before its
-// split (the last one fades out). Acne is prevented by the rasterizer's slope bias (shadow pass), a constant depth bias and a
-// normal offset (ShadowBias), and a receiver plane depth bias that follows the receiver's slope across the filter region.
+// with the frame, so a still view is the same in every frame. The cascades are stable (Renderer/ShadowCascades.h): each
+// covers the sphere around its slice of the view on whole texels of light space, and the penumbra is the same width in world
+// units in every cascade. Each cascade blends into the next one over a band before its split (the last one fades out). Acne
+// is prevented by the rasterizer's slope bias (shadow pass), a constant depth bias and a normal offset (ShadowBias), and a
+// receiver plane depth bias that follows the receiver's slope across the filter region.
 
 #include "Include/BlueNoise.slang"
 #include "Include/Scene.slang"
@@ -23,9 +25,22 @@ SamplerComparisonState u_ShadowCompareSampler : register(s9);
 static const int c_ShadowRangeLevels = 3;
 static const float c_MaxShadowSearchTexels = 31.0; // Keeps a search region within 5 x 5 cells of its level
 static const float c_GoldenAngle = 2.39996323;
-// How far inside its square's edges a cascade holds a receiver (ShadowFitTracker::c_FilterReachTexels): the filter's reach,
-// so a receiver it holds is filtered from texels of its square alone. The last cascade holds receivers to its edge.
+// How far inside its square's edges a cascade holds a receiver (ShadowCascades::c_FilterReachTexels): the filter's reach,
+// so a receiver it holds is filtered from texels of its square alone. Every square covers its slice's sphere by this margin;
+// the last cascade holds receivers to its edge.
 static const float c_ShadowCascadeMarginTexels = 33.0;
+// Penumbrae are searched for blockers up to ShadowSearchDistance from the receiver (world units): 5 m plus 0.3 of the
+// receiver's view distance, which keeps the cut of long shadows' soft tips where the cascades' own search distances had it
+// (0.2 of their spheres' radii plus 5 m) while making it the same in every cascade, so the two cascades of a blend band search
+// alike.
+static const float c_ShadowSearchBase = 5.0;
+static const float c_ShadowSearchPerMeter = 0.3;
+
+// The view distance where a cascade ends (FrameConstants::CascadeSplits).
+float GetCascadeSplit(int cascade)
+{
+	return u_Frame.CascadeSplits[cascade >> 2][cascade & 3];
+}
 
 // Whether a cascade holds a camera-relative position: within its square by `margin` (in uv) and within its depth range.
 bool ShadowCascadeHolds(int cascade, float3 relativePosition, float margin)
@@ -43,16 +58,16 @@ bool ShadowCascadeHolds(int cascade, float3 relativePosition)
 }
 
 // The cascade that shades a camera-relative position at a view depth, by containment: from the first cascade whose split lies
-// beyond the depth, the first one that holds the position (ShadowCascadeHolds); -1 when none does. The cascades' squares may be
-// fitted to the receivers a readback saw (SceneRenderer::FindShadowCasters, ShadowFitTracker): one the readback missed (a fast
-// turn, something that just appeared) falls to a coarser cascade, at last to the last one's sphere, which reaches the shadow
-// distance, until the next readback fits it. Every shader that selects a cascade calls this; none selects by depth alone.
+// beyond the depth, the first one that holds the position (ShadowCascadeHolds); -1 when none does. Each cascade's square covers
+// its slice's sphere by the filter's reach (SceneRenderer::FindShadowCasters), so a point of the view is held by the cascade of
+// its slice; containment also keeps a position the normal offset or the jitter moved off it from reading outside its square.
+// Every shader that selects a cascade calls this; none selects by depth alone.
 int SelectShadowCascade(float viewDepth, float3 relativePosition)
 {
 	int cascadeCount = int(u_Frame.ShadowParams.w);
 	for (int cascade = 0; cascade < cascadeCount; cascade++)
 	{
-		if (viewDepth < u_Frame.CascadeSplits[cascade] && ShadowCascadeHolds(cascade, relativePosition))
+		if (viewDepth < GetCascadeSplit(cascade) && ShadowCascadeHolds(cascade, relativePosition))
 			return cascade;
 	}
 	return -1;
@@ -60,13 +75,13 @@ int SelectShadowCascade(float viewDepth, float3 relativePosition)
 
 // How far a pixel is into the band where its cascade hands over to the next one (the last one fades out): 0 before the
 // band, 1 at the split. The band is the last ShadowParams.z of the cascade's depth range, from the previous split (the
-// first cascade's from the camera, at 0), as SceneRenderer::FindShadowCasters lays it out: the next cascade's slice starts
-// at the band, so its square covers it unless it is fitted to receivers elsewhere; then the cascade does not blend into it
-// (0), and a position beyond the split falls to the next cascade that holds it.
+// first cascade's from the camera, at 0), as ShadowCascades::GetLayout lays it out: the next cascade's slice starts at the
+// band, so its square covers it; where the next cascade does not hold a position (moved off it by the normal offset), the
+// cascade does not blend into it (0).
 float CascadeBlendWeight(int cascade, float viewDepth, float3 relativePosition)
 {
-	float split = u_Frame.CascadeSplits[cascade];
-	float previousSplit = cascade > 0 ? u_Frame.CascadeSplits[cascade - 1] : 0.0;
+	float split = GetCascadeSplit(cascade);
+	float previousSplit = cascade > 0 ? GetCascadeSplit(cascade - 1) : 0.0;
 	float band = u_Frame.ShadowParams.z * (split - previousSplit);
 	if (!(band > 0.0))
 		return 0.0;
@@ -119,13 +134,19 @@ struct ShadowSample
 	int Cascade;          // The cascade (the first one where two blend), -1 where none covers the position
 };
 
+// How far from a receiver at a view depth the filter searches for blockers (world units), in every cascade alike.
+float ShadowSearchDistance(float viewDepth)
+{
+	return c_ShadowSearchBase + c_ShadowSearchPerMeter * max(viewDepth, 0.0);
+}
+
 // The sun's visibility at a camera-relative position with its geometric normal (facing the viewer) in one cascade, at a
-// screen pixel (which picks the disk's fixed turn).
-ShadowSample SampleCascadeShadow(int cascade, float3 relativePosition, float3 normal, int2 pixel)
+// screen pixel (which picks the disk's fixed turn), searching blockers up to `searchDistance` (ShadowSearchDistance).
+ShadowSample SampleCascadeShadow(int cascade, float3 relativePosition, float3 normal, int2 pixel, float searchDistance)
 {
 	ShadowSample result = ShadowSample(1.0, 0.0, 0.0, cascade);
 	// Normal offset: push the lookup position off the surface by about a shadow texel to avoid acne.
-	float4 cascadeData = u_Cascades[cascade].Parameters; // x: world units per texel, y: depth range, z: search distance (world units)
+	float4 cascadeData = u_Cascades[cascade].Parameters; // x: world units per texel, y: depth range
 	float4x4 cascadeViewProjection = u_Cascades[cascade].ViewProjection;
 	float3 offsetPosition = relativePosition + normal * cascadeData.x * u_Frame.ShadowBias.y;
 	float4 lightClip = mul(cascadeViewProjection, float4(offsetPosition, 1.0));
@@ -142,12 +163,12 @@ ShadowSample SampleCascadeShadow(int cascade, float3 relativePosition, float3 no
 	float2 texelPosition = uv / texelSize;
 	float2 depthPerTexel = ReceiverDepthGradient(cascadeViewProjection, normal) * texelSize;
 	float slope = abs(depthPerTexel.x) + abs(depthPerTexel.y);
-	float maxCorrection = cascadeData.z / depthRange;
+	float maxCorrection = searchDistance / depthRange;
 	float worldPerTexel = max(cascadeData.x, 1e-6);
 
 	// The search region: the half-width of the penumbra of a blocker at the search distance, at least the tent's support, and
 	// a texel more for the bilinear footprints. Its cells come from the coarsest level that keeps it within 5 x 5 of them.
-	float searchTexels = min(u_Frame.ShadowParams.x * cascadeData.z / worldPerTexel, c_MaxShadowSearchTexels);
+	float searchTexels = min(u_Frame.ShadowParams.x * searchDistance / worldPerTexel, c_MaxShadowSearchTexels);
 	float regionTexels = max(searchTexels, 1.5) + 1.0;
 	int level = regionTexels <= 8.0 ? 0 : (regionTexels <= 16.0 ? 1 : 2);
 	float cellSize = float(4 << level);
@@ -246,11 +267,12 @@ ShadowSample EvaluateDirectionalShadow(float3 relativePosition, float3 normal, f
 	int cascade = SelectShadowCascade(viewDepth, relativePosition);
 	if (cascade < 0)
 		return ShadowSample(1.0, 0.0, 0.0, -1);
-	ShadowSample shadow = SampleCascadeShadow(cascade, relativePosition, normal, pixel);
+	float searchDistance = ShadowSearchDistance(viewDepth);
+	ShadowSample shadow = SampleCascadeShadow(cascade, relativePosition, normal, pixel, searchDistance);
 	float blend = CascadeBlendWeight(cascade, viewDepth, relativePosition);
 	if (blend > 0.0)
 	{
-		ShadowSample next = cascade + 1 < int(u_Frame.ShadowParams.w) ? SampleCascadeShadow(cascade + 1, relativePosition, normal, pixel)
+		ShadowSample next = cascade + 1 < int(u_Frame.ShadowParams.w) ? SampleCascadeShadow(cascade + 1, relativePosition, normal, pixel, searchDistance)
 			: ShadowSample(1.0, 0.0, 0.0, cascade);
 		shadow.Visibility = lerp(shadow.Visibility, next.Visibility, blend);
 		shadow.PenumbraTexels = lerp(shadow.PenumbraTexels, next.PenumbraTexels, blend);

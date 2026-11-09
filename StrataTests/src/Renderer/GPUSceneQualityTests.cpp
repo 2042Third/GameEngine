@@ -340,8 +340,6 @@ TEST_SUITE("GPU.SceneRenderer.Quality")
 		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::PlaneMesh));
 		QualityScene scene;
 		SceneRendererSpecification specification = MakeSpecification(GPUDrivenMode::Auto);
-		// Cached cascades are counted frame by frame across the change, whose first frames a fit to the view would lay out anew.
-		specification.FitShadowsToView = false;
 		SceneRenderer cached(specification);
 		specification.CacheShadowCascades = false;
 		SceneRenderer redrawn(specification);
@@ -535,13 +533,13 @@ TEST_SUITE("GPU.SceneRenderer.Quality")
 			CHECK(renderer.GetStats().ShadowMapSize == 4096);
 			CHECK(renderer.GetStats().LocalShadowTileSizes[0] <= 512);
 
-			// Auto at the viewport's rows, and the label of equal knobs.
+			// AutoFine at the viewport's rows, and the label of equal knobs.
 			RendererQualitySettings high = RendererQuality::GetPreset(RendererQualityPreset::High);
 			CHECK(renderer.SetQuality(high));
 			REQUIRE(renderer.Render(scene.SceneData, scene.Camera));
 			CHECK(renderer.GetStats().Quality == high);
 			CHECK(renderer.GetStats().Quality.Preset == RendererQualityPreset::High);
-			CHECK(renderer.GetStats().ShadowMapSize == 2048);
+			CHECK(renderer.GetStats().ShadowMapSize == 4096);
 		}
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);

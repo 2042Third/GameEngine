@@ -100,12 +100,11 @@ namespace Strata
 		if (!scene || !target || size.x == 0 || size.y == 0)
 			return false;
 
-		// Another scene (a level was loaded) starts at its own brightness instead of adapting from the previous one, its
-		// temporal anti-aliasing without the previous one's history and its cascades' fit without the previous one's receivers.
+		// Another scene (a level was loaded) starts at its own brightness instead of adapting from the previous one, and its
+		// temporal anti-aliasing without the previous one's history.
 		if (m_LastScene.lock() != scene)
 		{
 			m_Renderer->ResetExposureAdaptation();
-			m_Renderer->ResetShadowFit();
 			m_Renderer->ResetHistory();
 			m_LastScene = scene;
 			m_ShowingMessage = false; // A new scene without a camera is reported again
@@ -118,7 +117,6 @@ namespace Strata
 			{
 				ST_CORE_INFO("The scene '{}' has a primary camera again", scene->GetName());
 				m_Renderer->ResetExposureAdaptation();
-				m_Renderer->ResetShadowFit();
 				m_Renderer->ResetHistory();
 				m_ShowingMessage = false;
 			}

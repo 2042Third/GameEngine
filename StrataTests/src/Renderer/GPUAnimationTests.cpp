@@ -360,9 +360,7 @@ TEST_SUITE("GPU.Animation")
 
 		constexpr uint32_t size = 64;
 		const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.6f, 0.0f), glm::vec3(0.0f, 0.0f, -3.0f));
-		// The first two frames are compared pixel by pixel: the second must not fit the cascades to the view the first one saw.
 		SceneRendererSpecification specification;
-		specification.FitShadowsToView = false;
 		SceneRenderer renderer(specification);
 		renderer.SetViewportSize(size, size);
 		const ReadbackImage image = RenderToImage(renderer, scene, camera);

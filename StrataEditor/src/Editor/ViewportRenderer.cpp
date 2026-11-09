@@ -150,8 +150,6 @@ namespace Strata
 		// The capture renderer draws single pictures: every shadow view of every shadowed light in its first frame (no fades),
 		// at the quality of the view it captures (its atlas is released with its targets after each picture).
 		specification.SpreadLightingUpdates = fades;
-		// Single pictures: the cascades' fit follows Strata 0.7.0's rules (no holds), so a capture is the same on any machine.
-		specification.ShadowFitHolds = fades;
 		// Single pictures: global illumination voxelizes everything in its first frame (no budget spreads it).
 		if (!fades)
 		{

@@ -176,8 +176,8 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		CHECK(ColorOf(PageKey("Header.Ultra")) == 0);
 		// The automatic resolutions name the sizes they resolve to.
 		CHECK(TextOf(PageKey("Cell.ShadowResolution.Low")) == "1024");
-		CHECK(TextOf(PageKey("Cell.ShadowResolution.High")) == "Auto (2048 / 4096)");
-		CHECK(TextOf(PageKey("Cell.ShadowResolution.Ultra")) == "Auto fine (4096 / 8192)");
+		CHECK(TextOf(PageKey("Cell.ShadowResolution.High")) == "Auto fine (4096 / 8192)");
+		CHECK(TextOf(PageKey("Cell.ShadowResolution.Ultra")) == "8192");
 		CHECK(TextOf(PageKey("Cell.LODErrorPixels.Ultra")) == "0.5");
 		CHECK(TextOf(PageKey("Cell.MaxShadowedLocalLights.Low")) == "4");
 	}
@@ -195,12 +195,12 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		// global illumination's layout (146.4 MiB at every size). Whole MiB, rounded down.
 		CHECK(TextOf(PageKey("Memory1080.Low")) == "48 MiB");
 		CHECK(TextOf(PageKey("Memory1080.Medium")) == "192 MiB");
-		CHECK(TextOf(PageKey("Memory1080.High")) == "440 MiB");
-		CHECK(TextOf(PageKey("Memory1080.Ultra")) == "824 MiB");
-		CHECK(TextOf(PageKey("Memory2160.High")) == "879 MiB");
-		CHECK(TextOf(PageKey("Memory2160.Ultra")) == "1.8 GiB");
+		CHECK(TextOf(PageKey("Memory1080.High")) == "696 MiB");
+		CHECK(TextOf(PageKey("Memory1080.Ultra")) == "1.81 GiB");
+		CHECK(TextOf(PageKey("Memory2160.High")) == "1.86 GiB");
+		CHECK(TextOf(PageKey("Memory2160.Ultra")) == "2.05 GiB");
 		// Custom's column under High shows where a switch to Custom starts: High's values.
-		CHECK(TextOf(PageKey("Memory2160.Custom")) == "879 MiB");
+		CHECK(TextOf(PageKey("Memory2160.Custom")) == "1.86 GiB");
 		CHECK(ColorOf(PageKey("Memory2160.High")) == AccentMuted());
 		// The harness renders nothing on a GPU.
 		CHECK(TextOf(PageKey("GPU")) == "GPU times appear while the Scene view renders");
@@ -224,10 +224,10 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		CHECK(editor.Context().GetUndoStack().GetCount() == steps + 1);
 		CHECK_FALSE(editor.Context().IsSceneModified());
 		CHECK(ColorOf(PageKey("Header.Ultra")) == AccentMuted());
-		// Custom's column keeps showing the stored tuning (two cascades of High's, 128 MiB, with the atlas, the sky's map and the
+		// Custom's column keeps showing the stored tuning (two cascades of High's, 512 MiB, with the atlas, the sky's map and the
 		// reflections' and motion blur's targets, the probes' cubes and global illumination), which comes back when Custom is
 		// chosen, and an edit there starts from it, as its tooltip says.
-		CHECK(TextOf(PageKey("Memory2160.Custom")) == "751 MiB");
+		CHECK(TextOf(PageKey("Memory2160.Custom")) == "1.11 GiB");
 		CHECK(HoverCustomTooltip(editor, "ShadowCascades") == "Editing a value switches to Custom, starting from the Custom values chosen earlier, "
 			"which this column shows");
 
@@ -477,7 +477,7 @@ TEST_SUITE("Editor.UI.Inspector")
 		editor.Run("selection.set", { { "entities", { sun } } });
 		REQUIRE(editor.FramesUntil([]() { return IsDrawn("Inspector.DirectionalLight.ShadowQuality"); }));
 		// Without a GPU the Scene view draws no frame: the project's quality (High) resolved for 1080 rows.
-		CHECK(TextOf("Inspector.DirectionalLight.ShadowQuality") == "Shadow maps: 4 x 2048 at 1080 rows (Graphics Quality: High)");
+		CHECK(TextOf("Inspector.DirectionalLight.ShadowQuality") == "Shadow maps: 5 x 4096 at 1080 rows (Graphics Quality: High)");
 		CHECK(IsDrawn("Inspector.DirectionalLight.Section.Shadows"));
 		editor.Run("project.setSettings", { { "section", RendererQuality::c_SectionId }, { "value", { { "Preset", "Low" } } } });
 		editor.Frames(2);

@@ -247,19 +247,6 @@ namespace
 			Run("camera.set", { { "position", { 0, 0, 4 } }, { "target", { 0, 0, 0 } } });
 		}
 
-		// The scene's suns cast no shadows: a capture that counts its frames for another reason (text, probes, the motion view)
-		// then has no cascades whose fit to the view it waits for (SceneRendererStats::ShadowFitSettled).
-		void TurnOffSunShadows()
-		{
-			std::vector<UUID> suns;
-			Scene& scene = *Context.GetEditScene();
-			for (const entt::entity handle : scene.GetRegistry().view<DirectionalLightComponent>())
-				suns.push_back(Entity(handle, &scene).GetUUID());
-			for (const UUID sun : suns)
-				Run("component.set", { { "entity", UUIDToJson(sun) }, { "component", "DirectionalLight" }, { "values", { { "CastShadows", false } } } });
-			CHECK_FALSE(suns.empty());
-		}
-
 		// The edited scene's Post Process components ask for no global illumination (their bounces settle over
 		// GISettleFrames frames, which captures wait for).
 		void TurnOffGlobalIllumination()
@@ -482,7 +469,6 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(gpu.IsValid());
 		ViewportGPUHarness harness;
 		harness.AddScene();
-		harness.TurnOffSunShadows(); // The second capture waits for nothing
 		harness.Run("viewport.setSettings", { { "gameUI", true } });
 		// A UI label with more distinct glyphs than a render may rasterize (TextRenderer::c_FrameRasterBudget), new to the
 		// capture renderer, which the UI pass shares with the text.
@@ -764,7 +750,6 @@ TEST_SUITE("GPU.Editor.Viewport")
 		// for the cascades' fit, whose frames follow how soon the GPU finishes the readbacks, or for the bounces to settle, and
 		// waitedFrames would report the larger of the waits.
 		harness.Run("play.stop");
-		harness.TurnOffSunShadows();
 		harness.TurnOffGlobalIllumination();
 		harness.Run("play.start", { { "build", false } });
 		nlohmann::json immediate = size;
@@ -1833,7 +1818,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(gpu.IsValid());
 		ViewportGPUHarness harness;
 		harness.AddScene();
-		harness.TurnOffSunShadows(); // The motion view's capture renders exactly one frame more
+		// The motion view's capture renders exactly one frame more (the sun's cascades add none).
 		// No overlays: the debug views apply without them.
 		const nlohmann::json size = { { "width", 64 }, { "height", 64 }, { "overlays", false } };
 		auto withView = [&size](const char* view)
@@ -1948,7 +1933,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("A capture waits until the sun's cascades fit the view, and a second capture equals it byte for byte")
+	TEST_CASE("A capture takes the sun's cascades of its view's first frame, and a second capture equals it byte for byte")
 	{
 		Tests::GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -1962,24 +1947,18 @@ TEST_SUITE("GPU.Editor.Viewport")
 		const nlohmann::json parameters = { { "width", 128 }, { "height", 72 }, { "overlays", false } };
 		nlohmann::json first;
 		harness.Capture(parameters, &first);
-		CHECK(first["shadowFitSettled"] == true);
-		CHECK(first["waitedFrames"].get<int>() >= 1); // The first frame cannot know the receivers yet
-		CHECK(first["renderStats"]["shadowFit"]["fitted"] == true);
-		CHECK(first["renderStats"]["shadowFit"]["settled"] == true);
-		CHECK(first["renderStats"]["shadowFit"]["holding"] == false);
-		CHECK(first["renderStats"]["shadowFit"]["changes"].is_number_unsigned());
-		CHECK(first["renderStats"]["cascades"].size() == harness.Context.GetViewport().GetCaptureRenderer()->GetStats().CascadeCount);
-		CHECK(harness.Context.GetViewport().GetCaptureRenderer()->GetStats().ShadowFit);
-		// Single pictures keep Strata 0.7.0's fit rules: no holds counted in seconds, which would tie the picture to frame times.
-		CHECK_FALSE(harness.Context.GetViewport().GetCaptureRenderer()->GetSceneRenderer().GetSpecification().ShadowFitHolds);
-		CHECK(harness.Context.GetViewport().GetGameRenderer()->GetSceneRenderer().GetSpecification().ShadowFitHolds);
-		// Each capture starts the fit again (ResetShadowFit) and waits for it alike. How many frames that takes follows how soon the
-		// GPU finishes each frame's readback (polled, never waited for), so only its bounds are checked: the pictures are equal.
+		// Stable cascades depend on the view alone: nothing about them is read back, and nothing waits for them.
+		CHECK_FALSE(first.contains("shadowFitSettled"));
+		CHECK_FALSE(first["renderStats"].contains("shadowFit"));
+		const SceneRendererStats& stats = harness.Context.GetViewport().GetCaptureRenderer()->GetStats();
+		REQUIRE(stats.CascadeCount > 0);
+		REQUIRE(first["renderStats"]["cascades"].size() == stats.CascadeCount);
+		CHECK(first["renderStats"]["cascades"].back()["far"].get<float>() == doctest::Approx(DirectionalLightComponent().ShadowDistance));
+		CHECK_FALSE(first["renderStats"]["cascades"].front().contains("fitted"));
 		nlohmann::json second;
 		harness.Capture(parameters, &second);
-		CHECK(second["shadowFitSettled"] == true);
-		CHECK(second["waitedFrames"].get<int>() >= 1);
-		CHECK(second["waitedFrames"].get<int>() <= 12); // EditorViewportCommands.cpp's c_MaxCaptureShadowFitFrames
+		CHECK(second["waitedFrames"] == first["waitedFrames"]);
+		CHECK(second["renderStats"]["cascades"] == first["renderStats"]["cascades"]);
 		CHECK(second["Image"]["Data"] == first["Image"]["Data"]);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
@@ -1997,7 +1976,6 @@ TEST_SUITE("GPU.Editor.Viewport")
 		// A project, for the memory mesh's asset manager.
 		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(Tests::CreateTemporaryDirectory("ViewportCaptureGI") / "Game") }, { "name", "Game" } });
 		harness.AddScene();
-		harness.TurnOffSunShadows();
 		harness.Run("entity.create", { { "name", "Floor" }, { "components", { { "Transform", { { "Translation", { 0, -0.5, 0 } }, { "Scale", { 20, 1, 20 } } } },
 			{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::PlaneMesh) } } } } } });
 		constexpr uint32_t c_Parts = RenderData::c_VoxelItemMaxSubmesh + 1;
@@ -2505,7 +2483,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		harness.Capture(parameters, &result);
 		CHECK(result["renderStats"]["quality"]["Preset"] == "Ultra");
 		CHECK(result["renderStats"]["quality"] == RendererQuality::ToSectionValue(RendererQuality::GetPreset(RendererQualityPreset::Ultra)));
-		CHECK(result["renderStats"]["shadowMapSize"] == 4096); // AutoFine below 1440 rows
+		CHECK(result["renderStats"]["shadowMapSize"] == 8192); // Ultra's 8192 at every size
 
 		// Refused with nothing changed: an unknown preset, and a quality for a live capture (which renders nothing).
 		for (const nlohmann::json& refused : { nlohmann::json { { "quality", "extreme" } }, nlohmann::json { { "quality", "low" }, { "live", true },
@@ -2784,19 +2762,19 @@ TEST_SUITE("GPU.Editor.GameGraphics")
 		};
 
 		// The project's quality: what S6 promises at High in a view of 1440 rows.
-		CHECK(drawLine() == "Shadow maps: 4 x 4096 (Graphics Quality: High)");
+		CHECK(drawLine() == "Shadow maps: 5 x 8192 (Graphics Quality: High)");
 		// A preset of the view's own.
 		harness.Run("viewport.setSettings", { { "quality", "low" } });
 		CHECK(drawLine() == "Shadow maps: 3 x 1024 in the Scene view (Low; the project: High)");
 		// Through the scene's camera the view draws at the game's quality, which the view's own preset does not change: the
 		// project's, and while playing the player's choice.
 		harness.Run("viewport.setSettings", { { "pilotGameCamera", true } });
-		CHECK(drawLine() == "Shadow maps: 4 x 4096 (Graphics Quality: High)");
+		CHECK(drawLine() == "Shadow maps: 5 x 8192 (Graphics Quality: High)");
 		harness.Run("play.start", { { "build", false } });
 		REQUIRE(context.GetGameGraphics().SetOption("Preset", "Medium"));
 		CHECK(drawLine() == "Shadow maps: 4 x 2048 through the scene's camera (Medium, the player's; the project: High)");
 		harness.Run("play.stop");
-		CHECK(drawLine() == "Shadow maps: 4 x 4096 (Graphics Quality: High)");
+		CHECK(drawLine() == "Shadow maps: 5 x 8192 (Graphics Quality: High)");
 		scene.OnDetach(panelContext);
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);

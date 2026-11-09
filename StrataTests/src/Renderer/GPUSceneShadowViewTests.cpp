@@ -214,7 +214,6 @@ TEST_SUITE("GPU.SceneRenderer.ShadowView")
 		Entity box = AddMesh(view.SceneData, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(1.0f, 1.0f, -8.0f), "Box");
 		box.GetComponent<TransformComponent>().Scale = glm::vec3(2.0f);
 		SceneRendererSpecification specification = ShadowViewSpecification(GPUDrivenMode::Off);
-		specification.FitShadowsToView = false; // Frames are compared pixel by pixel: the same cascades in each
 		SceneRenderer renderer(specification);
 		renderer.SetViewportSize(c_ViewSize, c_ViewSize);
 		const auto render = [&](bool boxCasts)

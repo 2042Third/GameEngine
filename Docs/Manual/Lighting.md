@@ -117,14 +117,15 @@ active height fog in a scene applies.
 The directional light casts shadows up to **Shadow Distance** (meters) from the camera, in cascades that are finer near
 the camera. **Cascade Blend** hides the seams between the cascades and fades the shadows out at the distance.
 
-The cascades follow what the camera sees: a few frames after the view changes, they cover only the distances from the
-nearest to the farthest surface in view, and each one but the farthest shrinks to the surfaces it shades, so the shadow's
-detail goes where the surfaces are (a high camera looking down over a level gets several times finer shadows than
-cascades starting at the camera). The farthest cascade always reaches the Shadow Distance, so a surface that just came
-into view (the camera turned, a door opened) is shadowed at once, a little coarser for the few frames until the cascades
-follow. Something passing close to the camera, such as a thrown ball, leaves them alone; something that stays close moves
-them once, after half a second. **Cascade Distribution** (0 to 1, 0.9 by default) decides how the cascades share those distances: 0 evenly, 1 each
-cascade the same ratio farther than the previous one; higher puts more of the detail near the camera.
+The cascades depend only on where the camera is and how it looks: each covers a fixed range of distances, the same
+whichever way the camera turns, and moves with the camera in whole steps of its shadow texels. So the shadows are final
+in the first frame after the camera turns, moves or cuts, never coarse first and sharper later, and they stay still on
+the ground while the camera moves past them; nothing in the scene, such as a thrown ball, changes them. **Cascade
+Distribution** (0 to 1, 0.9 by default) decides how the cascades share the distances from 1.5 m to the Shadow Distance:
+0 evenly, 1 each cascade the same ratio farther than the previous one; higher puts more of the detail near the camera. At
+the default and a Shadow Distance of 80 m the four cascades end at about 5.8, 14, 33 and 80 m; the first one ends within
+7.5 m at any Shadow Distance. The High and Ultra presets add a fifth cascade before them, for what lies within about 1.5 m
+of the camera (1.4 m with a 70 degree lens), whose shadows are about four times sharper.
 
 **Angular Diameter** is the light's apparent size in degrees: 0.53 is the sun's (the default; scenes saved with another
 value keep it). It sizes the sun's highlight too (see Lights and their units). Shadows are sharp where an object touches the ground and soften with the distance from their caster as a
@@ -151,21 +152,22 @@ The project's **Graphics Quality** (Project Settings, [Graphics.md](Graphics.md)
 
 | Setting | Low | Medium | High | Ultra |
 | --- | --- | --- | --- | --- |
-| Shadow resolution (texels each way of every cascade) | 1024 | 2048 | 2048, 4096 from 1440 output rows | 4096, 8192 from 1440 rows |
+| Shadow resolution (texels each way of every cascade) | 1024 | 2048 | 4096, 8192 from 1440 output rows | 8192 |
 | Shadow cascades | 3 | 4 | 4 | 4 |
 | Shadow Filter Quality (taps of the wide soft edges) | 8 | 16 | 24 | 32 |
 | Contact Shadows (steps; off in every preset) | off | off | off | off |
 
-More filter taps only matter where soft edges are wider than a shadow texel (a large Angular Diameter, tall casters): they
-cost a little more there and leave less grain for the screen-space blur to remove. Contact shadows, when Custom turns them
+High and Ultra's shadow maps are large (four 8192 texel cascades take 1 GiB of video memory) because stable cascades
+cover the whole view around the camera; on a GPU with little memory, choose Medium. More filter taps only matter where
+soft edges are wider than a shadow texel (a large Angular Diameter, tall casters): they cost a little more there and
+leave less grain for the screen-space blur to remove. Contact shadows, when Custom turns them
 on, cost a march of their
 steps for each lit pixel nearer than the shadow distance (about 0.2-0.3 ms at 3840x2160 on a current GPU).
 
 To see where the cascades are and how fine they are, choose **Shadows** in the Scene view's debug menu: every surface is
 colored by how many screen pixels one shadow texel covers there (green about one, yellow two, red four or more), with the
 cascades outlined and their blend bands hatched. Agents read the same as numbers: `viewport.capture {"debugView": "shadows"}`
-reports each cascade's distances, texel size and pixels per texel (a capture waits the few frames the cascades take to
-follow the view: `shadowFitSettled`).
+reports each cascade's distances, texel size and pixels per texel.
 
 Point and spot lights cast shadows when **Cast Shadows** is on (it is off by default). A spot light's shadow covers its
 cone, a point light's every direction (the renderer draws it as the six faces of a cube). **Shadow Filter Radius** softens

@@ -194,7 +194,7 @@ namespace Strata
 		{
 			// Called only for frames with a shadowed sun: ShadowParams.w is their cascade count, the last split the shadow distance.
 			const int cascades = std::clamp(static_cast<int>(frame.ShadowParams.w), 1, static_cast<int>(RenderData::c_MaxCascades));
-			const float shadowDistance = frame.CascadeSplits[cascades - 1];
+			const float shadowDistance = frame.CascadeSplits[(cascades - 1) / 4][(cascades - 1) % 4];
 			parameters.ContactLength = m_ShadowLight.ContactLength;
 			parameters.ContactSteps = steps;
 			parameters.ContactMaxPixels = c_ContactShadowMaxScreenShare * static_cast<float>(m_ViewportSize.y);

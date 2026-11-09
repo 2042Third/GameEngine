@@ -74,7 +74,8 @@ struct FrameConstants
 	float4 ClusterDepth;              // Depth slice = log(view depth) * x + y; z, w: near and far view depth
 	float4 TimeParams;                // x: scene time in seconds
 	float4 SkyParams;                 // x: background mip (blur), y: 1 when the environment is the background
-	float4 CascadeSplits;             // View distance where each cascade ends (their projections: u_Cascades)
+	// View distance where each cascade ends, four per element (GetCascadeSplit; their projections: u_Cascades)
+	float4 CascadeSplits[2];
 	// x: tan(light angular radius), the penumbra's half-width per unit of separation, y: 1 / shadow map size, z: the fraction of
 	// each cascade's depth range over which it blends into the next (DirectionalLightComponent::CascadeBlend), w: cascade count
 	// (0 = none)

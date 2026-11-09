@@ -5,9 +5,11 @@
 # resource indices from the pipeline layout, which an offline conversion cannot know (Docs/DeveloperGuide.md, "Shaders").
 #
 # convert_shaders_to_metal.sh <the build's Strata/EmbeddedShaders folder> <output folder> [--report-only]
-# A failure prints "<source file>:1: error: <name>: <converter|metal>: <first lines>". Exit 1 on a failure not in
-# c_KnownFailures, or when a listed entry now converts and compiles (the list only shrinks); --report-only prints and
-# never fails.
+# A failure prints "<source file>:1: error: <name>: <converter|metal>: <first lines>", and one c_KnownFailures lists
+# "known failure: <name>: <converter|metal>: <first lines>": not an error line, because CI's annotations take the first
+# few error lines of the job's logs, and the listed entries would take them all from the job's real failures. Exit 1 on
+# a failure not in c_KnownFailures, or when a listed entry now converts and compiles (the list only shrinks);
+# --report-only prints and never fails.
 set -u
 
 # The entries the offline conversion refuses whatever compiled them, each with the first error line as its reason. Filled
@@ -32,6 +34,25 @@ c_KnownFailures=(
 	Scene/SelectionMask.frag
 	Scene/ShadowMask.frag
 )
+
+IsKnownFailure()
+{
+	local entry
+	for entry in "${c_KnownFailures[@]+"${c_KnownFailures[@]}"}"; do
+		[ "$entry" = "$1" ] && return 0
+	done
+	return 1
+}
+
+# ReportFailure <source file> <name> <converter|metal> <first lines>
+ReportFailure()
+{
+	if IsKnownFailure "$2"; then
+		echo "known failure: $2: $3: $4"
+	else
+		echo "$1:1: error: $2: $3: $4"
+	fi
+}
 
 if [ $# -lt 2 ] || [ $# -gt 3 ] || { [ $# -eq 3 ] && [ "$3" != "--report-only" ]; }; then
 	echo "usage: convert_shaders_to_metal.sh <EmbeddedShaders folder> <output folder> [--report-only]" >&2
@@ -78,7 +99,8 @@ xcrun -sdk macosx metal --version 2>&1 | head -1
 total=0
 passed=0
 failedNames=()
-passedNames=()
+# Each "<name>|<source file>".
+passedEntries=()
 while IFS='|' read -r name source stage defines; do
 	[ -n "$name" ] || continue
 	total=$((total + 1))
@@ -101,39 +123,35 @@ while IFS='|' read -r name source stage defines; do
 		result=$?
 	fi
 	if [ "$result" -ne 0 ] || [ ! -s "$metal" ]; then
-		echo "$source:1: error: $name: converter: $(printf '%s\n' "$output" | head -3 | tr '\n' ' ')"
+		ReportFailure "$source" "$name" converter "$(printf '%s\n' "$output" | head -3 | tr '\n' ' ')"
 		failedNames+=("$name")
 		continue
 	fi
 	if ! output=$(xcrun -sdk macosx metal -std=metal3.0 -c "$metal" -o "$out/$id.air" 2>&1); then
-		echo "$source:1: error: $name: metal: $(printf '%s\n' "$output" | grep -m 3 -E 'error|warning' | tr '\n' ' ')"
+		ReportFailure "$source" "$name" metal "$(printf '%s\n' "$output" | grep -m 3 -E 'error|warning' | tr '\n' ' ')"
 		failedNames+=("$name")
 		continue
 	fi
 	passed=$((passed + 1))
-	passedNames+=("$name")
+	passedEntries+=("$name|$source")
 done < "$manifest"
 
 echo "$passed of $total embedded shaders convert to Metal ($converter) and compile (Metal 3.0)"
 
 problems=0
 for name in "${failedNames[@]+"${failedNames[@]}"}"; do
-	known=0
-	for entry in "${c_KnownFailures[@]+"${c_KnownFailures[@]}"}"; do
-		[ "$entry" = "$name" ] && known=1
-	done
-	if [ "$known" -eq 0 ]; then
+	if ! IsKnownFailure "$name"; then
 		echo "error: $name does not convert or compile, and c_KnownFailures does not list it"
 		problems=$((problems + 1))
 	fi
 done
-for name in "${passedNames[@]+"${passedNames[@]}"}"; do
-	for entry in "${c_KnownFailures[@]+"${c_KnownFailures[@]}"}"; do
-		if [ "$entry" = "$name" ]; then
-			echo "error: $name now converts and compiles: remove it from c_KnownFailures"
-			problems=$((problems + 1))
-		fi
-	done
+# An error line with its source file, so that the annotations name a stale entry too.
+for entry in "${passedEntries[@]+"${passedEntries[@]}"}"; do
+	name="${entry%%|*}"
+	if IsKnownFailure "$name"; then
+		echo "${entry#*|}:1: error: $name now converts and compiles: remove it from c_KnownFailures"
+		problems=$((problems + 1))
+	fi
 done
 if [ "$reportOnly" -eq 1 ]; then
 	echo "Report only: $problems problems not counted"
