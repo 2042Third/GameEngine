@@ -541,7 +541,7 @@ namespace Strata
 			data.Texel = glm::ivec4(glm::ivec3(GlobalIllumination::GetTexel(state.Window, dimensions)), valid ? 1 : 0);
 			data.ValidMinimum = glm::ivec4(glm::ivec3(state.Valid.Minimum - state.Window), 0);
 			data.ValidMaximum = glm::ivec4(glm::ivec3(state.Valid.Maximum - state.Window), 0);
-			data.Anchor = glm::vec4(glm::vec3(glm::dvec3(state.Anchor) * voxelSize), 0.0f);
+			data.Anchor = glm::vec4(glm::vec3(glm::dvec3(state.Anchor) * voxelSize), gi.Layout.Levels[level].Drop);
 		}
 		// The probe field, snapped to whole top-cascade steps around the camera so every probe keeps its world position.
 		const ProbeCascadeLayout& firstCascade = gi.Layout.Cascades.front();

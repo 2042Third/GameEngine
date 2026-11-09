@@ -4971,7 +4971,10 @@ probe-field levels and local lights follow.
   scene's material table (4 KiB for 256 materials, doubling as it grows). A frame that wants none releases everything
   (`ReleaseGlobalIllumination`), and so do the render targets' release and a `SetQuality` that changes the row.
 - **The clipmap** (`R/VoxelClipmap.h`, CPU, main thread, `Renderer.VoxelClipmap`): per level a window centered on the
-  camera, snapped to steps of `c_GIScrollVoxels` (4) voxels, stored toroidally (world voxel `w` at texel `w mod
+  camera (the finest level's on a point `c_GIFinestLevelDrop`, 0.8 m, below it, `VoxelLevelLayout::Drop`, with its weights:
+  floors and what rests on them lie below the eye, and with the camera at half the height of the owner's 5.5 m Cornell box
+  the floor's contacts fell to level 1's 0.2 m voxels, which closed the floor under the sphere's overhang), snapped to steps
+  of `c_GIScrollVoxels` (4) voxels, stored toroidally (world voxel `w` at texel `w mod
   dimensions`: a scroll rewrites only the slabs that entered), with a queue of regions and the box of valid voxels. Regions
   and voxel coordinates are relative to an **anchor** (a multiple of 1,024 voxels, kept until the camera leaves its cell by
   1 km on an axis): the same scene voxelizes to the same bits whatever the camera. A scroll queues its slabs (the level is
@@ -5091,7 +5094,7 @@ probe-field levels and local lights follow.
   the camera's distance, the hard choices (relocate or not, which candidate) flipped as a probe crossed a blend into
   level 1's fatter surfaces, and probes about 5.5 m from a walking camera jumped up to 0.35 m in a frame; now a 2 cm step
   moves one at most 0.021 m and changes its validity at most 0.12 (`Renderer`'s "Relocated probes move continuously
-  ..."). So level 0's relocation reaches 5.35 m from the camera at High (2.15 m up and down), and level 1's 0.2 m voxels
+  ..."). So level 0's relocation reaches 5.35 m from the camera at High (2.95 m down and 1.35 m up), and level 1's 0.2 m voxels
   close gaps under objects beyond: no probe enters the yard's car's 0.15 m gap there, which takes no field light),
   `ProbeWeights` (the
   eight parents' trilinear weights times their validity and the transmittance between the moved probes), `CascadeMarch`
@@ -5191,9 +5194,9 @@ probe-field levels and local lights follow.
   the sphere's foot has no point darker than half its brightest neighbour a voxel away (0.65), and along the far corners
   (the back wall with the side walls and the ceiling, the ceiling with the side walls) no point within 0.2 m of the junction
   is darker than half of the point a voxel farther from it (0.58 at the least; without the push out of solids 0 at every
-  junction). The floor the sphere overhangs (its last 0.3 m) and around the tall box's foot keep at least 0.06 and 0.2 of
-  their brightest neighbour (0.083 and 0.233; 0.021 and 0.10 before relocation and the guard visibility): half is a goal not
-  met. `Renderer`'s "Dead probes" checks relocation: in a 2 m block the probes 0.05 m inside a face move out, live, those
+  junction). The floor the sphere overhangs (its last 0.3 m) keeps half of its brightest neighbour too (0.54; 0.083 while
+  the floor, 2.75 m below the camera, lay beyond level 0's weights, 0.021 before relocation and the guard visibility); around
+  the tall box's foot it keeps at least 0.2 (0.226; 0.10 before): half is a goal not met there. `Renderer`'s "Dead probes" checks relocation: in a 2 m block the probes 0.05 m inside a face move out, live, those
   deeper stay dead and are the ones counted.
 
 - **Sampling** (`Include/GlobalIllumination.slang`): a point reads the finest level whose valid box holds it with
@@ -5251,13 +5254,17 @@ probe-field levels and local lights follow.
   `Renderer.VoxelClipmap`'s "The brightest albedo voxelized bounds the bounces", and `PerfGPU.Renderer`'s "Global
   illumination's bounces' cost at 3840x2160" (the gain 0 against 1 in one process).
 - **What it cannot do** (so far): the field resolves no more than its probes, 0.5 m apart at High and 1 m at Low. In the
-  Cornell box at High the visible rim of the floor the sphere overhangs still falls to 0.083 of its neighbour's light within
-  a voxel, where a row of small hard-edged black notches (the voxels' edges) remains under the sphere with soft lighter
-  streaks at its left, and the gap between the tall box's back-left corner and the red wall to 0.23 (the stitching case
-  reports them):
-  under the sphere the free space is two voxels tall, and the probes' rays in and beside it meet
-  the soft layers of the floor and the sphere, and the box's gap lies in the panel's shadow beside a lit cell, whose 17
-  times brighter probe the trilinear weights blend in linearly. Neither denser probes (a 0.25 m cascade 0, measured: no
+  Cornell box at High a row of small hard-edged black notches (the voxels' edges) remains where the sphere meets the floor,
+  with soft lighter streaks at its left, and the floor in the gap between the tall box's back-left corner and the red wall
+  falls to 0.23 of its neighbour's light within a voxel (the stitching case reports it). The notches are floor the camera
+  sees through a gap of 6-15 cm under the sphere (0.3-0.5 m from its contact), thinner than a voxel: the sphere's voxels
+  (every voxel a face reaches into is solid) rest on the floor's there, so no probe sees those points, and the view ray from
+  them grazes the sphere's voxels for more than 0.6 m (measured: retesting each probe against where the view ray leaves the
+  closed voxels, darkening by the clearance above the surface, and stopping the visibility point before the next solid left
+  them black or drew new contours). The box's gap lies in the panel's full shadow (no direct light at any of its probes,
+  computed from the scene), but the probes in front of it read the panel through the cascades' merge, whose parents beside
+  the box see past it: 17 times their neighbours in the shadow, blended in linearly. Interpolating the probes' light in log
+  space smoothed that (0.43-0.45) but darkened the floor by 6% at High and halved Low's, and put new dark spots elsewhere. Neither denser probes (a 0.25 m cascade 0, measured: no
   better there, and steps and corners worse with 10 cm voxels) nor a per-pixel march through the voxels (measured: 0.16-0.24
   at the rim, junction speckles, 1.6-2.2 ms more at 3840 x 2160) met the goal; at Low whole cells of probes beside the box and the sphere lie in the coarse voxels' solids, so the floor
   and walls there still step and go black, and its ceiling's junctions with the walls darken within a voxel. Low bounces once:

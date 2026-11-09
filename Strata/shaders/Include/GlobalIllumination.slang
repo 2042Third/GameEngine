@@ -134,7 +134,8 @@ struct GIVoxelLevel
 	int4 Texel;         // xyz: the texel of the window's minimum corner; w: 1 when the level holds valid voxels
 	int4 ValidMinimum;  // xyz: the valid box's first voxel, relative to the window's minimum corner
 	int4 ValidMaximum;  // xyz: one past its last voxel
-	float4 Anchor;      // xyz: the anchor voxel's world position (the CPU's double as a float): regions and voxel coordinates start there
+	float4 Anchor;      // xyz: the anchor voxel's world position (the CPU's double as a float): regions and voxel coordinates start there;
+	                    // w: meters the window's center lies below the camera (VoxelLevelLayout::Drop)
 };
 
 struct GlobalIlluminationConstants
@@ -164,13 +165,14 @@ float GetLevelWeightWithin(uint level, float3 position, float reach)
 	float3 local = (position - data.Origin.xyz) / voxel;
 	if (any(local < float3(data.ValidMinimum.xyz) + inset) || any(local > float3(data.ValidMaximum.xyz) - inset))
 		return 0.0;
-	float3 margin = float3(u_GI.Dimensions.xyz) * (0.5 * voxel) - (ST_GI_SCROLL_VOXELS + ST_GI_LEVEL_GUARD_VOXELS) * voxel - reach - abs(position);
+	float3 margin = float3(u_GI.Dimensions.xyz) * (0.5 * voxel) - (ST_GI_SCROLL_VOXELS + ST_GI_LEVEL_GUARD_VOXELS) * voxel - reach - abs(position + float3(0.0, data.Anchor.w, 0.0));
 	return saturate(min(margin.x, min(margin.y, margin.z)) / (ST_GI_LEVEL_BLEND_VOXELS * voxel));
 }
 
 // The weight with which a camera-relative point reads `level` rather than the coarser ones (GlobalIllumination::GetLevelWeight):
 // 0 outside its valid box less c_GILevelGuardVoxels (trilinear filtering reads a voxel beyond), else by the distance from the
-// camera: 1 within the window's half extent less (scroll + guard + blend) voxels on every axis, falling to 0 over the blend.
+// camera: 1 within the window's half extent less (scroll + guard + blend) voxels on every axis around the window's center (the
+// camera, the level's Anchor.w below it: c_GIFinestLevelDrop for level 0), falling to 0 over the blend.
 float GetLevelWeight(uint level, float3 position)
 {
 	GIVoxelLevel data = u_GI.Levels[level];
@@ -180,7 +182,7 @@ float GetLevelWeight(uint level, float3 position)
 	float3 local = (position - data.Origin.xyz) / voxel;
 	if (any(local < float3(data.ValidMinimum.xyz) + ST_GI_LEVEL_GUARD_VOXELS) || any(local > float3(data.ValidMaximum.xyz) - ST_GI_LEVEL_GUARD_VOXELS))
 		return 0.0;
-	float3 margin = float3(u_GI.Dimensions.xyz) * (0.5 * voxel) - (ST_GI_SCROLL_VOXELS + ST_GI_LEVEL_GUARD_VOXELS) * voxel - abs(position);
+	float3 margin = float3(u_GI.Dimensions.xyz) * (0.5 * voxel) - (ST_GI_SCROLL_VOXELS + ST_GI_LEVEL_GUARD_VOXELS) * voxel - abs(position + float3(0.0, data.Anchor.w, 0.0));
 	return saturate(min(margin.x, min(margin.y, margin.z)) / (ST_GI_LEVEL_BLEND_VOXELS * voxel));
 }
 

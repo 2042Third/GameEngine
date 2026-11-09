@@ -158,7 +158,7 @@ namespace Strata
 
 			GlobalIlluminationLayout layout;
 			for (uint32_t index = 0; index < levelCount; index++)
-				layout.Levels.push_back(VoxelLevelLayout { firstVoxelSize * static_cast<float>(1u << index), dimensions });
+				layout.Levels.push_back(VoxelLevelLayout { firstVoxelSize * static_cast<float>(1u << index), dimensions, index == 0 ? RenderData::c_GIFinestLevelDrop : 0.0f });
 			for (uint32_t k = 0; k < cascadeCount; k++)
 			{
 				ProbeCascadeLayout cascade;
@@ -253,7 +253,7 @@ namespace Strata
 
 		glm::i64vec3 GetWindowMinimum(const VoxelLevelLayout& level, const glm::dvec3& cameraPosition)
 		{
-			const glm::i64vec3 center = GetVoxelIndex(cameraPosition, level.VoxelSize);
+			const glm::i64vec3 center = GetVoxelIndex(cameraPosition - glm::dvec3(0.0, static_cast<double>(level.Drop), 0.0), level.VoxelSize);
 			const int64_t step = RenderData::c_GIScrollVoxels;
 			return FloorDivide(center - glm::i64vec3(level.Dimensions / 2u), step) * step;
 		}
@@ -357,7 +357,7 @@ namespace Strata
 		{
 			const float voxel = level.VoxelSize;
 			const glm::vec3 margin = glm::vec3(level.Dimensions) * (0.5f * voxel)
-				- static_cast<float>(RenderData::c_GIScrollVoxels + RenderData::c_GILevelGuardVoxels) * voxel - glm::abs(relative);
+				- static_cast<float>(RenderData::c_GIScrollVoxels + RenderData::c_GILevelGuardVoxels) * voxel - glm::abs(relative + glm::vec3(0.0f, level.Drop, 0.0f));
 			const float nearest = std::min({ margin.x, margin.y, margin.z });
 			return std::clamp(nearest / (static_cast<float>(RenderData::c_GILevelBlendVoxels) * voxel), 0.0f, 1.0f);
 		}

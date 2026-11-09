@@ -314,11 +314,13 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 				{
 					CAPTURE(level.VoxelSize);
 					const glm::i64vec3 minimum = GlobalIllumination::GetWindowMinimum(level, camera);
+					// The window's center: the camera, the finest level's c_GIFinestLevelDrop below it.
+					const glm::dvec3 center = camera - glm::dvec3(0.0, static_cast<double>(level.Drop), 0.0);
 					for (int axis = 0; axis < 3; axis++)
 					{
 						CHECK(minimum[axis] % static_cast<int64_t>(RenderData::c_GIScrollVoxels) == 0);
-						// The camera lies between half the dimensions and half plus a step from the minimum face.
-						const double fromMinimum = camera[axis] / static_cast<double>(level.VoxelSize) - static_cast<double>(minimum[axis]);
+						// The center lies between half the dimensions and half plus a step from the minimum face.
+						const double fromMinimum = center[axis] / static_cast<double>(level.VoxelSize) - static_cast<double>(minimum[axis]);
 						const double half = static_cast<double>(level.Dimensions[axis] / 2);
 						CHECK(fromMinimum >= half);
 						CHECK(fromMinimum <= half + RenderData::c_GIScrollVoxels);
@@ -326,6 +328,24 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 				}
 			}
 		}
+	}
+
+	TEST_CASE("The finest level reaches the floor below the camera")
+	{
+		// The finest level's window and weights are centered c_GIFinestLevelDrop below the camera, the coarser levels' on it: at
+		// High a floor 2.75 m below (the owner's Cornell box seen from half its height) reads level 0 at full weight, where
+		// level 1's 0.2 m voxels closed the floor under the sphere's overhang, and a ceiling 2.75 m above reads level 1.
+		for (GlobalIlluminationLevel quality : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
+		{
+			const GlobalIlluminationLayout layout = GetLayout(quality);
+			CHECK(layout.Levels.front().Drop == RenderData::c_GIFinestLevelDrop);
+			for (size_t level = 1; level < layout.Levels.size(); level++)
+				CHECK(layout.Levels[level].Drop == 0.0f);
+		}
+		const GlobalIlluminationLayout high = GetLayout(GlobalIlluminationLevel::High);
+		CHECK(GlobalIllumination::GetLevelWeight(high.Levels[0], glm::vec3(0.0f, -2.75f, 0.0f)) == 1.0f);
+		CHECK(GlobalIllumination::GetLevelWeight(high.Levels[0], glm::vec3(0.0f, 2.75f, 0.0f)) == 0.0f);
+		CHECK(GlobalIllumination::GetLevelWeight(high.Levels[1], glm::vec3(0.0f, 2.75f, 0.0f)) == 1.0f);
 	}
 
 	TEST_CASE("The field reaches only where level 2 holds while a scroll is voxelized")
@@ -563,15 +583,20 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 				const glm::vec3 half = glm::vec3(level.Dimensions) * (0.5f * level.VoxelSize);
 				const float edge = static_cast<float>(RenderData::c_GIScrollVoxels + RenderData::c_GILevelGuardVoxels) * level.VoxelSize;
 				const float band = static_cast<float>(RenderData::c_GILevelBlendVoxels) * level.VoxelSize;
-				// 1 inside the band, 0 past it, on every axis.
+				// Around the window's center (the camera, the finest level's Drop below it): 1 inside the band, 0 past it, on every
+				// axis and both sides.
+				const glm::vec3 center(0.0f, -level.Drop, 0.0f);
 				for (int axis = 0; axis < 3; axis++)
 				{
-					glm::vec3 inside(0.0f);
-					inside[axis] = half[axis] - edge - band - 0.01f;
-					CHECK(GlobalIllumination::GetLevelWeight(level, inside) == 1.0f);
-					glm::vec3 past(0.0f);
-					past[axis] = -(half[axis] - edge + 0.01f);
-					CHECK(GlobalIllumination::GetLevelWeight(level, past) == 0.0f);
+					for (const float side : { 1.0f, -1.0f })
+					{
+						glm::vec3 inside = center;
+						inside[axis] += side * (half[axis] - edge - band - 0.01f);
+						CHECK(GlobalIllumination::GetLevelWeight(level, inside) == 1.0f);
+						glm::vec3 past = center;
+						past[axis] += side * (half[axis] - edge + 0.01f);
+						CHECK(GlobalIllumination::GetLevelWeight(level, past) == 0.0f);
+					}
 				}
 				// A camera moving 1 mm moves every point 1 mm relative to it: no weight changes by more than the blend's slope
 				// allows (1 mm over the band of c_GILevelBlendVoxels voxels).

@@ -665,6 +665,10 @@ namespace Strata
 		constexpr uint32_t c_GIScrollVoxels = 4;        // A level's window moves in steps of this many voxels: fewer, larger slabs
 		constexpr uint32_t c_GILevelGuardVoxels = 2;    // A level is never sampled this close to its window's (or valid box's) faces
 		constexpr uint32_t c_GILevelBlendVoxels = 2;    // Samples blend into the next level over this many voxels (by distance from the camera)
+		// The finest level's window (and its weights) is centered this far below the camera (meters; a whole number of scroll steps
+		// at High and Low): floors and what rests on them lie below the eye, and a camera at the middle of a 5.5 m room left the
+		// floor's contacts to level 1's coarser voxels, closed under a sphere's overhang (the Cornell box).
+		constexpr float c_GIFinestLevelDrop = 0.8f;
 		constexpr uint32_t c_GIRegionBrick = 4;         // Changed boxes snap outward to bricks of this many voxels
 		constexpr uint32_t c_GIMaxRegionVoxels = 64;    // A region is at most this many voxels a side (slabs and windows are cut so)
 		// Windows are addressed from an anchor (a multiple of c_GIAnchorVoxels voxels), kept while the camera stays within
@@ -824,7 +828,7 @@ namespace Strata
 			glm::ivec4 Texel;        // xyz: the minimum corner's texel; w: 1 when the level holds valid voxels
 			glm::ivec4 ValidMinimum; // xyz: the valid box's first voxel, relative to the window's minimum corner
 			glm::ivec4 ValidMaximum; // xyz: one past its last voxel
-			glm::vec4 Anchor;        // xyz: the anchor voxel's world position as a float (regions and voxel coordinates start there)
+			glm::vec4 Anchor;        // xyz: the anchor voxel's world position as a float (regions and voxel coordinates start there); w: the level's Drop
 		};
 		static_assert(sizeof(GIVoxelLevelData) == 80);
 

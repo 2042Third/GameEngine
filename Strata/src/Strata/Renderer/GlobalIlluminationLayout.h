@@ -37,6 +37,7 @@ namespace Strata
 	{
 		float VoxelSize = 0.0f;     // Meters: the first level's voxel size times 2^level
 		glm::uvec3 Dimensions{ 0 }; // Voxels per axis
+		float Drop = 0.0f;          // Meters its window's center lies below the camera (c_GIFinestLevelDrop for the first level)
 	};
 
 	// A cascade of probes: all cascades cover the same field around the camera; each has half the probes per axis of the one
@@ -141,8 +142,9 @@ namespace Strata
 
 		// The world voxel index of a position: floor(position / voxelSize).
 		glm::i64vec3 GetVoxelIndex(const glm::dvec3& position, float voxelSize);
-		// The minimum corner of a level's window around a camera: centered on the camera's voxel, snapped down to a multiple of
-		// c_GIScrollVoxels, so the camera lies between Dimensions / 2 and Dimensions / 2 + c_GIScrollVoxels voxels from it.
+		// The minimum corner of a level's window around a camera: centered on the voxel of the camera lowered by the level's Drop,
+		// snapped down to a multiple of c_GIScrollVoxels, so that point lies between Dimensions / 2 and Dimensions / 2 +
+		// c_GIScrollVoxels voxels from it.
 		glm::i64vec3 GetWindowMinimum(const VoxelLevelLayout& level, const glm::dvec3& cameraPosition);
 		VoxelBox GetWindow(const VoxelLevelLayout& level, const glm::i64vec3& minimum);
 		// Where a world voxel index is stored in a level's textures: its non-negative remainder by the dimensions.
@@ -167,9 +169,10 @@ namespace Strata
 		glm::vec3 GetVoxelCoordinate(const RenderData::AffineTransform& world, const glm::vec3& position, const glm::vec3& anchor, float voxelSize);
 
 		// The weight with which a sample at a camera-relative point reads a level rather than the coarser ones: 1 within the
-		// window's half extent less (c_GIScrollVoxels + c_GILevelGuardVoxels + c_GILevelBlendVoxels) voxels of the camera on every
-		// axis, falling to 0 over c_GILevelBlendVoxels voxels. By the distance from the camera, not from the snapped window, so
-		// it changes continuously as the camera moves (Include/GlobalIllumination.slang's GetLevelWeight).
+		// window's half extent less (c_GIScrollVoxels + c_GILevelGuardVoxels + c_GILevelBlendVoxels) voxels of the window's center
+		// (the camera, the level's Drop below it) on every axis, falling to 0 over c_GILevelBlendVoxels voxels. By the distance
+		// from the camera, not from the snapped window, so it changes continuously as the camera moves
+		// (Include/GlobalIllumination.slang's GetLevelWeight).
 		float GetLevelWeight(const VoxelLevelLayout& level, const glm::vec3& relative);
 
 		// A material's voxel colors (RenderData::GIMaterial): linear RGB in [0, 1] as 8 bits per channel (red in the low byte),

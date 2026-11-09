@@ -2742,14 +2742,17 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
 		// the sphere overhangs counts where the camera sees it, down to c_ContactGap from its contact point (a gap of 0.23 m under
 		// it, two voxels: closer in, no visibility point fits between the floor's and the sphere's voxels). Points the camera does
 		// not see and neighbours under the objects are left out, and so are points whose brightest neighbour is darker than a
-		// fiftieth of the floor's median. At High around the sphere's footprint; the overhung rim and the tall box's foot (the gap
-		// between its back-left corner and the red wall) still fall faster than c_MinRatio a voxel, which no probe of 0.5 m resolves:
-		// there the darkest point keeps at least c_MinOverhangRatio and c_MinBoxFootRatio of its brightest neighbour (0.021 and 0.10
-		// before probe relocation and the gather's guard visibility: a dead probe in the sphere and Chebyshev's blurred depths left
-		// them black), and c_MinRatio is a goal not met yet (DeveloperGuide, "Global illumination"). Low's 1 m probes are measured
-		// and reported: whole cells of them lie in the coarse voxels' solids beside the box and the sphere.
+		// fiftieth of the floor's median. At High around the sphere's footprint and under its overhang (0.083 while the floor, 2.75 m
+		// below the camera, lay beyond voxel level 0's weights: level 1's 0.2 m voxels closed the gap and the probe relocated there
+		// read a fortieth of its open neighbour's light; the finest level's window now lies c_GIFinestLevelDrop below the camera).
+		// The tall box's foot (the gap between its back-left corner and the red wall) still falls faster than c_MinRatio a voxel:
+		// there the darkest point keeps at least c_MinBoxFootRatio of its brightest neighbour (0.10 before probe relocation and the
+		// gather's guard visibility). That gap is in the box's full shadow from the panel, but the probes in front of it read the
+		// panel through the cascades' merge (parents beside the box see past it), 17 times their neighbours in the shadow, which
+		// the trilinear weights blend in linearly: c_MinRatio there is a goal not met yet (DeveloperGuide, "Global
+		// illumination"). Low's 1 m probes are measured and reported: whole cells of them lie in the coarse voxels' solids beside
+		// the box and the sphere.
 		constexpr float c_MinRatio = 0.5f;
-		constexpr float c_MinOverhangRatio = 0.06f;
 		constexpr float c_MinBoxFootRatio = 0.2f;
 		constexpr float c_ContactGap = 0.6f;
 		GPUContext gpu;
@@ -2828,7 +2831,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
 					<< " of the brightest, at (" << lowestAt.x << ", 0, " << lowestAt.y << "); the floor's median " << floorMedian);
 				CHECK(measured > (area == 1 ? 50u : 200u));
 				if (level == GlobalIlluminationLevel::High)
-					CHECK(lowest >= (area == 0 ? c_MinRatio : area == 1 ? c_MinOverhangRatio : c_MinBoxFootRatio));
+					CHECK(lowest >= (area == 2 ? c_MinBoxFootRatio : c_MinRatio));
 			}
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);

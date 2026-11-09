@@ -231,6 +231,14 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   from a fresh renderer, 0.247% and 7.2%: the probes' blurred distances, read toward a point moved toward the viewer,
   changed a thin post's light in steps as the view turned.
 
+**Global illumination: batch 2 (experimental).**
+
+- The finest voxels reach further down than up: their window lies 0.8 m below the camera, so floors and what rests on
+  them keep 10 cm voxels down to about 3 m below the eye (ceilings more than about 1.5 m above it take 20 cm ones). In
+  the owner's Cornell box seen from half its height, the floor under the sphere's overhang no longer falls to black
+  against its neighbour: the darkest point there keeps 0.54 of its neighbour's light 0.1 m away (0.083 before). No cost,
+  no memory.
+
 **Occlusion culling (cull fix)**
 
 - Fixed: occlusion culling hid objects in plain view. Its depth pyramid was built a texel or more off where a level's
@@ -357,10 +365,10 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   Low: 7 m and 2.8 m; faded to the light without it over 2 m): outdoors the edge of a bubble can show.
 - The owner's Cornell box at High, with every bounce: the probes are 0.5 m apart (1 m at Low), and the light still
   falls faster than it should where they cannot resolve it. Where the sphere meets the floor a row of small hard-edged
-  black notches remains (the voxels' edges): the darkest floor point under its overhang keeps 0.083 of its neighbour's
-  light 0.1 m away (0.071 before the probes' moves were made continuous; half is the goal), and the floor at the sphere's
-  left shows soft lighter streaks where a jagged lighter staircase was. The floor in the gap between the tall box and the
-  red wall falls to 0.23 (0.232), and that gap stays very dark. At Low, cells of probes beside the box and the sphere lie
+  black notches remains: floor seen through a gap of 6-15 cm under the sphere, thinner than a voxel, which no probe sees;
+  the floor at the sphere's left shows soft lighter streaks. The floor in the gap between the tall box and the red wall
+  falls to 0.23 of its neighbour's light 0.1 m away (half is the goal), and that gap stays very dark: it lies in the box's
+  full shadow, but the probes in front of it take the panel's light through the cascades' merge. At Low, cells of probes beside the box and the sphere lie
   inside them, and the walls and floor there still show steps and black patches, and the ceiling darkens along its edges.
   Low bounces once: with every bounce its Cornell box would be about 1.8 times as bright as High's (its ceiling 165-235
   nits per unit of albedo against 89-142). In the sun room, the window wall keeps its dark vertical bands either side of
