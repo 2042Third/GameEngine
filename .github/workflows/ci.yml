@@ -42,7 +42,7 @@ jobs:
             cache: ccache
             key: linux-release
           - name: macOS
-            os: macos-15
+            os: macos-14
             preset: macos
             config: release
             cache: ccache
