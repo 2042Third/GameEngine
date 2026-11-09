@@ -5252,14 +5252,24 @@ probe-field levels and local lights follow.
   take the palette's mean everywhere: one mauve for grass, wood and rock), double-sided materials' voxels have no facing
   (the voxels view shades them flat), glowing values above 65,408 nits clamp, and an editor top view far above a scene
   shows its coarse levels only. The field is an ambient cube per probe, exact for axis-aligned normals only: a white sphere
-  under a uniform sky reads 2% dark at its center and 5% at its rim (its probes see the sphere behind the point's own
-  horizon). Its light ends at the field's edge around the camera (High: full within 7.5 m horizontally and 5.5 m up and
+  under a uniform sky reads 2% dark at its center and 7% at its rim (one bounce; its probes see the sphere behind the
+  point's own horizon). Measured instead (batch 1, not landed): correction 7b's 8 x 8 octahedral tile read the rim 4.3% dark
+  but its bilinear reads creased the Cornell box's sphere; nine spherical-harmonic coefficients read it 3.5% dark and smooth,
+  but in half floats the bounces fell into a 0.2% cycle (still frames differed, settling missed its frame), and in floats
+  they still differed at frame 30; what is left at the rim seems to lie in the merge of parents beside the sphere (their rays
+  of the same direction cross it). Its light ends at the field's edge around the camera (High: full within 7.5 m horizontally and 5.5 m up and
   down, Low within 7 m and 2.8 m, faded to today's light over the next 2 m), which can show outdoors as the edge of a
   bubble. The reach stays where voxel level 2 holds every point while a scroll's slab waits to be voxelized and the camera
   moves on up to a step (`ComputeLayout`; Low's level 2 holds 4.8 m up and down), since a point no level holds takes
   today's light at once. A surface that sees none of its eight probes gets no field light (dark, never the sky): gaps,
   recesses and ledges under about two voxels and wall bases beside bright patches go nearly black, outdoors too, where
-  they are darker than without GI (the yard's pool box, ThirdPerson's ledges and fence rails).
+  they are darker than without GI (the yard's pool box, ThirdPerson's ledges and fence rails). The sun room's window wall
+  shows why at its foot: the row of probes 0.15 m above the floor sees the sunlit patch only at grazing angles, which their
+  64 directions (about 25 degrees apart) do not resolve, so at one bounce every face of those beside the window reads 0.0-0.1
+  (those under it, which see the sill's light, 30), and the wall's foot, between them and probes under the floor, goes black
+  (0.15 against the reference's 33-158 nits per albedo from the west corner to the window); beside the window at 1.5 m the
+  wall reads up to 1.8 times the reference near its edges, falling to 1.0 a metre away, which shows as darker bands either
+  side of a glow.
 
 ### Light units and exposure
 

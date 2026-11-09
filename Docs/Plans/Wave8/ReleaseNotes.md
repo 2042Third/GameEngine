@@ -299,7 +299,7 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
 - The east wall high and the ceiling's east side get 0.63 and 0.49 of their bounce (8 of 10 wall and ceiling points within
   30%; mean error 20%), one floor-wall junction misses, and two points behind the camera 2 m up get 0.62-0.66.
 - Low is too dark: 0.2-0.5 of the reference.
-- Open ground under the sky reads 3.2% off at 6 m, and a white sphere under a uniform sky 2% dark at its center and 5% at
+- Open ground under the sky reads 3.2% off at 6 m, and a white sphere under a uniform sky 2% dark at its center and 7% at
   its rim (each probe's light is an ambient cube, exact for axis-aligned surfaces only).
 - It costs 3.8-4.9 ms of GPU time at 3840 x 2160 at High in the sun room (`GPU.RadianceCascades`; 1-2 ms aimed at; the
   perf case `PerfGPU.Renderer.GlobalIllumination4K*`: 4.9 ms in the sun room, 4.0 ms in the yard), and the forward pass's
@@ -323,7 +323,9 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   inside them, and the walls and floor there still show steps and black patches, and the ceiling darkens along its edges.
   Low bounces once: with every bounce its Cornell box would be about 1.8 times as bright as High's (its ceiling 165-235
   nits per unit of albedo against 89-142). In the sun room, the window wall keeps its dark vertical bands either side of
-  the window and the dark band along its foot.
+  the window (a glow up to 1.8 times too bright near the window's edges, falling off a metre away) and the dark band
+  along its foot (the probes 0.15 m above the floor see the sunlit patch only at grazing angles, which their directions do
+  not resolve).
 - With every bounce, rooms take frames to fill after a cut, by their brightest surface: the sun room's gi view changes
   by less than 0.25% a frame from frame 11 (it is reported settled at 13), the Cornell box's from 15 (18), a closed
   white box's from 27 (39). Until then a game's cut shows the light rising.
