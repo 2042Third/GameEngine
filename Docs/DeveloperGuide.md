@@ -4673,7 +4673,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
     every caster of every receiver.
   Stats: `SceneRendererStats::Cascades` (each slice's near, far and texel size); `editor.perf`'s and every
   `viewport.capture` result's `renderStats.cascades`. Tests: `Renderer.ShadowCascades` (the layout alone),
-  `GPU.SceneRenderer.ShadowCascades` (turns and changes against fresh renderers, the strafe, the ball, both paths).
+  `GPU.SceneRenderer.ShadowCascades` (turns and changes against fresh renderers, the strafe, the ball, both paths). The
+  look-dev's `tp.live.turn90` shots (TAA, `.fxaa`, `.off`) turn the Third-Person camera a quarter turn in 34 steps
+  and capture the four frames right after it, `.later` and `.later.off` a second on (the attract mode's camera drifts:
+  compare two builds frame for frame).
 - **Costs** (look-dev A/B against cc9524a1, three interleaved pairs, medians, the samples' scene cameras with TAA; RTX
   5090, after the wave's perf pass): at 3840x2160 0.7.0's High, which drew contact shadows, `GPU.ScreenShadows` is
   0.35-0.52 ms (mask, contact shadows, blur and 0.7.0's fit's reduction, which went with the stable cascades) while `GPU.Opaque` loses the filter; at 1920x1080
