@@ -110,7 +110,7 @@ jobs:
             platform: linux-x64
             archive: tar.gz
           - name: macOS
-            os: macos-14
+            os: macos-15
             preset: macos
             platform: macos-arm64
             archive: tar.gz
