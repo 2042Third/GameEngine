@@ -884,6 +884,55 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A strafe's gi view is a fresh renderer's at its camera")
+	{
+		// The field is a function of world data and of where the camera stands, never of where it stood: after a strafe along the
+		// yard's fence (13 frames, 0.02 m each, one bounce: every bounce takes the frame before's field by design), the gi view, the
+		// field, cascade 0's validity and its depth moments equal a fresh renderer's at the last camera, bit for bit. What made the
+		// fence crawl was a camera input of the gather itself (DeveloperGuide, "Global illumination"), not a history.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const float aspect = static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y);
+		SceneTestAssets assets;
+		Scene scene;
+		BuildYard(scene, assets);
+		struct Reading
+		{
+			ReadbackImage Image;
+			std::vector<uint8_t> Field;
+			std::vector<uint8_t> Validity;
+			std::vector<uint8_t> Depth;
+		};
+		const auto read = [&](SceneRenderer& renderer)
+		{
+			Reading reading;
+			REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), reading.Image));
+			REQUIRE(renderer.ReadGlobalIlluminationField(reading.Field));
+			REQUIRE(renderer.ReadGlobalIlluminationValidity(0, reading.Validity));
+			REQUIRE(renderer.ReadGlobalIlluminationFieldDepth(reading.Depth));
+			return reading;
+		};
+		Scope<SceneRenderer> strafe = CreateScope<SceneRenderer>(RoomSpecification());
+		strafe->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+		for (uint32_t frame = 0; frame <= 13; frame++)
+			REQUIRE(RenderGIFrame(*strafe, scene, YardStrafe(frame, 1.0f, aspect), GIViewOptions()));
+		REQUIRE_FALSE(strafe->GetStats().GlobalIlluminationPending);
+		const Reading moved = read(*strafe);
+		strafe.reset();
+		Scope<SceneRenderer> fresh = CreateScope<SceneRenderer>(RoomSpecification());
+		fresh->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+		REQUIRE(RenderGIFrame(*fresh, scene, YardStrafe(13, 1.0f, aspect), GIViewOptions()));
+		REQUIRE_FALSE(fresh->GetStats().GlobalIlluminationPending);
+		const Reading still = read(*fresh);
+		fresh.reset();
+		CollectReleases();
+		CHECK(moved.Image.Pixels == still.Image.Pixels);
+		CHECK(moved.Field == still.Field);
+		CHECK(moved.Validity == still.Validity);
+		CHECK(moved.Depth == still.Depth);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A sunlit floor's light is continuous across the voxel levels' blends")
 	{
 		// The sun's walk from a voxel where its level blends into the next (weight below one half) read the coarser level from

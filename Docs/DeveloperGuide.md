@@ -4934,9 +4934,13 @@ lights, Post Process and the sky), and never a resolution below the output's.
 Global illumination is world-space radiance cascades over a voxel clipmap of the geometry pool: probes in the world trace
 rays through a voxel copy of the scene around the camera, lit by the sun, the sky and glowing surfaces every frame, whatever
 the screen shows. No light comes from the screen (no depth-buffer tracing, no previous frame's image) and nothing is
-blended over frames: the light is meant to be a function of world data alone, which camera motion cannot flicker. It is not
-yet: in a camera strafe along a fence the fence's light still crawls (Gate W's flicker miss, `Docs/Plans/Wave8/ReleaseNotes.md`'s
-Known issues), so some input still follows the camera; it has not been found. Built in stages from
+blended over frames: the light is a function of world data and of where the camera stands, never of where it stood (at
+one bounce a strafe's frame equals a fresh renderer's at its camera, bit for bit; every bounce takes the frame before's field
+by design). The camera inputs are continuous: the voxel levels' blends and the field's fade by distance, and the gather's
+visibility point moved toward the viewer. The last made a fence crawl while Chebyshev's bound weighed the probes (its cubed
+tail turned the view's turn into whole steps of a thin post's probe weights; 0.247% of blocks against Gate W's 0.10%); the
+voxels' guard does not (0.079%), and without the move toward the viewer the posts' light varied faster across the screen and
+crawled more (0.207%). Built in stages from
 `Docs/Plans/Wave8/specs/radiance-cascades-world.md` (its review corrections win over its body); the sources are the
 radiance-cascades lab (Daniel Quevedo, MIT: the triangle-box test, the winding steps and the column fill, the emission's
 coverage), Akenine-Moller's triangle-box test and, as ideas, Split RC, EggyStudio and creikey's voxel cascades.
@@ -5216,6 +5220,9 @@ probe-field levels and local lights follow.
   `Tests::AddVoxelizerBacklog`, with nothing else to wait for: the picture's frame has the field settled and joined);
   `Renderer.GlobalIlluminationLayout`'s "The field reaches only where level 2 holds while a scroll is voxelized";
   `PerfGPU.Renderer`'s "Global illumination's cost at 3840x2160" (sun room and yard, provisional);
+  `GPU.SceneRenderer.GlobalIllumination`'s "The fence and grass strafes on the gi view" (Gate W's flicker bounds: fence
+  blocks 0.10%, their 99th percentile 0.88%, grass 0.19%, without and with TAA) and `GlobalIlluminationRoom`'s "A strafe's gi
+  view is a fresh renderer's at its camera";
   `GPU.SceneRenderer.GlobalIlluminationBounce` (the owner's Cornell box, `Tests::BuildCornellBox`, which look-dev's
   `Cornell` scene and `lookdev.cornell` mirror: what the bounces add to the ceiling is at least half of the floor's light
   integrated from the panel, the floor and the sphere take the colored walls' tints; a glowing closed box converges to

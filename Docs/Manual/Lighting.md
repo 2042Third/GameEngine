@@ -321,8 +321,8 @@ goes on bouncing between the surfaces as it does in life (at High: a room lit by
 and colored walls tint the floor beside them), and a closed room stays dark, whether the source is on screen or not. The
 engine keeps a voxel copy of the scene around the camera, lights it with the sun every frame and gathers it in probes;
 moving the sun moves the bounce in the same frame.
-Nothing in it is blended over frames, so it does not smear behind a moving camera, but thin geometry can still crawl
-slightly in its light while the camera moves (see the list below).
+Nothing in it is blended over frames, so it neither smears behind a moving camera nor crawls on thin geometry such as
+fences.
 
 - **Global Illumination Intensity** (1): how much of the traced light shades surfaces; 1 as traced.
 - It runs at the **Graphics Quality**'s Global illumination level: High at High and Ultra, none at Low and Medium (see
@@ -346,7 +346,6 @@ slightly in its light while the camera moves (see the list below).
     walls beside bright patches can go nearly black. Outdoors this shows at the foot of large boxes on the ground and on
     ThirdPerson's ledges and fence rails; indoors as a dark band where the floor meets a wall below a sunlit window, and
     under low overhangs (the floor under a ball's rim) and in narrow gaps between an object and a wall.
-  - Thin geometry such as fence rails can crawl slightly in its light while the camera moves.
   - Low is too dark.
   - Its light fades out from 7.5 m to 9.5 m around the camera and from 5.5 m to 7.5 m above and below it at High
     (Low: 7 m to 9 m, and 2.8 m to 4.8 m), and outdoors that edge can show.

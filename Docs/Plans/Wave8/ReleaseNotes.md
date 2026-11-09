@@ -225,6 +225,10 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   stay dark. Look-dev: `lookdev.cornell` (lit and GI view).
 - What it costs at 3840 x 2160 at High: 0.1-0.2 ms more in global illumination's own stage (the probes' search), the
   opaque pass the same; no memory.
+- Fixed: a camera strafe along a fence no longer makes its light crawl in the GI view: 0.079% of the image's blocks change
+  from frame to frame (0.247% before; 0.10% is the bound), their 99th percentile 0.59% (7.2%), and grass 0.13% (0.22%).
+  The probes' blurred distances, read toward a point moved toward the viewer, changed a thin post's light in steps as the
+  view turned.
 
 **Occlusion culling (cull fix)**
 
@@ -297,8 +301,6 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
 - Low is too dark: 0.2-0.5 of the reference.
 - Open ground under the sky reads 3.2% off at 6 m, and a white sphere under a uniform sky 2% dark at its center and 5% at
   its rim (each probe's light is an ambient cube, exact for axis-aligned surfaces only).
-- A camera strafe along the fence crawls in the GI view: 0.147% of blocks change against the 0.10% aimed at, the 99th
-  percentile 6.07% against 1.0%.
 - It costs 3.8-4.9 ms of GPU time at 3840 x 2160 at High in the sun room (`GPU.RadianceCascades`; 1-2 ms aimed at; the
   perf case `PerfGPU.Renderer.GlobalIllumination4K*`: 4.9 ms in the sun room, 4.0 ms in the yard), and the forward pass's
   gather adds 0.3-0.8 ms to `GPU.Opaque` (look-dev: the sun room, the yard and ThirdPerson's course).
