@@ -101,8 +101,6 @@ namespace
 		specification.TextureStreaming = false;
 		specification.GPUDriven = mode;
 		specification.DebugName = name;
-		// Images of renderers that rendered different numbers of frames are compared: the sun's cascades must not follow the view.
-		specification.FitShadowsToView = false;
 		return SceneRenderer(specification);
 	}
 
@@ -957,7 +955,6 @@ TEST_SUITE("GPU.SceneRenderer.Interpolation")
 
 		SceneRendererSpecification specification;
 		specification.TextureStreaming = false;
-		specification.FitShadowsToView = false; // Both renderers' cascades keep one layout
 		specification.SpreadLightingUpdates = false; // Both draw every shadow view a frame asks for, without fades
 		SceneRenderer cached(specification);
 		specification.CacheShadowCascades = false;

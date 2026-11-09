@@ -13,7 +13,7 @@ struct CascadeFitBuffer
 {
 	float4x4 LightView;
 	float4 Boxes[4];       // Light view space: min.xy, max.xy
-	float4 Depths[4];      // x: the far side's z, y: the sphere's near side's z, z: world units per texel, w: the sphere's radius
+	float4 Depths[4];      // x: the far side's z, y: the sphere's near side's z, z: world units per texel, w: 0
 	float4 CasterNearZ;    // Per cascade: the nearest drawn caster's z, as the CPU found it
 	uint CascadeCount;
 	uint CasterDepthsFromGPU;
@@ -64,10 +64,10 @@ void st_Main()
 	projection[1][3] = -(box.w + box.y) / (box.w - box.y);
 	projection[2][3] = -zNear / (zFar - zNear);
 	u_Cascades[cascade].ViewProjection = mul(projection, u_Fit.LightView);
-	// Penumbrae are searched for blockers up to this distance from the receiver (world units).
-	float searchDistance = 0.2 * depths.w + 5.0;
-	// w: the near plane's light view z, for the cascades' occlusion culling (Cull.comp's IsOccludedInCascade).
-	u_Cascades[cascade].Parameters = float4(depths.z, farPlane - nearPlane, searchDistance, nearZ);
+	// z: 0 (the penumbra's search distance follows the receiver's view distance alike in every cascade: Include/Shadows.slang,
+	// ShadowSearchDistance); w: the near plane's light view z, for the cascades' occlusion culling (Cull.comp's
+	// IsOccludedInCascade).
+	u_Cascades[cascade].Parameters = float4(depths.z, farPlane - nearPlane, 0.0, nearZ);
 }
 
 // --- Entry point ---

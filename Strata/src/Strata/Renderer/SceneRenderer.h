@@ -18,7 +18,7 @@
 #include "Strata/Renderer/SceneRenderData.h"
 #include "Strata/Renderer/SceneVertexLayouts.h"
 #include "Strata/Renderer/ShadowAtlasAllocator.h"
-#include "Strata/Renderer/ShadowFit.h"
+#include "Strata/Renderer/ShadowCascades.h"
 #include "Strata/Renderer/ShadowView.h"
 #include "Strata/Renderer/TextureReadback.h"
 #include "Strata/Scene/Components.h"
@@ -237,20 +237,6 @@ namespace Strata
 		// tables and, while materials are alpha-masked, the texture table's entries). Other cascades keep their shadow map
 		// layer (SceneRendererStats::CachedCascadeMask): a still camera over a still or local change costs no shadow draws.
 		bool CacheShadowCascades = true;
-		// The sun's cascades are fitted to what the camera sees (ShadowFitTracker, Renderer/ShadowFit.h): each frame's prepass
-		// depth is reduced on the GPU (Scene/ShadowFit.comp, in GPU.ScreenShadows) to the receivers' range of view distances and
-		// their extent, read back frames later, and the cascades' slices cover that range while their squares (all but the last
-		// one's) shrink to those receivers: finer texels where the receivers are. The last cascade still reaches the shadow
-		// distance on its slice's sphere, and shaders select cascades by containment, so a receiver no readback saw yet is
-		// shadowed by a coarser cascade, never left unshadowed. A renderer's first frames, frames after a camera cut, another
-		// scene or other cascades, and frames without receivers use Strata 0.6.0's layout (SceneRendererStats::ShadowFit).
-		// Off: always Strata 0.6.0's layout (renderers of single images: thumbnails, bakes; tests of the layout itself).
-		bool FitShadowsToView = true;
-		// The fitted cascades wait before they follow a near object or a wider square and shrink only after half a second
-		// (ShadowFitTracker's holds, counted in seconds). Off: Strata 0.7.0's rules, growths at once and shrinks after
-		// c_ShrinkReadbacks readbacks, so that pictures do not depend on how long frames take: renderers of single images
-		// (viewport.capture's renderer, project thumbnails).
-		bool ShadowFitHolds = true;
 		// Scenes whose PostProcessComponent chooses AntiAliasingMode::TAA are drawn with temporal anti-aliasing: each frame
 		// offsets its samples by a sub-pixel jitter (8 phases of a Halton (2, 3) sequence, from the history's latest reset on,
 		// in the frame's copy of the camera only: culling, levels of detail, the shadow cascades and the overlays keep the
@@ -447,9 +433,9 @@ namespace Strata
 		// wrong place (lookdev.patch). (The procedural sky's disk is part of its environment cube, as for every surface's image
 		// light, and surfaces keep the image light's specular.)
 		bool ProbeCapture = false;
-		// The time since this renderer's previous frame that automatic exposure adapts over and the sun cascades' fit counts its
-		// holds in (ShadowFitTracker); unset, the wall clock between its frames (at most 0.25 s, so pauses do not turn into one
-		// huge step). Tests and tools that step time, and tests that compare two renderers' frames, set it.
+		// The time since this renderer's previous frame that automatic exposure adapts over; unset, the wall clock between its
+		// frames (at most 0.25 s, so pauses do not turn into one huge step). Tests and tools that step time, and tests that
+		// compare two renderers' frames, set it.
 		std::optional<float> AdaptationSeconds;
 		// The scene's motion blur applies (PostProcessComponent::MotionBlur, unless the quality turns it off). Editor views and
 		// renderers of single images (captures, thumbnails) turn it off: they never blur.
@@ -717,19 +703,6 @@ namespace Strata
 		uint32_t CascadeCount = 0;
 		// The frame drew the sun's screen-space shadow mask (SceneRenderer::GetScreenShadowTexture): every frame with a shadowed sun.
 		bool ScreenShadows = false;
-		// The sun's cascades fitted to what the camera sees (SceneRendererSpecification::FitShadowsToView): the frame's slices came
-		// from a readback of the receivers (else Strata 0.6.0's layout), and some cascade's square was fitted to them; whether
-		// the layout settled (no readback is due that may change it: true without a fit); the range [ShadowFitNear,
-		// ShadowFitFar] the slices divide (the last cascade always reaches the shadow distance); layout changes since the
-		// renderer was made. Cascades[c].Fitted says which squares were fitted. ShadowFitHolding: a growth of the near bound or
-		// of a square waits (ShadowFitTracker::IsHolding), and the layout is not settled meanwhile.
-		bool ShadowFit = false;
-		bool ShadowFitSquares = false;
-		bool ShadowFitSettled = true;
-		bool ShadowFitHolding = false;
-		float ShadowFitNear = 0.0f;
-		float ShadowFitFar = 0.0f;
-		uint64_t ShadowFitChanges = 0;
 		// Automatic exposure, from the newest readback of the renderer's metering (frames late, as the pre-exposure's): the
 		// adapted log2 average luminance, the exposure key's stops and the log2 luminance of the sun's gray card the key compares
 		// with (unset without a directional light). Unset with manual exposure and until a readback arrived.
@@ -1015,10 +988,6 @@ namespace Strata
 		// Only the jump of ResetExposureAdaptation: the next frame's automatic exposure is the brightness it meters, and the
 		// pre-exposure keeps its value (the later frames of a capture, each metered alone, wait for it to settle).
 		void JumpExposureAdaptation() { m_ResetExposure = true; }
-		// The sun's cascades start their fit to the view again with the next frame (SceneRendererSpecification::
-		// FitShadowsToView): Strata 0.6.0's layout until a readback of that frame's receivers arrives (scene loads, a capture's
-		// first frame; camera cuts do it themselves).
-		void ResetShadowFit() { m_ResetShadowFit = true; }
 		// Stops of headroom the automatic pre-exposure keeps above the metered exposure (SceneRendererStats::PreExposure).
 		static constexpr int32_t c_PreExposureHeadroomStops = 2;
 		// The pre-exposure stays within 2^-c_MaxPreExposureStops and 2^c_MaxPreExposureStops.
@@ -1267,7 +1236,6 @@ namespace Strata
 			uint32_t SizeCulled = 0;             // Visible proxies below RendererQualitySettings::MinProjectedPixels
 			AABB Receivers; // The world bounds of the chunk's visible proxies (scenes with Skin proxies only)
 			uint32_t SkinnedInstances = 0;
-			float NearestTransparent = 0.0f; // The view distance of the nearest point of its transparent draws' bounds
 		};
 
 		struct LightCandidate
@@ -1777,17 +1745,9 @@ namespace Strata
 		// CullView's work on a feedback frame: the feedback's marks and screen sizes, and the proxies the CPU still looks at in
 		// the view (users of transparent materials, skinned proxies).
 		void ApplyFeedback(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum);
-		// The sun's cascade layout of the frame (SceneRendererShadowFit.cpp): the light's view, the newest readback of the
-		// receivers and the tracker's layout (m_ShadowFitLayout), which FindShadowCasters applies. A new epoch on a camera cut,
-		// another scene (not a clone), other cascades, ResetShadowFit, and when the fit stops; unfitted without a shadowed sun
-		// or with FitShadowsToView off. The tracker counts its holds in the frame's StepSeconds (`options`).
-		void UpdateShadowFit(const RenderScene& renderScene, const SceneCamera& camera, bool cameraCut, const SceneRenderOptions& options);
-		// After the mask (GPU.ScreenShadows): reduces the prepass depth to the receivers (Scene/ShadowFit.comp) and records their
-		// copy into the readback ring, for frames whose cascades follow the view; false when its resources cannot be made
-		// (reported; the layout stays unfitted).
-		bool RecordShadowFit(nvrhi::ICommandList* commandList, const SceneCamera& camera);
-		// After the executed command list of a frame that recorded the reduction: the copy is pending.
-		void SubmitShadowFitReadback();
+		// The sun's cascade layout of the frame (stable cascades, ShadowCascades::GetLayout): the light's view and the slices and
+		// spheres of the frame's camera, which FindShadowCasters places in light space; none without a shadowed sun.
+		void LayOutShadowCascades(const SceneCamera& camera);
 		// Computes the cascades and, with `findCasters`, finds the shadow casters of each (feedback frames leave that to the
 		// GPU); leaves ShadowParams.w at 0 without shadows. Reports the animators of skinned casters out of view whose shadows
 		// can fall on what the view shows (CanShadowView).
@@ -2258,38 +2218,7 @@ namespace Strata
 		std::array<CascadeBox, RenderData::c_MaxCascades> m_Cascades = {};
 		glm::mat4 m_LightView = glm::mat4(1.0f);
 		uint32_t m_CascadeCount = 0;
-		// The cascades' fit to the view (UpdateShadowFit, RecordShadowFit): the tracker and the frame's layout; whether the
-		// frame's cascades follow the view (FitShadowsToView, a shadowed sun); a reset asked for; what a change of starts a new
-		// epoch (the render scene, the cascades' size and count); the nearest transparent surface the latest frame drew (for the
-		// next frame's near bound); the reduction's pipeline, buffer and binding set (which names the depth: released with the
-		// targets), and the ring of its readbacks, each with the camera and epoch of the frame it copied.
-		ShadowFitTracker m_ShadowFit;
-		ShadowFitLayout m_ShadowFitLayout;
-		std::optional<std::chrono::steady_clock::time_point> m_LastShadowFitTime; // StepSeconds' clock of the cascades' fit
-		bool m_ShadowFitActive = false;
-		bool m_ResetShadowFit = false;
-		uint64_t m_ShadowFitSceneId = 0;
-		uint32_t m_ShadowFitMapSize = 0;
-		uint32_t m_ShadowFitCascades = 0;
-		float m_NearestTransparent = std::numeric_limits<float>::infinity();
-		nvrhi::BindingLayoutHandle m_ShadowFitLayoutHandle;
-		nvrhi::ComputePipelineHandle m_ShadowFitPipeline;
-		nvrhi::BindingSetHandle m_ShadowFitSet;
-		nvrhi::BufferHandle m_ShadowFitBuffer;
-		struct ShadowFitRecord
-		{
-			Scope<BufferReadback> Readback;
-			uint64_t Render = 0;
-			uint64_t Epoch = 0;
-			uint64_t LayoutVersion = 0;
-			glm::dvec3 CameraPosition = glm::dvec3(0.0);
-			glm::dmat3 CameraRotation = glm::dmat3(1.0);
-		};
-		std::array<ShadowFitRecord, c_GPURecordCount> m_ShadowFitReadbacks;
-		uint32_t m_ShadowFitReadbackIndex = 0;
-		bool m_ShadowFitRecorded = false; // The frame being recorded copies the reduction (SubmitShadowFitReadback)
-		uint64_t m_ShadowFitSeen = 0;     // The newest frame whose readback the tracker was given
-		ShadowFitReadback m_ShadowFitScratch;
+		ShadowCascadeLayout m_ShadowCascadeLayout; // The frame's (LayOutShadowCascades)
 
 		// Clustered lighting
 		nvrhi::BindingLayoutHandle m_ClusterBindingLayout;

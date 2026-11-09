@@ -174,7 +174,7 @@ TEST_SUITE("GPU.Runtime.GameRenderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("A game's sun cascades start their fit to the view again with each scene it shows and when its camera returns")
+	TEST_CASE("A game's sun shadows are final in the first frame of each scene it shows and when its camera returns")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -195,37 +195,42 @@ TEST_SUITE("GPU.Runtime.GameRenderer")
 		};
 		const Ref<Scene> first = makeLevel("First");
 		const Ref<Scene> second = makeLevel("Second");
+		second->FindEntityByName("Cube").GetComponent<TransformComponent>().Translation.x = 1.5f;
 		GameRenderer renderer;
 		const glm::uvec2 size(c_Size, c_Size);
 		const SceneRendererStats& stats = renderer.GetSceneRenderer().GetStats();
-		// Each frame waited for (the window's image read back), so the fit's readback of a frame arrives in the next one.
-		const auto render = [&](const Ref<Scene>& scene)
+		const auto render = [&](GameRenderer& game, const Ref<Scene>& scene)
 		{
-			REQUIRE(renderer.Render(scene, target.Framebuffer, size));
-			target.Read();
+			REQUIRE(game.Render(scene, target.Framebuffer, size));
+			return target.Read();
 		};
-		const auto renderUntilFitted = [&](const Ref<Scene>& scene)
+		// The stable cascades depend on the view alone: a scene's first frame (just drawn) has the cascades of a game that never
+		// showed another scene, and the frames after it are that game's (from the second on: spatial reflections read the
+		// previous frame's color).
+		const auto checkFinal = [&](const Ref<Scene>& scene)
 		{
-			for (int frame = 0; frame < 8 && !stats.ShadowFit; frame++)
-				render(scene);
-			CHECK(stats.ShadowFit);
+			CHECK(stats.CascadeCount > 0);
+			CHECK(stats.ScreenShadows);
+			const auto cascades = stats.Cascades;
+			const ReadbackImage next = render(renderer, scene);
+			GameRenderer fresh;
+			render(fresh, scene);
+			CHECK(fresh.GetSceneRenderer().GetStats().Cascades == cascades);
+			CHECK(render(fresh, scene).Pixels == next.Pixels);
 		};
-		render(first);
-		CHECK_FALSE(stats.ShadowFit); // The first frame knows no receivers yet
-		renderUntilFitted(first);
-		// A level load: the previous level's receivers say nothing about it.
-		render(second);
-		CHECK_FALSE(stats.ShadowFit);
-		renderUntilFitted(second);
-		// The camera goes (the message shows) and comes back: its view is fitted afresh.
+		render(renderer, first);
+		checkFinal(first);
+		// A level load.
+		render(renderer, second);
+		checkFinal(second);
+		// The camera goes (the message shows) and comes back.
 		Entity camera = second->FindEntityByName("Camera");
 		camera.SetActive(false);
 		REQUIRE(renderer.Render(second, target.Framebuffer, size));
 		CHECK(renderer.IsShowingMessage());
 		camera.SetActive(true);
-		render(second);
-		CHECK_FALSE(stats.ShadowFit);
-		renderUntilFitted(second);
+		render(renderer, second);
+		checkFinal(second);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

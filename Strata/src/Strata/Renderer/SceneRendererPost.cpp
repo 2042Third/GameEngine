@@ -13,7 +13,9 @@
 #include "Strata/Scene/Scene.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -72,6 +74,16 @@ namespace Strata
 			}
 		}
 
+	}
+
+	float SceneRenderer::StepSeconds(std::optional<std::chrono::steady_clock::time_point>& last, const SceneRenderOptions& options)
+	{
+		const auto now = std::chrono::steady_clock::now();
+		float seconds = last ? std::clamp(std::chrono::duration<float>(now - *last).count(), 0.0f, c_MaxStepSeconds) : 0.0f;
+		if (options.AdaptationSeconds)
+			seconds = std::isfinite(*options.AdaptationSeconds) ? std::max(*options.AdaptationSeconds, 0.0f) : 0.0f;
+		last = now;
+		return seconds;
 	}
 
 	void SceneRenderer::CreatePostResources()

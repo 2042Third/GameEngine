@@ -223,7 +223,7 @@ namespace Strata
 			for (uint32_t cascade = 0; cascade < stats.CascadeCount && cascade < stats.Cascades.size(); cascade++)
 			{
 				const ShadowCascadeStats& slice = stats.Cascades[cascade];
-				cascades.push_back({ { "near", slice.Near }, { "far", slice.Far }, { "texelSize", slice.WorldPerTexel }, { "fitted", slice.Fitted } });
+				cascades.push_back({ { "near", slice.Near }, { "far", slice.Far }, { "texelSize", slice.WorldPerTexel } });
 			}
 			return {
 				// What the frame drew with: the Renderer.Quality section's fields and values (project.setSettings takes them), the
@@ -231,10 +231,6 @@ namespace Strata
 				{ "quality", RendererQuality::ToSectionValue(stats.Quality) },
 				{ "shadowMapSize", stats.ShadowMapSize },
 				{ "cascades", std::move(cascades) },
-				// Whether the cascades were fitted to what the view shows (the slices to the receivers' range, the squares to their
-				// extent) and the fit settled, and the range the slices divide.
-				{ "shadowFit", { { "fitted", stats.ShadowFit }, { "squaresFitted", stats.ShadowFitSquares }, { "settled", stats.ShadowFitSettled },
-					{ "near", stats.ShadowFitNear }, { "far", stats.ShadowFitFar }, { "changes", stats.ShadowFitChanges }, { "holding", stats.ShadowFitHolding } } },
 				{ "localShadowTileSizes", std::move(tileSizes) },
 				{ "gpuDriven", stats.GPUDriven },
 				{ "gpuCulled", stats.GPUCulled },
@@ -932,11 +928,7 @@ namespace Strata
 			"the CPU's frame time, cpu when the CPU's does, capped when neither does (vsync or a frame-rate cap sets the pace), unknown without GPU "
 			"times. renderStats is the viewport's latest frame (null while it renders none): quality (the Graphics Quality it drew with, as "
 			"project.settings shows Renderer.Quality), shadowMapSize (the sun's cascades' texels), cascades (each sun cascade's slice near and far in "
-			"meters of view distance, texelSize in meters, and fitted: its square follows the receivers rather than its slice's sphere), shadowFit "
-			"(fitted: the cascades are laid out over the receivers the frame's depth showed; squaresFitted; settled: no readback is due that may "
-			"change them; near and far: the range the slices divide; changes: the view renderer's layout changes since it was made (count them "
-			"over a run to see re-cuts); holding: a near object or a wider square waits before it re-cuts the cascades (half a second on a still "
-			"camera, an eighth while the camera moves)), localShadowTileSizes (each shadowed point and spot "
+			"meters of view distance and texelSize in meters: stable cascades, which depend on the view alone), localShadowTileSizes (each shadowed point and spot "
 			"light's tile), gpuDriven (the frame took the GPU-driven path: "
 			"its counts are the GPU's, of a frame 2-3 frames older, once gpuCounts is true; transparent surfaces are the CPU's), gpuCulled (the GPU "
 			"culled the scene's mesh renderers and built their draws; false in a scene without mesh renderers, whose frames record no culling and "

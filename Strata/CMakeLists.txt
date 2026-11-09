@@ -98,7 +98,6 @@ strata_add_shaders(Strata_Renderer
 		Scene/CullFeedback.comp
 		Scene/CascadeFit.comp
 		Scene/ShadowRanges.comp
-		Scene/ShadowFit.comp
 		Scene/HZBBuild.comp
 		Scene/MotionCopy.comp
 		Debug/LODSelection.comp

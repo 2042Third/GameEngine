@@ -88,7 +88,6 @@ namespace Strata
 		m_Frames = 0;
 		m_TemporalFrames = 0;
 		m_ExposureFrames = 0;
-		m_ShadowFitFrames = 0;
 		m_GIFrames = 0;
 		m_ReflectionFrames = 0;
 		m_Rendered = false;
@@ -137,8 +136,7 @@ namespace Strata
 			// As the game shows it: no editor overlays, no preview lighting of its own.
 			ViewportSettings settings = context.GetViewport().GetSettings();
 			settings.DebugView = ViewportDebugView::None;
-			// Metered from its own frames alone; the first one starts the pre-exposure and the sun's cascades' fit again, which the
-			// later ones keep.
+			// Metered from its own frames alone; the first one starts the pre-exposure again, which the later ones keep.
 			if (m_Rendered)
 			{
 				renderer->GetSceneRenderer().JumpExposureAdaptation();
@@ -146,7 +144,6 @@ namespace Strata
 			else
 			{
 				renderer->GetSceneRenderer().ResetExposureAdaptation();
-				renderer->GetSceneRenderer().ResetShadowFit();
 			}
 			m_Rendered = true;
 			if (!renderer->Render(context, size, *view, settings, false, RendererQuality::GetProjectQuality()))
@@ -159,8 +156,7 @@ namespace Strata
 			// the finer levels of textures the view wants (a texture counts as loaded with its mip tail), mesh renderers still
 			// on their way to the GPU, point and spot lights' shadow views not drawn yet and reflection probes' captures not
 			// converted yet (none for the capture renderer, which draws and converts them at once), for at most c_MaxFrames frames (a texture budget may keep levels out for good), and the
-			// pre-exposure until it settled, for at most c_MaxExposureFrames, and the sun's cascades until their fit to the view
-			// settled, for at most c_MaxShadowFitFrames. An incomplete frame starts temporal
+			// pre-exposure until it settled, for at most c_MaxExposureFrames. An incomplete frame starts temporal
 			// anti-aliasing's history again, so that it holds the jitter's phases of the complete view, or of the view as it is
 			// once that wait ended: the picture then waits for the history too.
 			const SceneRendererStats& stats = renderer->GetStats();
@@ -168,9 +164,8 @@ namespace Strata
 				|| stats.LocalShadowViewsPending > 0 || stats.ReflectionProbesPending > 0 || renderer->CountTexturesBelowWanted() > 0;
 			const bool waiting = incomplete && ++m_Frames < c_MaxFrames;
 			const bool exposureWaiting = !stats.PreExposureSettled && ++m_ExposureFrames < c_MaxExposureFrames;
-			const bool shadowFitWaiting = !stats.ShadowFitSettled && ++m_ShadowFitFrames < c_MaxShadowFitFrames;
 			const bool giWaiting = !stats.GlobalIlluminationSettled && ++m_GIFrames < c_MaxGIFrames;
-			if (waiting || exposureWaiting || shadowFitWaiting || giWaiting)
+			if (waiting || exposureWaiting || giWaiting)
 			{
 				renderer->GetSceneRenderer().ResetHistory();
 				return;
@@ -207,7 +202,6 @@ namespace Strata
 		m_Frames = 0;
 		m_TemporalFrames = 0;
 		m_ExposureFrames = 0;
-		m_ShadowFitFrames = 0;
 		m_GIFrames = 0;
 		m_ReflectionFrames = 0;
 		m_Rendered = false;

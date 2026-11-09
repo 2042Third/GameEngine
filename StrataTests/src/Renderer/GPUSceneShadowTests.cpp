@@ -1,5 +1,6 @@
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Strata/Renderer/RendererComponents.h"
+#include "Strata/Renderer/ShadowCascades.h"
 
 #include <glm/gtc/packing.hpp>
 
@@ -62,8 +63,8 @@ namespace
 	};
 
 	// A floor under a roof that shadows all of it, with a sun from +X 45 degrees above the horizon and shadows to 50 m: the
-	// splits of its four cascades, a blend of 0.8 logarithmic and 0.2 uniform splits from the near clip of 0.1 m, lie at
-	// 2.89, 6.80, 15.96 and 50 m.
+	// splits of its four cascades, a blend of 0.9 logarithmic and 0.1 uniform splits from 1.5 m (ShadowCascades::GetSplit),
+	// lie at 4.61, 10.37, 22.52 and 50 m.
 	struct RoofScene
 	{
 		Scene SceneData;
@@ -334,10 +335,7 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		sun.GetComponent<DirectionalLightComponent>().ShadowDistance = 1000.0f;
 
 		constexpr uint32_t size = 64;
-		// Two frames' casters are compared: the cascades must not follow the first frame's receivers into the second (the fit
-		// has its own suite, GPU.SceneRenderer.ShadowFit).
 		SceneRendererSpecification specification;
-		specification.FitShadowsToView = false;
 		SceneRenderer renderer(specification);
 		renderer.SetViewportSize(size, size);
 		SceneCamera camera = LookAt(glm::vec3(0.0f, 8.0f, 8.0f), glm::vec3(0.0f));
@@ -427,9 +425,6 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		Scene& scene = cacheScene.SceneData;
 		SceneRendererSpecification specification;
 		specification.TextureStreaming = false;
-		// Cached cascades are counted frame by frame from the first frame, whose layout a fit to the view would change after the
-		// first readback (GPU.SceneRenderer.ShadowFit covers caching with it).
-		specification.FitShadowsToView = false;
 		SceneRenderer cached(specification);
 		specification.CacheShadowCascades = false;
 		SceneRenderer redrawn(specification);
@@ -512,8 +507,8 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		wall.GetComponent<TransformComponent>().Scale = glm::vec3(0.2f, 4.0f, 400.0f);
 		Entity sun = AddSun(scene, SunDirection(elevation, 0.0f), 3.0f);
 		DirectionalLightComponent& light = sun.GetComponent<DirectionalLightComponent>();
-		// Shadows to 50 m: the third cascade ends at 15.96 m (RoofScene), and its band at the default blend of 0.1 begins
-		// 0.92 m before. The normal offset, in texels of each cascade, moves the edge where the texels grow: four texels
+		// Shadows to 50 m: the third cascade ends at 22.52 m (RoofScene), and its band at the default blend of 0.1 begins
+		// 1.21 m before. The normal offset, in texels of each cascade, moves the edge where the texels grow: four texels
 		// rather than the default 1.5 make that move outweigh the rounding of the edge to the coarser cascade's texels.
 		light.ShadowDistance = 50.0f;
 		light.ShadowNormalBias = 4.0f;
@@ -521,18 +516,19 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		constexpr uint32_t size = 256;
 		SceneRendererSpecification specification;
 		specification.TextureStreaming = false;
-		specification.FitShadowsToView = false; // The split's position is Strata 0.6.0's layout's
 		SceneRenderer renderer(specification);
 		renderer.SetViewportSize(size, size);
-		// Looking down at 45 degrees, the floor from 12.6 m to 21.9 m away: about 30 rows per metre of depth at the split.
-		const SceneCamera camera = PitchedCamera(glm::vec3(0.0f, 11.3f, 0.0f), 45.0f, 30.0f);
+		// Looking down at 45 degrees, the floor from 0.79 to 1.37 times the split away (17.8 m to 30.9 m): about 21 rows per
+		// metre of depth at the split.
+		const float split = ShadowCascades::GetSplit(ShadowCascades::c_SplitStart, 50.0f, light.CascadeDistribution, 2, 4);
+		const SceneCamera camera = PitchedCamera(glm::vec3(0.0f, 0.708f * split, 0.0f), 45.0f, 30.0f);
 
 		// Per row, the edge's place: the sunlight summed across 80 columns around it (lit on the left, in shadow on the
 		// right), in pixels. Steps of it from row to row inside a cascade are the shadow filter's noise.
 		struct Steps
 		{
 			float InCascade = 0.0f; // The largest step between rows inside the third or the fourth cascade
-			float AtSplit = 0.0f;   // The largest step from 14.8 m to 16.2 m: the third cascade's band and its split
+			float AtSplit = 0.0f;   // The largest step from 0.927 to 1.015 times the split: the third cascade's band and its split
 		};
 		const auto measure = [&](float blend)
 		{
@@ -552,12 +548,16 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 				const float depth = FloorRowDepth(camera, row, size);
 				const float nextDepth = FloorRowDepth(camera, row + 1, size);
 				const float step = std::abs(edges[row + 1] - edges[row]);
-				if ((inRange(depth, 13.0f, 14.8f) && inRange(nextDepth, 13.0f, 14.8f)) || (inRange(depth, 16.2f, 21.0f) && inRange(nextDepth, 16.2f, 21.0f)))
+				const float before = 0.8145f * split;
+				const float bandStart = 0.927f * split;
+				const float after = 1.015f * split;
+				const float end = 1.316f * split;
+				if ((inRange(depth, before, bandStart) && inRange(nextDepth, before, bandStart)) || (inRange(depth, after, end) && inRange(nextDepth, after, end)))
 				{
 					CHECK(std::abs(edges[row] - 40.0f) < 6.0f); // The edge stays in the middle
 					steps.InCascade = std::max(steps.InCascade, step);
 				}
-				else if (inRange(depth, 14.8f, 16.2f) && inRange(nextDepth, 14.8f, 16.2f))
+				else if (inRange(depth, bandStart, after) && inRange(nextDepth, bandStart, after))
 				{
 					steps.AtSplit = std::max(steps.AtSplit, step);
 				}
@@ -586,18 +586,17 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		roofScene.Sun.GetComponent<DirectionalLightComponent>().CascadeBlend = DirectionalLightComponent::c_MaxCascadeBlend;
 
 		// A narrow view along the floor across the sun's direction, 20 cm above it: from 2.3 m on, its slices are long and
-		// thin, so the bands before the splits (half of each slice: from 1.45 m, 4.85 m and 11.38 m) reach past the squares
+		// thin, so the bands before the splits (half of each slice: from 2.30 m, 7.49 m and 16.44 m) reach past the squares
 		// of the next slices' spheres unless those slices begin at the bands.
 		constexpr uint32_t size = 256;
 		SceneRendererSpecification specification;
 		specification.TextureStreaming = false;
-		specification.FitShadowsToView = false; // The bands' positions are Strata 0.6.0's layout's (RoofScene)
 		SceneRenderer renderer(specification);
 		renderer.SetViewportSize(size, size);
 		const SceneCamera camera = PitchedCamera(glm::vec3(0.0f, 0.2f, 0.0f), 0.0f, 10.0f);
 		const SunlightImage sunlight = RenderSunlight(renderer, roofScene.SceneData, camera, roofScene.Sun);
 
-		// Up to the last cascade's band (from 32.98 m) the roof's shadow is whole.
+		// Up to the last cascade's band (from 36.26 m) the roof's shadow is whole.
 		uint32_t rows = 0;
 		float brightest = 0.0f;
 		for (uint32_t row = 0; row < size; row++)
@@ -624,13 +623,12 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		constexpr uint32_t size = 256;
 		SceneRendererSpecification specification;
 		specification.TextureStreaming = false;
-		specification.FitShadowsToView = false; // The last band's position is Strata 0.6.0's layout's (RoofScene)
 		SceneRenderer renderer(specification);
 		renderer.SetViewportSize(size, size);
 		// Looking down at 45 degrees from 20 m: the floor from about 15 m to 67 m away.
 		const SceneCamera camera = PitchedCamera(glm::vec3(0.0f, 20.0f, 0.0f), 45.0f, 60.0f);
 
-		// Per row, the mean sunlight; at the default blend of 0.1 the last band is the last 3.40 m before 50 m.
+		// Per row, the mean sunlight; at the default blend of 0.1 the last band is the last 2.75 m before 50 m.
 		const auto rowSunlight = [&](const SunlightImage& sunlight, uint32_t row)
 		{
 			float sum = 0.0f;
@@ -638,7 +636,7 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 				sum += sunlight.At(x, row);
 			return sum / static_cast<float>(size);
 		};
-		const float bandStart = 50.0f - 0.1f * (50.0f - 15.964f);
+		const float bandStart = 50.0f - 0.1f * (50.0f - ShadowCascades::GetSplit(ShadowCascades::c_SplitStart, 50.0f, 0.9f, 2, 4));
 		const SunlightImage faded = RenderSunlight(renderer, roofScene.SceneData, camera, roofScene.Sun);
 		uint32_t bandRows = 0;
 		float previous = 0.0f;

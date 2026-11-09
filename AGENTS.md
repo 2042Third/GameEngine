@@ -423,7 +423,7 @@ reaches the application only through `EditorHost`. Every command family, panel a
   positioned relative to the camera, subtracting in double ([Camera-relative space](Docs/DeveloperGuide.md#camera-relative-space)).
 - The sun's shadow reaches opaque surfaces through the screen-space mask (SRV 28) and transparent ones through
   `SampleDirectionalShadow`: change both; the sun's filters use fixed noise, never `TemporalParams.z`, and cascade layouts
-  come only from `ShadowFitTracker` on the CPU ([Sun shadows](Docs/DeveloperGuide.md#sun-shadows)).
+  come only from `ShadowCascades::GetLayout`, the view's alone: nothing read back ([Sun shadows](Docs/DeveloperGuide.md#sun-shadows)).
 - A new input of how casters are drawn changes a version the shadow caches compare (`PrepareShadowCache`,
   `FindLocalShadowCasters`). What is drawn and requested is decided by the CPU path and `Cull.comp`: change both, keep
   shading independent of draw order (derivatives only of the primitive's own interpolants and textures) and

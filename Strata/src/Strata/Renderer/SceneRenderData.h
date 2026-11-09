@@ -129,8 +129,9 @@ namespace Strata
 		struct CascadeData
 		{
 			glm::mat4 ViewProjection;           // Light clip space, reversed-Z
-			// x: world units per shadow texel, y: depth range in world units, z: penumbra search distance, w: the near plane's light
-			// view z (camera-relative: the cascades' occlusion culling places depths with it)
+			// x: world units per shadow texel, y: depth range in world units, z: 0 (the penumbra's search distance is the
+			// receiver's, the same in every cascade: Include/Shadows.slang), w: the near plane's light view z (camera-relative: the
+			// cascades' occlusion culling places depths with it)
 			glm::vec4 Parameters = glm::vec4(0.0f);
 		};
 		static_assert(sizeof(CascadeData) == 80);
@@ -143,7 +144,7 @@ namespace Strata
 			glm::mat4 LightView = glm::mat4(1.0f);
 			// Light view space relative to the camera's position in it (the shaders' positions are camera-relative): min.xy, max.xy
 			glm::vec4 Boxes[c_MaxCascades] = {};
-			glm::vec4 Depths[c_MaxCascades] = {};    // x: the far side's z, y: the sphere's near side's z, z: world units per texel, w: the sphere's radius
+			glm::vec4 Depths[c_MaxCascades] = {};    // x: the far side's z, y: the sphere's near side's z, z: world units per texel, w: 0
 			glm::vec4 CasterNearZ = glm::vec4(0.0f); // Per cascade: the nearest drawn caster's (relative) z, as the CPU found it
 			uint32_t CascadeCount = 0;
 			uint32_t CasterDepthsFromGPU = 0;        // 1: the nearest casters come from the GPU's culling instead of CasterNearZ
@@ -612,49 +613,6 @@ namespace Strata
 		};
 		static_assert(sizeof(ScreenShadowBlurParameters) == 16);
 
-		// Scene/ShadowFit.comp: the receivers the frame's depth holds, binned by view distance in quarter stops from
-		// c_ShadowFitBinBase (bin = floor(4 log2(d / c_ShadowFitBinBase)), clamped to the bins: 6.25 cm to 65 km), for the
-		// cascades' fit to what the camera sees (ShadowFitTracker, Renderer/ShadowFit.h).
-		constexpr uint32_t c_ShadowFitBins = 80;
-		constexpr float c_ShadowFitBinBase = 0.0625f;
-		constexpr uint32_t c_ShadowFitBinsPerStop = 4;
-
-		// A bin's receivers as a box in the camera's view space: x and y of their positions and their view distance d, each an
-		// EncodeOrderedFloat (Include/OrderedFloat.slang), and how many pixels hold them. The minima are stored complemented, so
-		// every box field reduces with atomicMax (the count with atomicAdd) and a buffer cleared to 0 holds empty bins (MaxD 0:
-		// no float encodes to 0).
-		struct ShadowFitBin
-		{
-			uint32_t MinX;
-			uint32_t MinY;
-			uint32_t MinD;
-			uint32_t MaxX;
-			uint32_t MaxY;
-			uint32_t MaxD;
-			uint32_t Pixels;
-		};
-		static_assert(sizeof(ShadowFitBin) == 28);
-
-		// Scene/ShadowFit.comp's result: the nearest (complemented) and farthest view distance of any receiver, how many pixels
-		// hold one, and the bins.
-		struct ShadowFitResult
-		{
-			uint32_t Nearest;
-			uint32_t Farthest;
-			uint32_t SurfacePixels;
-			uint32_t Reserved;
-			ShadowFitBin Bins[c_ShadowFitBins];
-		};
-		static_assert(sizeof(ShadowFitResult) == 2256);
-
-		// Scene/ShadowFit.comp's push constants: the depth's size in pixels.
-		struct ShadowFitParameters
-		{
-			uint32_t Width;
-			uint32_t Height;
-			uint32_t Reserved[2];
-		};
-		static_assert(sizeof(ShadowFitParameters) == 16);
 		// The lighting debug views' statistics (Effects/LightingViewStats.comp; SceneRenderer::GetLightingViewStats): histograms of
 		// a frame's EV100 (log2 of its luminance in nits, plus 3) in quarter-EV bins from c_LightingViewMinEV100 on, and of the
 		// value views' values (occlusion, the albedo's luminance) in bins of 1/64 over [0, 1].

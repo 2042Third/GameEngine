@@ -35,9 +35,6 @@ namespace Strata
 		static constexpr uint32_t c_MaxTemporalFrames = 16;
 		// Frames rendered while the pre-exposure settles (SceneRendererStats::PreExposureSettled), as captures wait for it.
 		static constexpr uint32_t c_MaxExposureFrames = 8;
-		// Frames rendered while the sun's cascades' fit to the view settles (SceneRendererStats::ShadowFitSettled), as captures
-		// wait for it.
-		static constexpr uint32_t c_MaxShadowFitFrames = 12;
 		// Frames rendered while global illumination settles (SceneRendererStats::GlobalIlluminationSettled; scenes whose Post Process
 		// asks for it at a quality that runs it), as captures wait for it: meshes still uploading join the voxels as they arrive,
 		// and the bounces settle up to RenderData::c_GIMaxSettleFrames (38) frames after the last of them, 16 more allowed for
@@ -76,7 +73,6 @@ namespace Strata
 		uint32_t m_Frames = 0;         // Rendered while the view was incomplete
 		uint32_t m_TemporalFrames = 0; // Rendered while temporal anti-aliasing settled
 		uint32_t m_ExposureFrames = 0; // Rendered while the pre-exposure settled
-		uint32_t m_ShadowFitFrames = 0; // Rendered while the sun's cascades' fit settled
 		uint32_t m_GIFrames = 0;       // Rendered while global illumination settled
 		uint32_t m_ReflectionFrames = 0; // Rendered again while spatial screen-space reflections waited for a previous frame's color
 		bool m_Rendered = false;       // The picture's first frame was rendered (it started the exposure and the cascades' fit again)

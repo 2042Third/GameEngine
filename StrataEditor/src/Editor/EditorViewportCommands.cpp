@@ -68,9 +68,6 @@ namespace Strata
 		// exposure reads its metering back frames later, and a scene far from 1 nit (daylight in real units) needs a second
 		// readback once its pre-exposure moved.
 		constexpr uint32_t c_MaxCaptureExposureFrames = 8;
-		// Frames a capture may render again while the sun's cascades' fit to the view settles (SceneRendererStats::ShadowFitSettled):
-		// a readback 2-3 frames late sets the layout from the receivers, and a second one confirms it.
-		constexpr uint32_t c_MaxCaptureShadowFitFrames = 12;
 		// Frames a capture may render again while global illumination settles (SceneRendererStats::GlobalIlluminationSettled):
 		// the capture renderer voxelizes everything in its first frame, but meshes still uploading join the voxels as they arrive,
 		// and the bounces settle up to c_GIMaxSettleFrames frames after the last of them.
@@ -406,7 +403,6 @@ namespace Strata
 			bool LightingStatsPending = false;
 			std::optional<LightingViewStats> LightingStats;
 			uint32_t ExposureFrames = 0; // Renders repeated while the pre-exposure settled
-			uint32_t ShadowFitFrames = 0; // Renders repeated while the sun's cascades' fit settled
 			uint32_t GIFrames = 0;        // Renders repeated while global illumination settled
 			// A GI view's debugView.globalIllumination, described with the captured frame (the renderer lets the GI go with its targets).
 			nlohmann::json GlobalIllumination;
@@ -757,8 +753,7 @@ namespace Strata
 			progress.DebugView = settings.DebugView;
 
 			// A capture's exposure is metered from its own frames alone, not adapted from an earlier one; its first frame starts the
-			// pre-exposure again too, which the later ones keep while it settles, and the sun's cascades' fit to the view (the
-			// capture renderer's last view may have been another).
+			// pre-exposure again too, which the later ones keep while it settles.
 			if (progress.Rendered)
 			{
 				renderer->GetSceneRenderer().JumpExposureAdaptation();
@@ -766,7 +761,6 @@ namespace Strata
 			else
 			{
 				renderer->GetSceneRenderer().ResetExposureAdaptation();
-				renderer->GetSceneRenderer().ResetShadowFit();
 			}
 			progress.Rendered = true;
 			// The quality asked for, else the view's, as the panel showing it draws: the Scene view's setting for the editor camera
@@ -809,12 +803,10 @@ namespace Strata
 			const bool lightingPending = progress.LocalShadowViewsPending + probesPending > 0 && progress.LightingFrames < c_MaxCaptureLightingFrames;
 			// Until its pre-exposure settled the frame's brightest and darkest values may have clamped or lost bits.
 			const bool exposurePending = !stats.PreExposureSettled && progress.ExposureFrames < c_MaxCaptureExposureFrames;
-			// Until the cascades' fit settled, a readback may still change them (finer texels where the receivers are).
-			const bool shadowFitPending = !stats.ShadowFitSettled && progress.ShadowFitFrames < c_MaxCaptureShadowFitFrames;
 			// Global illumination's voxels: until nothing is left to voxelize.
 			const bool giPending = !stats.GlobalIlluminationSettled && progress.GIFrames < c_MaxCaptureGIFrames;
 			const bool contentPending = textPending || assetsPending || mipsPending || posesPending || instancesPending || motionPending || lightingPending
-				|| exposurePending || shadowFitPending || giPending;
+				|| exposurePending || giPending;
 			// Temporal anti-aliasing: the mean of the jitter's phases of the complete view, as the viewport shows a still view once it
 			// settled. A frame still incomplete starts the history again (the capture's targets are released after each picture,
 			// so each one starts it anyway), so the picture blends complete frames only.
@@ -829,7 +821,6 @@ namespace Strata
 				progress.MotionFrames += motionPending ? 1 : 0;
 				progress.LightingFrames += lightingPending ? 1 : 0;
 				progress.ExposureFrames += exposurePending ? 1 : 0;
-				progress.ShadowFitFrames += shadowFitPending ? 1 : 0;
 				progress.GIFrames += giPending ? 1 : 0;
 				progress.TemporalFrames += temporalPending ? 1 : 0;
 				progress.ReflectionFrames += reflectionsPending ? 1 : 0;
@@ -955,7 +946,7 @@ namespace Strata
 				{ "camera", request.OwnCamera.IsSet() ? "custom" : (progress.View.FromScene ? "scene" : "editor") },
 				{ "view", DescribeView(progress.View.Camera) },
 				{ "waitedFrames", std::max({ progress.TextFrames, progress.AssetFrames, progress.MipFrames, progress.PoseFrames, progress.InstanceFrames,
-					progress.MotionFrames, progress.TemporalFrames, progress.LightingFrames, progress.ExposureFrames, progress.ShadowFitFrames,
+					progress.MotionFrames, progress.TemporalFrames, progress.LightingFrames, progress.ExposureFrames,
 					progress.ReflectionFrames, progress.GIFrames }) },
 				{ "temporalFrames", progress.Stats.TemporalFrames },
 				{ "overlays", progress.Overlays },
@@ -966,7 +957,6 @@ namespace Strata
 				{ "localShadowViewsPending", progress.LocalShadowViewsPending },
 				{ "reflectionProbesPending", progress.ReflectionProbesPending },
 				{ "preExposureSettled", progress.Stats.PreExposureSettled },
-				{ "shadowFitSettled", progress.Stats.ShadowFitSettled },
 				{ "globalIlluminationSettled", progress.Stats.GlobalIlluminationSettled },
 				{ "previewLighting", progress.PreviewLighting },
 				{ "screenSpaceTexts", progress.ScreenSpaceTexts },
@@ -1221,8 +1211,7 @@ namespace Strata
 			"while seen (WhenVisible) until they show the pose of their time (a few frames, also while paused), and mesh renderers the scene just "
 			"gained until they reached the GPU (a few frames for a million; renderStats.deferredInstanceBytes says what still waited), and the "
 			"renderer's pre-exposure (the power of two its HDR values are scaled by, chosen from automatic exposure's metering read back frames "
-			"later) until it settled (a few frames, also without waitForAssets; preExposureSettled false if it did not within 8), and the sun's "
-			"shadow cascades until their fit to the surfaces the view shows settled (a few frames; shadowFitSettled false if it did not within 12), and a scene "
+			"later) until it settled (a few frames, also without waitForAssets; preExposureSettled false if it did not within 8), and a scene "
 			"drawn with temporal anti-aliasing (PostProcess AntiAliasingMethod TAA), also without waitForAssets, until 8 frames of the complete "
 			"view, the mean of its jitter's phases (temporalFrames: the frames the picture's history holds, 0 without it). Reports what was still "
 			"loading when the picture was taken (pendingAssets), the textures drawn coarser than the view wants (texturesBelowWanted), animators "

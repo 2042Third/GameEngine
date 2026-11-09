@@ -266,7 +266,7 @@ TEST_SUITE("Runtime.GameGraphics")
 		REQUIRE(service.GetEffectiveValue()["Preset"] == "Custom");
 		REQUIRE(service.ResetOptions("ShadowCascades"));
 		CHECK(service.GetPlayerOptions()["ShadowCascades"] == 4);
-		CHECK(service.GetPlayerOptions()["ShadowResolution"] == "AutoFine");
+		CHECK(service.GetPlayerOptions()["ShadowResolution"] == "8192"); // Ultra's
 		CHECK(service.GetEffectiveValue()["Preset"] == "Custom");
 		CHECK(service.GetSource("ShadowCascades") == GameGraphicsSource::Player);
 

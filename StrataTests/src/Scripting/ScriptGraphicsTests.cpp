@@ -131,8 +131,8 @@ TEST_SUITE("Scripting.Graphics")
 			names += (names.empty() ? "" : "\n") + field.Name;
 		CHECK(probe.Get<std::string>("Names") == names);
 		CHECK(probe.Get<std::string>("PresetChoices") == "Low\nMedium\nHigh\nUltra\nCustom");
-		// The project's default, High: the automatic shadow resolution, from the project.
-		CHECK(probe.Get<std::string>("Effective") == "Auto");
+		// The project's default, High: the finer automatic shadow resolution, from the project.
+		CHECK(probe.Get<std::string>("Effective") == "AutoFine");
 		CHECK(probe.Get<int32_t>("Source") == StrataScriptGraphicsOptionSource_Project);
 		CHECK(probe.Get<int32_t>("Preset") == 2);
 		probe.Ask(0, "ShadowCascades");

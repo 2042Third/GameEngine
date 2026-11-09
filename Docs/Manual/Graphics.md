@@ -13,7 +13,7 @@ what each one costs:
 
 | Setting | Low | Medium | High (default) | Ultra |
 | --- | --- | --- | --- | --- |
-| Sun shadow resolution (each cascade) | 1024 | 2048 | Auto: 2048 below 1440 rows, 4096 from 1440 | Auto fine: 4096 below 1440 rows, 8192 from 1440 |
+| Sun shadow resolution (each cascade) | 1024 | 2048 | Auto fine: 4096 below 1440 rows, 8192 from 1440 | 8192 |
 | Sun shadow cascades | 3 | 4 | 4 | 4 |
 | Point and spot shadow atlas | 2048 | 4096 | 4096 | 8192 |
 | Largest point and spot shadow tile | 512 | 1024 | 1024 | 2048 |
