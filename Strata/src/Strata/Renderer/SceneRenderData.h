@@ -665,9 +665,10 @@ namespace Strata
 		constexpr uint32_t c_GIScrollVoxels = 4;        // A level's window moves in steps of this many voxels: fewer, larger slabs
 		constexpr uint32_t c_GILevelGuardVoxels = 2;    // A level is never sampled this close to its window's (or valid box's) faces
 		constexpr uint32_t c_GILevelBlendVoxels = 2;    // Samples blend into the next level over this many voxels (by distance from the camera)
-		// The finest level's window (and its weights) is centered this far below the camera (meters; a whole number of scroll steps
-		// at High and Low): floors and what rests on them lie below the eye, and a camera at the middle of a 5.5 m room left the
-		// floor's contacts to level 1's coarser voxels, closed under a sphere's overhang (the Cornell box).
+		// At High the finest level's window (and its weights) is centered this far below the camera (meters, two scroll steps):
+		// floors and what rests on them lie below the eye, and a camera at the middle of a 5.5 m room left the floor's contacts to
+		// level 1's coarser voxels, closed under a sphere's overhang (the Cornell box). Low's finest level, at full weight only
+		// 1.6 m up and down, stays centered: a drop would hand a room's ceiling 1.5 m above the eye to its 0.4 m voxels.
 		constexpr float c_GIFinestLevelDrop = 0.8f;
 		constexpr uint32_t c_GIRegionBrick = 4;         // Changed boxes snap outward to bricks of this many voxels
 		constexpr uint32_t c_GIMaxRegionVoxels = 64;    // A region is at most this many voxels a side (slabs and windows are cut so)

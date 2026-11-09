@@ -37,7 +37,7 @@ namespace Strata
 	{
 		float VoxelSize = 0.0f;     // Meters: the first level's voxel size times 2^level
 		glm::uvec3 Dimensions{ 0 }; // Voxels per axis
-		float Drop = 0.0f;          // Meters its window's center lies below the camera (c_GIFinestLevelDrop for the first level)
+		float Drop = 0.0f;          // Meters its window's center lies below the camera (c_GIFinestLevelDrop for High's first level)
 	};
 
 	// A cascade of probes: all cascades cover the same field around the camera; each has half the probes per axis of the one

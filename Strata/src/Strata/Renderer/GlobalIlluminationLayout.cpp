@@ -158,7 +158,7 @@ namespace Strata
 
 			GlobalIlluminationLayout layout;
 			for (uint32_t index = 0; index < levelCount; index++)
-				layout.Levels.push_back(VoxelLevelLayout { firstVoxelSize * static_cast<float>(1u << index), dimensions, index == 0 ? RenderData::c_GIFinestLevelDrop : 0.0f });
+				layout.Levels.push_back(VoxelLevelLayout { firstVoxelSize * static_cast<float>(1u << index), dimensions, index == 0 && high ? RenderData::c_GIFinestLevelDrop : 0.0f });
 			for (uint32_t k = 0; k < cascadeCount; k++)
 			{
 				ProbeCascadeLayout cascade;

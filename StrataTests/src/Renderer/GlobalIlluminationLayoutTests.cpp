@@ -332,16 +332,20 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 
 	TEST_CASE("The finest level reaches the floor below the camera")
 	{
-		// The finest level's window and weights are centered c_GIFinestLevelDrop below the camera, the coarser levels' on it: at
-		// High a floor 2.75 m below (the owner's Cornell box seen from half its height) reads level 0 at full weight, where
-		// level 1's 0.2 m voxels closed the floor under the sphere's overhang, and a ceiling 2.75 m above reads level 1.
+		// At High the finest level's window and weights are centered c_GIFinestLevelDrop below the camera, the coarser levels' on
+		// it: a floor 2.75 m below (the owner's Cornell box seen from half its height) reads level 0 at full weight, where level
+		// 1's 0.2 m voxels closed the floor under the sphere's overhang, and a ceiling 2.75 m above reads level 1. Low's finest
+		// level (full weight 1.6 m up and down) stays centered, so a ceiling 1.5 m above the eye keeps it.
 		for (GlobalIlluminationLevel quality : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
 		{
 			const GlobalIlluminationLayout layout = GetLayout(quality);
-			CHECK(layout.Levels.front().Drop == RenderData::c_GIFinestLevelDrop);
+			CHECK(layout.Levels.front().Drop == (quality == GlobalIlluminationLevel::High ? RenderData::c_GIFinestLevelDrop : 0.0f));
 			for (size_t level = 1; level < layout.Levels.size(); level++)
 				CHECK(layout.Levels[level].Drop == 0.0f);
 		}
+		const GlobalIlluminationLayout low = GetLayout(GlobalIlluminationLevel::Low);
+		CHECK(GlobalIllumination::GetLevelWeight(low.Levels[0], glm::vec3(0.0f, 1.5f, 0.0f)) == 1.0f);
+		CHECK(GlobalIllumination::GetLevelWeight(low.Levels[0], glm::vec3(0.0f, -1.5f, 0.0f)) == 1.0f);
 		const GlobalIlluminationLayout high = GetLayout(GlobalIlluminationLevel::High);
 		CHECK(GlobalIllumination::GetLevelWeight(high.Levels[0], glm::vec3(0.0f, -2.75f, 0.0f)) == 1.0f);
 		CHECK(GlobalIllumination::GetLevelWeight(high.Levels[0], glm::vec3(0.0f, 2.75f, 0.0f)) == 0.0f);

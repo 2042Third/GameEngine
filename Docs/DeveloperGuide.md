@@ -4971,9 +4971,10 @@ probe-field levels and local lights follow.
   scene's material table (4 KiB for 256 materials, doubling as it grows). A frame that wants none releases everything
   (`ReleaseGlobalIllumination`), and so do the render targets' release and a `SetQuality` that changes the row.
 - **The clipmap** (`R/VoxelClipmap.h`, CPU, main thread, `Renderer.VoxelClipmap`): per level a window centered on the
-  camera (the finest level's on a point `c_GIFinestLevelDrop`, 0.8 m, below it, `VoxelLevelLayout::Drop`, with its weights:
-  floors and what rests on them lie below the eye, and with the camera at half the height of the owner's 5.5 m Cornell box
-  the floor's contacts fell to level 1's 0.2 m voxels, which closed the floor under the sphere's overhang), snapped to steps
+  camera (at High the finest level's on a point `c_GIFinestLevelDrop`, 0.8 m, below it, `VoxelLevelLayout::Drop`, with its
+  weights: floors and what rests on them lie below the eye, and with the camera at half the height of the owner's 5.5 m
+  Cornell box the floor's contacts fell to level 1's 0.2 m voxels, which closed the floor under the sphere's overhang; Low's
+  finest level, at full weight only 1.6 m up and down, stays centered, keeping a ceiling 1.5 m above the eye), snapped to steps
   of `c_GIScrollVoxels` (4) voxels, stored toroidally (world voxel `w` at texel `w mod
   dimensions`: a scroll rewrites only the slabs that entered), with a queue of regions and the box of valid voxels. Regions
   and voxel coordinates are relative to an **anchor** (a multiple of 1,024 voxels, kept until the camera leaves its cell by

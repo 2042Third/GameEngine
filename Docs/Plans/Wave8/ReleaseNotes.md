@@ -233,11 +233,11 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 
 **Global illumination: batch 2 (experimental).**
 
-- The finest voxels reach further down than up: their window lies 0.8 m below the camera, so floors and what rests on
-  them keep 10 cm voxels down to about 3 m below the eye (ceilings more than about 1.5 m above it take 20 cm ones). In
-  the owner's Cornell box seen from half its height, the floor under the sphere's overhang no longer falls to black
-  against its neighbour: the darkest point there keeps 0.54 of its neighbour's light 0.1 m away (0.083 before). No cost,
-  no memory.
+- At High the finest voxels reach further down than up: their window lies 0.8 m below the camera, so floors and what
+  rests on them keep 10 cm voxels down to about 3 m below the eye (ceilings more than about 1.5 m above it take 20 cm
+  ones). In the owner's Cornell box seen from half its height, the floor under the sphere's overhang no longer falls to
+  black against its neighbour: the darkest point there keeps 0.54 of its neighbour's light 0.1 m away (0.083 before). No
+  cost, no memory.
 
 **Occlusion culling (cull fix)**
 
