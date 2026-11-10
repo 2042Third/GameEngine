@@ -180,8 +180,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   do not turn it on, and every sample and the showcase, look exactly as before.
 - Graphics Quality: a new row **Global illumination** (Off, Low, High; Off at Low and Medium, High at High and Ultra): 23
   MiB of GPU memory per view at Low, 153 MiB at High, only in scenes that turn it on; the Graphics Quality page's memory
-  rows count it as they count the reflections' (High at 1920 x 1080: 440 MiB, was 294). The `Renderer.Quality` section's
-  version is 6.
+  rows count it as they count the reflections' (High at 1920 x 1080: 702 MiB, 153 of them global illumination's). The
+  `Renderer.Quality` section's version is 6.
 - Captures and the project's picture wait for global illumination to settle.
 - AI agents: `component.set` on `PostProcess` takes `GlobalIllumination` and `GlobalIlluminationIntensity`;
   `project.setSettings` and the players' graphics options take `Renderer.Quality.GlobalIllumination`.
