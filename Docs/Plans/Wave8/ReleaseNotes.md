@@ -283,6 +283,9 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - The point and spot shadows' filter noise no longer turns from frame to frame under TAA: it looked right only with TAA
   and could crawl without it; images without TAA are unchanged to the bit.
 - Lights behind a surface skip their shadow's taps: less GPU time for many shadowed lights.
+- Casters that keep moving under many shadowed lights cost the main thread little: with 1,000 casters moving every
+  frame under 256 shadowed point lights at Ultra, deciding which shadow views to draw again takes 0.33 ms a frame
+  (`SceneRendererStats::LocalShadowFindMs`; the perf case `PerfGPU.Renderer.LocalShadows256LightsUltraMoving1kFind`).
 - The Scene view's statistics and `editor.perf` report how many shadowed lights in view asked for a shadow
   (`localShadowRequested`), got one (`localShadowLights`), are fading theirs out (`localShadowFading`) and how many tiles
   of each size they have (`localShadowTileSizeCounts`).

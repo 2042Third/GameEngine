@@ -308,6 +308,76 @@ TEST_SUITE("GPU.SceneRenderer.LocalShadows")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A caster's change redraws the views it reaches where its lamp moved to, and beside a caster destroyed in the same frame")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			CAPTURE(static_cast<int>(mode));
+			TwoLampScene twoLamps;
+			Scene& scene = twoLamps.SceneData;
+			// Cubes below and above lamp A (each in one face, like the cube beside it), and one on the ground lamp B moves to.
+			Entity below = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(-10.0f, 1.0f, 0.0f), "Below");
+			below.GetComponent<TransformComponent>().Scale = glm::vec3(0.5f);
+			Entity above = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(-10.0f, 5.0f, 0.0f), "Above");
+			above.GetComponent<TransformComponent>().Scale = glm::vec3(0.5f);
+			Entity distant = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(26.0f, 1.0f, 0.0f), "Distant");
+			distant.GetComponent<TransformComponent>().Scale = glm::vec3(0.5f);
+			SceneRenderer renderer(LocalShadowSpecification(mode));
+			renderer.SetViewportSize(c_Size, c_Size);
+			// Both lamps are in view wherever lamp B stands.
+			const SceneCamera camera = LookAt(glm::vec3(8.0f, 40.0f, 30.0f), glm::vec3(8.0f, 0.0f, 0.0f));
+			const auto settle = [&]()
+			{
+				for (uint32_t frame = 0; frame < 16; frame++)
+				{
+					REQUIRE(renderer.Render(scene, camera));
+					if (renderer.GetStats().LocalShadowViewsDrawn == 0 && renderer.GetStats().LocalShadowViewsPending == 0)
+						return true;
+				}
+				return false;
+			};
+			REQUIRE(renderer.Render(scene, camera));
+			CHECK(renderer.GetStats().LocalShadowLights == 2);
+			REQUIRE(settle());
+
+			// A change while the lamps stand where their views were drawn: what finds a change's lamps is made for these places.
+			Move(twoLamps.CubeA, glm::vec3(-8.0f, 3.0f, 0.05f));
+			REQUIRE(renderer.Render(scene, camera));
+			CHECK(renderer.GetStats().LocalShadowViewsDrawn == 1);
+			REQUIRE(settle());
+
+			// Lamp B moves more than two ranges away, which changes no proxy. The cube below its new place then moves: the view
+			// below lamp B is drawn, which a search among the lamps' old places would miss.
+			Move(twoLamps.LampB, glm::vec3(26.0f, 3.0f, 0.0f));
+			REQUIRE(renderer.Render(scene, camera));
+			CHECK(renderer.GetStats().LocalShadowViewsDrawn >= 6);
+			REQUIRE(settle());
+			Move(distant, glm::vec3(26.0f, 1.0f, 0.05f));
+			REQUIRE(renderer.Render(scene, camera));
+			CHECK(renderer.GetStats().LocalShadowViewsDrawn == 1);
+			REQUIRE(settle());
+
+			// In one frame a caster is destroyed and a neighbour in another face of the lamp moves, then two neighbours are
+			// destroyed: both faces are drawn each time, whichever change is seen first (a destroyed proxy has no bounds to
+			// look lamps up with, and the lamps found for the change before it are not the next change's).
+			scene.DestroyEntity(below);
+			Move(twoLamps.CubeA, glm::vec3(-8.0f, 3.0f, 0.1f));
+			REQUIRE(renderer.Render(scene, camera));
+			CHECK(renderer.GetStats().LocalShadowViewsDrawn == 2);
+			REQUIRE(settle());
+			scene.DestroyEntity(above);
+			scene.DestroyEntity(twoLamps.CubeA);
+			REQUIRE(renderer.Render(scene, camera));
+			CHECK(renderer.GetStats().LocalShadowViewsDrawn == 2);
+			REQUIRE(settle());
+			gpu.GetDevice().WaitForIdle();
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The redraw budget holds while lighting updates are spread; without it, or without the cache, every view is drawn in the frame")
 	{
 		GPUContext gpu;

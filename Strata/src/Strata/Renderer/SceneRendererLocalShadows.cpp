@@ -62,6 +62,9 @@ namespace Strata
 		constexpr uint32_t c_LocalShadowAgedShare = 4;
 		// The change tracking's grid: a light or a proxy's bounds spanning more cells than this is tested without it.
 		constexpr uint64_t c_LocalShadowGridMaxCells = 64;
+		// A change reaches a view when its box, grown by this fraction of the view's range, reaches the view's range and
+		// frustum: the margin for the rounding of what the CPU or the GPU took as the view's casters.
+		constexpr float c_LocalShadowChangeMargin = 0.01f;
 		constexpr int32_t c_LocalShadowGridBias = 1 << 20;
 		constexpr uint32_t c_NoLocalShadowLight = ~0u;
 		// A spot light's view covers at most this half angle (radians, 80 degrees): one perspective tile cannot show a
@@ -144,6 +147,55 @@ namespace Strata
 		{
 			const glm::vec3 offset = glm::clamp(center, boxMin, boxMax) - center;
 			return glm::dot(offset, offset) <= radius * radius;
+		}
+
+		// AABB::Intersects (boxes that touch count) with the six sides compared at once. The change tracking asks it of every
+		// light around every change, where the side that fails first is as good as random: a branch per side is mispredicted
+		// about once a light, which cost more than the comparisons.
+		bool BoxesTouch(const AABB& first, const AABB& second)
+		{
+			const bool below = (first.Min.x <= second.Max.x) & (first.Min.y <= second.Max.y) & (first.Min.z <= second.Max.z);
+			const bool above = (first.Max.x >= second.Min.x) & (first.Max.y >= second.Min.y) & (first.Max.z >= second.Min.z);
+			return below & above;
+		}
+
+		// Grows a light's box in the change tracking by a sphere it lights or lit a drawn view with: the range with the tests'
+		// margin, as much again and a millionth of the coordinates, so that whatever the rounding of a view's own test lets
+		// pass lies in the box (a box that misses it is skipped without looking at the views).
+		void ExpandByReach(AABB& box, const glm::vec3& center, float range)
+		{
+			const float largest = std::max({ std::abs(center.x), std::abs(center.y), std::abs(center.z) });
+			const float reach = range * (1.0f + 2.0f * c_LocalShadowChangeMargin) + (largest + range) * 1.0e-6f;
+			box.Expand(center - reach);
+			box.Expand(center + reach);
+		}
+
+		// A box no change that reaches a drawn view misses (the change tracking's test of a view: the change's bounds, grown by
+		// the margin, reach the range and lie in the frustum's planes): the range's box, cut by the planes that face along an
+		// axis. Such a plane's test reads one coordinate of the bounds, as the box does (a cube face's near plane takes the
+		// half behind the face away); the other planes cut nothing. Like ExpandByReach, every side lies the margin again and
+		// a millionth of the coordinates further out than the test's own, so the test's rounding stays inside.
+		AABB GetLocalShadowChangeBox(const glm::vec3& position, float range, const std::array<glm::vec4, 6>& planes)
+		{
+			AABB box;
+			ExpandByReach(box, position, range);
+			const float largest = std::max({ std::abs(position.x), std::abs(position.y), std::abs(position.z) });
+			const float slack = range * 2.0f * c_LocalShadowChangeMargin + (largest + range) * 1.0e-6f;
+			for (const glm::vec4& plane : planes)
+			{
+				for (int32_t axis = 0; axis < 3; axis++)
+				{
+					if (plane[axis] == 0.0f || plane[(axis + 1) % 3] != 0.0f || plane[(axis + 2) % 3] != 0.0f)
+						continue;
+					// The plane keeps the side its normal points to: coordinate * normal + w >= 0.
+					const float bound = -plane.w / plane[axis];
+					if (plane[axis] > 0.0f)
+						box.Min[axis] = std::max(box.Min[axis], bound - slack);
+					else
+						box.Max[axis] = std::min(box.Max[axis], bound + slack);
+				}
+			}
+			return box;
 		}
 
 		// Frustum::IsAABBVisible's test, also the GPU culling's (Include/Culling.slang, IsBoxInFrustum).
@@ -587,54 +639,92 @@ namespace Strata
 			else if (!m_LocalShadowChanges.empty())
 			{
 				// A grid of the lights' reach (their ranges now and as their views were drawn) finds the few lights a change can
-				// reach; cells twice the median range wide.
-				const float marginScale = 1.01f;
+				// reach; cells twice the median range wide. Beside every light goes the box of its reach, which of its views a
+				// change can still reach and the box of those (LocalShadowReach): most changes reach none (a caster on the ground
+				// keeps moving through views that are dirty already, below the ones that look up), and are done without reading
+				// the lights. The grid is sorted again only when a box or the cells' size changed: the boxes in the lights' order
+				// say all it holds.
 				std::vector<float> ranges;
 				ranges.reserve(m_LocalShadowLights.size());
 				for (const LocalShadowLight& light : m_LocalShadowLights)
 					ranges.push_back(records[light.Record].PositionRange.w);
 				std::nth_element(ranges.begin(), ranges.begin() + static_cast<std::ptrdiff_t>(ranges.size() / 2), ranges.end());
-				m_LocalShadowCellSize = std::max(ranges.empty() ? 1.0f : ranges[ranges.size() / 2] * 2.0f, 0.5f);
-				m_LocalShadowGrid.clear();
-				m_LocalShadowLargeLights.clear();
+				const float cellSize = std::max(ranges.empty() ? 1.0f : ranges[ranges.size() / 2] * 2.0f, 0.5f);
+				bool gridValid = cellSize == m_LocalShadowCellSize && m_LocalShadowReach.size() == m_LocalShadowLights.size();
+				m_LocalShadowCellSize = cellSize;
+				m_LocalShadowReach.resize(m_LocalShadowLights.size());
 				for (uint32_t index = 0; index < m_LocalShadowLights.size(); index++)
 				{
 					const LocalShadowLight& light = m_LocalShadowLights[index];
 					const glm::vec4 position = records[light.Record].PositionRange;
-					glm::vec3 reachMin = glm::vec3(position) - position.w * marginScale;
-					glm::vec3 reachMax = glm::vec3(position) + position.w * marginScale;
-					for (uint32_t view = 0; view < light.ViewCount; view++)
+					AABB box;
+					ExpandByReach(box, glm::vec3(position), position.w);
+					AABB cleanBox;
+					uint32_t cleanViews = 0;
+					bool drawnElsewhere = false;
+					for (uint32_t face = 0; face < light.ViewCount; face++)
 					{
-						const LocalShadowViewKey& drawn = light.Views[view].DrawnKey;
-						if (!light.Views[view].HasContent)
+						const LocalShadowView& view = light.Views[face];
+						if (!view.HasContent)
 							continue;
-						reachMin = glm::min(reachMin, drawn.Position - drawn.Range * marginScale);
-						reachMax = glm::max(reachMax, drawn.Position + drawn.Range * marginScale);
+						ExpandByReach(box, view.DrawnKey.Position, view.DrawnKey.Range);
+						drawnElsewhere = drawnElsewhere || view.DrawnKey.Position != glm::vec3(position) || view.DrawnKey.Range != position.w;
+						if (view.Dirty)
+							continue;
+						cleanViews |= 1u << face;
+						cleanBox.Expand(view.DrawnBox);
 					}
-					const GridRange cells = GetGridRange(reachMin, reachMax, m_LocalShadowCellSize);
-					if (cells.GetCellCount() > c_LocalShadowGridMaxCells)
+					LocalShadowReach& reach = m_LocalShadowReach[index];
+					gridValid = gridValid && reach.Box.Min == box.Min && reach.Box.Max == box.Max;
+					reach.Box = box;
+					reach.CleanBox = cleanBox;
+					reach.PositionRange = position;
+					reach.CleanViews = cleanViews;
+					reach.DrawnElsewhere = drawnElsewhere;
+				}
+				if (!gridValid)
+				{
+					m_LocalShadowGrid.clear();
+					m_LocalShadowLargeLights.clear();
+					for (uint32_t index = 0; index < m_LocalShadowReach.size(); index++)
 					{
-						m_LocalShadowLargeLights.push_back(index);
-						continue;
-					}
-					for (int32_t x = cells.Min.x; x <= cells.Max.x; x++)
-					{
-						for (int32_t y = cells.Min.y; y <= cells.Max.y; y++)
+						const AABB& box = m_LocalShadowReach[index].Box;
+						const GridRange cells = GetGridRange(box.Min, box.Max, m_LocalShadowCellSize);
+						if (cells.GetCellCount() > c_LocalShadowGridMaxCells)
 						{
-							for (int32_t z = cells.Min.z; z <= cells.Max.z; z++)
-								m_LocalShadowGrid.emplace_back(GetGridKey(x, y, z), index);
+							m_LocalShadowLargeLights.push_back(index);
+							continue;
+						}
+						for (int32_t x = cells.Min.x; x <= cells.Max.x; x++)
+						{
+							for (int32_t y = cells.Min.y; y <= cells.Max.y; y++)
+							{
+								for (int32_t z = cells.Min.z; z <= cells.Max.z; z++)
+									m_LocalShadowGrid.emplace_back(GetGridKey(x, y, z), index);
+							}
 						}
 					}
+					std::sort(m_LocalShadowGrid.begin(), m_LocalShadowGrid.end());
 				}
-				std::sort(m_LocalShadowGrid.begin(), m_LocalShadowGrid.end());
 				m_LocalShadowStamps.resize(m_LocalShadowLights.size(), 0u);
-				// The lights whose reach a box may touch, each once (m_LocalShadowQueried).
+				// The lights whose reach a box may touch, each once (m_LocalShadowQueried). Changes come in runs of the same cells
+				// (a proxy's bounds before and after its move, its neighbours'): the cells just asked keep their answer.
+				GridRange queriedCells;
+				bool queriedValid = false;
 				const auto query = [&](const AABB& bounds)
 				{
-					m_LocalShadowQueried.clear();
 					if (!bounds.IsValid())
+					{
+						m_LocalShadowQueried.clear();
+						queriedValid = false;
 						return;
+					}
 					const GridRange cells = GetGridRange(bounds.Min, bounds.Max, m_LocalShadowCellSize);
+					if (queriedValid && cells.Min == queriedCells.Min && cells.Max == queriedCells.Max)
+						return;
+					queriedCells = cells;
+					queriedValid = true;
+					m_LocalShadowQueried.clear();
 					if (cells.GetCellCount() > c_LocalShadowGridMaxCells)
 					{
 						for (uint32_t index = 0; index < m_LocalShadowLights.size(); index++)
@@ -667,39 +757,53 @@ namespace Strata
 					}
 				};
 				// The views whose content a proxy's change reaches: its bounds before (as followed) or after reach the light's
-				// range and the view's frustum as the view was drawn.
+				// range and the view's frustum as the view was drawn. Only views a change has not reached yet are asked, and only
+				// of lights whose box of such views the bounds touch.
 				const auto markReached = [this](const AABB& bounds)
 				{
 					for (const uint32_t index : m_LocalShadowQueried)
 					{
+						LocalShadowReach& reach = m_LocalShadowReach[index];
+						if (!BoxesTouch(bounds, reach.CleanBox))
+							continue;
 						LocalShadowLight& light = m_LocalShadowLights[index];
 						for (uint32_t face = 0; face < light.ViewCount; face++)
 						{
-							LocalShadowView& view = light.Views[face];
-							if (!view.HasContent || view.Dirty)
+							if ((reach.CleanViews & (1u << face)) == 0)
 								continue;
-							// A margin of a hundredth of the range for the rounding of what the CPU or the GPU took.
-							const float margin = view.DrawnKey.Range * 0.01f;
+							LocalShadowView& view = light.Views[face];
+							const float margin = view.DrawnKey.Range * c_LocalShadowChangeMargin;
 							const glm::vec3 boxMin = bounds.Min - margin;
 							const glm::vec3 boxMax = bounds.Max + margin;
 							if (BoxReachesSphere(boxMin, boxMax, view.DrawnKey.Position, view.DrawnKey.Range) && BoxInPlanes(boxMin, boxMax, view.DrawnPlanes))
+							{
 								view.Dirty = true;
+								reach.CleanViews &= ~(1u << face);
+							}
 						}
 					}
 				};
+				bool allDirty = false;
 				for (const uint32_t proxy : m_LocalShadowChanges)
 				{
 					const bool alive = proxy < renderScene.GetProxyCapacity() && renderScene.GetEntity(proxy) != entt::null;
 					const AABB bounds = alive ? renderScene.GetWorldBounds(proxy) : AABB();
-					auto it = m_LocalShadowBounds.find(proxy);
+					const auto it = m_LocalShadowBounds.find(proxy);
 					if (it != m_LocalShadowBounds.end())
 					{
 						query(it->second);
 						markReached(it->second);
 					}
-					else if (!followed)
+					else if (!followed && !allDirty)
 					{
+						// Once: nothing here makes a view clean again.
 						dirtyAll();
+						for (LocalShadowReach& reach : m_LocalShadowReach)
+						{
+							reach.CleanViews = 0;
+							reach.CleanBox = AABB();
+						}
+						allDirty = true;
 					}
 					query(bounds);
 					markReached(bounds);
@@ -707,10 +811,13 @@ namespace Strata
 					bool inRange = false;
 					for (const uint32_t index : m_LocalShadowQueried)
 					{
+						const LocalShadowReach& reach = m_LocalShadowReach[index];
+						if (!BoxesTouch(bounds, reach.Box))
+							continue;
+						inRange = BoxReachesSphere(bounds.Min, bounds.Max, glm::vec3(reach.PositionRange), reach.PositionRange.w);
+						// The views' own ranges only where one was drawn from elsewhere (the light moved since).
 						const LocalShadowLight& light = m_LocalShadowLights[index];
-						const glm::vec4 position = records[light.Record].PositionRange;
-						inRange = inRange || BoxReachesSphere(bounds.Min, bounds.Max, glm::vec3(position), position.w);
-						for (uint32_t face = 0; face < light.ViewCount && !inRange; face++)
+						for (uint32_t face = 0; reach.DrawnElsewhere && face < light.ViewCount && !inRange; face++)
 						{
 							const LocalShadowView& view = light.Views[face];
 							inRange = view.HasContent && BoxReachesSphere(bounds.Min, bounds.Max, view.DrawnKey.Position, view.DrawnKey.Range);
@@ -718,10 +825,19 @@ namespace Strata
 						if (inRange)
 							break;
 					}
-					if (inRange)
-						m_LocalShadowBounds[proxy] = bounds;
+					if (!inRange)
+					{
+						if (it != m_LocalShadowBounds.end())
+							m_LocalShadowBounds.erase(it);
+					}
 					else if (it != m_LocalShadowBounds.end())
-						m_LocalShadowBounds.erase(it);
+					{
+						it->second = bounds;
+					}
+					else
+					{
+						m_LocalShadowBounds.emplace(proxy, bounds);
+					}
 				}
 			}
 		}
@@ -780,7 +896,10 @@ namespace Strata
 				if (!waiting[index].Empty)
 					order.push_back(index);
 			}
-			std::sort(order.begin(), order.end(), [&waiting](uint32_t a, uint32_t b)
+			// Of each order only the first are taken (far fewer than wait where this matters): sorted no further.
+			const uint32_t aged = std::max(budget / c_LocalShadowAgedShare, 1u);
+			const size_t agedPlaces = std::min<size_t>(aged, order.size());
+			std::partial_sort(order.begin(), order.begin() + static_cast<std::ptrdiff_t>(agedPlaces), order.end(), [&waiting](uint32_t a, uint32_t b)
 			{
 				const Waiting& first = waiting[a];
 				const Waiting& second = waiting[b];
@@ -788,14 +907,15 @@ namespace Strata
 					return first.Waited > second.Waited;
 				return first.Score != second.Score ? first.Score > second.Score : a < b;
 			});
-			const uint32_t aged = std::max(budget / c_LocalShadowAgedShare, 1u);
 			uint32_t taken = 0;
-			for (size_t place = 0; place < order.size() && taken < aged; place++, taken++)
+			for (size_t place = 0; place < agedPlaces; place++, taken++)
 				chosen[order[place]] = 1;
 			order.resize(waiting.size());
 			for (uint32_t index = 0; index < waiting.size(); index++)
 				order[index] = index;
-			std::sort(order.begin(), order.end(), [&waiting](uint32_t a, uint32_t b)
+			// The first `budget` places hold what the budget still takes: at most `taken` of them are chosen already.
+			const size_t places = std::min<size_t>(budget, order.size());
+			std::partial_sort(order.begin(), order.begin() + static_cast<std::ptrdiff_t>(places), order.end(), [&waiting](uint32_t a, uint32_t b)
 			{
 				const Waiting& first = waiting[a];
 				const Waiting& second = waiting[b];
@@ -805,7 +925,7 @@ namespace Strata
 					return first.Score > second.Score;
 				return a < b; // The lights' order, then their faces
 			});
-			for (size_t place = 0; place < order.size() && taken < budget; place++)
+			for (size_t place = 0; place < places && taken < budget; place++)
 			{
 				if (chosen[order[place]] != 0)
 					continue;
@@ -1259,6 +1379,7 @@ namespace Strata
 					m_LocalShadowAllocator.Free(view.DrawnKey.Tile);
 				view.DrawnKey = view.Key;
 				view.DrawnPlanes = Frustum(GetLocalShadowViewProjection(view.Key, glm::dvec3(0.0))).GetPlanes();
+				view.DrawnBox = GetLocalShadowChangeBox(view.Key.Position, view.Key.Range, view.DrawnPlanes);
 				view.DrawnEpoch = m_LocalShadowDrawEpoch;
 				view.HasContent = true;
 				view.Dirty = false;

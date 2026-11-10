@@ -1279,6 +1279,7 @@ namespace Strata
 			LocalShadowViewKey Key;
 			LocalShadowViewKey DrawnKey;      // Valid while HasContent
 			std::array<glm::vec4, 6> DrawnPlanes = {}; // DrawnKey's frustum in world space (what changes it)
+			AABB DrawnBox;                    // A box no change that reaches DrawnKey's content misses (GetLocalShadowChangeBox)
 			uint64_t DrawnEpoch = 0;          // m_LocalShadowEpoch when it was drawn
 			uint32_t WaitedFrames = 0;        // Frames it has not been up to date without being drawn
 			bool HasContent = false;
@@ -1304,6 +1305,17 @@ namespace Strata
 			float Fade = 0.0f;                // Its strength in the last frame drawn (where lighting updates are spread)
 			bool Complete = false;            // This frame: every view holds content (or is drawn)
 			float Strength = 0.0f;            // This frame's (RenderData::LocalShadowData::Parameters.w)
+		};
+		// A light as the change tracking asks it, beside m_LocalShadowLights in their order (a change passes most lights
+		// without reading more than this): the box its range and its drawn views' ranges lie in, its views a change can still
+		// reach (a bit per view that holds content and is not dirty) with the box of their DrawnBoxes, and its range now.
+		struct LocalShadowReach
+		{
+			AABB Box;
+			AABB CleanBox;                    // Invalid while CleanViews is 0. Views marked since it was made stay in it
+			glm::vec4 PositionRange = glm::vec4(0.0f);
+			uint32_t CleanViews = 0;
+			bool DrawnElsewhere = false;      // A view holds content drawn from another position or range than PositionRange
 		};
 		// A shadow view the frame draws: its light (shadow slot) and face, the casters the CPU found in it, and its batches.
 		struct LocalShadowDrawView
@@ -2252,7 +2264,10 @@ namespace Strata
 		std::vector<uint32_t> m_LocalShadowChanges;
 		// Lights by (entity, type) key, sorted: what a ranking finds a light's state by. The change tracking's grid of lights:
 		// (cell key, light) sorted by cell, the lights too large for it, and a stamp per light that keeps a query's lights unique.
+		// The grid holds m_LocalShadowReach's boxes in cells of m_LocalShadowCellSize (TrackLocalShadowChanges alone writes
+		// the three, together).
 		std::vector<std::pair<uint64_t, uint32_t>> m_LocalShadowLightIndex;
+		std::vector<LocalShadowReach> m_LocalShadowReach;
 		std::vector<std::pair<uint64_t, uint32_t>> m_LocalShadowGrid;
 		std::vector<uint32_t> m_LocalShadowLargeLights;
 		std::vector<uint32_t> m_LocalShadowStamps;
