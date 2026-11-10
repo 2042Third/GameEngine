@@ -6498,7 +6498,12 @@ use no transcendental functions where a vertex depends on them and quantize ever
 the same bytes; `selftest` (CTests `StrataTools.ShowcaseTerrain` and `.ShowcaseProps`, label `tools`) writes twice, compares
 with the committed files (the maps by their pixels), checks the design's rules (the golden sun clears the hills from the
 apron, the pads are flat, the letterboard is vertical, the shots' mirror points lie on their surfaces) and that the
-scripts' `Scripts/Stations.h` rows equal the generator's table. To change the ground or a prop, change the generator,
+scripts' `Scripts/Stations.h` rows equal the generator's table. The terrain's `selftest` also holds the copies of the
+stations' steps to what `setup` writes (`StrataTests/Editor/ShowcaseRenderCommands.json` in the script form,
+`Tools/LookDev/Shots.json`'s `showcase.shot<N>` shots in the look-dev form: after a change to the table, write them
+again with `setup --station <name> --format script|lookdev`, never by hand), checks the pictures script (below; scripts
+with one thing wrong must fail the check) and that `Picture.png` shows what `Screenshots/Shot2.png` shows (the mean
+codes of 16 x 9 blocks, within 1 on average and 4 in any block). To change the ground or a prop, change the generator,
 write in place (`terrain` or `props --output Samples/Showcase/Assets/Generated/...`): the editor reimports and keeps the
 handles. The generators' command scripts (`materials`, `prefabs`, `layout`, `controls`, `dress`, `bake`) are run once
 with `StrataEditor --quit-after-commands` (on Windows through `Start-Process -Wait`: the editor is a GUI program, and a
@@ -6524,6 +6529,11 @@ measures it again); `StrataRuntime.ShowcaseWindowed` checks the exported game's 
 `Showcase` holds the `showcase.*` shots ([Look-dev harness](#look-dev-harness)), and `PerfGPU.Samples` measures the tour at
 High and Ultra ([Perf tests](#perf-tests)). A change to the showcase's look retakes its screenshots, `Picture.png`, its
 icon and its look-dev shots: `GenerateShowcaseTerrain.py pictures` writes the command script that captures the six shots
-and the icon, each at its station from its look-dev shot's camera, saves the scene at Golden and waits for the
-project's thumbnail (the scene's camera stands at shot 2's key); run it on the sample in place after `bake`, then copy
-`.strata/Thumbnail.png` to `Picture.png`.
+and the icon, each right after its station's steps from its look-dev shot's camera, saves the scene at Golden and waits
+for the project's thumbnail (the scene's camera stands at shot 2's key). Every capture expects a complete picture (nothing
+loading, no texture below the level the view wants, the local lights' shadow views and the probes drawn, the exposure
+settled and temporal anti-aliasing's history holding its eight phases: `viewport.capture` returns a picture that lacks
+one of them after its wait, saying so), so the script stops instead of leaving such a picture. Run it on the sample in
+place after `bake`, in a session of its own, then `GenerateShowcaseTerrain.py picture --project Samples/Showcase`, which
+copies `.strata/Thumbnail.png` to `Picture.png` and refuses a thumbnail that is missing, not 480 x 270, older than a
+screenshot or the icon, or that does not show what `Screenshots/Shot2.png` shows.

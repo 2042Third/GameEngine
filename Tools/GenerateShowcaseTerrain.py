@@ -7,12 +7,14 @@ The outputs are committed and a CTest (StrataTools.ShowcaseTerrain) keeps them e
     python3 -I Tools/GenerateShowcaseTerrain.py check
     python3 -I Tools/GenerateShowcaseTerrain.py stations [--json <file>]
     python3 -I Tools/GenerateShowcaseTerrain.py selftest --committed Samples/Showcase/Assets/Generated/Terrain
-        --stations Samples/Showcase/Scripts/Stations.h --work <dir>
+        --stations Samples/Showcase/Scripts/Stations.h --sample Samples/Showcase
+        --render-commands StrataTests/Editor/ShowcaseRenderCommands.json --work <dir>
     python3 -I Tools/GenerateShowcaseTerrain.py layout --output <Layout.json>
     python3 -I Tools/GenerateShowcaseTerrain.py controls --output <Controls.json>
     python3 -I Tools/GenerateShowcaseTerrain.py dress --output <Dress.json>
     python3 -I Tools/GenerateShowcaseTerrain.py bake --output <Bake.json>
     python3 -I Tools/GenerateShowcaseTerrain.py pictures --output <Pictures.json>
+    python3 -I Tools/GenerateShowcaseTerrain.py picture --project Samples/Showcase
     python3 -I Tools/GenerateShowcaseTerrain.py setup --station Dawn|Golden|Dusk --format lookdev|script [--output <file>]
     python3 -I Tools/GenerateShowcaseTerrain.py checkshots --capture <LookDev output directory> [--live]
 
@@ -52,7 +54,15 @@ stations  prints the three times of day (Dawn, Golden, Dusk) and, per shot of th
           same as JSON.
 selftest  check, terrain twice (byte-equal), each model byte-equal to the committed one (--committed), shots 2-4's
           mirror relations within 1 cm and 0.1 degree, and the rows of c_Stations in the scripts' Stations.h (--stations)
-          equal to this file's STATIONS.
+          equal to this file's STATIONS. Then what the pictures rest on: the pictures script takes each picture right
+          after its station's steps, from its LookDev shot's camera (LookDev/Shots.json's showcase.shot<N>), at its size,
+          at High, without overlays and expecting a complete, settled picture, and ends at Golden with a scene.save and a
+          wait long enough for the thumbnail (scripts with one of these wrong must fail the check); the stations' steps
+          that other files hold are the ones setup writes (--render-commands: every sky preset of
+          ShowcaseRenderCommands.json is part of a station's script steps and all three are there; in LookDev/Shots.json
+          the Setup of every showcase.shot<N> of a station other than the saved one begins with that station's LookDev
+          steps, and no other showcase shot sets a sky); the sample's Picture.png (--sample) shows what its
+          Screenshots/Shot2.png shows; and picture refuses what it must (in --work).
 layout    writes the editor command script that builds the scene's entities in Scenes/Outpost.stscene (which holds the
           sky, the sun, the terrain and the Post Process, and with the materials and prefabs of GenerateShowcaseProps.py
           present): the ground's materials, the fog, the camera rig, the props on the surfaces under them, the seeded rocks
@@ -68,7 +78,13 @@ bake     writes the command script that bakes the six probes: per station (Dawn,
 pictures  writes the command script that retakes the sample's pictures after a change to its look: Screenshots/Shot1.png
           to Shot6.png (960 x 540 at High, each shot's key camera at its station, no overlays), Assets/Icon.png (256 x 256
           of shot 2) and, by a scene.save at Golden (the scene's camera stands at shot 2's key), the project's thumbnail
-          (.strata/Thumbnail.png), which is then copied to Picture.png. Run it on the sample in place after bake.
+          (.strata/Thumbnail.png). Every capture must report a complete picture (nothing loading, textures at the levels
+          the view wants, the local lights' shadows and the probes drawn, the exposure and temporal anti-aliasing's
+          history settled) or the script stops. Run it on the sample in place after bake, in a session of its own.
+picture   copies the project's thumbnail (--project's .strata/Thumbnail.png) to its Picture.png, the last step of a
+          retake. It refuses (exit 1, nothing copied) a thumbnail that is missing, not 480 x 270, older than a screenshot
+          or the icon (the pictures script did not write it), or that does not show what Screenshots/Shot2.png shows
+          (the scene was saved at another station or from another camera).
 setup     prints a station's edit-mode steps: the GoldenHour preset turned to its sun, the sun's intensity and shadow
           distance, the fog, the exposure, the local lights (their intensity and source radius), the embers and wicks, and
           its probes on (LookDev Setup entries naming entities, or command steps that find them).
@@ -80,11 +96,13 @@ Exit codes: 0 done, 1 a check failed, 2 usage.
 """
 
 import argparse
+import copy
 import json
 import math
 import os
 import random
 import re
+import shutil
 import struct
 import sys
 
@@ -2063,21 +2081,37 @@ def bake_script():
     return steps
 
 
-PICTURE_SIZE = (960, 540)  # Screenshots/Shot<N>.png
-ICON_SIZE = 256            # Assets/Icon.png, of shot 2
-# The project's thumbnail renders over the frames after a save (at most about 200: ProjectThumbnail's c_MaxFrames,
-# c_MaxTemporalFrames, c_MaxExposureFrames, c_MaxGIFrames and its readback), then is written in the background; a script
-# that quits right after its scene.save leaves none.
-THUMBNAIL_FRAMES = 600
+SAVED_STATION = "Golden"     # The station the scene is saved at: the one the game starts in and the thumbnail shows
+SHOT_COUNT = 6               # The tour's shots (shots), one screenshot each
+PICTURE_SIZE = (960, 540)    # Screenshots/Shot<N>.png
+ICON_SIZE = 256              # Assets/Icon.png, of shot 2
+THUMBNAIL_SIZE = (480, 270)  # .strata/Thumbnail.png and Picture.png (ProjectThumbnail's c_Width and c_Height)
+# What a picture's capture must report. viewport.capture waits for all of it, but only so long, and then returns the
+# picture as it is, saying what it lacks: assets still loading, textures below the level the view wants, local lights'
+# shadow views or probes' captures not drawn yet, an exposure still adapting, or a history of temporal anti-aliasing that
+# holds fewer than the jitter's eight phases (a soft or noisy picture).
+PICTURE_COMPLETE = {"/pendingAssets": {"equals": 0}, "/texturesBelowWanted": {"equals": 0},
+                    "/localShadowViewsPending": {"equals": 0}, "/reflectionProbesPending": {"equals": 0},
+                    "/preExposureSettled": {"equals": True}, "/temporalFrames": {"min": 8}}
+# The project's thumbnail renders over the frames after a save, within ProjectThumbnail's limits (c_MaxFrames 120,
+# c_MaxTemporalFrames 16, c_MaxExposureFrames 8, c_MaxGIFrames 54 and c_MaxReflectionFrames 2: 200 frames if each ran
+# out in turn), is read back and then written in the background; a script that quits right after its scene.save leaves
+# none. The script waits three times that; picture refuses a thumbnail the wait did not bring.
+THUMBNAIL_RENDER_FRAMES = 200
+THUMBNAIL_FRAMES = 3 * THUMBNAIL_RENDER_FRAMES
+# Picture.png against Screenshots/Shot2.png, both averaged over 16 x 9 blocks: how far the blocks' mean codes may lie
+# apart on average and in any block. The two are one view rendered twice, at 1440 x 810 and at 960 x 540 (measured 0.51
+# and 1.67 on the pictures of wave 8's reflections; the pictures taken before them against the ones after: 1.09 and 7.71).
+PICTURE_BLOCK = 30
+PICTURE_LIMITS = (1.0, 4.0)
 
 
 def pictures_script(world):
     """The pictures' retake (D14's pictures): each shot's key camera at its station, captured at High without overlays into
-    Screenshots/Shot<N>.png, shot 2 also into Assets/Icon.png (256 x 256; the asset keeps its handle), then Golden, the
-    saved station, and a scene.save, after which the editor renders the project's thumbnail (.strata/Thumbnail.png,
-    480 x 270, from the scene's camera, which the layout stands at shot 2's key) that Picture.png copies. Nothing pending
-    may show in a picture."""
-    complete = {"/pendingAssets": {"equals": 0}, "/reflectionProbesPending": {"equals": 0}}
+    Screenshots/Shot<N>.png, shot 2 also into Assets/Icon.png (256 x 256; the asset keeps its handle), then the saved
+    station and a scene.save, after which the editor renders the project's thumbnail (.strata/Thumbnail.png, 480 x 270,
+    from the scene's camera, which the layout stands at shot 2's key) that picture copies to Picture.png. A capture that
+    reports an incomplete or unsettled picture stops the script (PICTURE_COMPLETE)."""
     steps = [{"command": "scene.open", "parameters": {"scene": SCENE}}]
     for shot in shots(world):
         camera = {"position": rounded(shot["key"], 3), "target": rounded(shot["look"], 3), "fov": shot["fov"]}
@@ -2087,53 +2121,308 @@ def pictures_script(world):
             pictures.append(("Assets/Icon.png", (ICON_SIZE, ICON_SIZE)))
         for picture, (width, height) in pictures:
             parameters = dict(camera, width=width, height=height, quality="high", overlays=False, path=picture, overwrite=True)
-            steps.append({"command": "viewport.capture", "parameters": parameters, "expect": complete})
-    steps += station_steps("Golden", True)
+            steps.append({"command": "viewport.capture", "parameters": parameters, "expect": copy.deepcopy(PICTURE_COMPLETE)})
+    steps += station_steps(SAVED_STATION, True)
     steps.append({"command": "scene.save"})
     steps.append({"command": "editor.wait", "parameters": {"frames": THUMBNAIL_FRAMES}})
     return steps
 
 
-def check_pictures(world, shots_file):
-    """The pictures script against the shots: each screenshot (and the icon, of shot 2) is taken after its station's steps
-    from the camera of its LookDev shot (shots_file's showcase.shot<N>), and the script ends at Golden with a scene.save
-    and the wait for the thumbnail it starts. Returns the failures."""
+def station_block_at(steps, index, blocks):
+    """The station whose steps (blocks: station_steps per name) start at steps[index] and follow without a gap, or None."""
+    for name, block in blocks.items():
+        if steps[index:index + len(block)] == block:
+            return name
+    return None
+
+
+def check_pictures(world, shots_file, steps=None):
+    """The pictures script (steps; pictures_script's when None) against the shots: it opens the scene, takes each
+    screenshot (and the icon, of shot 2) right after its station's steps, from the camera of its LookDev shot (shots_file's
+    showcase.shot<N>), at its size, at High, without overlays and expecting a complete picture, and ends at the saved
+    station with a scene.save and a wait long enough for the thumbnail the save starts. Returns the failures."""
     failures = []
     with open(shots_file, encoding="utf-8") as file:
         lookdev = {shot["Name"]: shot for shot in json.load(file)["Shots"]}
-    stations = {row[4]: row[0] for row in STATIONS}
-    expected = {"Screenshots/Shot%d.png" % shot["shot"]: shot for shot in shots(world)}
-    expected["Assets/Icon.png"] = expected["Screenshots/Shot2.png"]
-    station = None
+    if steps is None:
+        steps = pictures_script(world)
+    blocks = {row[0]: station_steps(row[0], True) for row in STATIONS}
+    expected = {"Screenshots/Shot%d.png" % shot["shot"]: (shot, PICTURE_SIZE) for shot in shots(world)}
+    if sorted(expected) != ["Screenshots/Shot%d.png" % (number + 1) for number in range(SHOT_COUNT)]:
+        return ["the tour's shots are not numbered 1 to %d" % SHOT_COUNT]
+    expected["Assets/Icon.png"] = (expected["Screenshots/Shot2.png"][0], (ICON_SIZE, ICON_SIZE))
+    if not steps or steps[0] != {"command": "scene.open", "parameters": {"scene": SCENE}}:
+        failures.append("the pictures script does not start by opening %s" % SCENE)
+    station = None  # The station whose steps were the last thing before this step, captures aside
     taken = []
-    steps = pictures_script(world)
-    for step in steps:
-        parameters = step.get("parameters", {})
-        if step["command"] == "lighting.applySkyPreset":
-            station = stations.get(parameters.get("sunAzimuth"))
-        if step["command"] != "viewport.capture":
+    saved = []
+    index = 0
+    while index < len(steps):
+        name = station_block_at(steps, index, blocks)
+        if name is not None:
+            station = name
+            index += len(blocks[name])
             continue
+        step = steps[index]
+        index += 1
+        if step.get("command") == "scene.save":
+            saved.append(station)
+            continue
+        if step.get("command") != "viewport.capture":
+            station = None  # Anything else, a station's step out of its place included, leaves the scene at no station
+            continue
+        parameters = step.get("parameters", {})
         path = parameters.get("path")
         taken.append(path)
-        shot = expected.get(path)
-        if shot is None:
+        if path not in expected:
             failures.append("the pictures script captures %s, which is no picture of the sample" % path)
             continue
+        shot, (width, height) = expected[path]
         if station != shot["station"]:
-            failures.append("%s is taken at %s, not at shot %d's %s" % (path, station, shot["shot"], shot["station"]))
+            failures.append("%s is not taken right after the steps of %s, shot %d's station" % (path, shot["station"], shot["shot"]))
         reference = lookdev.get("showcase.shot%d" % shot["shot"])
         if reference is None:
             failures.append("%s has no LookDev shot showcase.shot%d" % (shots_file, shot["shot"]))
             continue
+        wanted = {"position": reference["Position"], "target": reference["Target"], "fov": reference["Fov"],
+                  "width": width, "height": height, "quality": "high", "overlays": False, "path": path, "overwrite": True}
+        if sorted(parameters) != sorted(wanted):
+            failures.append("%s is captured with the parameters %s, not %s" % (path, sorted(parameters), sorted(wanted)))
+            continue
         camera = list(parameters["position"]) + list(parameters["target"]) + [parameters["fov"]]
-        wanted = list(reference["Position"]) + list(reference["Target"]) + [reference["Fov"]]
-        if any(abs(a - b) > 1e-3 for a, b in zip(camera, wanted)):
-            failures.append("%s looks from %s, LookDev's showcase.shot%d from %s" % (path, camera, shot["shot"], wanted))
+        lookdev_camera = list(wanted["position"]) + list(wanted["target"]) + [wanted["fov"]]
+        if len(camera) != len(lookdev_camera) or any(abs(a - b) > 1e-3 for a, b in zip(camera, lookdev_camera)):
+            failures.append("%s looks from %s, LookDev's showcase.shot%d from %s" % (path, camera, shot["shot"], lookdev_camera))
+        for key in ("width", "height", "quality", "overlays", "overwrite"):
+            if parameters[key] != wanted[key] or type(parameters[key]) is not type(wanted[key]):
+                failures.append("%s is captured with %s %s, not %s" % (path, key, json.dumps(parameters[key]), json.dumps(wanted[key])))
+        if step.get("expect") != PICTURE_COMPLETE:
+            failures.append("%s's capture does not expect a complete, settled picture (%s)" % (path, ", ".join(sorted(PICTURE_COMPLETE))))
     if sorted(taken) != sorted(expected):
-        failures.append("the pictures script captures %s, not %s" % (sorted(taken), sorted(expected)))
-    ending = [step["command"] for step in steps[-2:]]
-    if station != "Golden" or ending != ["scene.save", "editor.wait"]:
-        failures.append("the pictures script does not end at Golden with a scene.save and the wait for its thumbnail")
+        failures.append("the pictures script captures %s, not %s" % (sorted(str(path) for path in taken), sorted(expected)))
+    wait = steps[-1] if steps else {}
+    frames = wait.get("parameters", {}).get("frames", 0) if wait.get("command") == "editor.wait" else 0
+    if saved != [SAVED_STATION] or len(steps) < 2 or steps[-2].get("command") != "scene.save":
+        failures.append("the pictures script does not end with one scene.save right after %s's steps and a wait" % SAVED_STATION)
+    if not isinstance(frames, int) or frames < THUMBNAIL_FRAMES:
+        failures.append("the pictures script does not end with a wait of at least %d frames for the thumbnail" % THUMBNAIL_FRAMES)
+    return failures
+
+
+def picture_mutations(world):
+    """The pictures script with one thing wrong at a time, each of which check_pictures must report: (what, steps)."""
+    base = pictures_script(world)
+    captures = [index for index, step in enumerate(base) if step["command"] == "viewport.capture"]
+    saved_block = len(station_steps(SAVED_STATION, True))
+    mutations = []
+
+    def mutate(what, change):
+        steps = copy.deepcopy(base)
+        change(steps)
+        mutations.append((what, steps))
+
+    def set_parameter(index, key, value):
+        return lambda steps: steps[index]["parameters"].__setitem__(key, value)
+
+    mutate("a picture of another size", set_parameter(captures[0], "width", 1920))
+    mutate("a picture at another quality", set_parameter(captures[1], "quality", "medium"))
+    mutate("a picture with the editor's overlays", set_parameter(captures[2], "overlays", True))
+    mutate("a picture from another camera", set_parameter(captures[3], "fov", base[captures[3]]["parameters"]["fov"] + 5.0))
+    mutate("a picture that keeps an older file", set_parameter(captures[4], "overwrite", False))
+    mutate("a picture of another name", set_parameter(captures[5], "path", "Screenshots/Shot7.png"))
+    mutate("a picture with a debug view", set_parameter(captures[6], "debugView", "lighting"))
+    mutate("a capture that expects nothing", lambda steps: steps[captures[0]].pop("expect"))
+    for key in sorted(PICTURE_COMPLETE):
+        mutate("a capture that does not expect %s" % key, lambda steps, key=key: steps[captures[-1]]["expect"].pop(key))
+    mutate("a missing picture", lambda steps: steps.pop(captures[0]))
+    mutate("a station's step changed by hand", set_parameter(captures[-1] - 1, "active", False))
+    mutate("a step between a station's steps and its picture",
+           lambda steps: steps.insert(captures[-1], {"command": "editor.wait", "parameters": {"frames": 1}}))
+    mutate("a picture at another station", lambda steps: steps.__delitem__(slice(captures[-1] - len(station_steps("Dusk", True)), captures[-1])))
+    mutate("a scene that is not opened", lambda steps: steps.pop(0))
+    mutate("a save at another station", lambda steps: steps.__delitem__(slice(len(steps) - 2 - saved_block, len(steps) - 2)))
+    mutate("no save", lambda steps: steps.pop(len(steps) - 2))
+    mutate("a wait too short for the thumbnail", set_parameter(len(base) - 1, "frames", THUMBNAIL_RENDER_FRAMES))
+    mutate("no wait", lambda steps: steps.pop())
+    return mutations
+
+
+LOOKDEV_SHOT_NAME = re.compile(r"^showcase\.shot(\d+)(?:\.|$)")
+
+
+def check_station_copies(world, render_file, shots_file):
+    """The stations' steps where other files hold them: every lighting.applySkyPreset of the render test's commands
+    (render_file) is part of a station's steps as station_steps writes them (the script form), with all three stations
+    there; in LookDev's shots (shots_file) the Setup of every showcase.shot<N>, variants included, of a station other than
+    the saved one begins with that station's steps (the LookDev form), and no other showcase shot sets a sky (edit-mode
+    shots show the saved scene, live ones the director's stations). Returns the failures."""
+    failures = []
+    blocks = {row[0]: station_steps(row[0], True) for row in STATIONS}
+    render_name = os.path.basename(render_file)
+    with open(render_file, encoding="utf-8") as file:
+        steps = json.load(file)
+    found = set()
+    index = 0
+    while index < len(steps):
+        name = station_block_at(steps, index, blocks)
+        if name is not None:
+            found.add(name)
+            index += len(blocks[name])
+            continue
+        if steps[index].get("command") == "lighting.applySkyPreset":
+            failures.append("%s: the sky preset of step %d is not part of a station's steps as `setup --format script` writes them"
+                            % (render_name, index))
+        index += 1
+    for row in STATIONS:
+        if row[0] not in found:
+            failures.append("%s holds no steps of %s as `setup --station %s --format script` writes them" % (render_name, row[0], row[0]))
+
+    shots_name = os.path.basename(shots_file)
+    lookdev_blocks = {row[0]: station_steps(row[0], False) for row in STATIONS}
+    stations_of = {shot["shot"]: shot["station"] for shot in shots(world)}
+    with open(shots_file, encoding="utf-8") as file:
+        lookdev = json.load(file)["Shots"]
+    for shot in lookdev:
+        if shot.get("Project") != "Showcase":
+            continue
+        setup = shot.get("Setup", [])
+        presets = sum(1 for entry in setup if entry.get("Command") == "lighting.applySkyPreset")
+        match = LOOKDEV_SHOT_NAME.match(shot["Name"])
+        wanted = stations_of.get(int(match.group(1))) if match else None
+        if wanted is None or wanted == SAVED_STATION:
+            if presets:
+                failures.append("%s: %s sets a sky, but shows %s" % (shots_name, shot["Name"], "the saved scene" if not shot.get("Live") else "the director's stations"))
+            continue
+        block = lookdev_blocks[wanted]
+        if setup[:len(block)] != block or presets != 1:
+            failures.append("%s: %s's Setup does not begin with %s's steps as `setup --station %s --format lookdev` prints them"
+                            % (shots_name, shot["Name"], wanted, wanted))
+    return failures
+
+
+def lookdev_module():
+    """Tools/LookDev.py, for its PNG reader and writer (8-bit RGB and RGBA, all five filters)."""
+    tools = os.path.dirname(os.path.abspath(__file__))
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    import LookDev
+    return LookDev
+
+
+def block_means(image, size):
+    """The mean code of an image's red, green and blue over each size x size block, row by row."""
+    means = []
+    for top in range(0, image.height - size + 1, size):
+        for left in range(0, image.width - size + 1, size):
+            total = 0
+            for y in range(top, top + size):
+                start = (y * image.width + left) * image.channels
+                row = image.data[start:start + size * image.channels]
+                total += sum(row[0::image.channels]) + sum(row[1::image.channels]) + sum(row[2::image.channels])
+            means.append(total / (size * size * 3.0))
+    return means
+
+
+def check_picture(picture, shot2):
+    """A project picture (the thumbnail, or Picture.png) against Screenshots/Shot2.png: 480 x 270, and the same view at the
+    same station, by the mean codes of 16 x 9 blocks (PICTURE_LIMITS). Returns the failures."""
+    lookdev = lookdev_module()
+    images = []
+    for path, size in ((picture, THUMBNAIL_SIZE), (shot2, PICTURE_SIZE)):
+        try:
+            image = lookdev.read_png(path)
+        except (OSError, lookdev.ToolError) as error:
+            return ["%s cannot be read: %s" % (path, error)]
+        if (image.width, image.height) != size:
+            return ["%s is %d x %d, not %d x %d" % (path, image.width, image.height, size[0], size[1])]
+        images.append(image)
+    small = block_means(images[0], PICTURE_BLOCK)
+    large = block_means(images[1], PICTURE_BLOCK * PICTURE_SIZE[0] // THUMBNAIL_SIZE[0])
+    differences = [abs(a - b) for a, b in zip(small, large)]
+    mean, most = sum(differences) / len(differences), max(differences)
+    if mean > PICTURE_LIMITS[0] or most > PICTURE_LIMITS[1]:
+        return ["%s does not show what %s shows: their blocks' mean codes differ by %.2f on average and %.2f at most (limits %.1f and %.1f); "
+                "retake them together (pictures, then picture)" % (picture, shot2, mean, most, PICTURE_LIMITS[0], PICTURE_LIMITS[1])]
+    return []
+
+
+def copy_picture(project):
+    """picture: copies the project's thumbnail to its Picture.png, once it is the one the pictures script left: there,
+    480 x 270, not older than the screenshots and the icon that script took before its save, and showing what
+    Screenshots/Shot2.png shows. Returns the failures; nothing is copied when there are any."""
+    thumbnail = os.path.join(project, ".strata", "Thumbnail.png")
+    if not os.path.isfile(thumbnail):
+        return ["%s does not exist: run the pictures script on the project first" % thumbnail]
+    failures = []
+    written = os.path.getmtime(thumbnail)
+    taken = ["Screenshots/Shot%d.png" % (index + 1) for index in range(SHOT_COUNT)] + ["Assets/Icon.png"]
+    for relative in taken:
+        path = os.path.join(project, *relative.split("/"))
+        if not os.path.isfile(path):
+            failures.append("%s does not exist" % path)
+        elif os.path.getmtime(path) > written:
+            # Equal times pass: file systems keep them in steps of up to two seconds.
+            failures.append("%s is newer than %s: the pictures script did not write that thumbnail" % (path, thumbnail))
+    if failures:
+        return failures
+    failures = check_picture(thumbnail, os.path.join(project, "Screenshots", "Shot2.png"))
+    if failures:
+        return failures
+    shutil.copyfile(thumbnail, os.path.join(project, "Picture.png"))
+    return []
+
+
+def check_copy_picture(sample, work):
+    """picture on stand-ins of the project under work: it copies the sample's picture when it is the thumbnail the script
+    left, and refuses a thumbnail that is missing, of another size, older than a screenshot or of another view."""
+    lookdev = lookdev_module()
+    failures = []
+    project = os.path.join(work, "picture")
+    shutil.rmtree(project, ignore_errors=True)
+    os.makedirs(os.path.join(project, "Screenshots"))
+    os.makedirs(os.path.join(project, "Assets"))
+    os.makedirs(os.path.join(project, ".strata"))
+    for index in range(SHOT_COUNT):
+        shutil.copyfile(os.path.join(sample, "Screenshots", "Shot%d.png" % (index + 1)), os.path.join(project, "Screenshots", "Shot%d.png" % (index + 1)))
+    shutil.copyfile(os.path.join(sample, "Assets", "Icon.png"), os.path.join(project, "Assets", "Icon.png"))
+    thumbnail = os.path.join(project, ".strata", "Thumbnail.png")
+    picture = os.path.join(project, "Picture.png")
+    taken = [os.path.join(project, "Screenshots", "Shot%d.png" % (index + 1)) for index in range(SHOT_COUNT)] + [os.path.join(project, "Assets", "Icon.png")]
+
+    def stamp(thumbnail_time, picture_time):
+        for path in taken:
+            os.utime(path, (picture_time, picture_time))
+        os.utime(thumbnail, (thumbnail_time, thumbnail_time))
+
+    def refused(what):
+        if not copy_picture(project):
+            failures.append("picture copies %s" % what)
+        elif os.path.exists(picture):
+            failures.append("picture refuses %s, but writes Picture.png" % what)
+
+    refused("a thumbnail that does not exist")
+    shutil.copyfile(os.path.join(sample, "Screenshots", "Shot2.png"), thumbnail)
+    stamp(2000000000, 2000000000)
+    refused("a thumbnail of another size")
+    shutil.copyfile(os.path.join(sample, "Picture.png"), thumbnail)
+    stamp(2000000000, 2000000010)
+    refused("a thumbnail older than the screenshots")
+    image = lookdev.read_png(os.path.join(sample, "Picture.png"))
+    stride = image.width * image.channels
+    rows = [image.data[y * stride:(y + 1) * stride] for y in range(image.height)]
+    image.data[:] = b"".join(reversed(rows))  # Upside down: the sky's codes where the ground's were
+    lookdev.write_png(thumbnail, image)
+    stamp(2000000010, 2000000000)
+    refused("a thumbnail of another view")
+    shutil.copyfile(os.path.join(sample, "Picture.png"), thumbnail)
+    stamp(2000000000, 2000000000)
+    problems = copy_picture(project)
+    if problems:
+        failures.append("picture refuses the thumbnail the script left: %s" % "; ".join(problems))
+    else:
+        with open(picture, "rb") as copied, open(thumbnail, "rb") as source:
+            if copied.read() != source.read():
+                failures.append("picture's Picture.png differs from the thumbnail")
     return failures
 
 
@@ -2141,14 +2430,10 @@ def check_pictures(world, shots_file):
 # Checking captured shots (LookDev's output)
 
 def read_capture(directory, name):
-    tools = os.path.dirname(os.path.abspath(__file__))
-    if tools not in sys.path:
-        sys.path.insert(0, tools)
-    import LookDev  # Its PNG reader (8-bit RGB and RGBA, all five filters)
     path = os.path.join(directory, "shots", name)
     if not os.path.isfile(path):
         return None
-    return LookDev.read_png(path)
+    return lookdev_module().read_png(path)
 
 
 def luma(image, x, y):
@@ -2388,8 +2673,22 @@ def command_selftest(arguments):
     failures += station_failures
     shots_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "LookDev", "Shots.json")
     picture_failures = check_pictures(world, shots_file)
-    print("pictures: %s" % ("; ".join(picture_failures) if picture_failures else "each taken at its station from its LookDev shot's camera"))
+    mutations = picture_mutations(world)
+    for what, steps in mutations:
+        if not check_pictures(world, shots_file, steps):
+            picture_failures.append("the check of the pictures script passes %s" % what)
+    print("pictures script: %s" % ("; ".join(picture_failures) if picture_failures else
+                                   "each picture taken complete at its station from its LookDev shot's camera; %d wrong scripts caught" % len(mutations)))
     failures += picture_failures
+    copy_failures = check_station_copies(world, arguments.render_commands, shots_file)
+    print("stations' steps: %s" % ("; ".join(copy_failures) if copy_failures else
+                                   "%s and %s hold them as setup writes them" % (os.path.basename(arguments.render_commands), os.path.basename(shots_file))))
+    failures += copy_failures
+    sample_failures = check_picture(os.path.join(arguments.sample, "Picture.png"), os.path.join(arguments.sample, "Screenshots", "Shot2.png"))
+    # picture is tried on the sample's own pictures, so only once they belong together.
+    sample_failures += [] if sample_failures else check_copy_picture(arguments.sample, arguments.work)
+    print("Picture.png: %s" % ("; ".join(sample_failures) if sample_failures else "shows what Screenshots/Shot2.png shows; picture copies only such a thumbnail"))
+    failures += sample_failures
     print("FAIL: %s" % "; ".join(failures) if failures else "PASS")
     return 1 if failures else 0
 
@@ -2506,6 +2805,15 @@ def command_pictures(arguments):
     return 0
 
 
+def command_picture(arguments):
+    failures = copy_picture(arguments.project)
+    if failures:
+        print("FAIL: %s; nothing copied" % "; ".join(failures))
+        return 1
+    print("%s: the project's thumbnail" % os.path.join(arguments.project, "Picture.png"))
+    return 0
+
+
 def command_setup(arguments):
     steps = station_steps(arguments.station, arguments.format == "script")
     if arguments.output:
@@ -2536,6 +2844,8 @@ def main():
     selftest.add_argument("--committed", required=True, help="The committed models' directory")
     selftest.add_argument("--work", required=True, help="A directory to write into")
     selftest.add_argument("--stations", required=True, help="The scripts' Stations.h, whose c_Stations rows must equal the table")
+    selftest.add_argument("--sample", required=True, help="The sample's directory, whose Picture.png must show what its Screenshots/Shot2.png shows")
+    selftest.add_argument("--render-commands", required=True, help="The render test's command script, whose stations' steps must be setup's")
     layout_parser = commands.add_parser("layout", help="Write the command script that builds the scene's entities")
     layout_parser.add_argument("--output", required=True, help="The command script to write (.json)")
     controls = commands.add_parser("controls", help="Write the command script of the input actions, the photo mode and the loading scene")
@@ -2546,6 +2856,8 @@ def main():
     bake.add_argument("--output", required=True, help="The command script to write (.json)")
     pictures = commands.add_parser("pictures", help="Write the command script that retakes the screenshots, the icon and the thumbnail")
     pictures.add_argument("--output", required=True, help="The command script to write (.json)")
+    picture = commands.add_parser("picture", help="Copy the project's thumbnail to its Picture.png, once it is the one the pictures script left")
+    picture.add_argument("--project", required=True, help="The sample's directory (holding .strata/Thumbnail.png)")
     setup = commands.add_parser("setup", help="Print a station's edit-mode steps")
     setup.add_argument("--station", required=True, choices=[row[0] for row in STATIONS])
     setup.add_argument("--format", required=True, choices=("lookdev", "script"), help="LookDev Setup entries or command steps")
@@ -2557,7 +2869,7 @@ def main():
     try:
         return {"terrain": command_terrain, "check": command_check, "stations": command_stations,
                 "selftest": command_selftest, "layout": command_layout, "controls": command_controls, "dress": command_dress,
-                "bake": command_bake, "pictures": command_pictures, "setup": command_setup,
+                "bake": command_bake, "pictures": command_pictures, "picture": command_picture, "setup": command_setup,
                 "checkshots": command_checkshots}[arguments.command](arguments)
     except CheckFailed as error:
         print("FAIL: %s" % error)

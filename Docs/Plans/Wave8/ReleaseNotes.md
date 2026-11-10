@@ -153,7 +153,11 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   shadow (at dusk the fuel tank's half in the bus's shadow is dark now, not lit green); the fire and the lanterns have
   the size of their flames for their highlights (Source Radius 0.25 and 0.04 m); the puddles are water (IOR 1.33).
   `GenerateShowcaseTerrain.py pictures` retakes the screenshots, the icon and the launcher's picture after a change to
-  its look.
+  its look: its script stops at a capture that does not report a complete, settled picture, and
+  `GenerateShowcaseTerrain.py picture` copies the thumbnail to `Picture.png` only when it is the one that run left
+  (480 x 270, not older than the screenshots, showing what `Screenshots/Shot2.png` shows). `StrataTools.ShowcaseTerrain`
+  now also fails when that script, the stations' steps in the render test's commands and the look-dev shots, or
+  `Picture.png` no longer follow the generator.
 - Editor: a `viewport.capture` taken right after a `scene.save` is settled again, and so is the launcher's picture the
   save asks for. The two render through one renderer at sizes of their own, and in shared frames each started the
   other's temporal history again: the capture was read back with two frames of it instead of eight (aliased edges,

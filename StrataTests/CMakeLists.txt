@@ -539,12 +539,17 @@ if(TARGET StrataEditor AND TARGET StrataCLI)
 
 	# The showcase sample's ground is what its generator writes: the design's checks pass, two runs write the same bytes,
 	# the committed models equal them, shots 2-4 see the sun where the layout says and the scripts' times of day
-	# (Samples/Showcase/Scripts/Stations.h) are the generator's (Tools/GenerateShowcaseTerrain.py).
+	# (Samples/Showcase/Scripts/Stations.h) are the generator's (Tools/GenerateShowcaseTerrain.py). So are the stations'
+	# steps that the render test's commands and the look-dev shots hold, the script that retakes the sample's pictures
+	# takes each complete, at its station and from its look-dev shot's camera, and the sample's Picture.png shows what its
+	# Screenshots/Shot2.png shows.
 	if(Python3_Interpreter_FOUND)
 		add_test(NAME StrataTools.ShowcaseTerrain
 			COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/Tools/GenerateShowcaseTerrain.py" selftest
 				--committed "${PROJECT_SOURCE_DIR}/Samples/Showcase/Assets/Generated/Terrain"
 				--stations "${PROJECT_SOURCE_DIR}/Samples/Showcase/Scripts/Stations.h"
+				--sample "${PROJECT_SOURCE_DIR}/Samples/Showcase"
+				--render-commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/ShowcaseRenderCommands.json"
 				--work "${CMAKE_CURRENT_BINARY_DIR}/ShowcaseTerrain/$<CONFIG>")
 	else()
 		add_test(NAME StrataTools.ShowcaseTerrain
