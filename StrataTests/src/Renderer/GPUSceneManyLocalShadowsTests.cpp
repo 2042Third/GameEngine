@@ -43,9 +43,20 @@ namespace
 		return glm::unpackHalf1x16(value);
 	}
 
-	ReadbackImage RenderHDR(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera)
+	// Frames 1/30 s apart, whatever the machine's clock says: a shadow's fade then takes its c_LocalShadowFadeFrames frames.
+	constexpr float c_FrameSeconds = 1.0f / 30.0f;
+	static_assert(c_FrameSeconds >= SceneRenderer::c_LocalShadowFadeSeconds / static_cast<float>(SceneRenderer::c_LocalShadowFadeFrames));
+
+	SceneRenderOptions FrameOptions(float seconds)
 	{
-		REQUIRE(renderer.Render(scene, camera));
+		SceneRenderOptions options;
+		options.AdaptationSeconds = seconds;
+		return options;
+	}
+
+	ReadbackImage RenderHDR(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera, float seconds = c_FrameSeconds)
+	{
+		REQUIRE(renderer.Render(scene, camera, nullptr, FrameOptions(seconds)));
 		ReadbackImage image;
 		REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
 		REQUIRE(image.Format == nvrhi::Format::RGBA16_FLOAT);
@@ -191,7 +202,7 @@ namespace
 		SceneRenderer unshadowed(ManySpecification(mode, false));
 		unshadowed.SetViewportSize(imageSize, imageSize);
 		for (uint32_t frame = 0; frame < settleFrames; frame++)
-			REQUIRE(walker.Render(field.SceneData, path(0)));
+			REQUIRE(walker.Render(field.SceneData, path(0), nullptr, FrameOptions(c_FrameSeconds)));
 
 		WalkResult result;
 		result.Last.resize(field.Lamps.size());
@@ -680,6 +691,83 @@ TEST_SUITE("GPU.SceneRenderer.ManyLocalShadows")
 			}
 			CHECK(nearSize > farSize);
 			gpu.GetDevice().WaitForIdle();
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A shadow fades in and out over the same time at any frame rate, and over at least eight frames where they are slow")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		constexpr uint32_t c_ImageSize = 256;
+		// Two lamps as far from the camera, one shadow between them: the first lamp's while the second is a tenth as bright,
+		// then the second's once it is ten times as bright (it matters about three times as much: the square root of its
+		// intensity). Neither lamp's range reaches the other's shadow.
+		LampField field({ glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(12.0f, 3.0f, 0.0f) }, 4.5f, glm::vec3(-10.0f, -1.0f, -10.0f), glm::vec3(22.0f, 0.0f, 10.0f));
+		const auto setIntensity = [](Entity lamp, float intensity)
+		{
+			lamp.GetComponent<PointLightComponent>().Intensity = intensity;
+			lamp.MarkModified<PointLightComponent>();
+		};
+		const SceneCamera camera = LookAt(glm::vec3(6.0f, 14.0f, 12.0f), glm::vec3(6.0f, 0.0f, 0.0f));
+		const glm::uvec2 pixel = ProjectToPixel(camera, field.ShadowCenters[0], c_ImageSize);
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			CAPTURE(static_cast<int>(mode));
+			setIntensity(field.Lamps[1], 3.0f);
+			SceneRendererSpecification fullSpecification = ManySpecification(mode, false);
+			fullSpecification.Quality.MaxShadowedLocalLights = 1;
+			SceneRenderer full(fullSpecification);
+			full.SetViewportSize(c_ImageSize, c_ImageSize);
+			const float dark = ReadRed(RenderHDR(full, field.SceneData, camera), pixel);
+			const float lit = ReadRed(field.RenderUnshadowed(full, camera), pixel);
+			REQUIRE(lit - dark > lit * 0.5f);
+			for (const float seconds : { 1.0f / 240.0f, 1.0f / 60.0f, 1.0f / 30.0f })
+			{
+				CAPTURE(seconds);
+				setIntensity(field.Lamps[1], 3.0f);
+				SceneRendererSpecification specification = ManySpecification(mode, true);
+				specification.Quality.MaxShadowedLocalLights = 1;
+				SceneRenderer renderer(specification);
+				renderer.SetViewportSize(c_ImageSize, c_ImageSize);
+				// c_LocalShadowFadeSeconds of frames this far apart, or c_LocalShadowFadeFrames where they are farther.
+				const float step = SceneRenderer::GetLocalShadowFadeStep(seconds);
+				const uint32_t frames = std::max(static_cast<uint32_t>(std::lround(SceneRenderer::c_LocalShadowFadeSeconds / seconds)),
+					SceneRenderer::c_LocalShadowFadeFrames);
+				CHECK(step <= 1.0f / static_cast<float>(SceneRenderer::c_LocalShadowFadeFrames));
+				// The first lamp's views are drawn in the first frame, and its shadow fades in by the step a frame.
+				uint32_t fadedIn = 0;
+				for (uint32_t frame = 0; frame < frames + 4 && fadedIn == 0; frame++)
+				{
+					CAPTURE(frame);
+					const float strength = (lit - ReadRed(RenderHDR(renderer, field.SceneData, camera, seconds), pixel)) / (lit - dark);
+					CHECK(std::abs(strength - std::min(static_cast<float>(frame + 1) * step, 1.0f)) < 0.03f);
+					if (frame + 2 < frames)
+						CHECK(renderer.GetStats().LocalShadowFadingIn == 1);
+					if (strength > 0.99f)
+						fadedIn = frame + 1;
+				}
+				CHECK(fadedIn == frames);
+				RenderHDR(renderer, field.SceneData, camera, seconds);
+				CHECK(renderer.GetStats().LocalShadowFadingIn == 0);
+				// The second lamp outranks it: its shadow fades out as long, keeping its tiles meanwhile.
+				setIntensity(field.Lamps[1], 300.0f);
+				uint32_t fadedOut = 0;
+				for (uint32_t frame = 0; frame < frames + 4 && fadedOut == 0; frame++)
+				{
+					CAPTURE(frame);
+					const float strength = (lit - ReadRed(RenderHDR(renderer, field.SceneData, camera, seconds), pixel)) / (lit - dark);
+					CHECK(std::abs(strength - std::max(1.0f - static_cast<float>(frame + 1) * step, 0.0f)) < 0.03f);
+					CHECK(renderer.GetStats().LocalShadowLights == 1);
+					if (frame + 2 < frames)
+						CHECK(renderer.GetStats().LocalShadowFading == 1);
+					if (strength < 0.01f)
+						fadedOut = frame + 1;
+				}
+				CHECK(fadedOut == frames);
+				MESSAGE("frames ", seconds, " s apart: faded in over ", fadedIn, ", out over ", fadedOut);
+				gpu.GetDevice().WaitForIdle();
+			}
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

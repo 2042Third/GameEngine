@@ -2405,14 +2405,14 @@ TEST_SUITE("GPU.Editor.Viewport")
 		light.Range = 10.0f;
 		light.CastShadows = true;
 
-		// The Game view at 1280 x 720 until every shadow view is drawn and its fade is done.
+		// The Game view at 1280 x 720 until every shadow view is drawn and its fade, by the clock, is done.
 		EditorContext& context = harness.Context;
 		EditorViewport& viewport = context.GetViewport();
 		const glm::uvec2 size(1280, 720);
 		ViewportRenderer* game = viewport.GetGameRenderer();
 		REQUIRE(game);
 		int settled = 0;
-		for (int frame = 0; frame < 600 && settled < static_cast<int>(SceneRenderer::c_LocalShadowFadeFrames) + 2; frame++)
+		for (int frame = 0; frame < 600 && settled < 2; frame++)
 		{
 			REQUIRE(gpu.GetDevice().BeginFrame());
 			Renderer::BeginFrame();
@@ -2422,9 +2422,10 @@ TEST_SUITE("GPU.Editor.Viewport")
 			REQUIRE(game->Render(context, size, *view, viewport.GetSettings(), false, RendererQuality::GetProjectQuality()));
 			gpu.GetDevice().EndFrame();
 			const SceneRendererStats& stats = game->GetStats();
-			settled = stats.LocalShadowLights == 1 && stats.LocalShadowViewsPending == 0 && stats.PendingAssets == 0 ? settled + 1 : 0;
+			settled = stats.LocalShadowLights == 1 && stats.LocalShadowViewsPending == 0 && stats.LocalShadowFadingIn == 0 && stats.PendingAssets == 0
+				? settled + 1 : 0;
 		}
-		REQUIRE(settled > 0);
+		REQUIRE(settled == 2);
 		const SceneRendererStats gameStats = game->GetStats();
 		CHECK(gameStats.LocalShadowTileSizes[0] == 1024);
 		ReadbackImage gameImage;

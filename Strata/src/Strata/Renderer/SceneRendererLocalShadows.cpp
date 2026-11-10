@@ -330,7 +330,14 @@ namespace Strata
 		ResetLocalShadows();
 	}
 
-	uint32_t SceneRenderer::RankLocalShadowLights(const RenderLights& lights, const SceneCamera& camera, const Frustum& frustum, bool spread)
+	float SceneRenderer::GetLocalShadowFadeStep(float seconds)
+	{
+		if (!(seconds > 0.0f))
+			return 0.0f;
+		return std::min(seconds / c_LocalShadowFadeSeconds, 1.0f / static_cast<float>(c_LocalShadowFadeFrames));
+	}
+
+	uint32_t SceneRenderer::RankLocalShadowLights(const RenderLights& lights, const SceneCamera& camera, const Frustum& frustum, bool spread, float fadeStep)
 	{
 		// The lights holding a shadow by (entity, type), for a lookup per shadowed light in view.
 		const auto keyOf = [](entt::entity entity, uint32_t type) { return (static_cast<uint64_t>(entt::to_integral(entity)) << 8) | (type & 0xFFu); };
@@ -442,13 +449,12 @@ namespace Strata
 		// Lights still in view that lost their rank fade their shadows out where lighting updates are spread (keeping their tiles
 		// meanwhile); the others give their tiles back now. A light out of view lights nothing the view shows, so its shadow goes
 		// at once.
-		const float step = 1.0f / static_cast<float>(c_LocalShadowFadeFrames);
 		for (uint32_t index = 0; index < m_LocalShadowLights.size(); index++)
 		{
 			if (fates[index] == Fate::Ranked)
 				continue;
 			LocalShadowLight& light = m_LocalShadowLights[index];
-			if (fates[index] == Fate::Unranked && spread && light.Fade > step)
+			if (fates[index] == Fate::Unranked && spread && light.Fade > fadeStep)
 			{
 				m_LocalShadowScratch.push_back(std::move(light));
 				m_LocalShadowScratch.back().Ranked = false;
@@ -953,7 +959,8 @@ namespace Strata
 		return pending;
 	}
 
-	void SceneRenderer::FindLocalShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, bool exactCasters, bool markCasters)
+	void SceneRenderer::FindLocalShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, float fadeStep, bool exactCasters,
+		bool markCasters)
 	{
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Render.Extract");
@@ -979,18 +986,18 @@ namespace Strata
 		// Spread over frames, with fades, only where the cache keeps views: without it every view is drawn every frame, so
 		// nothing waits and nothing fades.
 		const bool spread = m_Specification.SpreadLightingUpdates && m_Specification.CacheLocalShadows;
-		const uint32_t requested = RankLocalShadowLights(lights, camera, frustum, spread);
+		const uint32_t requested = RankLocalShadowLights(lights, camera, frustum, spread, fadeStep);
 		PlaceLocalShadowTiles(lights, camera, spread);
 		TrackLocalShadowChanges(renderScene);
 		const uint32_t pending = ScheduleLocalShadowViews(spread);
 
 		// A light casts its shadow once every view holds content (drawn now, or kept from before, possibly from where it was or
-		// in its old tiles); where lighting updates are spread it then fades in by a step a frame, and a light that lost its rank
-		// fades out as fast.
-		const float step = 1.0f / static_cast<float>(c_LocalShadowFadeFrames);
+		// in its old tiles); where lighting updates are spread it then fades in by the frame's step of the fade (the time since
+		// the previous frame), and a light that lost its rank fades out as fast.
 		m_Stats.LocalShadowRequested = requested;
 		m_Stats.LocalShadowLights = 0;
 		m_Stats.LocalShadowFading = 0;
+		m_Stats.LocalShadowFadingIn = 0;
 		m_Stats.LocalShadowTileSizes = {};
 		m_Stats.LocalShadowSizeCounts = {};
 		for (LocalShadowLight& light : m_LocalShadowLights)
@@ -1003,7 +1010,7 @@ namespace Strata
 			else if (!spread)
 				light.Strength = 1.0f;
 			else
-				light.Strength = light.Ranked ? std::min(light.Fade + step, 1.0f) : std::max(light.Fade - step, 0.0f);
+				light.Strength = light.Ranked ? std::min(light.Fade + fadeStep, 1.0f) : std::max(light.Fade - fadeStep, 0.0f);
 			if (!light.Ranked)
 			{
 				m_Stats.LocalShadowFading++;
@@ -1011,6 +1018,7 @@ namespace Strata
 			}
 			if (light.TileSize == 0)
 				continue;
+			m_Stats.LocalShadowFadingIn += light.Complete && light.Strength < 1.0f ? 1u : 0u;
 			if (m_Stats.LocalShadowLights < m_Stats.LocalShadowTileSizes.size())
 				m_Stats.LocalShadowTileSizes[m_Stats.LocalShadowLights] = static_cast<uint16_t>(std::min(light.TileSize, 65535u));
 			m_Stats.LocalShadowLights++;

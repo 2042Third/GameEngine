@@ -85,9 +85,14 @@ namespace
 		return glm::unpackHalf1x16(value);
 	}
 
+	// Frames 1/30 s apart, whatever the machine's clock says: a shadow's fade then takes its c_LocalShadowFadeFrames frames.
 	ReadbackImage RenderHDR(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera)
 	{
-		REQUIRE(renderer.Render(scene, camera));
+		constexpr float c_FrameSeconds = 1.0f / 30.0f;
+		static_assert(c_FrameSeconds >= SceneRenderer::c_LocalShadowFadeSeconds / static_cast<float>(SceneRenderer::c_LocalShadowFadeFrames));
+		SceneRenderOptions options;
+		options.AdaptationSeconds = c_FrameSeconds;
+		REQUIRE(renderer.Render(scene, camera, nullptr, options));
 		ReadbackImage image;
 		REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
 		REQUIRE(image.Format == nvrhi::Format::RGBA16_FLOAT);

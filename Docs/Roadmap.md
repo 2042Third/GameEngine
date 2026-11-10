@@ -1621,11 +1621,11 @@ the previous frame's lit color, as screen-space reflections' is.
   that keep their shadow while they resize, no global layouts, a scheduler that starves nothing, a grid for change
   tracking, the filter on fixed noise. Below the cut: a time governor.
   Landed on its branch (2026-11-09): the shadows go to the lights that matter most (screen size, distance, brightness)
-  with hysteresis and fade in and out over eight frames; resized lights keep their old tiles until the new ones are
-  drawn; a quarter of the views per frame (the new row 12, 12, 24, 48) goes to the views that waited longest; the light
-  and view buffers grow; lights behind a surface skip their shadow's taps. Still below its cut: the time governor (a
-  GPU.LocalShadows stage scaling the views per frame), tap counts by rank, retained tiles for lights that left the view,
-  and the cached rotation-projection per view.
+  with hysteresis and fade in and out over 0.2 s (at least eight frames); resized lights keep their old tiles until the
+  new ones are drawn; a quarter of the views per frame (the new row 12, 12, 24, 48) goes to the views that waited
+  longest; the light and view buffers grow; lights behind a surface skip their shadow's taps. Still below its cut: the
+  time governor (a GPU.LocalShadows stage scaling the views per frame), tap counts by rank, retained tiles for lights
+  that left the view, and the cached rotation-projection per view.
 
 **Tranche 3, wave 9 unless usage remains:**
 

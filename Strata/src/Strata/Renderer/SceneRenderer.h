@@ -264,11 +264,11 @@ namespace Strata
 		// Quality.LocalShadowViewsPerFrame shadow views are drawn per frame (views without content first, then by how long they
 		// waited and how much their light matters, so none starves); a light whose views were not all drawn yet casts no shadow,
 		// and a light that gains or loses its shadow (Quality.MaxShadowedLocalLights, the atlas) fades it in or out over
-		// c_LocalShadowFadeFrames frames, so shadows do not pop. Off (renderers of single images: captures, thumbnails): each
-		// frame draws every view that is not up to date, and nothing fades (SceneRendererStats::LocalShadowViewsPending is 0
-		// after every frame). Reflection probes likewise: at most SceneRenderer::c_ReflectionProbeConversionsPerFrame captures
-		// are converted per frame, else every one in view at once (SceneRendererStats::ReflectionProbesPending then counts only
-		// captures still loading).
+		// c_LocalShadowFadeSeconds (at least c_LocalShadowFadeFrames frames), so shadows do not pop. Off (renderers of single
+		// images: captures, thumbnails): each frame draws every view that is not up to date, and nothing fades
+		// (SceneRendererStats::LocalShadowViewsPending is 0 after every frame). Reflection probes likewise: at most
+		// SceneRenderer::c_ReflectionProbeConversionsPerFrame captures are converted per frame, else every one in view at once
+		// (SceneRendererStats::ReflectionProbesPending then counts only captures still loading).
 		bool SpreadLightingUpdates = true;
 		// Reflection probes (ReflectionProbeComponent): the renderer keeps the strongest this many in view (at most
 		// RenderData::c_MaxReflectionProbes; by priority, then the smaller box), each capture converted into a slot of its cube
@@ -434,9 +434,9 @@ namespace Strata
 		// wrong place (lookdev.patch). (The procedural sky's disk is part of its environment cube, as for every surface's image
 		// light, and surfaces keep the image light's specular.)
 		bool ProbeCapture = false;
-		// The time since this renderer's previous frame that automatic exposure adapts over; unset, the wall clock between its
-		// frames (at most 0.25 s, so pauses do not turn into one huge step). Tests and tools that step time, and tests that
-		// compare two renderers' frames, set it.
+		// The time since this renderer's previous frame that automatic exposure adapts over and point and spot shadows fade
+		// over (SceneRenderer::c_LocalShadowFadeSeconds); unset, the wall clock between its frames (at most 0.25 s, so pauses
+		// do not turn into one huge step). Tests and tools that step time, and tests that compare two renderers' frames, set it.
 		std::optional<float> AdaptationSeconds;
 		// The scene's motion blur applies (PostProcessComponent::MotionBlur, unless the quality turns it off). Editor views and
 		// renderers of single images (captures, thumbnails) turn it off: they never blur.
@@ -638,12 +638,13 @@ namespace Strata
 		uint32_t AmbientOcclusionSamples = 0;
 		// Local light shadows (RendererQualitySettings::LocalShadowAtlasSize): the shadowed point and spot lights in view (those
 		// that ask for a shadow), those given one (atlas tiles: at most Quality.MaxShadowedLocalLights, and what the atlas holds),
-		// those still fading out the shadow they lost, the shadow views (tiles) drawn this frame, and those of the lights given a
-		// shadow still waiting to be drawn (their lights cast no shadow until all of theirs are drawn, or keep the shadows drawn
-		// before they changed).
+		// those still fading out the shadow they lost, those of the lights given one whose shadow is still fading in, the shadow
+		// views (tiles) drawn this frame, and those of the lights given a shadow still waiting to be drawn (their lights cast no
+		// shadow until all of theirs are drawn, or keep the shadows drawn before they changed).
 		uint32_t LocalShadowRequested = 0;
 		uint32_t LocalShadowLights = 0;
 		uint32_t LocalShadowFading = 0;
+		uint32_t LocalShadowFadingIn = 0;
 		uint32_t LocalShadowViewsDrawn = 0;
 		uint32_t LocalShadowViewsPending = 0;
 		// CPU time of deciding the frame's local shadows, a part of ExtractMs: the lights' ranks and tiles, the changes that
@@ -963,9 +964,14 @@ namespace Strata
 		static constexpr float c_ContactShadowMaxScreenShare = 0.05f;
 		static constexpr float c_ContactShadowThickness = 0.02f;
 		static constexpr float c_ContactShadowThicknessScale = 0.005f;
-		// Frames over which a light's shadow fades in once all its views are drawn, and out once it lost its shadow while in view
-		// (SceneRendererSpecification::SpreadLightingUpdates): a shadow changes by at most 1 / c_LocalShadowFadeFrames a frame.
+		// How long a light's shadow takes to fade in once all its views are drawn, and out once it lost its shadow while in view
+		// (SceneRendererSpecification::SpreadLightingUpdates): c_LocalShadowFadeSeconds of the time between the renderer's
+		// frames (SceneRenderOptions::AdaptationSeconds), and at least c_LocalShadowFadeFrames frames, so that where frames
+		// are slow a shadow still changes by at most 1 / c_LocalShadowFadeFrames a frame.
+		static constexpr float c_LocalShadowFadeSeconds = 0.2f;
 		static constexpr uint32_t c_LocalShadowFadeFrames = 8;
+		// The share of a shadow's fade a frame `seconds` after the renderer's previous one takes.
+		static float GetLocalShadowFadeStep(float seconds);
 		// The reflection probes' cube array (RGBA16_FLOAT, RendererQualitySettings::ReflectionProbeResolution texels across, one level per
 		// roughness step, a cube per slot of SceneRendererSpecification::MaxReflectionProbes): null until a frame has a probe in
 		// view, and again once the render targets are released or a frame's scene has no probe. The array frames shade with:
@@ -1854,11 +1860,13 @@ namespace Strata
 		// Local light shadows (SceneRendererLocalShadows.cpp). Chooses the shadowed point and spot lights of the frame and their
 		// tiles, follows what changed what their views hold, chooses the views the frame draws (m_LocalShadowViews) and finds
 		// their casters: with `exactCasters` each view's (the CPU path; their meshes and materials marked with `markCasters`),
-		// else only what bounds the GPU's culling of them.
-		void FindLocalShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, bool exactCasters, bool markCasters);
+		// else only what bounds the GPU's culling of them. Shadows fade by `fadeStep` (GetLocalShadowFadeStep) where lighting
+		// updates are spread.
+		void FindLocalShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, float fadeStep, bool exactCasters,
+			bool markCasters);
 		// FindLocalShadowCasters' steps. Ranks the shadowed lights in view and keeps the lights given a shadow and those fading
-		// theirs out (m_LocalShadowLights); returns how many asked for one.
-		uint32_t RankLocalShadowLights(const RenderLights& lights, const SceneCamera& camera, const Frustum& frustum, bool spread);
+		// theirs out (m_LocalShadowLights, those whose fade outlasts this frame's step); returns how many asked for one.
+		uint32_t RankLocalShadowLights(const RenderLights& lights, const SceneCamera& camera, const Frustum& frustum, bool spread, float fadeStep);
 		// Sizes the ranked lights' tiles and changes them within the frame's limits (a light keeps its old tiles' shadows until
 		// the new ones are drawn).
 		void PlaceLocalShadowTiles(const RenderLights& lights, const SceneCamera& camera, bool spread);
@@ -2256,6 +2264,7 @@ namespace Strata
 		std::vector<SceneDrawBatch> m_LocalShadowBatches;
 		std::vector<RenderData::LocalShadowData> m_LocalShadowData;
 		uint64_t m_LocalShadowSceneId = 0;
+		std::optional<std::chrono::steady_clock::time_point> m_LastLocalShadowFadeTime; // The fades' clock (StepSeconds)
 		LocalShadowContent m_LocalShadowContent;
 		uint64_t m_LocalShadowProxyVersion = 0;
 		uint64_t m_LocalShadowEpoch = 1;

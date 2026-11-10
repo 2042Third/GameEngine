@@ -273,8 +273,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - Many point and spot lights cast shadows at once: 64 at High and 256 at Ultra (16 at Medium, 4 at Low, as before), and
   Custom any number the shadow atlas holds (about 149 point lights at 4096 texels, 597 at 8192). The shadows go to the
   lights that matter most (near, large on screen, bright); a light that gains or loses its shadow fades it in or out over
-  eight frames, and one near the cut keeps it until another clearly matters more: shadows no longer pop or blink while the
-  camera moves.
+  0.2 s at any frame rate (at least eight frames where frames are slower than 40 a second), and one near the cut keeps it
+  until another clearly matters more: shadows no longer pop or blink while the camera moves.
 - A light whose shadow map changes size keeps its old shadow until the new one is drawn (0.7.0 showed it unshadowed for a
   frame or more), and the atlas is never laid out again all at once.
 - No light's shadow waits long for an update while nearer lights move every frame: a quarter of each frame's shadow
