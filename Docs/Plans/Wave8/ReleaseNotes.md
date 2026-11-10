@@ -236,8 +236,10 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - At High the finest voxels reach further down than up: their window lies 0.8 m below the camera, so floors and what
   rests on them keep 10 cm voxels down to about 3 m below the eye (ceilings more than about 1.5 m above it take 20 cm
   ones). In the owner's Cornell box seen from half its height, the floor under the sphere's overhang no longer falls to
-  black against its neighbour: the darkest point there keeps 0.54 of its neighbour's light 0.1 m away (0.083 before). No
-  cost, no memory.
+  black against its neighbour: the darkest point there keeps 0.53 of its neighbour's light 0.1 m away (0.083 before). The
+  price is paid at that room's ceiling, 2.75 m above the camera and in 20 cm voxels now: where the side walls meet it the
+  darkest point keeps 0.53 and 0.64 of the light 0.1 m below (0.58 and 0.73 before; the back wall there 0.92, 0.89
+  before). No cost, no memory.
 - Thin gaps that the voxels close no longer go black: where the probes around a surface cannot see it, it takes the light
   of the gap's opening as the camera sees it, darkened by how far in it lies. Under the yard's covered car (0.15 m off the
   ground) seen from 6 m, the ground 0.2-0.5 m under its edge keeps 6% of the open ground's light and 0.5-1 m in 1% (it
@@ -357,9 +359,11 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
 - Open ground under the sky reads 3.2% off at 6 m, and a white sphere under a uniform sky 2% dark at its center and 3.5% at
   its rim, or up to 10% where a probe lies within a voxel of it (3% is the goal: what is left lies in the probes' light
   beside the sphere, whose skimming rays the voxels absorb, not in how the probes store it).
-- It costs 3.8-4.9 ms of GPU time at 3840 x 2160 at High in the sun room (`GPU.RadianceCascades`; 1-2 ms aimed at; the
-  perf case `PerfGPU.Renderer.GlobalIllumination4K*`: 4.9 ms in the sun room, 4.0 ms in the yard), and the forward pass's
-  gather adds 0.3-0.8 ms to `GPU.Opaque` (look-dev: the sun room, the yard and ThirdPerson's course).
+- It costs about 4.4 ms of GPU time at 3840 x 2160 at High (`GPU.RadianceCascades`; 1-2 ms aimed at; the perf cases
+  `PerfGPU.Renderer.GlobalIllumination4K*`: medians of 4.43 ms in the sun room and 4.46 ms in the yard), and the forward
+  pass's gather adds 0.3-0.8 ms to `GPU.Opaque` (look-dev: the sun room, the yard and ThirdPerson's course). Of the stage,
+  the march of the three coarser cascades takes 2.6 ms, summing the finest one's rays into the field 1.35 ms, lighting
+  the voxels 0.53 ms and their downsample 0.08 ms; no cheap cut of the first two was found.
 - Off, it is not quite free: at Medium with TAA at 3840 x 2160, the samples' `??.scene` shots (three interleaved pairs
   against main without global illumination) spend 0.010-0.014 ms more in `GPU.Opaque` (3.9-5.1%; the base's own spread is
   0.003-0.010 ms), the forward shader's gather being compiled in although it does not run. Sampling the field at one
@@ -376,7 +380,7 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   falls faster than it should where they cannot resolve it. Where the sphere meets the floor a row of small hard-edged
   black notches remains: floor seen through a gap of 6-15 cm under the sphere, thinner than a voxel, which no probe sees;
   the floor at the sphere's left shows soft lighter streaks. The floor in the gap between the tall box and the red wall
-  falls to 0.23 of its neighbour's light 0.1 m away (half is the goal), and that gap stays very dark: it lies in the box's
+  falls to 0.21 of its neighbour's light 0.1 m away (half is the goal), and that gap stays very dark: it lies in the box's
   full shadow, but the probes in front of it take the panel's light through the cascades' merge. At Low, cells of probes beside the box and the sphere lie
   inside them, and the walls and floor there still show steps and black patches, and the ceiling darkens along its edges.
   Low bounces once: with every bounce its Cornell box would be about 1.8 times as bright as High's (its ceiling 165-235
@@ -387,9 +391,12 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
 - The ground right at the edge of a thin gap beyond about 5.4 m from the camera at High (the first 0.2 m under the
   yard's covered car) reads about twice as bright as from nearer: there the probes beside the object light it without
   its overhang, since the 0.2 m voxels close the gap.
-- Global illumination's own stage at 3840 x 2160 reads about 4.4 ms in some runs and about 6.5 ms in others of the same
-  build (the sun room, High): the difference lies in the pass that sums cascade 0's rays into the field (1.2 or 3.6 ms).
-  Seen before this batch's last fix too; not explained yet.
+- Global illumination's own stage at 3840 x 2160 read about 4.4 ms in some runs and about 6.5 ms in others of the same
+  build (the sun room and the yard, High): the difference lay in the pass that sums cascade 0's rays into the field (1.2
+  or 3.6 ms), with the opaque pass's time unchanged. Every slow run was measured on one day before 15:00; afterwards
+  neither this build (54 blocks of 60 frames in three processes) nor the one before it (16 runs) read slow once, with the
+  same work in every frame. The cause is not established: another program's work on the GPU falling into the frame's
+  longest stage fits the readings but was not reproduced. Until it is, a single reading of the stage can be 2 ms high.
 - With every bounce, rooms take frames to fill after a cut, by their brightest surface: the sun room's gi view changes
   by less than 0.25% a frame from frame 11 (it is reported settled at 13), the Cornell box's from 15 (18), a closed
   white box's from 27 (39). Until then a game's cut shows the light rising.

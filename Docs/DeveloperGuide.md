@@ -5164,7 +5164,21 @@ probe-field levels and local lights follow.
   1, three interleaved pairs a run, two runs): `GPU.RadianceCascades` 3.93-3.95 ms with one bounce, 4.01-4.04 ms with
   every bounce, so the injection's gather costs 0.06-0.10 ms. An earlier A/B between main's binary and this one's put
   main's stage at 5.6 ms in the sun room against 4.0 ms; that gap between binaries was not explained, and the in-process
-  figures replace it. Without GI nothing of it runs.
+  figures replace it. Where the stage's time goes (batch 2: a timer per pass, added for the measurement and removed
+  again; medians of 60 settled frames, three processes, the sun room and the yard, three renderers each, validation off,
+  under `PerfLock`): the voxels' lighting (`VoxelInject`, every voxel of every level) 0.53 ms, its downsample 0.08 ms,
+  validity and weights 0.01 ms, the march of cascades 3 to 1 2.6 ms and cascade 0's rays summed into the field
+  (`FieldReduce`) 1.35 ms: 4.3-4.7 ms in all (the perf cases `PerfGPU.Renderer.GlobalIllumination4K*`: medians of 4.43 ms
+  in the sun room and 4.46 ms in the yard, `GPU.Opaque` 1.07 and 0.84 ms). 1-2 ms is the goal: the march and the reduce
+  hold what is to be won, and no cheap cut of either was found. **Two modes:** some runs read the stage at about 6.5 ms
+  instead (the reduce 3.6 ms for 1.2, `GPU.Opaque`'s median the same, the frame's GPU time 2 ms longer): one binary read
+  6.65, 4.32 and 5.92 ms in three runs, and single look-dev shots read 5.5-7.4 ms among others of 4.0-4.8. Every slow
+  reading was taken on one day before 15:00; from 17:00 on none of 54 blocks of 60 frames of the same code read slow,
+  nor did 16 runs of the code before it (4.1-4.5 ms), whose look-dev shots had, with nothing voxelized, queued or pending
+  in any block. A settled frame's work depends on the layout alone, so the slow mode is not work this code chooses to do;
+  a time slice of another program's GPU work falling into the frame's longest stage fits what was seen (other agents
+  worked on the machine that day) but was neither reproduced nor ruled out. Judge the stage by the medians of several
+  runs. Without GI nothing of it runs.
 - **The join** (`Scene/Forward.frag.slang`'s `ShadeLitSurface`, `Include/IndirectLight.slang`'s `GatherIndirectField`):
   where the scene asked and the frame's field is used (ran, not pending), `FrameConstants::ReflectionParams.y` is 1 and `.z`
   the intensity (clamped to [0, 4], non-finite 1). Every variant (opaque, alpha-blended, glass: no screen data is read)
@@ -5218,10 +5232,12 @@ probe-field levels and local lights follow.
   steps at most 10% beyond its slope (the old on/off gather: 25% on the red wall; 8.9% at most now), and the floor around
   the sphere's foot has no point darker than half its brightest neighbour a voxel away (0.65), and along the far corners
   (the back wall with the side walls and the ceiling, the ceiling with the side walls) no point within 0.2 m of the junction
-  is darker than half of the point a voxel farther from it (0.58 at the least; without the push out of solids 0 at every
-  junction). The floor the sphere overhangs (its last 0.3 m) keeps half of its brightest neighbour too (0.54; 0.083 while
-  the floor, 2.75 m below the camera, lay beyond level 0's weights, 0.021 before relocation and the guard visibility); around
-  the tall box's foot it keeps at least 0.2 (0.226; 0.10 before): half is a goal not met there. "A thin gap takes field
+  is darker than half of the point a voxel farther from it (0.53 at the least, on the red wall by the ceiling; 0.58 before
+  the finest voxels' window moved 0.8 m down: the ceiling, 2.75 m above the camera, takes 0.2 m voxels since; without the
+  push out of solids 0 at every junction). The floor the sphere overhangs (its last 0.3 m) keeps half of its brightest
+  neighbour too (0.53; 0.083 while the floor, 2.75 m below the camera, lay beyond level 0's weights, 0.021 before
+  relocation and the guard visibility); around the tall box's foot it keeps at least 0.2 (0.21; 0.23 before the window
+  moved and surfaces read harmonics, 0.10 before relocation): half is a goal not met there. "A thin gap takes field
   light beyond the finest voxels" checks the yard's car from 4 and 6 m (above: from 6 m the band under its edge keeps 0.1 of
   the open ground's light, and every band half of what it keeps from 4 m). `Renderer`'s "Dead probes" checks relocation: in
   a 2 m block the probes 0.05 m inside a face move out, live, those deeper stay dead and are the ones counted.
@@ -5283,7 +5299,7 @@ probe-field levels and local lights follow.
 - **What it cannot do** (so far): the field resolves no more than its probes, 0.5 m apart at High and 1 m at Low. In the
   Cornell box at High a row of small hard-edged black notches (the voxels' edges) remains where the sphere meets the floor,
   with soft lighter streaks at its left, and the floor in the gap between the tall box's back-left corner and the red wall
-  falls to 0.23 of its neighbour's light within a voxel (the stitching case reports it). The notches are floor the camera
+  falls to 0.21 of its neighbour's light within a voxel (the stitching case reports it). The notches are floor the camera
   sees through a gap of 6-15 cm under the sphere (0.3-0.5 m from its contact), thinner than a voxel: the sphere's voxels
   (every voxel a face reaches into is solid) rest on the floor's there, so no probe sees those points, and the view ray from
   them grazes the sphere's voxels for more than 0.6 m (measured: retesting each probe against where the view ray leaves the
@@ -5310,8 +5326,15 @@ probe-field levels and local lights follow.
   sends nothing back (a probe 8 cm off the sphere holds 0.81 of the sky along the normal, with one bounce and with every
   bounce; marched without the lead-in, or without the origin's sample, the sphere read within 1% of the same). So the loss
   depends on where a surface lies among the probes: the same sphere at (0.13, 0.07, 0.21) reads 9.8% dark at its center and
-  2.9% at its rim (the same case holds the center within 10.5%, the rim within 4%). Measured instead (batch 1): correction
-  7b's 8 x 8 octahedral tile read the
+  2.9% at its rim (the same case holds the center within 10.5%, the rim within 4%). Pushing cascade 0's probes a voxel
+  off the surfaces around where they land (clearance: on each axis the occupancy a voxel behind against a voxel ahead;
+  measured, batch 2) read that sphere 3.5-3.8% dark at its center and took the largest step at a probe plane from 6.1% to
+  1.7% on the Cornell box's ceiling and from 5.3% to 3.7% on its floor, but its side walls by the ceiling fell to 0.38 and
+  0.48 of the light 0.1 m from the corner (0.53 and 0.64; the corners' case asserts half), its sealed twin let in ten
+  times as much (0.026 nits for 0.003 with every bounce, of 656 in the open room) and the sun room's image settled at
+  frame 13, with the flag, instead of two frames before it; with two voxels of clearance a Low probe 0.5 m above a floor
+  also found it 1.08 m below (0.57). Not kept: the walls' loss by the ceiling is not understood. Measured instead (batch
+  1): correction 7b's 8 x 8 octahedral tile read the
   rim 4.3% dark but its bilinear reads creased the Cornell box's sphere; the harmonics for re-injection made the bounces
   cycle (above); a stricter facing of the probes (from 0.05 instead of -0.05) moved the rim by half a percent only. Its
   light ends at the field's edge around the camera (High: full within 7.5 m horizontally and 5.5 m up and
