@@ -500,4 +500,12 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
 - Beyond 4,096 proxies per shadowed light the quality allows within their lights' ranges (1,048,576 at Ultra), the
   shadow views' following starts over, and any proxy's change then draws every view again until one following holds
   them all.
+- Ordering the shadowed lights stays quadratic where a camera cut reorders many of them: each light moves up one place
+  at a time past those it matters a quarter more than. In a micro-benchmark of the pass (GCC -O2 on this machine, other
+  builds running), a cut that leaves the previous order in two halves, the second mattering twice as much, takes
+  0.02 ms at Ultra's 256 lights and 3.7 ms at Graphics Quality Custom's ceiling (3,584 spot lights in an 8192 atlas:
+  3.2 million moves of 12 bytes); in sixteen groups each twice the last, 0.04 ms and 7.0 ms (6.0 million moves), in the
+  frame of the cut alone. Bounding it (past a number of moves, ordering that frame by importance alone) gives up the
+  hysteresis in that frame and needs a test at hundreds of lights; it is left for later because only Custom counts far
+  beyond Ultra's pay it, once per cut.
 
