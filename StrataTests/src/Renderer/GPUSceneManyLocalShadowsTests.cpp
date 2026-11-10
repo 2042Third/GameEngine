@@ -652,6 +652,52 @@ TEST_SUITE("GPU.SceneRenderer.ManyLocalShadows")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A caster's change reaches the views of a light whose range is many times the other lights'")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		constexpr uint32_t c_ImageSize = 256;
+		// The change tracking finds the lights a change can reach in a grid of cells twice the shadowed lights' median range wide
+		// (9 m here); a light whose reach spans more cells than the grid lists a light in (64) is asked of every change instead.
+		// One lamp of range 40 (about ten cells each way) among two of 4.5: its caster moves within its range alone, 0.75 m along
+		// -Z, and its shadow on the floor twice as far (the caster hangs halfway down). The few views the move reaches fit the
+		// frame's budget: the frame that moves the caster draws them.
+		LampField field({ glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(14.0f, 3.0f, 0.0f), glm::vec3(20.0f, 3.0f, 0.0f) }, 4.5f,
+			glm::vec3(-30.0f, -1.0f, -30.0f), glm::vec3(30.0f, 0.0f, 30.0f));
+		field.Lamps[0].GetComponent<PointLightComponent>().Range = 40.0f;
+		field.Lamps[0].MarkModified<PointLightComponent>();
+		// From the +X side of the shadows (X = 1), so that the caster (X up to 0.75) hides neither.
+		const SceneCamera camera = LookAt(glm::vec3(10.0f, 16.0f, 10.0f), glm::vec3(9.0f, 0.0f, 0.0f));
+		const glm::vec3 before = field.ShadowCenters[0];
+		const glm::vec3 after = before + glm::vec3(0.0f, 0.0f, -1.5f);
+		const glm::uvec2 beforePixel = ProjectToPixel(camera, before, c_ImageSize);
+		const glm::uvec2 afterPixel = ProjectToPixel(camera, after, c_ImageSize);
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			CAPTURE(static_cast<int>(mode));
+			Move(field.Casters[0], glm::vec3(0.5f, 1.5f, 0.0f));
+			SceneRenderer renderer(ManySpecification(mode, true));
+			renderer.SetViewportSize(c_ImageSize, c_ImageSize);
+			ReadbackImage settled;
+			for (uint32_t frame = 0; frame < 30; frame++)
+				settled = RenderHDR(renderer, field.SceneData, camera);
+			REQUIRE(renderer.GetStats().LocalShadowLights == 3);
+			REQUIRE(renderer.GetStats().LocalShadowViewsPending == 0);
+			const float dark = ReadRed(settled, beforePixel);
+			const float lit = ReadRed(settled, afterPixel);
+			REQUIRE(dark < lit * 0.5f);
+
+			Move(field.Casters[0], glm::vec3(0.5f, 1.5f, -0.75f));
+			const ReadbackImage moved = RenderHDR(renderer, field.SceneData, camera);
+			CHECK(renderer.GetStats().LocalShadowViewsDrawn > 0);
+			CHECK(renderer.GetStats().LocalShadowViewsPending == 0);
+			CHECK(ReadRed(moved, afterPixel) < (dark + lit) * 0.5f);
+			CHECK(ReadRed(moved, beforePixel) > (dark + lit) * 0.5f);
+			gpu.GetDevice().WaitForIdle();
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("With one view drawn a frame, new lights' views are drawn and a view that changes every frame does not starve")
 	{
 		GPUContext gpu;
