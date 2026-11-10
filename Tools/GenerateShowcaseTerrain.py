@@ -46,18 +46,25 @@ check     evaluates the design's rules on the generated surfaces and exits 1 whe
              azimuths 135-145 (the dawn sun is 5), 3. every pad's footprint is flat (at most 3 cm and 2 degrees),
              4. the inner terrain meets the ring within 2 cm, 5. within 140 m slopes above 45 degrees lie only in the
              cliff band (reported, not fatal), 6. the apron's edge stays at least 2 cm above the terrain and its skirt
-             reaches at least 3 cm below it.
+             reaches at least 3 cm below it, 7. from each of shot 6's subjects and the hut's door wall the dusk sun
+             stands at least 0.75 degrees beside the bus's footprint and 0.15 degrees above the terrain (a probe holds
+             no sun, so what the bus shades at dusk came out near black).
 stations  prints the three times of day (Dawn, Golden, Dusk) and, per shot of the tour, its cameras (key, from, to),
           look target, field of view, where its subjects fall in a 16:9 picture and the mirror points of shots 2-4
           (where the camera sees the sun reflected: on the bus's letterboard and the oil tank's shell as
           GenerateShowcaseProps.py builds them, measured from its meshes, and on the first puddle); --json writes the
           same as JSON.
 selftest  check, terrain twice (byte-equal), each model byte-equal to the committed one (--committed), shots 2-4's
-          mirror relations within 1 cm and 0.1 degree, and the rows of c_Stations in the scripts' Stations.h (--stations)
-          equal to this file's STATIONS. Then what the pictures rest on: the pictures script takes each picture right
-          after its station's steps, from its LookDev shot's camera (LookDev/Shots.json's showcase.shot<N>), at its size,
-          at High, without overlays and expecting a complete, settled picture, and ends at Golden with a scene.save and a
-          wait long enough for the thumbnail (scripts with one of these wrong must fail the check); the stations' steps
+          mirror relations within 1 cm and 0.1 degree, rule 7 failing with the dusk sun at its old azimuth (32, behind
+          the bus), and the rows of c_Stations in the scripts' Stations.h (--stations) equal to this file's STATIONS.
+          The bake script opens the scene, bakes every station once in BAKE_ORDER (Golden, the saved one, last), each
+          one's two probes BAKE_PASSES (eight) times right after its steps, where and with the box the probes' table
+          bakes them, puts a moved probe back before the next station's steps or the save, and ends with its one
+          scene.save (scripts with one of these wrong must fail the check). Then what the pictures rest on: the
+          pictures script takes each picture right after its station's steps, from its LookDev shot's camera
+          (LookDev/Shots.json's showcase.shot<N>), at its size, at High, without overlays and expecting a complete,
+          settled picture, and ends at Golden with a scene.save and a wait long enough for the thumbnail (scripts with
+          one of these wrong must fail the check); the stations' steps
           that other files hold are the ones setup writes (--render-commands: every sky preset of
           ShowcaseRenderCommands.json is part of a station's script steps and all three are there; in LookDev/Shots.json
           the Setup of every showcase.shot<N> of a station other than the saved one begins with that station's LookDev
