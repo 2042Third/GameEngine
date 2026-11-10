@@ -1833,9 +1833,12 @@ namespace
 		return s_Cases;
 	}
 
-	// The value at `share` (0..1) of the sorted values.
+	// The value at `share` (0..1) of the sorted values. NaN for no values, which fails every bound it is checked against:
+	// some lists hold what the code under test makes of the cases, which a broken table can leave empty.
 	double GetPercentile(std::span<const double> unsorted, double share)
 	{
+		if (unsorted.empty())
+			return std::numeric_limits<double>::quiet_NaN();
 		std::vector<double> values(unsorted.begin(), unsorted.end());
 		std::sort(values.begin(), values.end());
 		return values[std::min(static_cast<size_t>(share * static_cast<double>(values.size())), values.size() - 1)];
@@ -2022,6 +2025,8 @@ TEST_SUITE("Renderer.AreaLights")
 		const SpecularCases& cases = GetSpecularCases();
 		REQUIRE(cases.Cases.size() == std::size(c_SpecularRoughness) * c_CasesPerRoughness);
 		REQUIRE(std::size(c_SpecularBounds) == std::size(c_SpecularRoughness));
+		// A list the code under test leaves empty fails its bounds instead of being read past its end.
+		CHECK(std::isnan(GetPercentile(std::span<const double>(), 0.95)));
 		MESSAGE("reference quadrature: " << cases.Evaluations << " evaluations");
 		for (size_t index = 0; index < std::size(c_SpecularRoughness); index++)
 		{
