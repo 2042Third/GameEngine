@@ -369,6 +369,17 @@ else()
 endif()
 set_tests_properties(StrataTools.LookDevOffline PROPERTIES LABELS "tools" TIMEOUT 120)
 
+# The rect lights' tables (Renderer/LTCTable.inl) are the output of Tools/ConvertLTCTable.py: the committed file is what
+# the script writes for the values it pins, the layout holds, malformed sources are refused. No upstream file is needed.
+if(Python3_Interpreter_FOUND)
+	add_test(NAME StrataTools.LTCTable
+		COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/Tools/ConvertLTCTable.py" selftest)
+else()
+	add_test(NAME StrataTools.LTCTable
+		COMMAND "${CMAKE_COMMAND}" "-DTEST_NAME=StrataTools.LTCTable" -P "${CMAKE_CURRENT_SOURCE_DIR}/Tools/PythonMissing.cmake")
+endif()
+set_tests_properties(StrataTools.LTCTable PROPERTIES LABELS "tools" TIMEOUT 120)
+
 # Games contain no tooling: the runtime's linker map names no object or library of Dear ImGui, ImGuizmo, the asset
 # pipeline, the network or zstd's compressor (Architecture/CheckNoTooling.cmake; the configure checks what it links).
 if(TARGET StrataRuntime)

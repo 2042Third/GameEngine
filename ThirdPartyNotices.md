@@ -51,6 +51,7 @@ version, license, Strata's files, what was derived) and its license's full text 
 | Project | Version | License | Strata's files | What was derived |
 | --- | --- | --- | --- | --- |
 | [radiance-cascades-lab](https://github.com/dequevedo/radiance-cascades-lab) | as of 2026-11-03 | MIT | `Strata/shaders/Include/Voxelize.slang`, `Include/GIMarch.slang`, `Include/GIProbes.slang`, `Include/GIField.slang`, `Strata/shaders/GI/VoxelTriangles.comp.slang`, `VoxelFill.comp.slang`, `VoxelFinalize.comp.slang`, `VoxelInject.comp.slang`, `CascadeMarch.comp.slang`, `ProbeWeights.comp.slang`, `FieldReduce.comp.slang` | Akenine-Moller's triangle-box test in its form, the winding steps along columns and their fill, the emission's coverage (from `src/rc/shaders/voxelize_mesh.comp`, `fill_solid.comp`); the march through soft occupancy with its gain (2.5) and the facing weight `smoothstep(-0.15, 0.25, ...)` of a surface the ray meets, and the merge's mean of the four parent directions a ray covers (`cascade3d.comp`); the sun's march starting off the surface along its normal (`inject.comp`, as an idea: the walk through exact voxels is Strata's); the probes' merge weights (`probe_weights.comp`); the forward gather's eight probes weighted by visibility and facing, with a second pass when none is visible (`gather3d.comp`); the ambient cube of cascade 0's probes (`ambient.comp`) |
+| [ltc_code](https://github.com/selfshadow/ltc_code) | 31e5e96b | BSD 2-Clause with a third condition: a reference to the paper | `Strata/src/Strata/Renderer/LTCTable.inl` (written by `Tools/ConvertLTCTable.py`), `Strata/src/Strata/Renderer/AreaLights.h`, `AreaLights.cpp` | The fitted tables of linearly transformed cosines, value for value (`fit/results/ltc.js`: the lobes' inverse transforms, their magnitude and Fresnel term, the form factor of a sphere the horizon clips), with the layout `fit/fitLTC.cpp` packs them in; the shading of a rectangle with them, ported to C++ (`webgl/shaders/ltc/ltc_quad.fs`: the frame and transform of the lobe, the edge integral with its rational fit, the vector form factor and its horizon term from the sphere's table). The paper: Eric Heitz, Jonathan Dupuy, Stephen Hill and David Neubelt, "Real-Time Polygonal-Light Shading with Linearly Transformed Cosines", ACM Transactions on Graphics (Proceedings of ACM SIGGRAPH 2016) 35(4), 2016, https://eheitzresearch.wordpress.com/415-2/ |
 
 radiance-cascades-lab:
 
@@ -76,6 +77,42 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+ltc_code:
+
+```
+Copyright (c) 2017, Eric Heitz, Jonathan Dupuy, Stephen Hill and David Neubelt.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+* If you use (or adapt) the source code in your own work, please include a
+  reference to the paper:
+
+  Real-Time Polygonal-Light Shading with Linearly Transformed Cosines.
+  Eric Heitz, Jonathan Dupuy, Stephen Hill and David Neubelt.
+  ACM Transactions on Graphics (Proceedings of ACM SIGGRAPH 2016) 35(4), 2016.
+  Project page: https://eheitzresearch.wordpress.com/415-2/
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
 ## Sample assets
