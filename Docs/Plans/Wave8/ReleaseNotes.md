@@ -154,6 +154,11 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   the size of their flames for their highlights (Source Radius 0.25 and 0.04 m); the puddles are water (IOR 1.33).
   `GenerateShowcaseTerrain.py pictures` retakes the screenshots, the icon and the launcher's picture after a change to
   its look.
+- Editor: a `viewport.capture` taken right after a `scene.save` is settled again, and so is the launcher's picture the
+  save asks for. The two render through one renderer at sizes of their own, and in shared frames each started the
+  other's temporal history again: the capture was read back with two frames of it instead of eight (aliased edges,
+  speckled highlights; `temporalFrames` 2), the picture with one. A capture now renders once the picture's frame is
+  being read back.
 
 **Global illumination (stage 1: the voxels).**
 

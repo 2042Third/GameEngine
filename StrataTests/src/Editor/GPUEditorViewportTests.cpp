@@ -46,6 +46,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -1433,6 +1434,104 @@ TEST_SUITE("GPU.Editor.Viewport")
 				difference = std::max(difference, std::abs(static_cast<int>(viewport.Pixels[index]) - static_cast<int>(captured.Pixels[index])));
 		}
 		CHECK(difference <= 1);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A capture and the picture a save asks for render one after the other, and both settle their history")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		EditorContext& context = harness.Context;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("CaptureAfterSave") / "Game";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		// One editor frame, as the application runs it: the context's update, in which the project's picture renders, then
+		// the runner's, in which the capture does. `betweenUpdates` runs between the two.
+		const auto runFrame = [&](const std::function<void()>& betweenUpdates = nullptr)
+		{
+			REQUIRE(gpu.GetDevice().BeginFrame());
+			Renderer::BeginFrame();
+			context.Update(Timestep(1.0f / 60.0f));
+			if (betweenUpdates)
+				betweenUpdates();
+			harness.Runner.Update(context);
+			gpu.GetDevice().EndFrame();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		};
+		// The new project's own picture first.
+		for (int frame = 0; frame < 3000 && context.GetProjectThumbnail().IsPending(); frame++)
+			runFrame();
+		REQUIRE_FALSE(context.GetProjectThumbnail().IsPending());
+
+		Scene& scene = *context.GetActiveScene();
+		Entity postProcessEntity = scene.FindEntityByName("Post Process");
+		if (!postProcessEntity)
+		{
+			postProcessEntity = scene.CreateEntity("Post Process");
+			postProcessEntity.AddComponent<PostProcessComponent>();
+		}
+		PostProcessComponent& postProcess = postProcessEntity.GetComponent<PostProcessComponent>();
+		postProcess.AntiAliasing = true;
+		postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
+		Tests::AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f), "Cube");
+		harness.Run("camera.set", { { "position", { 0.0, 1.0, 4.0 } }, { "target", { 0.0, 0.0, 0.0 } } });
+
+		// Starts a capture (of another size than the picture's 1440x810) and returns where its result arrives.
+		const auto startCapture = [&]()
+		{
+			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+			harness.Runner.Run(context, harness.Commands, "viewport.capture", { { "width", 64 }, { "height", 64 }, { "overlays", false } },
+				[completed](const EditorCommandResult& result) { *completed = result; });
+			return completed;
+		};
+		// Runs frames until the capture completed: the picture and the capture each hold a settled history when read back.
+		const auto finishBoth = [&](const std::shared_ptr<std::optional<EditorCommandResult>>& completed)
+		{
+			const uint64_t written = context.GetProjectThumbnail().GetWrittenCount();
+			uint32_t pictureHistory = 0; // The frames the picture's history held when it was read back
+			for (int frame = 0; frame < 20000 && !*completed; frame++)
+			{
+				const bool rendering = context.GetProjectThumbnail().IsRendering();
+				runFrame([&]()
+				{
+					if (!rendering || context.GetProjectThumbnail().IsRendering())
+						return;
+					// The picture's last frame was rendered in this update, and the capture has not rendered since.
+					ViewportRenderer* captureRenderer = context.GetViewport().GetCaptureRenderer();
+					REQUIRE(captureRenderer);
+					CHECK(captureRenderer->GetStats().TemporalAntiAliasing);
+					pictureHistory = captureRenderer->GetStats().TemporalFrames;
+				});
+			}
+			REQUIRE(*completed);
+			INFO((*completed)->Error);
+			REQUIRE((*completed)->Success);
+			CHECK(pictureHistory == c_TemporalSettleFrames);
+			CHECK((*completed)->Value["temporalFrames"] == c_TemporalSettleFrames);
+			for (int frame = 0; frame < 3000 && context.GetProjectThumbnail().IsPending(); frame++)
+				runFrame();
+			REQUIRE_FALSE(context.GetProjectThumbnail().IsPending());
+			CHECK(context.GetProjectThumbnail().GetWrittenCount() == written + 1);
+		};
+
+		// The save asks for the project's picture, which renders through the capture renderer on the next frames. Rendering in
+		// the same frames, each would start the other's history again every frame, and both would be read back with a frame or
+		// two of it: the capture asked for now renders after the picture.
+		harness.Run("scene.saveAs", { { "path", "Scenes/Main.stscene" } });
+		REQUIRE(context.GetProjectThumbnail().IsRendering());
+		finishBoth(startCapture());
+
+		// The other order: a save while a capture renders. The capture lets the picture render, then goes on.
+		const std::shared_ptr<std::optional<EditorCommandResult>> interrupted = startCapture();
+		for (int frame = 0; frame < 3; frame++)
+			runFrame();
+		REQUIRE_FALSE(*interrupted); // Its history needs eight frames
+		harness.Run("entity.create", { { "name", "Marker" } });
+		harness.Run("scene.save");
+		REQUIRE(context.GetProjectThumbnail().IsRendering());
+		finishBoth(interrupted);
+		CHECK(FileSystem::Exists(ProjectThumbnail::GetFile(directory)));
+		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

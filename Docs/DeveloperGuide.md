@@ -4416,7 +4416,12 @@ lights, Post Process and the sky), and never a resolution below the output's.
   again until the history holds `c_TemporalSettleFrames` (8) complete frames (a frame still incomplete for another reason
   starts it again while its own bounded wait lasts, so a view that stays incomplete still settles once that wait ended),
   bounded by `c_MaxCaptureTemporalFrames` and `ProjectThumbnail::c_MaxTemporalFrames` (16); the thumbnails' renderer sets
-  `SceneRendererSpecification::TemporalAntiAliasing` off and draws TAA scenes with FXAA.
+  `SceneRendererSpecification::TemporalAntiAliasing` off and draws TAA scenes with FXAA. The two share the viewport's
+  capture renderer at sizes of their own, and a renderer whose size changes starts its history again: rendering in the
+  same frames, neither would ever hold more than a frame or two of it. So a capture renders only while the project's
+  picture does not (`ProjectThumbnail::IsRendering`: from the save that asks for it until its frame is read back, which
+  its own limits bound): a `viewport.capture` right after a `scene.save` waits those frames, and one a save interrupts
+  goes on after the picture (`GPU.Editor.Viewport`).
 - Tests (`GPU.SceneRenderer.TAA`): culling, levels of detail and the cached cascades match a renderer without the jitter;
   a still edge between colors of equal luminance is the mean of its eight jittered frames at eight frames (0.5%) and stays
   within 15% of their spread; a moving box leaves no trail beyond two pixels once it stops; every reset outputs the
