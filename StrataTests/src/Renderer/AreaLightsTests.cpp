@@ -495,7 +495,8 @@ TEST_SUITE("Renderer.AreaLights")
 	{
 		// The bounds below are measured, and a draw of 2000 lights held them by its seed: 40 other seeds of 2000 put the
 		// worst face above the horizon past the bound of 0.02 of the length 16 times. 80,000 lights (the first 2000 are the
-		// same) measure what the draw reaches: 50 other draws of 40,000 and one of 4 million stay within 1.5 times it.
+		// same) measure what the draw reaches: 50 other draws of 40,000, nine of 80,000 and one of 4 million stay within 1.5
+		// times it.
 		const Frame frame = MakeFrame();
 		const glm::vec3 position = frame.GetPoint(glm::dvec3(0.0));
 		const glm::vec3 normal = frame.GetDirection(glm::dvec3(0.0, 0.0, 1.0));
@@ -510,19 +511,27 @@ TEST_SUITE("Renderer.AreaLights")
 		double worstIdentity = 0.0;    // clipped(N) - clipped(-N) against the vector form factor along N
 		double worstExact = 0.0;       // The table where the cap is above the horizon, absolute
 		// The table where the face is above the horizon but its cap is not: absolute, over the vector form factor's length
-		// (the light's largest form factor) and over the exact value. Over the length only where the length is at least
-		// c_MaterialLength: for lights that give less, the floats' rounding alone (1e-7) is a material part of it.
+		// (the light's largest form factor) and over the exact value. Over the length only from a least length up: the
+		// float vector form factor the term starts from has an error of its own, which grows against the length as the
+		// edges' terms cancel (mostly the edge fit's 1.5e-6 of each term, then the floats' rounding), and the ratio is the
+		// table's only where that error fits in the bound's margin over the worst the draws above reach. Over those draws
+		// it is at most 0.0023 of the length from 1e-4 up, 0.026 from 1e-5, 0.07 from 1e-6, 0.22 from 1e-7 and 1.8 under
+		// that. Hence c_AboveLeastLength, 1e-4 (the margin is 0.0357 - 0.0243), and c_CutLeastLength, 1e-5 (0.312 - 0.266).
+		// The few lights left out (the messages count them) give too little for a bound on the table to be told from it.
 		double worstAbove = 0.0;
 		double worstAboveLength = 0.0;
 		double worstAboveRelative = 0.0;
+		int aboveShortCount = 0;
 		// The table where the horizon cuts the face: the same three, the last where the exact value is at least a hundredth
 		// of the length.
 		double worstCut = 0.0;
 		double worstCutLength = 0.0;
 		double worstCutRelative = 0.0;
+		int cutShortCount = 0;
 		double worstOverLength = -1.0; // The reference minus the vector form factor's length (negative: under it)
 		double worstUnderSum = -1.0;   // The signed sum minus the table's value (negative: the table is over it)
-		constexpr double c_MaterialLength = 1e-3;
+		constexpr double c_AboveLeastLength = 1e-4;
+		constexpr double c_CutLeastLength = 1e-5;
 		for (int index = 0; index < 80000; index++)
 		{
 			AreaLights::AreaLight light;
@@ -593,23 +602,29 @@ TEST_SUITE("Renderer.AreaLights")
 			{
 				aboveCount++;
 				worstAbove = std::max(worstAbove, std::abs(clipless - reference));
-				if (length >= c_MaterialLength)
+				if (length >= c_AboveLeastLength)
 					worstAboveLength = std::max(worstAboveLength, std::abs(clipless - reference) / length);
+				else
+					aboveShortCount++;
 				worstAboveRelative = std::max(worstAboveRelative, std::abs(clipless - reference) / reference);
 			}
 			else
 			{
 				cutCount++;
 				worstCut = std::max(worstCut, std::abs(clipless - reference));
-				if (length >= c_MaterialLength)
+				if (length >= c_CutLeastLength)
 					worstCutLength = std::max(worstCutLength, std::abs(clipless - reference) / length);
+				else
+					cutShortCount++;
 				if (reference >= 0.01 * length)
 					worstCutRelative = std::max(worstCutRelative, std::abs(clipless - reference) / reference);
 			}
 		}
 		MESSAGE("horizon: cap above " << exactCount << " worst " << worstExact);
-		MESSAGE("horizon: face above " << aboveCount << " worst " << worstAbove << ", over length " << worstAboveLength << ", relative " << worstAboveRelative);
-		MESSAGE("horizon: face cut " << cutCount << " worst " << worstCut << ", over length " << worstCutLength << ", relative " << worstCutRelative);
+		MESSAGE("horizon: face above " << aboveCount << " worst " << worstAbove << ", over length " << worstAboveLength << " (" << aboveShortCount
+			<< " shorter than " << c_AboveLeastLength << " left out), relative " << worstAboveRelative);
+		MESSAGE("horizon: face cut " << cutCount << " worst " << worstCut << ", over length " << worstCutLength << " (" << cutShortCount << " shorter than "
+			<< c_CutLeastLength << " left out), relative " << worstCutRelative);
 		MESSAGE("horizon: clipped worst absolute " << worstClipped << ", identity " << worstIdentity << ", reference minus length " << worstOverLength
 			<< ", signed sum minus table " << worstUnderSum);
 		CHECK(exactCount >= 8000);
