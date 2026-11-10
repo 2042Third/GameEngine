@@ -44,9 +44,12 @@ groupshared float4 s_Faces[ST_GI_REDUCE_GROUP][6];
 groupshared float2 s_Distances[ST_GI_FIELD_DIRECTIONS];
 // Each direction itself, for the filter (computed once per group, not per texel and ray).
 groupshared float3 s_Directions[ST_GI_FIELD_DIRECTIONS];
-// Each direction's light (rgb, a the sky share) times its solid angle, and its solid angle, for the harmonics.
+// Each direction's light (rgb, a the sky share) times its solid angle, its solid angle and its harmonics, for the coefficients'
+// sums. The direction's own thread evaluates the basis, once: the group's other threads wait while the nine that sum run their
+// loop, so what it does per direction is paid as the whole group's time.
 groupshared float4 s_Rays[ST_GI_FIELD_DIRECTIONS];
 groupshared float s_SolidAngles[ST_GI_FIELD_DIRECTIONS];
+groupshared float s_Basis[ST_GI_FIELD_DIRECTIONS][9];
 
 // A tile texel's solid angle (GlobalIllumination::GetSolidAngle): the octahedron's Jacobian 1 / |p|^3 at its center times the
 // tile's normalization.
@@ -135,6 +138,11 @@ void main(uint3 groupID : SV_GroupID, uint index : SV_GroupIndex)
 			{
 				s_Rays[direction] = value;
 				s_SolidAngles[direction] = solidAngle;
+				float basis[9];
+				ProbeSHBasis(d, basis);
+				[unroll]
+				for (uint coefficient = 0u; coefficient < 9u; coefficient++)
+					s_Basis[direction][coefficient] = basis[coefficient];
 			}
 			faces[0] += value * max(d.x, 0.0);
 			faces[1] += value * max(-d.x, 0.0);
@@ -167,11 +175,10 @@ void main(uint3 groupID : SV_GroupID, uint index : SV_GroupIndex)
 		float total = 0.0;
 		for (uint direction = 0u; direction < directions; direction++)
 		{
-			float basis[9];
-			ProbeSHBasis(s_Directions[direction], basis);
-			sum += basis[coefficient] * s_Rays[direction];
+			float basis = s_Basis[direction][coefficient];
+			sum += basis * s_Rays[direction];
 			mean += s_Rays[direction];
-			uniform += basis[coefficient] * s_SolidAngles[direction];
+			uniform += basis * s_SolidAngles[direction];
 			total += s_SolidAngles[direction];
 		}
 		// Band 0 integrates a uniform radiance exactly; the others take out what the quadrature leaves of it.
