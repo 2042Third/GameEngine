@@ -163,6 +163,10 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   other's temporal history again: the capture was read back with two frames of it instead of eight (aliased edges,
   speckled highlights; `temporalFrames` 2), the picture with one. A capture now renders once the picture's frame is
   being read back.
+- Editor: `lighting.bakeProbes` bakes a probe where it stands when the command runs. A probe that a command of the same
+  frame had moved (itself or a parent) was baked from the place it had left, because the bake read the world matrix the
+  frame's update had not yet brought up to date: a script that moves a probe and bakes it at once, as the showcase's bake
+  does with its hut probes, took the first capture from the old place.
 
 **Global illumination (stage 1: the voxels).**
 

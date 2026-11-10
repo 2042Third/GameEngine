@@ -5922,7 +5922,10 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   cancels the import, so nothing reaches the project (one that ends once the copy is done leaves its captures there,
   unused); a scene change or Play before the import leaves nothing behind,
   after it the imported files go to the trash.
-  A probe bakes what is drawn at its position, other probes' current captures included: baking twice adds a bounce.
+  A probe bakes what is drawn where it stands when the command runs (`Scene::GetWorldTransform`, never the cached
+  matrix: a command of the same frame may have moved it or a parent, as a script that moves a probe and bakes it does),
+  the probes' current captures included, its own too: every further bake adds a bounce, and bakes repeated in an
+  unchanged scene settle.
 - **Screen-space reflections** (`PostProcessComponent::ScreenSpaceReflections`, `SceneRendererScreenReflections.cpp`)
   trace in the mode of the `Reflections` quality row (`ReflectionsQuality`, "Quality settings"): none at Low (Off),
   Checkerboard at Medium (Strata 0.6.0's, with TAA only), Spatial at High and SpatialHigh at Ultra (with or without TAA).
