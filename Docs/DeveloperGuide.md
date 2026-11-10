@@ -4796,7 +4796,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   in the frame, every light takes its size at once and nothing fades; captures and the project's picture still count
   views left pending as incomplete. `CacheLocalShadows` off draws every view of every shadowed light every frame (the perf
   tests' worst case), and nothing fades. `SceneRendererStats::LocalShadowViewsDrawn` and `LocalShadowViewsPending` say
-  what a frame drew and left waiting.
+  what a frame drew and left waiting, `LocalShadowFindMs` what deciding it took of the main thread (within `ExtractMs`).
 - Which views a frame draws is the CPU's decision on both paths (`FindLocalShadowCasters`: `RankLocalShadowLights`,
   `PlaceLocalShadowTiles`, `TrackLocalShadowChanges`, `ScheduleLocalShadowViews`, then one job per drawn light: a sphere
   query of its range, then the exact tests per view on the CPU path); what each view draws is decided twice
@@ -4812,7 +4812,11 @@ lights, Post Process and the sky), and never a resolution below the output's.
   depth. A light behind a surface without a clear coat (N.L <= 0, where `EvaluateLightWeighted` adds nothing, glass too)
   is skipped before its shadow's taps.
 - Cost: the views drawn (none in a still scene), their casters' culling (a sphere query per drawn light on the CPU, or the
-  GPU's tests per view), and 16 comparison taps per pixel for each shadowed light in front of it.
+  GPU's tests per view), and 16 comparison taps per pixel for each shadowed light in front of it. The main thread's
+  share (`FindLocalShadowCasters`, `LocalShadowFindMs`) grows with the lights and with the proxies that changed in the
+  frame: `PerfGPU.Renderer.LocalShadows256LightsUltraMoving1kFind` measures it under Ultra's 256 lights with 1,000
+  casters moving every frame (wave 8's target: 0.5 ms), beside the 256 lights' whole frame with every view drawn and
+  with all of them cached (`LocalShadows256LightsUltra*`).
 
 ### Lighting
 

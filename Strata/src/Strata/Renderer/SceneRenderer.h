@@ -646,6 +646,9 @@ namespace Strata
 		uint32_t LocalShadowFading = 0;
 		uint32_t LocalShadowViewsDrawn = 0;
 		uint32_t LocalShadowViewsPending = 0;
+		// CPU time of deciding the frame's local shadows, a part of ExtractMs: the lights' ranks and tiles, the changes that
+		// reach their views, the views to draw and those views' casters (what grows with lights times moved proxies).
+		float LocalShadowFindMs = 0.0f;
 		// The tile size of the first of the lights given a shadow, by rank (the first min(LocalShadowLights,
 		// c_LocalShadowStatsLights) entries; 128 to RendererQualitySettings::LocalShadowMaxTile texels), and how many of them have
 		// tiles of each size (entry i: 128 << i texels). A light given a shadow counts once it has its tiles (when the atlas has

@@ -3176,7 +3176,9 @@ namespace Strata
 		}
 		FindShadowCasters(renderScene, camera, frustum, frame, !m_FeedbackFrame);
 		// The local shadow views' casters: the CPU's on frames that walk the view (both paths), else bounds for the GPU's culling.
+		const auto localShadowStart = std::chrono::steady_clock::now();
 		FindLocalShadowCasters(renderScene, camera, frustum, !m_FeedbackFrame, !m_FeedbackFrame);
+		m_Stats.LocalShadowFindMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - localShadowStart).count();
 		// Rendered with a reported limitation: keep the error so it is not logged every frame.
 		bool degraded = motionFailed || temporalFailed || giFailed || (reflectionsWanted && !m_ReflectionFrame && !m_ReflectionCopyFrame);
 		if (!m_LocalShadowLights.empty() && !EnsureLocalShadowAtlas())

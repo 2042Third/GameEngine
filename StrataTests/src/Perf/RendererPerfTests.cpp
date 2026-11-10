@@ -970,6 +970,150 @@ TEST_SUITE("PerfGPU.Renderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Render cost of 100,000 cubes under 256 shadowed point lights at Ultra, every view drawn each frame and cached")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+		// The 64-light case's scene under 256 shadowed point lights, 16 by 16 over the grid, at the Ultra preset (256 shadowed
+		// lights, 48 views a frame; provisional: the reference machine sets the budgets): uncached, all 1536 views drawn and
+		// culled every frame, and cached, a still scene's steady state. The cached renderer draws its views over 32 frames, more
+		// than the measurement's warm-up, so it runs them first.
+		constexpr size_t c_Count = 100'000;
+		constexpr uint32_t c_Lamps = 256;
+		Scene scene("ShadowedLampCubes256");
+		Perf::AddCameraAndLight(scene);
+		Perf::CreateCubeGrid(scene, c_Count);
+		Perf::CreateShadowedLampGrid(scene, c_Lamps, 15.0f);
+		const SceneCamera camera = GridView(c_Count);
+		const bool measuresGPU = Perf::MeasuresGPU();
+		for (const bool cached : { false, true })
+		{
+			CAPTURE(cached);
+			SceneRendererSpecification specification = Perf::MeasuredRendererSpecification();
+			specification.Quality = RendererQuality::GetPreset(RendererQualityPreset::Ultra);
+			specification.CacheLocalShadows = cached;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_Width, c_Height);
+			const std::string key = cached ? "PerfGPU.Renderer.LocalShadows256LightsUltraCached" : "PerfGPU.Renderer.LocalShadows256LightsUltra";
+			std::vector<std::string> keys = { key };
+			if (measuresGPU)
+				keys.push_back(key + "GPU");
+			Perf::CheckBudgetsConfirmed(keys, [&]
+			{
+				if (cached)
+				{
+					const int fillFrames = static_cast<int>(c_Lamps * 6 / specification.Quality.LocalShadowViewsPerFrame);
+					Perf::MeasureFrames(gpu, fillFrames, 1, [&] { REQUIRE(renderer.Render(scene, camera)); });
+				}
+				const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, camera,
+					cached ? "100k cubes under 256 cached shadowed lamps at Ultra" : "100k cubes under 256 shadowed lamps at Ultra, every view drawn");
+				const SceneRendererStats& stats = renderer.GetStats();
+				CHECK(stats.LocalShadowLights == c_Lamps);
+				CHECK(stats.LocalShadowViewsDrawn == (cached ? 0u : c_Lamps * 6));
+				CHECK(stats.LocalShadowViewsPending == 0);
+				Perf::MetricValues values { { key, measurement.CPU.MedianMs } };
+				if (measuresGPU)
+					values.emplace(key + "GPU", Perf::MeasureGPU(measurement));
+				return values;
+			});
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Main-thread cost of 1,000 cubes moving under 256 shadowed point lights at Ultra")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+		// What moving casters cost the local shadows on the main thread (provisional: the reference machine sets the budgets):
+		// 256 shadowed lamps 11 m apart, all in view at the Ultra preset, and 1,000 cubes spread under them that all move in
+		// every frame, as falling bodies do. Each cube's change reaches the views of the lamps around it, so far more views
+		// wait in every frame than Ultra's 48 draw. Find is the time of deciding the shadows (SceneRendererStats::
+		// LocalShadowFindMs: ranks, tiles, change tracking, schedule and the drawn views' casters), the share that grew with
+		// lights times moved proxies while every light's views were tested for every change (wave 8's target: 0.5 ms);
+		// Extract is the whole extraction around it (ExtractMs: the view's and the sun's too, and the views' draws).
+		constexpr size_t c_Count = 1000;
+		constexpr uint32_t c_Lamps = 256;
+		constexpr float c_LampSpacing = 11.0f;
+		constexpr float c_LampFieldSide = 16.0f * c_LampSpacing;
+		Scene scene("MovingCubesUnderLamps");
+		Perf::AddCameraAndLight(scene);
+		const std::vector<Entity> cubes = Perf::CreateCubeGrid(scene, c_Count);
+		Perf::CreateShadowedLampGrid(scene, c_Lamps, c_LampSpacing);
+		// The cubes' grid, stretched over the lamps' field.
+		const float stretch = c_LampFieldSide / (std::ceil(std::sqrt(static_cast<float>(c_Count))) * Perf::c_GridSpacing);
+		std::vector<glm::vec3> origins;
+		origins.reserve(cubes.size());
+		for (Entity cube : cubes)
+			origins.push_back(cube.GetComponent<TransformComponent>().Translation * glm::vec3(stretch, 1.0f, stretch));
+		// GridView's grid of the lamps' field: the whole field in view.
+		const size_t viewSide = static_cast<size_t>(c_LampFieldSide / Perf::c_GridSpacing);
+		const SceneCamera camera = GridView(viewSide * viewSide);
+		const bool measuresGPU = Perf::MeasuresGPU();
+		SceneRendererSpecification specification = Perf::MeasuredRendererSpecification();
+		specification.Quality = RendererQuality::GetPreset(RendererQualityPreset::Ultra);
+		SceneRenderer renderer(specification);
+		renderer.SetViewportSize(c_Width, c_Height);
+		const std::string key = "PerfGPU.Renderer.LocalShadows256LightsUltraMoving1k";
+		std::vector<std::string> keys = { key, key + "Extract", key + "Find" };
+		if (measuresGPU)
+			keys.push_back(key + "GPU");
+		float phase = 0.0f;
+		Perf::CheckBudgetsConfirmed(keys, [&]
+		{
+			// Every view is drawn once before the measured frames, so they are the steady state.
+			const int fillFrames = static_cast<int>(c_Lamps * 6 / specification.Quality.LocalShadowViewsPerFrame) + c_WarmupFrames;
+			int frame = 0;
+			std::vector<float> extraction;
+			std::vector<float> finding;
+			uint32_t fewestDrawn = UINT32_MAX;
+			uint32_t fewestPending = UINT32_MAX;
+			uint32_t fewestUpdates = UINT32_MAX;
+			const Perf::FrameMeasurement measurement = Perf::MeasureFrames(gpu, fillFrames, c_MeasuredFrames, [&]
+			{
+				phase += 0.05f;
+				for (size_t index = 0; index < cubes.size(); index++)
+				{
+					Entity cube = cubes[index];
+					const float angle = phase + static_cast<float>(index);
+					cube.GetComponent<TransformComponent>().Translation = origins[index] + glm::vec3(std::cos(angle), 0.0f, std::sin(angle)) * 0.5f;
+					cube.MarkModified<TransformComponent>();
+				}
+				REQUIRE(renderer.Render(scene, camera));
+				if (frame++ < fillFrames)
+					return;
+				const SceneRendererStats& stats = renderer.GetStats();
+				extraction.push_back(stats.ExtractMs);
+				finding.push_back(stats.LocalShadowFindMs);
+				fewestDrawn = std::min(fewestDrawn, stats.LocalShadowViewsDrawn);
+				fewestPending = std::min(fewestPending, stats.LocalShadowViewsPending);
+				fewestUpdates = std::min(fewestUpdates, stats.ProxyUpdates);
+			});
+			REQUIRE(extraction.size() == static_cast<size_t>(c_MeasuredFrames));
+			std::sort(extraction.begin(), extraction.end());
+			std::sort(finding.begin(), finding.end());
+			const double extractMs = extraction[extraction.size() / 2];
+			const double findMs = finding[finding.size() / 2];
+			MESSAGE("1,000 cubes moving under 256 shadowed lamps at Ultra: ", measurement.CPU.MedianMs, " ms median frame (the cubes' writes and the render), extraction ",
+				extractMs, " ms median, ", extraction.back(), " ms slowest, of it the local shadows' decisions ", findMs, " ms median, ", finding.back(),
+				" ms slowest; GPU ", measurement.GPU ? measurement.GPU->MedianMs : 0.0, " ms busy; a frame draws at least ", fewestDrawn, " views and leaves at least ",
+				fewestPending, " waiting, with at least ", fewestUpdates, " proxies updated");
+			CHECK(renderer.GetStats().LocalShadowLights == c_Lamps);
+			// Every frame moved every cube, had more views to draw again than its budget and drew a budget's worth.
+			CHECK(fewestUpdates >= c_Count);
+			CHECK(fewestDrawn == specification.Quality.LocalShadowViewsPerFrame);
+			CHECK(fewestPending > 0);
+			Perf::MetricValues values { { key, measurement.CPU.MedianMs }, { key + "Extract", extractMs }, { key + "Find", findMs } };
+			if (measuresGPU)
+				values.emplace(key + "GPU", Perf::MeasureGPU(measurement));
+			return values;
+		});
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Render cost of 100,000 cubes under 16 shadowed point lights, every view drawn each frame and cached")
 	{
 		GPUContext gpu;
