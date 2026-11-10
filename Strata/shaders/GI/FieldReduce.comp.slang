@@ -195,20 +195,21 @@ void main(uint3 groupID : SV_GroupID, uint index : SV_GroupIndex)
 		uint coefficient = index - 6u;
 		uint directions = live ? min(a * a, ST_GI_FIELD_DIRECTIONS) : 0u;
 		precise float4 sum = float4(0.0, 0.0, 0.0, 0.0);
-		precise float4 mean = float4(0.0, 0.0, 0.0, 0.0);
-		precise float uniform = 0.0;
+		precise float4 integral = float4(0.0, 0.0, 0.0, 0.0);
+		precise float uniformResponse = 0.0;
 		precise float total = 0.0;
 		for (uint direction = 0u; direction < directions; direction++)
 		{
 			float basis = s_Basis[direction][coefficient];
 			sum += basis * s_Rays[direction];
-			mean += s_Rays[direction];
-			uniform += basis * s_SolidAngles[direction];
+			integral += s_Rays[direction];
+			uniformResponse += basis * s_SolidAngles[direction];
 			total += s_SolidAngles[direction];
 		}
-		// Band 0 integrates a uniform radiance exactly; the others take out what the quadrature leaves of it.
+		// Band 0 integrates a uniform radiance exactly; the others take out what the quadrature leaves of it: the basis function's
+		// own sum over the directions (its response to a radiance of one, zero in the continuum) times the rays' mean.
 		if (coefficient > 0u)
-			sum -= uniform / max(total, 1e-6) * mean;
+			sum -= uniformResponse / max(total, 1e-6) * integral;
 		float lobe = coefficient == 0u ? 1.0 : coefficient < 4u ? 2.0 / 3.0 : 0.25;
 		precise float4 irradiance = sum * lobe;
 		o_Irradiance[uint3(probe.x * 3u + coefficient % 3u, probe.y * 3u + coefficient / 3u, probe.z)] = irradiance;
