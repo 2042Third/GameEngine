@@ -646,12 +646,16 @@ rendering streams branch from its tip:
   of six shots at three baked times of day (dawn over the valley, the low sun sliding along a bus's painted and bare
   sheet steel, the streak on a weathered oil tank, the glint column on a wet apron, the hut's interior, dusk with the fire
   and lanterns), each time of day with its own reflection probe entities; a first-person walk, free flight and a photo
-  mode (time of day, exposure, lens, the Graphics options, seven bookmarks); High by default. Its metal and wet ground
-  are tuned against 0.7.0's screen-space reflections: `reflections`' adoption pass retunes them, rebakes and retakes.
-  `PerfGPU.Samples.ShowcaseHigh1440` and `.ShowcaseUltra1440` record the tour at 2560 x 1440 (a 4K window does not fit
-  a 4K display). Later: grass with coverage-preserving alpha, people, the B-list of scans, sound, the walk on a
-  character controller (after `physics-timing`), supersampled stills, and sunlight thrown off a sheet onto nearby
-  surfaces (after `radiance-cascades`).
+  mode (time of day, exposure, lens, the Graphics options, seven bookmarks); High by default. It adopted `reflections`
+  after R2: the six probes are baked again without the sun's disk (eight passes, until the captures settle), dusk's sun
+  stands beside the bus (azimuth 16 instead of 32, held by the generator's rule 7) so that the hut's front, the fire and
+  the fuel tank are not left in the bus's shadow, the fire and the lanterns have their flames' sizes for their
+  highlights, the puddles are water (IOR 1.33), and `GenerateShowcaseTerrain.py pictures` retakes the pictures. What
+  dusk's sun does not reach is darker than with the old probes, whose sun's disk lit it (the release notes' known
+  issues). `PerfGPU.Samples.ShowcaseHigh1440` and `.ShowcaseUltra1440` record the tour at 2560 x 1440 (a 4K window does
+  not fit a 4K display). Later: grass with coverage-preserving alpha, people, the B-list of scans, sound, the walk on a
+  character controller (after `physics-timing`), supersampled stills, a night after dusk (a station with probes of its
+  own), and sunlight thrown off a sheet onto nearby surfaces (after `radiance-cascades`).
 
 Open items and deferrals later waves own:
 

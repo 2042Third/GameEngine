@@ -148,6 +148,43 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   view, focus, f-number, depth of field, the quality preset and anti-aliasing, seven bookmarks), H hides the UI.
 - Samples: a showcase may hold six screenshots in 8 MB (the others three in 3 MB).
 - Manual, Lighting: "Times of day with baked probes".
+- The showcase adopts this wave's reflections: its six probes are baked again without the sun's disk and highlights (the
+  golden-hour yard's capture peaked at 5.5e8, now 4.6e4), so what stands in the sun's shadow has the sky's light and
+  the local lights' alone. Dusk's sun therefore stands at azimuth 16, beside the bus: at 32 it stood behind it, and the
+  bus's shadow lay over the hut's front, the fire and the fuel tank's near end, which came out near black. The
+  generator's checks hold it there (rule 7: seen from the fire, the lantern, the fuel tank and the hut's door, the sun
+  at least 0.75 degrees beside the bus and 0.15 above the hills), and `selftest` fails if the rule would pass the sun
+  behind the bus. The fire and the lanterns have the size of their flames for their highlights (Source Radius 0.25 and
+  0.04 m); the puddles are water (IOR 1.33).
+- `GenerateShowcaseTerrain.py pictures` retakes the showcase's screenshots, icon and launcher picture after a change to
+  its look: its script stops at a capture that does not report a complete, settled picture, and
+  `GenerateShowcaseTerrain.py picture` copies the thumbnail to `Picture.png` only when it is the one that run left
+  (480 x 270, not older than the screenshots, showing what `Screenshots/Shot2.png` shows). `StrataTools.ShowcaseTerrain`
+  now also fails when that script, the stations' steps in the render test's commands and the look-dev shots, or
+  `Picture.png` no longer follow the generator.
+- Editor: a `viewport.capture` taken right after a `scene.save` is settled again, and so is the launcher's picture the
+  save asks for. The two render through one renderer at sizes of their own, and in shared frames each started the
+  other's temporal history again: the capture was read back with two frames of it instead of eight (aliased edges,
+  speckled highlights; `temporalFrames` 2), the picture with one. A capture now renders once the picture's frame is
+  being read back, and one a save interrupted starts over then: it meters its own view again instead of keeping the
+  pre-exposure the picture settled for the scene camera's (without TAA it was read back on its first frame after the
+  picture, its `preExposureSettled` true), and its waits have their whole budgets again.
+- Editor: `lighting.bakeProbes` bakes a probe where it stands when the command runs. A probe that a command of the same
+  frame had moved (itself or a parent) was baked from the place it had left, because the bake read the world matrix the
+  frame's update had not yet brought up to date: a script that moves a probe and bakes it at once, as the showcase's bake
+  does with its hut probes, took the first capture from the old place.
+- The showcase's `bake` script bakes each station's probes eight times, not twice, so one run reproduces the committed
+  captures whatever captures the project held. A bake draws the probes' present captures, the baked probe's own too:
+  two passes left the hut's captures depending on the ones before (begun from the sample's earlier captures, the dusk
+  hut's came out 18% above where further passes settle it), while after eight passes bakes begun from different
+  captures agree to 0.01% in every 64 x 64 block's mean. `StrataTools.ShowcaseTerrain` holds the script to the probes'
+  table.
+- Measured, the tour's station switches with the probes' cubes at 256 texels against 128 (the exported Release game at
+  2560 x 1440 and High, three runs of each in turns, on a machine other agents worked on): the larger cubes hold 49-51
+  MB more device memory and make no frame at a switch longer that the runs can show. The main thread's worst frame at
+  the switch to golden hour took 5.4-6.9 ms at 256 and 5.4-6.2 ms at 128, to dusk 4.5-9.0 and 4.5-5.5 ms, and every
+  run has frames of 5.1-9.5 ms away from the switches; the GPU's longest busy time after a switch was 6.2-11.1 against
+  6.4-10.3 ms. The showcase's plan gives each run (`specs/showcase.md`, section 11).
 
 **Global illumination (stage 1: the voxels).**
 
@@ -508,4 +545,25 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   frame of the cut alone. Bounding it (past a number of moves, ordering that frame by importance alone) gives up the
   hysteresis in that frame and needs a test at hundreds of lights; it is left for later because only Custom counts far
   beyond Ultra's pay it, once per cut.
+
+**Showcase (the reflections' adoption)**
+
+- At dusk, what the sun does not reach is darker than in landing 1's pictures. Their probes held the sun's disk and lit
+  such surfaces with it; this wave's hold the sky alone, and the light sunlit ground throws back is global
+  illumination's work, which stays off in the showcase. Shot 6 at 960 x 540, mean code before the adoption against now:
+  the lean-to 17.6 against 11.7 (16% of its pixels under 8 codes, now 44%), the wall at lantern A 94.5 against 85.0, the
+  wet apron 12.4 against 11.8 (31% under 8 codes, now 44%); of the whole picture 15.2% of the pixels were under 8 codes
+  and 22.6% are (its mean 38.0 against 39.0).
+- In shot 5, at golden hour, the hut's roof underside is darker for the same reason (mean code 65.8 against 56.5); its
+  back wall (23.9 against 24.0) and the dark corner the hut's measurement view reads (surface EV100 8.77 against 8.74 at
+  960 x 540) are as they were.
+- Dusk's sun stands at azimuth 16 instead of 32, so that the bus's shadow leaves the hut's front, the fire and the fuel
+  tank (the tank's shadowed half: 27.3 before the adoption, 13.5 with the new probes and the sun behind the bus, 40.8
+  now; the hut's front 85.5, 61.8 and 77.7; the ground at the fire 70.2, 61.8 and 78.8). The shadow now lies on the
+  slope's foot at shot 6's left (46.7 against 9.4, 46% of it under 8 codes), and the slope beyond it is lit (14.0
+  against 53.3). The photo mode's sweep from golden hour to dusk turns the sun 29 degrees instead of 13.
+- The photo mode's day still ends at dusk (19.0 h). The night after it, which the showcase's plan tied to R2's fix of
+  the night sky's bands (the slider to 19.5 h, the sun below the horizon and its light faded to nothing), is not
+  adopted: the day's course has no values below the horizon yet, and dusk's probes hold dusk's sky, which a darker sky
+  would no longer match, so a night needs a station with probes of its own and a look to be judged. Not tried.
 

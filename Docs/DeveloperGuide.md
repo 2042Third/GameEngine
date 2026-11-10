@@ -4419,7 +4419,13 @@ lights, Post Process and the sky), and never a resolution below the output's.
   again until the history holds `c_TemporalSettleFrames` (8) complete frames (a frame still incomplete for another reason
   starts it again while its own bounded wait lasts, so a view that stays incomplete still settles once that wait ended),
   bounded by `c_MaxCaptureTemporalFrames` and `ProjectThumbnail::c_MaxTemporalFrames` (16); the thumbnails' renderer sets
-  `SceneRendererSpecification::TemporalAntiAliasing` off and draws TAA scenes with FXAA.
+  `SceneRendererSpecification::TemporalAntiAliasing` off and draws TAA scenes with FXAA. The two share the viewport's
+  capture renderer at sizes of their own, and a renderer whose size changes starts its history again: rendering in the
+  same frames, neither would ever hold more than a frame or two of it. So a capture renders only while the project's
+  picture does not (`ProjectThumbnail::IsRendering`: from the save that asks for it until its frame is read back, which
+  its own limits bound): a `viewport.capture` right after a `scene.save` waits those frames, and one a save interrupts
+  starts over after the picture, which settled the pre-exposure for its own view and released the targets: its first
+  frame starts the pre-exposure again, and its waits have their whole budgets (`GPU.Editor.Viewport`).
 - Tests (`GPU.SceneRenderer.TAA`): culling, levels of detail and the cached cascades match a renderer without the
   jitter; a still edge between colors of equal luminance is the mean of its eight jittered frames at eight frames (0.5%)
   and stays within 15% of their spread; a moving box leaves no trail beyond two pixels once it stops; every reset
@@ -5962,7 +5968,10 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   cancels the import, so nothing reaches the project (one that ends once the copy is done leaves its captures there,
   unused); a scene change or Play before the import leaves nothing behind,
   after it the imported files go to the trash.
-  A probe bakes what is drawn at its position, other probes' current captures included: baking twice adds a bounce.
+  A probe bakes what is drawn where it stands when the command runs (`Scene::GetWorldTransform`, never the cached
+  matrix: a command of the same frame may have moved it or a parent, as a script that moves a probe and bakes it does),
+  the probes' current captures included, its own too: every further bake adds a bounce, and bakes repeated in an
+  unchanged scene settle.
 - **Screen-space reflections** (`PostProcessComponent::ScreenSpaceReflections`, `SceneRendererScreenReflections.cpp`)
   trace in the mode of the `Reflections` quality row (`ReflectionsQuality`, "Quality settings"): none at Low (Off),
   Checkerboard at Medium (Strata 0.6.0's, with TAA only), Spatial at High and SpatialHigh at Ultra (with or without TAA).
@@ -6537,8 +6546,14 @@ streaks instead of one even glare). Both seed their noise,
 use no transcendental functions where a vertex depends on them and quantize every attribute, so every platform writes
 the same bytes; `selftest` (CTests `StrataTools.ShowcaseTerrain` and `.ShowcaseProps`, label `tools`) writes twice, compares
 with the committed files (the maps by their pixels), checks the design's rules (the golden sun clears the hills from the
-apron, the pads are flat, the letterboard is vertical, the shots' mirror points lie on their surfaces) and that the
-scripts' `Scripts/Stations.h` rows equal the generator's table. To change the ground or a prop, change the generator,
+apron, the pads are flat, the letterboard is vertical, the shots' mirror points lie on their surfaces, the dusk sun
+stands beside the bus and above the hills from the fire, the lantern, the fuel tank and the hut's door) and that the
+scripts' `Scripts/Stations.h` rows equal the generator's table. The terrain's `selftest` also holds the copies of the
+stations' steps to what `setup` writes (`StrataTests/Editor/ShowcaseRenderCommands.json` in the script form,
+`Tools/LookDev/Shots.json`'s `showcase.shot<N>` shots in the look-dev form: after a change to the table, write them
+again with `setup --station <name> --format script|lookdev`, never by hand), checks the pictures script (below; scripts
+with one thing wrong must fail the check) and that `Picture.png` shows what `Screenshots/Shot2.png` shows (the mean
+codes of 16 x 9 blocks, within 1 on average and 4 in any block). To change the ground or a prop, change the generator,
 write in place (`terrain` or `props --output Samples/Showcase/Assets/Generated/...`): the editor reimports and keeps the
 handles. The generators' command scripts (`materials`, `prefabs`, `layout`, `controls`, `dress`, `bake`) are run once
 with `StrataEditor --quit-after-commands` (on Windows through `Start-Process -Wait`: the editor is a GUI program, and a
@@ -6547,13 +6562,23 @@ The materials' values live in `GenerateShowcaseProps.py`'s table: change them th
 sets them on the existing materials.
 
 The three times of day are stations: the sun's direction and the values that go with it (`Stations.h`, `setup --station`).
+A station's sun must reach what its shots show lit: the probes hold no sun (a bake draws neither its disk nor the
+highlights it makes), so what stands in a shadow has the sky's light and the local lights' alone. Dusk's azimuth, 16, is
+where the last sun passes beside the bus (the checks' rule 7); at 32 the bus's shadow lay over the hut's front, the fire
+and the fuel tank's near end, which came out near black. A change to a station's sun or to what stands in the yard runs
+`check` before anything is baked.
 Each has two reflection probe entities, `Probe.<Dawn, Golden or Dusk>.<Yard or Hut>`, never two probes baked three times
 (a bake trashes the capture an earlier bake made for that entity). `bake` sets each station with only its own probes
-active and bakes them twice (the second pass adds a bounce), Golden last, the saved station; rebake after any change the
-probes see, only through `bake`, and never in a session that does not save (the old captures would be trashed under the
-saved scene). The hut's box is its interior, so nothing outside takes the dark interior's light; its capture is taken in
-the back corner away from the sun's patches (from the middle the hut came out only 0.3 EV below the yard), so `bake`
-moves the probe there and back, and the probe projects no box (`BoxProjection` off: its capture is not at the box's center).
+active and bakes them eight times (`BAKE_PASSES`), Golden last, the saved station. A bake draws the probes' present
+captures, the baked probe's own too, so every pass adds a bounce and a few passes leave captures that depend on those the
+project held: two passes begun from the sample's earlier captures left the dusk hut's 18% above where it settles. A pass
+leaves about 0.16 of the difference in the hut; after eight, bakes begun from different captures agree to 0.01% in every
+64 x 64 block's mean, so one run reproduces the committed captures (`selftest` holds the script to the probes' table:
+`check_bake`). Rebake after any change the probes see, only through `bake`, and never in a session that does not save
+(the old captures would be trashed under the saved scene). The hut's box is its interior, so nothing outside takes the
+dark interior's light; its capture is taken in the back corner away from the sun's patches (from the middle the hut came
+out only 0.3 EV below the yard), so `bake` moves the probe there and back, and the probe projects no box (`BoxProjection`
+off: its capture is not at the box's center).
 The director switches stations with `SetActive`, holding the old probes on for a second with the new ones' priority raised,
 so a box never falls to the sky while its capture converts; `Assets::GetLoadProgress` in `OnCreate` keeps all six loaded.
 
@@ -6563,4 +6588,12 @@ the dawn cascades at 550 m and the hut a third of the yard's light (the yard's E
 measures it again); `StrataRuntime.ShowcaseWindowed` checks the exported game's shot 2 in a window. The LookDev project
 `Showcase` holds the `showcase.*` shots ([Look-dev harness](#look-dev-harness)), and `PerfGPU.Samples` measures the tour at
 High and Ultra ([Perf tests](#perf-tests)). A change to the showcase's look retakes its screenshots, `Picture.png`, its
-icon and its look-dev shots.
+icon and its look-dev shots: `GenerateShowcaseTerrain.py pictures` writes the command script that captures the six shots
+and the icon, each right after its station's steps from its look-dev shot's camera, saves the scene at Golden and waits
+for the project's thumbnail (the scene's camera stands at shot 2's key). Every capture expects a complete picture (nothing
+loading, no texture below the level the view wants, the local lights' shadow views and the probes drawn, the exposure
+settled and temporal anti-aliasing's history holding its eight phases: `viewport.capture` returns a picture that lacks
+one of them after its wait, saying so), so the script stops instead of leaving such a picture. Run it on the sample in
+place after `bake`, in a session of its own, then `GenerateShowcaseTerrain.py picture --project Samples/Showcase`, which
+copies `.strata/Thumbnail.png` to `Picture.png` and refuses a thumbnail that is missing, not 480 x 270, older than a
+screenshot or the icon, or that does not show what `Screenshots/Shot2.png` shows.

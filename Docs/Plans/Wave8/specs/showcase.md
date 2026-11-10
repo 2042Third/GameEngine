@@ -349,6 +349,16 @@ sun (azimuth 45), `v = (z - x) / sqrt(2)` across it (+v is azimuth 135, the dawn
 6. The apron's top stays at least 2 cm above the terrain at every vertex of its outline and of its skirt's top edge, and its
    skirt reaches at least 3 cm below the terrain there (so the terrain never covers the asphalt's edge and no gap shows under
    it). The first draft's formula, `0.04 + 0.004 * (x - 6)`, is -4 cm at the -X edge and fails this rule.
+7. *As built (the reflections' adoption):* the dusk sun reaches shot 6's subjects. Seen from the fire, lantern A, the fuel
+   tank and the hut's door wall, the sun's azimuth stands at least 0.75 degrees beside the bus's footprint, and the light's
+   drawn elevation at least 0.15 degrees above the terrain's horizon (`dusk_sun_reach`). A probe holds no sun since the
+   adoption (a bake draws neither its disk nor the highlights it makes), so what the dusk sun does not reach has the sky's
+   light and the fire's alone: at D4's azimuth 32 the bus stood before the sun (from the fire its footprint spans azimuths
+   17.3 to 37.3) and its shadow lay over the hut's front, the fire's ground and the fuel tank's near end, which came out
+   near black. On the sun's course (its azimuth falls through the day: 140, 92, 45) the rule passes at 16 alone among
+   whole degrees: 1.00 degree beside the bus from lantern A, 0.21 above the terrain from the fire; at 17 the bus is 0.004
+   degrees beside the sun from lantern A, at 15 the sun 0.11 degrees above the terrain from the fire. It passes again
+   from 52 to 61, on the bus's other side, where the sun would turn back after Golden's 45.
 
 The layout's heights (`layout`, `stations`) come from the surface a point stands on: the apron's top inside its outline (the
 bus, the oil tank's pad, the drums and tyres on the apron, Lantern B's drum), else the terrain. D5's numbers below are
@@ -366,6 +376,10 @@ A station is the sun's direction and the values that go with it. The scene is sa
 
 - **Toward the sun:** `TowardSun(e, a) = (cos e cos a, sin e, cos e sin a)`, `R/SkyPresets.cpp:93-98`; Dawn
   (-0.763, 0.087, 0.640), Golden (0.703, 0.105, 0.703), Dusk drawn (0.848, 0.035, 0.530).
+  *As built (the reflections' adoption):* Dusk's azimuth is 16, not 32, its drawn direction (0.961, 0.035, 0.275): D3's
+  rule 7 keeps the last sun beside the bus, whose shadow now lies over the asphalt before the camera and the slope's foot
+  left of the hut, clear of the fire, the lantern, the hut's front and the fuel tank. The photo mode's day turns the sun
+  through 29 degrees between Golden and Dusk (13 before).
 - **The light below 2 degrees** follows `DayNight.h:43-60`: it is drawn at `max(e, 2)` (shadows stay drawable) and its
   intensity is `120000 * clamp(sin(e) / 0.035, 0, 1)`; at Dusk, `sin(1) / 0.035 = 0.4986`, the light scale 0.5.
 - **The sun's rotation** in scripts: `glm::quatLookAt(-TowardSun(drawnElevation, a), glm::vec3(0, 1, 0))` (lights shine along
@@ -476,8 +490,9 @@ the rim camera in shadow at dawn: 7.8 degrees at 130 m). The constants are the S
 - `Mud.glb`: 8 patches `Mud_<n>` (r 2-5 m, noisy outlines) along the apron's outline and under the bus's front, draped 1.5
   cm above whatever surface is under them (the terrain, or the apron's top) along its normal.
 
-**`check`** evaluates D3's six rules on a sampled grid (1 m inner, 10 m ring, bilinear between), prints each rule's worst
-value and where, and exits 1 if one fails. `terrain` runs it first and writes nothing on a failure.
+**`check`** evaluates D3's rules (seven with the adoption's rule 7) on a sampled grid (1 m inner, 10 m ring, bilinear
+between), prints each rule's worst value and where, and exits 1 if one fails. `terrain` runs it first and writes nothing on
+a failure.
 
 **`stations`** prints the D4 table and, per shot, the key, From, To, look, FOV and the image positions of D5's subjects
 (pinhole, 16:9), as text or JSON.
@@ -514,7 +529,8 @@ over blocks and k, in percent of full scale, per shot and AA mode: PASS at a mea
 to the committed one in `--committed`; the station rows parsed from `Stations.h`'s `c_Stations` (one line per station,
 `{ <hour>, <elevation>, <drawn>, <azimuth>, <scale>, <fog>, <exposure>, <shadow distance>, <local lights> }`) equal to its
 own table; D5's mirror relations of shots 2-4 hold for the layout within 1 cm and 0.1 degree. Under 60 s (the horizon march
-uses the sampled grid, not the noise).
+uses the sampled grid, not the noise). *As built (the reflections' adoption):* it also asks rule 7 about the azimuth the
+dusk sun had (32) and fails if the rule would pass it: the sun behind the bus is what the rule is there to refuse.
 
 ### D7 `Tools/GenerateShowcaseProps.py`
 
@@ -590,6 +606,11 @@ decides if S1 finds metal in it, and is 0 if S1 finds the B channel zero. Scan m
 | Embers | none | | (0.05, 0.04, 0.035) | 0 | 0.9 | EmissiveColor (1.0, 0.35, 0.08), EmissiveIntensity 4000 nits | Embers, wicks |
 
 `UVTiling` is a two-component property (`Material.h`, `MaterialProperties::UVTiling`): the `materials` script writes `[t, t]`.
+
+*As built (the reflections' adoption):* Water has IOR 1.33 and the base (0.035, 0.037, 0.040), the wet asphalt under it: the
+row's base was darkened for an F0 of 0.04, and at 0.02 the water mirrors half as much, so the adoption made it lighter, not
+darker as proposed below. `Water.glb`'s stand-in carries the same base and roughness: both generators take them from
+`WATER_COLOR` and `WATER_ROUGHNESS` of `GenerateShowcaseTerrain.py` (the stand-in had kept the row's base).
 
 Proposed values to tune in S6 (each with the reason): the bus paint's roughness factor (no highlight at 1, glints at 0.45,
 `p08`/`p11`); the apron's damp roughness 0.45-0.6 and darker base (audit: "uniformly damp through factors"); water 0.02-0.06
@@ -678,6 +699,15 @@ order Dawn, Dusk, Golden (Golden last, so the saved scene is Golden):
 3. `lighting.bakeProbes {"entities": [the two]}`, twice (the second pass adds the bounce the first capture of the other probe
    gives: "baking twice adds a second bounce", `:872-873`; it trashes the first pass's files).
 
+   *As built (the reflections' adoption):* eight times (`BAKE_PASSES`), not twice. A pass draws the probes' present
+   captures, the baked probe's own too, so two passes left the hut's captures depending on the ones the project held
+   (begun from the sample's earlier captures, the dusk hut's came out 18% above where it settles, and 17% above the one
+   two passes gave from the adoption's first captures). A pass leaves about 0.16 of the difference; after eight, bakes
+   begun from different captures agree to 0.01% in every 64 x 64 block's mean, so one run reproduces what is committed.
+   `selftest` holds the script to the probes' table (`check_bake`). The same work found that the first pass after the
+   hut probe's move had been taken from the place it had left (`lighting.bakeProbes` read the world matrix the frame had
+   not yet updated; fixed in the command).
+
 Then `scene.save`. Six `.hdr` files in `Assets/Lighting/Outpost/`.
 
 **Switching in play** (`Outpost::SetStation`):
@@ -726,7 +756,8 @@ Written against `StrataScriptCore` only (skills `strata-scripting`, `strata-make
   D14), `TourSpeed` 1, `LoopTour` true, `FadeSeconds` 0.75, `WalkSpeed` 1.5, `RunSpeed` 3.2,
   `FlySpeed` 6, `FastFactor` 4, `LookSpeed` 0.12 (degrees per pixel), `StickTurnSpeed` 120, `UseController` false (true
   after `physics-timing`'s adoption), `WalkRadius` 140, `ProbeHoldSeconds` 1, `NightAfterDusk` false, `PhotoHourMax` 19.0,
-  `SunIlluminance` 120000.
+  `SunIlluminance` 120000. *As built:* `UseController` and `NightAfterDusk` are not fields of the script: each comes
+  with its adoption (section 11), and the night was not adopted with R2.
 - State: `Mode` (0 tour, 1 walk, 2 fly), `Shot` (0-6), `Station` (0-2), `CapturesFound`, `CapturesResident`, `PhotoOpen`,
   `PhotoHour`, `SunElevation`, `SunAzimuth`, `Bookmark` (last one taken, 0 none), `DistanceWalked`, `Grounded`,
   `HeightAboveGround` (the eye's height above the ground under it), `ToursCompleted`.
@@ -841,7 +872,7 @@ after play (two `edit.undo`).
 	{"command": "script.get", "parameters": {"entity": {"$ref": "outpost"}, "class": "Outpost"}, "expect": {"/scripts/0/fields/Shot": {"equals": 2}, "/scripts/0/fields/Station": {"equals": 1}}, "until": {"steps": 600}},
 	{"command": "entity.get", "parameters": {"entity": {"$ref": "dawnYard"}}, "expect": {"/active": {"equals": false}}, "until": {"steps": 120}},
 	{"command": "entity.get", "parameters": {"entity": {"$ref": "goldenYard"}}, "expect": {"/active": {"equals": true}}},
-	{"command": "script.get", "parameters": {"entity": {"$ref": "outpost"}, "class": "Outpost"}, "expect": {"/scripts/0/fields/Shot": {"equals": 6}, "/scripts/0/fields/Station": {"equals": 2}, "/scripts/0/fields/SunAzimuth": {"min": 31.9, "max": 32.1}}, "until": {"steps": 1500}},
+	{"command": "script.get", "parameters": {"entity": {"$ref": "outpost"}, "class": "Outpost"}, "expect": {"/scripts/0/fields/Shot": {"equals": 6}, "/scripts/0/fields/Station": {"equals": 2}, "/scripts/0/fields/SunAzimuth": {"min": 15.9, "max": 16.1}}, "until": {"steps": 1500}},
 	{"command": "entity.get", "parameters": {"entity": {"$ref": "duskYard"}}, "expect": {"/active": {"equals": true}}},
 	{"command": "component.get", "parameters": {"entity": {"$ref": "fire"}, "component": "PointLight"}, "expect": {"/values/Intensity": {"min": 150}, "/values/CastShadows": {"equals": true}}, "until": {"steps": 60}},
 	{"command": "input.key", "parameters": {"key": "W", "steps": 10}},
@@ -1289,6 +1320,43 @@ This stream changes no engine file, shader or ABI, so it never conflicts with st
 | `showcase-engine` E2 | Ground at the feet | Separate meshes per material (apron, mud, ground) with hard edges hidden by props | The generator writes the two masks (G wetness, B puddles; +2.0 MB), the apron and ground take the blended material, the mud meshes go |
 | `showcase-engine` E1 | Stills | Native 4K stills | Screenshots and the owner's sheet with `supersample: 2` |
 | `editor-ux`, `animation-graph`, subsurface | Nothing | No people | A later update if a realistic body is found (wave 9) |
+
+*As built (the reflections' adoption), R2's row:*
+
+- Highlights: `SourceRadius` 0.25 m on `Fire` and 0.04 m on `LanternA.Light` and `LanternB.Light`, as proposed (the
+  stations' steps write them; `StrataEditor.Showcase` holds the fire's to 0.2-0.3 m and both lanterns' to 0.03-0.06 m).
+- `checkshots`, on stills at 1920 x 1080 with TAA and on four live frames per shot in the three AA modes, all captured
+  after the last bake: shot 2's highlight lies 14.3 px from its computed place (at most 40), shot 3's streak 12.0 px (at
+  most 30), the shell beside it differs by 11.3 codes with and without the yard's probe (at least 8), and shot 6's fuel
+  tank is 5.7 codes brighter with the fire (at least 2). Live, the twelve crops (shots 2, 3, 4 and 6 with TAA, FXAA and
+  no anti-aliasing) differ between frames by at most 0.08% in the mean and 0.73% at p99 (limits 1.0 and 3.0): no
+  highlight shimmers.
+- Water has IOR 1.33 and a lighter base, not a darker one (D8's note).
+- The night after dusk is not adopted. `PhotoHourMax` stays 19.0, and `NightAfterDusk`, which landing 1 listed and did
+  not build, stays unbuilt. R2 took the bands out of the night sky, which the row waited for, but the day's course
+  (`SampleDay`) has no values below the horizon, and dusk's probes hold dusk's sky: a night needs a station with probes
+  of its own and a look to judge (the release notes' known issues, the roadmap's "Later").
+- The station switch with the probes' cubes at 256 against 128 texels: the exported Release game's tour at 2560 x 1440,
+  High with the one row set by the players' options (`Preset` Custom), three runs of each in turns and one of High
+  alone, under `PerfLock.py` on a machine other agents worked on. Device memory differs by 49-51 MB from the start (2198
+  against 2147-2149 MB), so the row took effect; at each switch it grows by about 70 MB at either size. The main
+  thread's worst frame at the switch to Golden took 5.37, 6.16 and 6.91 ms at 256 and 6.23, 5.65 and 5.41 ms at 128
+  (High alone 4.72): five or six frames of `Assets.Finalize`, 1.2-4.6 ms each, with loads queued at the cut to shot 2.
+  To Dusk it took 5.53, 9.02 and 4.46 ms at 256 and 5.45, 4.50 and 5.36 ms at 128 (High alone 11.16): `Render.Submit`
+  of the switch's own frame (3.8-10.6 ms), in which the two lights' twelve shadow views are drawn, then two frames of
+  finalizing. A frame's median is 0.65-1.05 ms. The GPU's longest busy time in the 1.5 s after the switch: Golden
+  6.2-7.2 ms at 256 and 6.4-7.8 ms at 128 (the second before: 5.4-6.0), Dusk 7.6-11.1 and 7.8-10.3 ms (before:
+  6.9-8.0). The runs differ more than the sizes do (away from the switches every run has frames of 5.1-9.5 ms of
+  work), and neither long frame changes with the row: it costs memory and no hitch at the switch that this measurement
+  can show. `GPU.Reflections`, the conversions' stage, steps to the new station's level at the switch (0.27 to 0.37 ms
+  at Golden, 0.26 to 0.59 ms at Dusk). Of the sixteen frames after it a few stand above that level, at most by 0.2-1.9
+  ms in the runs at 256 and by 0.3-1.2 ms in those at 128, and frames up to 0.7 ms above the level stand before the
+  switches too: the conversions do not stand out from the stage's scatter.
+- E_yard, measured again: the yard's surface EV100 is 14.03 at 960 x 540, the render test's size (13.98 at 1920 x 1080),
+  so `ShowcaseRenderCommands.json` keeps 14.0 +-0.5; the hut's dark corner reads 8.74, 5.29 EV below (at least 1.58).
+- Dusk's sun stands at azimuth 16, not 32 (D3's rule 7, D4's note), and a bake takes eight passes, not two (D10's
+  note). What the sun does not reach at dusk is darker than in landing 1's pictures: the release notes' known issues
+  give the numbers.
 
 ## 12. Risks
 

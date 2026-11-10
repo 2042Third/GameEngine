@@ -272,6 +272,79 @@ TEST_SUITE("GPU.Editor.Lighting")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("lighting.bakeProbes bakes a probe where it stands, also when a command of the same frame moved it or its parent")
+	{
+		// A script that moves a probe and bakes it runs both commands in one frame, before the frame's update brings the cached
+		// world matrices up to date. A bake that read the cached matrix captured the place the probe had left: the showcase's
+		// hut probes, baked away from their boxes' centers, got the first pass of every bake from the middle of the room.
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		LightingGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GPUEditorBakeMoved") / "Game";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		// Two glowing (unlit) walls across +X, the red one at 3 m hiding the green one at 9 m from the origin.
+		const std::string red = harness.Run("material.create", { { "path", "Materials/Red.stmat" },
+			{ "properties", { { "BaseColor", { 1, 0, 0, 1 } }, { "Unlit", true } } } })["asset"].get<std::string>();
+		const std::string green = harness.Run("material.create", { { "path", "Materials/Green.stmat" },
+			{ "properties", { { "BaseColor", { 0, 1, 0, 1 } }, { "Unlit", true } } } })["asset"].get<std::string>();
+		for (const auto& [name, material, x] : { std::tuple("Red Wall", red, 3.0), std::tuple("Green Wall", green, 9.0) })
+		{
+			harness.Run("entity.create", { { "name", name }, { "components", {
+				{ "Transform", { { "Translation", { x, 0, 0 } }, { "Scale", { 0.5, 8, 8 } } } },
+				{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) }, { "Material", material } } } } } });
+		}
+		const std::string rig = harness.Run("entity.create", { { "name", "Rig" } })["id"].get<std::string>();
+		const std::string probe = harness.Run("entity.create", { { "name", "Probe" }, { "parent", rig },
+			{ "components", { { "ReflectionProbe", { { "Extents", { 2, 2, 2 } } } } } } })["id"].get<std::string>();
+		harness.Run("scene.saveAs", { { "path", "Scenes/Walls.stscene" } });
+
+		// The texels along +X (the image's middle) and along -X (its left edge) of the capture a bake of the probe writes.
+		struct BakedViews
+		{
+			glm::vec3 East;
+			glm::vec3 West;
+		};
+		const auto bake = [&harness, &probe]()
+		{
+			const nlohmann::json result = harness.Bake({ { "entities", { probe } } });
+			const nlohmann::json& baked = FindProbe(result, probe);
+			CHECK(baked["complete"] == true);
+			const std::filesystem::path file = harness.GetAssetPath(baked["path"].get<std::string>());
+			return BakedViews { ReadHDRTexel(file, 512, 256), ReadHDRTexel(file, 1, 256) };
+		};
+		const auto isRed = [](const glm::vec3& texel) { return texel.r > 0.8f && texel.g < 0.1f; };
+		const auto isGreen = [](const glm::vec3& texel) { return texel.g > 0.8f && texel.r < 0.1f; };
+
+		// At the origin (the bake's frames also bring the cached matrices there): the red wall ahead, no wall behind.
+		const BakedViews origin = bake();
+		CAPTURE(origin.East);
+		CAPTURE(origin.West);
+		CHECK(isRed(origin.East));
+		CHECK_FALSE(isRed(origin.West));
+		CHECK_FALSE(isGreen(origin.West));
+
+		// Moved between the walls and baked in the same frame: the green wall ahead, the red one behind.
+		harness.Run("component.set", { { "entity", probe }, { "component", "Transform" }, { "values", { { "Translation", { 6, 0, 0 } } } } });
+		const BakedViews between = bake();
+		CAPTURE(between.East);
+		CAPTURE(between.West);
+		CHECK(isGreen(between.East));
+		CHECK(isRed(between.West));
+
+		// Its parent moved, which carries it past both walls: no wall ahead, the green one behind.
+		harness.Run("component.set", { { "entity", rig }, { "component", "Transform" }, { "values", { { "Translation", { 6, 0, 0 } } } } });
+		const BakedViews beyond = bake();
+		CAPTURE(beyond.East);
+		CAPTURE(beyond.West);
+		CHECK_FALSE(isRed(beyond.East));
+		CHECK_FALSE(isGreen(beyond.East));
+		CHECK(isGreen(beyond.West));
+
+		harness.Runner.CancelAll("The test ends");
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("lighting.bakeProbes bakes at its own quality, never the project's")
 	{
 		Tests::GPUContext gpu;
