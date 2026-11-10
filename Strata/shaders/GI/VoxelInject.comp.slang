@@ -1,3 +1,5 @@
+// SRV 35 holds the probes' ambient cubes here (Include/GIField.slang's ReadProbeIrradiance).
+#define ST_GI_FIELD_AMBIENT_CUBE
 #include "Include/Common.slang"
 
 #include "Include/GIProbes.slang"

@@ -147,11 +147,12 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 		CHECK(high.Validity == 421200);
 		CHECK(high.Field == 4423680);
 		CHECK(high.FieldDepth == 36864000); // 92,160 probes, a 10 x 10 tile of two halves each
+		CHECK(high.FieldIrradiance == 6635520); // Nine RGBA16F harmonics each
 		CHECK(high.Tiles == 262144);
 		CHECK(high.WorkItems == 1572864);
 		CHECK(high.Regions == 196640);
-		CHECK(high.GetTotal() == 153469552);
-		CHECK(GetLayout(GlobalIlluminationLevel::High).GetMemoryBytes() == 153469552);
+		CHECK(high.GetTotal() == 160105072);
+		CHECK(GetLayout(GlobalIlluminationLevel::High).GetMemoryBytes() == 160105072);
 
 		const GlobalIlluminationMemory low = GetLayout(GlobalIlluminationLevel::Low).GetMemory();
 		CHECK(low.VoxelLevels == 7864320);
@@ -161,10 +162,11 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 		CHECK(low.Validity == 52560);
 		CHECK(low.Field == 552960);
 		CHECK(low.FieldDepth == 4608000);
+		CHECK(low.FieldIrradiance == 829440);
 		CHECK(low.Tiles == 262144);
 		CHECK(low.WorkItems == 1572864);
 		CHECK(low.Regions == 196640);
-		CHECK(low.GetTotal() == 23659120);
+		CHECK(low.GetTotal() == 24488560);
 	}
 
 	TEST_CASE("Directions and solid angles")

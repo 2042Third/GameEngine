@@ -238,8 +238,8 @@ namespace Strata
 		std::array<nvrhi::ITexture*, 6> textures = { black, black, black, black, black, Renderer::GetZero3DUintTexture() };
 		if (!m_GI)
 			return textures;
-		if (m_GI->Field)
-			textures[0] = m_GI->Field;
+		if (m_GI->FieldIrradiance)
+			textures[0] = m_GI->FieldIrradiance;
 		if (!m_GI->Cascades.empty() && m_GI->Cascades.front().Validity)
 			textures[1] = m_GI->Cascades.front().Validity;
 		for (uint32_t level = 0; level < 3 && level < m_GI->Levels.size(); level++)
@@ -322,6 +322,9 @@ namespace Strata
 		// R32_UINT holding two halves (PackHalf2x16), not RG16F: that is an extended storage format, which devices may lack.
 		gi->FieldDepth = createTexture(nvrhi::Format::R32_UINT, glm::uvec3(firstCascade.Grid.x * RenderData::c_GIFieldDepthTexels,
 			firstCascade.Grid.y * RenderData::c_GIFieldDepthTexels, firstCascade.Grid.z), name + "FieldDepth");
+		// The probes' irradiance as scene passes read it (FieldReduce.comp): nine coefficients, 3 x 3 texels a probe.
+		gi->FieldIrradiance = createTexture(nvrhi::Format::RGBA16_FLOAT, glm::uvec3(3 * firstCascade.Grid.x, 3 * firstCascade.Grid.y,
+			firstCascade.Grid.z), name + "FieldIrradiance");
 		// Cascade 0's solid angle normalization and its faces' cosine sums, the same every frame.
 		gi->SolidAngleNorms = glm::vec4(GlobalIllumination::GetSolidAngleNormalization(firstCascade.DirectionsPerAxis), 0.0f, 0.0f, 0.0f);
 		for (uint32_t face = 0; face < RenderData::c_GIFieldFaces; face++)
@@ -473,6 +476,7 @@ namespace Strata
 		}
 		release(gi.Field);
 		release(gi.FieldDepth);
+		release(gi.FieldIrradiance);
 		for (GlobalIlluminationResources::Pass* pass : { &gi.Inject, &gi.Downsample, &gi.Validity, &gi.Weights, &gi.March, &gi.Reduce })
 		{
 			for (nvrhi::BindingSetHandle& set : pass->Sets)
@@ -663,6 +667,7 @@ namespace Strata
 			}
 			commandList->clearTextureFloat(gi.Field, nvrhi::AllSubresources, nvrhi::Color(0.0f));
 			commandList->clearTextureUInt(gi.FieldDepth, nvrhi::AllSubresources, 0);
+			commandList->clearTextureFloat(gi.FieldIrradiance, nvrhi::AllSubresources, nvrhi::Color(0.0f));
 			gi.Cleared = true;
 		}
 		commandList->clearBufferUInt(gi.Counters, 0);
@@ -953,6 +958,7 @@ namespace Strata
 			add3D(reduce, 60, single ? nullptr : gi.Cascades[1].Atlas.Get());
 			addUAV(reduce, 0, gi.Field);
 			addUAV(reduce, 1, gi.FieldDepth);
+			addUAV(reduce, 2, gi.FieldIrradiance);
 			makeSet(gi.Reduce, reduce, "GI/FieldReduce.comp");
 			gi.LightBound = created;
 			gi.BoundEnvironment = environment;

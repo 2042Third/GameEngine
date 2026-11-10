@@ -179,7 +179,7 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   stay dark, also for alpha-blended and glass surfaces. **Global Illumination Intensity** (1, 0-4) scales it. Scenes that
   do not turn it on, and every sample and the showcase, look exactly as before.
 - Graphics Quality: a new row **Global illumination** (Off, Low, High; Off at Low and Medium, High at High and Ultra): 23
-  MiB of GPU memory per view at Low, 146 MiB at High, only in scenes that turn it on; the Graphics Quality page's memory
+  MiB of GPU memory per view at Low, 153 MiB at High, only in scenes that turn it on; the Graphics Quality page's memory
   rows count it as they count the reflections' (High at 1920 x 1080: 440 MiB, was 294). The `Renderer.Quality` section's
   version is 6.
 - Captures and the project's picture wait for global illumination to settle.
@@ -242,6 +242,10 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   of the gap's opening as the camera sees it, darkened by how far in it lies. Under the yard's covered car (0.15 m off the
   ground) seen from 6 m, the ground 0.2-0.5 m under its edge keeps 6% of the open ground's light and 0.5-1 m in 1% (it
   was black; seen from 4 m, where the finest voxels hold the gap, 6% and 0.5%). Closed rooms stay dark.
+- Round objects take their light more evenly: surfaces read each probe's light as spherical harmonics, smooth at every
+  angle, where an ambient cube blended the light of the axes. A white sphere under a uniform sky now reads 3.5% dark at its
+  rim (7% before) and 2% at its center. The bounces keep the cubes, so the light still settles to the same frame and still
+  pictures repeat exactly. 6.3 MiB more memory per view at High (0.8 MiB at Low).
 
 **Occlusion culling (cull fix)**
 
@@ -350,8 +354,9 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
 - The east wall high and the ceiling's east side get 0.63 and 0.49 of their bounce (8 of 10 wall and ceiling points within
   30%; mean error 20%), one floor-wall junction misses, and two points behind the camera 2 m up get 0.62-0.66.
 - Low is too dark: 0.2-0.5 of the reference.
-- Open ground under the sky reads 3.2% off at 6 m, and a white sphere under a uniform sky 2% dark at its center and 7% at
-  its rim (each probe's light is an ambient cube, exact for axis-aligned surfaces only).
+- Open ground under the sky reads 3.2% off at 6 m, and a white sphere under a uniform sky 2% dark at its center and 3.5% at
+  its rim, or up to 10% where a probe lies within a voxel of it (3% is the goal: what is left lies in the probes' light
+  beside the sphere, whose skimming rays the voxels absorb, not in how the probes store it).
 - It costs 3.8-4.9 ms of GPU time at 3840 x 2160 at High in the sun room (`GPU.RadianceCascades`; 1-2 ms aimed at; the
   perf case `PerfGPU.Renderer.GlobalIllumination4K*`: 4.9 ms in the sun room, 4.0 ms in the yard), and the forward pass's
   gather adds 0.3-0.8 ms to `GPU.Opaque` (look-dev: the sun room, the yard and ThirdPerson's course).

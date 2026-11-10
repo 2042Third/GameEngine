@@ -13,6 +13,7 @@
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -1467,6 +1468,100 @@ namespace
 
 TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationJoin")
 {
+	TEST_CASE("The white furnace keeps its light with GI")
+	{
+		// A white rough dielectric sphere of the built-in mesh (radius 0.5) under a uniform sky, no sun, seen head-on through an
+		// orthographic camera: its light with GI against today's (the sky's irradiance) at its center (NoV 1) and at 0.8 of its
+		// radius (NoV 0.6).
+		// The sphere is convex: every point of it sees the whole sky, and anything less is light the field lost.
+		// - The probes' ambient cubes read the rim 7% dark (0.932, 0.952 with every bounce: a normal between the axes blends the axes'
+		//   hemispheres, and takes what the probes beside the sphere see of it behind the normal's plane). Drawn surfaces read the probes'
+		//   spherical harmonics, whose kernel is the cosine's about the normal itself: 0.979 at the center, 0.965 at the rim.
+		// - Every bounce (what a renderer draws by default) does not close the rest (0.979 and 0.970): it is not light the
+		//   sphere's voxels could return. A probe within two voxels of the sphere loses the rays that skim it to the voxels'
+		//   layer about the surface, which absorbs them at a grazing angle and sends nothing back (measured: a probe 8 cm off
+		//   the surface holds 0.81 of the sky along the normal, with one bounce and with every bounce).
+		// - So the loss depends on where the sphere lies among the probes: moved by offGrid, which puts a probe 8 cm off its
+		//   front, it reads 0.902 at its center (0.901 with every bounce) and 0.971 at its rim (0.978). That is measured too:
+		//   the center is kept within c_OffGridTolerance, which only holds what is there (c_Tolerance is the goal there as
+		//   well: DeveloperGuide, "Global illumination", Known issues), the rim within c_RimTolerance.
+		constexpr float c_Tolerance = 0.03f;
+		constexpr float c_RimTolerance = 0.04f;
+		constexpr float c_OffGridTolerance = 0.105f;
+		const glm::vec3 offGrid(0.13f, 0.07f, 0.21f);
+		constexpr uint32_t c_Size = 96;
+		constexpr float c_View = 1.2f;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		const AssetHandle sky = assets.Add(CreateEnvironmentTexture(glm::vec3(1.0f), glm::vec3(1.0f)), "Furnace");
+		MaterialProperties dielectric;
+		dielectric.BaseColor = glm::vec4(1.0f);
+		dielectric.Roughness = 1.0f;
+		const AssetHandle material = assets.AddMaterial(dielectric);
+		// The sphere's light at its center (x) and rim (y): without GI, with one bounce and with every bounce, then both again
+		// with the sphere (and the camera) moved off the probes' grid.
+		struct Furnace
+		{
+			bool Asked = false;
+			float BounceGain = 0.0f;
+			glm::vec3 Position { 0.0f };
+			glm::vec2 Light { 0.0f };
+		};
+		Furnace furnaces[5] = { { false, 0.0f }, { true, 0.0f }, { true, 1.0f }, { true, 0.0f, offGrid }, { true, 1.0f, offGrid } };
+		for (Furnace& furnace : furnaces)
+		{
+			Scene scene;
+			AddNeutralPostProcess(scene).GlobalIllumination = furnace.Asked;
+			scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().EnvironmentMap = sky;
+			AddMesh(scene, BuiltinAssets::SphereMesh, material, furnace.Position, "Sphere");
+			SceneRendererSpecification specification = RoomSpecification(GlobalIlluminationLevel::High, furnace.BounceGain);
+			specification.TextureStreaming = false;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_Size, c_Size);
+			const SceneCamera camera = OrthographicLookAt(furnace.Position + glm::vec3(0.0f, 0.0f, 3.0f), furnace.Position, c_View);
+			// Until the sky is there and the field holds every bounce it will (by the clock, not a count of frames).
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+			const auto waiting = [&]()
+			{
+				const SceneRendererStats& stats = renderer.GetStats();
+				return !stats.EnvironmentLighting || stats.GlobalIlluminationPending || !stats.GlobalIlluminationSettled;
+			};
+			do
+			{
+				REQUIRE(RenderGIFrame(renderer, scene, camera, SceneRenderOptions {}));
+			} while (waiting() && std::chrono::steady_clock::now() < deadline);
+			REQUIRE(renderer.GetStats().EnvironmentLighting);
+			CHECK(renderer.GetStats().GlobalIllumination == furnace.Asked);
+			CHECK_FALSE(renderer.GetStats().GlobalIlluminationPending);
+			CHECK(renderer.GetStats().GlobalIlluminationSettled);
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
+			const uint32_t center = c_Size / 2;
+			const uint32_t rim = center + static_cast<uint32_t>(std::lround(0.8f * 0.5f / c_View * static_cast<float>(c_Size)));
+			furnace.Light = glm::vec2(ReadHalfTexel(image, center, center).g, ReadHalfTexel(image, rim, center).g);
+		}
+		REQUIRE(furnaces[0].Light.x > 0.0f);
+		REQUIRE(furnaces[0].Light.y > 0.0f);
+		const glm::vec2 once = furnaces[1].Light / furnaces[0].Light;
+		const glm::vec2 bounced = furnaces[2].Light / furnaces[0].Light;
+		const glm::vec2 offGridOnce = furnaces[3].Light / furnaces[0].Light;
+		const glm::vec2 offGridBounced = furnaces[4].Light / furnaces[0].Light;
+		MESSAGE("Furnace with GI: center " << once.x << ", rim " << once.y << " of today's with one bounce; center " << bounced.x << ", rim " << bounced.y
+			<< " with every bounce");
+		MESSAGE("Furnace with GI, the sphere off the probes' grid: center " << offGridOnce.x << ", rim " << offGridOnce.y << " with one bounce; center "
+			<< offGridBounced.x << ", rim " << offGridBounced.y << " with every bounce");
+		CHECK(std::abs(once.x - 1.0f) <= c_Tolerance);
+		CHECK(std::abs(once.y - 1.0f) <= c_RimTolerance);
+		CHECK(std::abs(bounced.x - 1.0f) <= c_Tolerance);
+		CHECK(std::abs(bounced.y - 1.0f) <= c_RimTolerance);
+		CHECK(std::abs(offGridOnce.x - 1.0f) <= c_OffGridTolerance);
+		CHECK(std::abs(offGridOnce.y - 1.0f) <= c_RimTolerance);
+		CHECK(std::abs(offGridBounced.x - 1.0f) <= c_OffGridTolerance);
+		CHECK(std::abs(offGridBounced.y - 1.0f) <= c_RimTolerance);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Without GI asked, or at the row Off, nothing is made and the image is the same")
 	{
 		GPUContext gpu;

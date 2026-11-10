@@ -1,6 +1,7 @@
 #include "Include/Common.slang"
 
 #include "Include/GIMarch.slang"
+#include "Include/SphericalHarmonics.slang"
 
 // Cascade 0 and the irradiance field (Docs/DeveloperGuide.md, "Global illumination"): a group per cascade-0 probe, a thread per
 // direction of its tile (cascade 1's directions: the layout gives cascade 0 as many). Each thread marches its own ray over cascade
@@ -18,6 +19,14 @@
 // (probe.xy * texels + texel, probe.z): the interior is the rays' own 8 x 8 directions, the border repeats it across the
 // octahedron's edges (GetDepthTileSource), and the gather's bilinear read blends neighbouring texels as a mixture. Fixed
 // directions, nothing over time: a still scene gives the same bits every frame. A dead probe writes zero (it is never read).
+// The probe's irradiance as drawn (the scene passes read it; re-injection keeps the faces): the same rays projected on the real
+// spherical harmonics of bands 0-2 (Include/SphericalHarmonics.slang's order), each band times the cosine lobe's factor over pi
+// (1, 2/3, 1/4), a coefficient at (3x + c % 3, 3y + c / 3, z) (rgb irradiance over pi, a the sky share): at a normal the sum
+// of the coefficients times the basis is the radiance of a white Lambertian surface facing it. The 64 directions' quadrature is
+// not exact beyond band 1: what a uniform radiance (the rays' mean) would leave in a coefficient is taken out, so a uniform
+// radiance gives every normal exactly that radiance. The faces blend axis lobes for a normal between the axes, which take
+// directions behind its plane: beside a white sphere under a uniform sky, probes a few centimeters off it read its rim 7% dark
+// (Include/GIField.slang).
 
 Texture3D<float4> u_Validity : register(t57);
 Texture3D<float4> u_WeightsA : register(t58);
@@ -26,6 +35,7 @@ Texture3D<float4> u_ParentAtlas : register(t60);
 [vk::image_format("rgba16f")] RWTexture3D<float4> o_Field : register(u0);
 // Two halves a texel (PackHalf2x16): RG16F is an extended storage format, which devices may lack.
 [vk::image_format("r32ui")] RWTexture3D<uint> o_Depth : register(u1);
+[vk::image_format("rgba16f")] RWTexture3D<float4> o_Irradiance : register(u2);
 
 #define ST_GI_REDUCE_GROUP 64u
 
@@ -34,6 +44,9 @@ groupshared float4 s_Faces[ST_GI_REDUCE_GROUP][6];
 groupshared float2 s_Distances[ST_GI_FIELD_DIRECTIONS];
 // Each direction itself, for the filter (computed once per group, not per texel and ray).
 groupshared float3 s_Directions[ST_GI_FIELD_DIRECTIONS];
+// Each direction's light (rgb, a the sky share) times its solid angle, and its solid angle, for the harmonics.
+groupshared float4 s_Rays[ST_GI_FIELD_DIRECTIONS];
+groupshared float s_SolidAngles[ST_GI_FIELD_DIRECTIONS];
 
 // A tile texel's solid angle (GlobalIllumination::GetSolidAngle): the octahedron's Jacobian 1 / |p|^3 at its center times the
 // tile's normalization.
@@ -91,7 +104,11 @@ void main(uint3 groupID : SV_GroupID, uint index : SV_GroupIndex)
 	// spacings, plus the view bias).
 	float missDistance = u_Pass.Interval.z;
 	if (index < ST_GI_FIELD_DIRECTIONS)
+	{
 		s_Distances[index] = float2(missDistance, missDistance * missDistance);
+		s_Rays[index] = float4(0.0, 0.0, 0.0, 0.0);
+		s_SolidAngles[index] = 0.0;
+	}
 	if (live)
 	{
 		// From the probe as ProbeValidity.comp moved it off a surface it sat on.
@@ -112,7 +129,13 @@ void main(uint3 groupID : SV_GroupID, uint index : SV_GroupIndex)
 				s_Distances[direction] = (hit.xy + passed * float2(missDistance, missDistance * missDistance)) / max(hit.z + passed, 1e-6);
 			}
 			float4 rest = ray.a > 0.0 && hasParents ? MergeParents(probe, texel, a) : float4(0.0, 0.0, 0.0, 0.0);
-			float4 value = float4(ray.rgb + ray.a * rest.rgb, ray.a * rest.a) * GetTileSolidAngle(texel, a, u_GI.SolidAngleNorms.x);
+			float solidAngle = GetTileSolidAngle(texel, a, u_GI.SolidAngleNorms.x);
+			float4 value = float4(ray.rgb + ray.a * rest.rgb, ray.a * rest.a) * solidAngle;
+			if (direction < ST_GI_FIELD_DIRECTIONS)
+			{
+				s_Rays[direction] = value;
+				s_SolidAngles[direction] = solidAngle;
+			}
 			faces[0] += value * max(d.x, 0.0);
 			faces[1] += value * max(-d.x, 0.0);
 			faces[2] += value * max(d.y, 0.0);
@@ -131,6 +154,31 @@ void main(uint3 groupID : SV_GroupID, uint index : SV_GroupIndex)
 		for (uint thread = 0u; thread < ST_GI_REDUCE_GROUP; thread++)
 			sum += s_Faces[thread][index];
 		o_Field[uint3(probe.x * 3u + index % 3u, probe.y * 2u + index / 3u, probe.z)] = sum * u_GI.FaceWeights[index >> 2][index & 3u];
+	}
+	// The irradiance's coefficients: a thread each, over every direction (none of a dead probe, whose threads wrote no
+	// direction: it writes zero).
+	if (index >= 6u && index < 15u && all(probe < u_Pass.Grid.xyz))
+	{
+		uint coefficient = index - 6u;
+		uint directions = live ? min(a * a, ST_GI_FIELD_DIRECTIONS) : 0u;
+		float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+		float4 mean = float4(0.0, 0.0, 0.0, 0.0);
+		float uniform = 0.0;
+		float total = 0.0;
+		for (uint direction = 0u; direction < directions; direction++)
+		{
+			float basis[9];
+			ProbeSHBasis(s_Directions[direction], basis);
+			sum += basis[coefficient] * s_Rays[direction];
+			mean += s_Rays[direction];
+			uniform += basis[coefficient] * s_SolidAngles[direction];
+			total += s_SolidAngles[direction];
+		}
+		// Band 0 integrates a uniform radiance exactly; the others take out what the quadrature leaves of it.
+		if (coefficient > 0u)
+			sum -= uniform / max(total, 1e-6) * mean;
+		float lobe = coefficient == 0u ? 1.0 : coefficient < 4u ? 2.0 / 3.0 : 0.25;
+		o_Irradiance[uint3(probe.x * 3u + coefficient % 3u, probe.y * 3u + coefficient / 3u, probe.z)] = sum * lobe;
 	}
 	uint depthTexels = ST_GI_FIELD_DEPTH_TEXELS * ST_GI_FIELD_DEPTH_TEXELS;
 	if (!all(probe < u_Pass.Grid.xyz))

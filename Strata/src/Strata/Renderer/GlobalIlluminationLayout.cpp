@@ -65,7 +65,7 @@ namespace Strata
 
 	uint64_t GlobalIlluminationMemory::GetTotal() const
 	{
-		return VoxelLevels + Scratch + Atlases + Weights + Validity + Field + FieldDepth + Tiles + WorkItems + Regions;
+		return VoxelLevels + Scratch + Atlases + Weights + Validity + Field + FieldDepth + FieldIrradiance + Tiles + WorkItems + Regions;
 	}
 
 	GlobalIlluminationMemory GlobalIlluminationLayout::GetMemory() const
@@ -79,6 +79,7 @@ namespace Strata
 		constexpr uint64_t c_ValidityBytes = 4;
 		constexpr uint64_t c_FieldBytes = 6 * 8;
 		constexpr uint64_t c_FieldDepthBytes = RenderData::c_GIFieldDepthTexels * RenderData::c_GIFieldDepthTexels * 4;
+		constexpr uint64_t c_FieldIrradianceBytes = 9 * 8;
 		constexpr uint64_t c_MaxTiles = 32768;
 		constexpr uint64_t c_TileBytes = 8;
 		constexpr uint64_t c_MaxWorkItems = 65536;
@@ -101,6 +102,7 @@ namespace Strata
 			{
 				memory.Field = probes * c_FieldBytes;
 				memory.FieldDepth = probes * c_FieldDepthBytes;
+				memory.FieldIrradiance = probes * c_FieldIrradianceBytes;
 			}
 		}
 		memory.Tiles = c_MaxTiles * c_TileBytes;

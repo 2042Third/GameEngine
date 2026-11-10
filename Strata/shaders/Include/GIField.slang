@@ -9,6 +9,7 @@
 #include "Include/Common.slang"
 
 #include "Include/GlobalIllumination.slang"
+#include "Include/SphericalHarmonics.slang"
 
 struct GIFieldConstants
 {
@@ -48,6 +49,26 @@ float4 ReadAmbientCube(int3 probe, float3 normal)
 	float4 y = u_GIFieldFaces.Load(int4(base + (normal.y >= 0.0 ? int3(2, 0, 0) : int3(0, 1, 0)), 0));
 	float4 z = u_GIFieldFaces.Load(int4(base + (normal.z >= 0.0 ? int3(1, 1, 0) : int3(2, 1, 0)), 0));
 	return squared.x * x + squared.y * y + squared.z * z;
+}
+
+// A cascade-0 probe's irradiance for a shading normal (rgb irradiance over pi times ST_GI_RADIANCE_SCALE, a the sky share). Scene
+// passes read SRV 35 as the probes' spherical harmonics (FieldReduce.comp's coefficients times the basis at the normal, never below
+// zero: band 2 rings a little past a sharp edge of light). The re-injection (GI/VoxelInject.comp) and the probes view bind the
+// ambient cubes there (they define ST_GI_FIELD_AMBIENT_CUBE): their weights are never negative, so the bounces' series rises to
+// its limit and stays there (the harmonics' negative lobes made it cycle by a rounding step, and still frames differed).
+float4 ReadProbeIrradiance(int3 probe, float3 normal)
+{
+#ifdef ST_GI_FIELD_AMBIENT_CUBE
+	return ReadAmbientCube(probe, normal);
+#else
+	float basis[9];
+	ProbeSHBasis(normal, basis);
+	float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+	[unroll]
+	for (uint coefficient = 0u; coefficient < 9u; coefficient++)
+		sum += basis[coefficient] * u_GIFieldFaces.Load(int4(probe.x * 3 + int(coefficient % 3u), probe.y * 3 + int(coefficient / 3u), probe.z, 0));
+	return max(sum, float4(0.0, 0.0, 0.0, 0.0));
+#endif
 }
 
 float SampleFieldVoxels(uint level, SamplerState repeat, float3 coordinate)
@@ -197,7 +218,7 @@ float4 GatherFieldProbes(SamplerState repeat, float3 biased, float3 position, fl
 			weight *= GetFieldTransmittance(repeat, probePosition, seen);
 		if (weight <= 0.0)
 			continue;
-		sum += weight * ReadAmbientCube(probe, shadingNormal);
+		sum += weight * ReadProbeIrradiance(probe, shadingNormal);
 		total += weight;
 	}
 	return sum;

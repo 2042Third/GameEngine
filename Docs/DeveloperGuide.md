@@ -4038,7 +4038,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | Screen-space reflections' targets per view (scenes that ask for them; "Reflections") | none | 20 MiB, 79 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows |
 | Motion blur's targets per view (scenes with motion blur) | none | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows |
 | Reflection probes per view (16 slots, scenes with probes) | 17 MiB | 17 MiB | 68 MiB | 68 MiB |
-| Global illumination per view (scenes that ask for it; Low's layout 22.6 MiB) | none | none | 146.4 MiB | 146.4 MiB |
+| Global illumination per view (scenes that ask for it; Low's layout 23.4 MiB) | none | none | 152.7 MiB | 152.7 MiB |
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
   High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for rows that cost at every
@@ -4969,8 +4969,9 @@ probe-field levels and local lights follow.
 - **Layout** (`R/GlobalIlluminationLayout.h`, `Renderer.GlobalIlluminationLayout`): per quality level the voxel levels
   (High four of 128 x 64 x 128 voxels from 10 cm, Low three of 64 x 32 x 64 from 20 cm, each level twice the voxel size of
   the one before) and the probe cascades (High four from 0.5 m, 16 to 1,024 directions; Low three from 1 m). Memory per view
-  that runs GI (`GetMemory`, the same at every output size, the frame's work and region lists included): 146.4 MiB at High,
-  22.6 MiB at Low (the probes' depth moments 35.2 and 4.4 of them); `SceneRenderer::GetGlobalIlluminationMemoryBytes` adds the
+  that runs GI (`GetMemory`, the same at every output size, the frame's work and region lists included): 152.7 MiB at High,
+  23.4 MiB at Low (the probes' depth moments 35.2 and 4.4 of them, their spherical harmonics 6.3 and 0.8);
+  `SceneRenderer::GetGlobalIlluminationMemoryBytes` adds the
   scene's material table (4 KiB for 256 materials, doubling as it grows). A frame that wants none releases everything
   (`ReleaseGlobalIllumination`), and so do the render targets' release and a `SetQuality` that changes the row.
 - **The clipmap** (`R/VoxelClipmap.h`, CPU, main thread, `Renderer.VoxelClipmap`): per level a window centered on the
@@ -5118,8 +5119,16 @@ probe-field levels and local lights follow.
   unabsorbed ray continues into the parents' merged rays, only the top cascade, leaving the clipmap, reads the sky), and
   `FieldReduce` (a group per cascade-0 probe, a thread per direction: cascade 0 marches cascade 1's 64 directions, each
   continued by cascade 1's merged ray of the same direction and gated by its own transmittance, into the field's ambient cube:
-  six RGBA16F faces per cascade-0 probe, irradiance over pi and the sky share, normalized by the directions' cosine sum;
-  cascade 0 has no atlas). A 16-direction cascade 0 reduced apart gated four of cascade 1's directions with one ray and put an
+  six RGBA16F faces per cascade-0 probe, irradiance over pi and the sky share, normalized by the directions' cosine sum, which
+  re-injection reads; and the same rays projected on the real spherical harmonics of bands 0-2, each band times the cosine
+  lobe's factor over pi (1, 2/3, 1/4), less what a uniform radiance leaves in a coefficient through the 64 directions'
+  quadrature, nine RGBA16F texels a probe (`FieldIrradiance`), which drawn surfaces read; cascade 0 has no atlas). Drawn
+  surfaces read the harmonics (`ReadProbeIrradiance`, never below zero): the faces blend the axes' hemispheres for a normal
+  between them, which take directions behind its plane, and beside a white sphere under a uniform sky the probes a few
+  centimeters off it read its rim 7% dark (the harmonics 3.5%). Re-injection and the probes view keep the faces
+  (`ST_GI_FIELD_AMBIENT_CUBE`): their weights are never negative, so the bounces' series rises to its limit and stays there
+  (re-injected through the harmonics, the series fell into a rounding cycle: still frames differed, settling missed its
+  frame). A 16-direction cascade 0 reduced apart gated four of cascade 1's directions with one ray and put an
   emissive wall's light at its directions' centres' cosines, 1.34-1.42 times the form factor. The same pass keeps each probe's
   **depth moments** (DDGI's, Majercik et al. 2019 and 2021, ideas only): each ray's distance to its first hit over its march
   (the absorbed shares' mean; what passes counts at the march's end, two spacings; the probe's own sample is its validity, not
@@ -5293,13 +5302,19 @@ probe-field levels and local lights follow.
   count by their maps' means (models colored from one shared palette map, as the ThirdPerson sample's Kenney models are,
   take the palette's mean everywhere: one mauve for grass, wood and rock), double-sided materials' voxels have no facing
   (the voxels view shades them flat), glowing values above 65,408 nits clamp, and an editor top view far above a scene
-  shows its coarse levels only. The field is an ambient cube per probe, exact for axis-aligned normals only: a white sphere
-  under a uniform sky reads 2% dark at its center and 7% at its rim (one bounce; its probes see the sphere behind the
-  point's own horizon). Measured instead (batch 1, not landed): correction 7b's 8 x 8 octahedral tile read the rim 4.3% dark
-  but its bilinear reads creased the Cornell box's sphere; nine spherical-harmonic coefficients read it 3.5% dark and smooth,
-  but in half floats the bounces fell into a 0.2% cycle (still frames differed, settling missed its frame), and in floats
-  they still differed at frame 30; what is left at the rim seems to lie in the merge of parents beside the sphere (their rays
-  of the same direction cross it). Its light ends at the field's edge around the camera (High: full within 7.5 m horizontally and 5.5 m up and
+  shows its coarse levels only. A white sphere under a uniform sky reads 2.1% dark at its center and 3.5% at its rim (one
+  bounce; the white furnace case, `GlobalIlluminationJoin`, asserts 3% and 4%; 3% at the rim is the goal; the ambient cubes
+  read 6.8% there). Neither the form nor the bounces decide what is left (every bounce: 2.1% and 3.0%): a probe within two
+  voxels of the
+  sphere loses the rays that skim it to the voxels' layer about the surface, which absorbs them at a grazing angle and
+  sends nothing back (a probe 8 cm off the sphere holds 0.81 of the sky along the normal, with one bounce and with every
+  bounce; marched without the lead-in, or without the origin's sample, the sphere read within 1% of the same). So the loss
+  depends on where a surface lies among the probes: the same sphere at (0.13, 0.07, 0.21) reads 9.8% dark at its center and
+  2.9% at its rim (the same case holds the center within 10.5%, the rim within 4%). Measured instead (batch 1): correction
+  7b's 8 x 8 octahedral tile read the
+  rim 4.3% dark but its bilinear reads creased the Cornell box's sphere; the harmonics for re-injection made the bounces
+  cycle (above); a stricter facing of the probes (from 0.05 instead of -0.05) moved the rim by half a percent only. Its
+  light ends at the field's edge around the camera (High: full within 7.5 m horizontally and 5.5 m up and
   down, Low within 7 m and 2.8 m, faded to today's light over the next 2 m), which can show outdoors as the edge of a
   bubble. The reach stays where voxel level 2 holds every point while a scroll's slab waits to be voxelized and the camera
   moves on up to a step (`ComputeLayout`; Low's level 2 holds 4.8 m up and down), since a point no level holds takes

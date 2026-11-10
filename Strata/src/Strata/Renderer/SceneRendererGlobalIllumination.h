@@ -76,6 +76,7 @@ namespace Strata
 		std::vector<Cascade> Cascades;
 		nvrhi::TextureHandle Field;
 		nvrhi::TextureHandle FieldDepth; // R32_UINT, two halves: each cascade-0 probe's tile of depth moments (FieldReduce.comp)
+		nvrhi::TextureHandle FieldIrradiance; // RGBA16F: each cascade-0 probe's irradiance as nine harmonics (what scene passes read)
 		// Multi-bounce by re-injection: VoxelInject reads the field the frame before left (its texture and cascade 0's validity
 		// still hold it when injection runs) through these constants (b3), relative to that frame's camera.
 		nvrhi::BufferHandle PreviousFieldBuffer;   // RenderData::GIFieldConstants
