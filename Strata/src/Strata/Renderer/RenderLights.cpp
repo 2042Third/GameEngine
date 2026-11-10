@@ -40,11 +40,6 @@ namespace Strata
 
 		constexpr uint32_t c_LightTypes = RenderData::c_LightTypeCount;
 
-		bool IsDrawn(const RenderData::LightRecord& record)
-		{
-			return record.SpotAngles.z != 0.0f;
-		}
-
 		// The record type of a light component.
 		template<typename Component>
 		constexpr uint32_t GetLightType()
@@ -305,15 +300,12 @@ namespace Strata
 				m_ByKey.resize(key + 1, c_InvalidIndex);
 			m_ByKey[key] = index;
 			m_Count++;
+			m_TypeCounts[type]++;
 		}
 		else if (RecordsEqual(m_Records[index], record) && m_ShadowSettings[index] == shadow)
 		{
 			return false;
 		}
-		if (IsDrawn(m_Records[index]))
-			m_DrawnCounts[type]--;
-		if (IsDrawn(record))
-			m_DrawnCounts[type]++;
 		m_Records[index] = record;
 		m_ShadowSettings[index] = shadow;
 		UpdateShadowed(index);
@@ -328,13 +320,12 @@ namespace Strata
 			return;
 		m_ByKey[GetKey(entity, type)] = c_InvalidIndex;
 		m_Entities[index] = entt::null;
-		if (IsDrawn(m_Records[index]))
-			m_DrawnCounts[type]--;
 		m_Records[index] = RenderData::LightRecord {};
 		m_ShadowSettings[index] = LightShadowSettings {};
 		UpdateShadowed(index);
 		m_FreeRecords.push_back(index);
 		m_Count--;
+		m_TypeCounts[type]--;
 		LogChange(index);
 	}
 
@@ -416,7 +407,7 @@ namespace Strata
 			return false;
 		};
 		uint32_t count = 0;
-		std::array<uint32_t, c_LightTypes> drawn = {};
+		std::array<uint32_t, c_LightTypes> types = {};
 		for (uint32_t index = 0; index < m_Entities.size(); index++)
 		{
 			const entt::entity entity = m_Entities[index];
@@ -427,8 +418,8 @@ namespace Strata
 				continue;
 			}
 			count++;
-			if (IsDrawn(m_Records[index]) && m_Types[index] < c_LightTypes)
-				drawn[m_Types[index]]++;
+			if (m_Types[index] < c_LightTypes)
+				types[m_Types[index]]++;
 			RenderData::LightRecord expected;
 			LightShadowSettings expectedShadow;
 			if (!ComputeRecord(scene, entity, m_Types[index], expected, expectedShadow))
@@ -442,8 +433,8 @@ namespace Strata
 		}
 		if (count != m_Count)
 			return fail("the light count differs from the records");
-		if (drawn != m_DrawnCounts)
-			return fail("the drawn lights' counts differ from the records");
+		if (types != m_TypeCounts)
+			return fail("the light types' counts differ from the records");
 		for (uint32_t place = 0; place < m_Shadowed.size(); place++)
 		{
 			if (m_Shadowed[place] >= m_ShadowedIndex.size() || m_ShadowedIndex[m_Shadowed[place]] != place)

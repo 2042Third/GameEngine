@@ -1139,10 +1139,12 @@ TEST_SUITE("GPU.SceneRenderer.AreaLights")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("Frames draw with the forward shaders that shade rect lights only while the scene has a drawn rect light")
+	TEST_CASE("Frames draw with the forward shaders that shade rect lights while the scene has a rect light, drawn or not")
 	{
 		// The shaders' forms without the rect lights' code are those of before (their registers would cost every pixel): a
-		// scene draws with the others from its first drawn rect light on, in view or not, and goes back without one.
+		// scene draws with the others from its first rect light on, in view or not, and goes back once it has none. Drawn or
+		// not: the forms shade the rest of the light a little differently, so turning a light's intensity or its entity off
+		// and on must leave every pixel it does not reach as it was, on both paths.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
@@ -1161,16 +1163,31 @@ TEST_SUITE("GPU.SceneRenderer.AreaLights")
 			const SceneCamera camera = LookAt(glm::vec3(0.0f, 2.0f, 2.0f), glm::vec3(0.0f));
 			RenderHDR(renderer, scene, camera);
 			CHECK_FALSE(renderer.GetStats().AreaLightShading);
-			// Unlit: not drawn.
+			// Unlit (not drawn), behind the camera and out of its reach.
 			Entity panel = AddRectLight(scene, glm::vec3(0.0f, 1.0f, 40.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), 1.0f, 1.0f, 0.0f, 2.0f);
-			RenderHDR(renderer, scene, camera);
-			CHECK_FALSE(renderer.GetStats().AreaLightShading);
-			// Drawn, behind the camera and out of its reach.
+			const ReadbackImage unlit = RenderHDR(renderer, scene, camera);
+			CHECK(renderer.GetStats().AreaLightShading);
+			// Lit, its entity turned off, and lit again: the same forms and the same pixels every frame.
 			scene.GetRegistry().patch<RectLightComponent>(panel.GetHandle(), [](RectLightComponent& light) { light.Intensity = 100.0f; });
-			RenderHDR(renderer, scene, camera);
+			const ReadbackImage lit = RenderHDR(renderer, scene, camera);
 			CHECK(renderer.GetStats().AreaLightShading);
 			CHECK(GetLightCounts(renderer).AreaLights == 0);
+			CHECK(lit.Pixels == unlit.Pixels);
 			panel.SetActive(false);
+			const ReadbackImage inactive = RenderHDR(renderer, scene, camera);
+			CHECK(renderer.GetStats().AreaLightShading);
+			CHECK(inactive.Pixels == unlit.Pixels);
+			panel.SetActive(true);
+			RenderHDR(renderer, scene, camera);
+			CHECK(renderer.GetStats().AreaLightShading);
+			// Without the component, and with it again until its entity goes.
+			panel.RemoveComponent<RectLightComponent>();
+			RenderHDR(renderer, scene, camera);
+			CHECK_FALSE(renderer.GetStats().AreaLightShading);
+			panel.AddComponent<RectLightComponent>();
+			RenderHDR(renderer, scene, camera);
+			CHECK(renderer.GetStats().AreaLightShading);
+			scene.DestroyEntity(panel);
 			RenderHDR(renderer, scene, camera);
 			CHECK_FALSE(renderer.GetStats().AreaLightShading);
 		}

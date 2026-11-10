@@ -597,7 +597,8 @@ namespace Strata
 		bool EnvironmentRefreshPending = false;
 		glm::vec3 SunTransmittance = glm::vec3(1.0f);
 		bool PreviewLighting = false;     // SceneRenderOptions::PreviewEnvironment lit the scene (it has no light of its own)
-		// The forward passes drew with the shaders that shade rect lights: the scene has a drawn rect light (in view or not)
+		// The forward passes drew with the shaders that shade rect lights: the scene has a rect light (a RectLightComponent,
+		// drawn or not, in view or not)
 		bool AreaLightShading = false;
 		bool HeightFog = false;           // The scene's height fog (SceneRenderer::FindHeightFog) was drawn
 		uint32_t ShadowCasters = 0;       // Instances drawn into shadow cascades (summed over cascades)
@@ -1141,8 +1142,8 @@ namespace Strata
 			bool Velocity = false;
 			// The prepass of a frame with screen-space reflections (always with Velocity): it writes the surface target too.
 			bool Surface = false;
-			// The forward passes (Opaque, Transparent, Glass) of a frame whose scene has a drawn rect light: the shaders' forms
-			// that shade rect lights (ST_AREA_LIGHTS). GetScenePipeline sets it from the frame.
+			// The forward passes (Opaque, Transparent, Glass) of a frame whose scene has a rect light: the shaders' forms that
+			// shade rect lights (ST_AREA_LIGHTS). GetScenePipeline sets it from the frame.
 			bool AreaLights = false;
 			bool operator==(const PipelineKey&) const = default;
 		};
@@ -2136,7 +2137,7 @@ namespace Strata
 		nvrhi::ShaderHandle m_ForwardTransparentPixelShader;
 		nvrhi::ShaderHandle m_GlassPixelShader; // With or without entity ids, as the renderer writes them
 		// The forward shaders' forms that shade rect lights (ST_AREA_LIGHTS: Include/AreaLights.slang), for frames whose scene has
-		// a drawn rect light (m_AreaLightsFrame); the others leave them out, so that frames without them pay nothing.
+		// a rect light (m_AreaLightsFrame); the others leave them out, so that frames without them pay nothing.
 		nvrhi::ShaderHandle m_ForwardAreaPixelShader;
 		nvrhi::ShaderHandle m_ForwardTransparentAreaPixelShader;
 		nvrhi::ShaderHandle m_GlassAreaPixelShader;

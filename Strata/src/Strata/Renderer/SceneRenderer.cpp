@@ -2438,7 +2438,7 @@ namespace Strata
 
 	nvrhi::IGraphicsPipeline* SceneRenderer::GetScenePipeline(const PipelineKey& requested)
 	{
-		// The forward passes of a frame whose scene has a drawn rect light take the shaders' forms that shade them.
+		// The forward passes of a frame whose scene has a rect light take the shaders' forms that shade them.
 		PipelineKey key = requested;
 		key.AreaLights = m_AreaLightsFrame && (key.PassType == Pass::Opaque || key.PassType == Pass::Transparent || key.PassType == Pass::Glass);
 		for (const auto& [cachedKey, pipeline] : m_ScenePipelines)
@@ -2645,9 +2645,11 @@ namespace Strata
 		m_LightBounds.clear();
 		m_LightRecordIndices.clear();
 		const RenderLights& lights = renderScene.GetLights();
-		// Both paths alike: whether the scene has a rect light drawn anywhere, not only in view (the GPU-driven path culls on
-		// the GPU), chooses the forward shaders that shade them.
-		m_AreaLightsFrame = lights.GetDrawnCount(RenderData::c_LightRect) > 0;
+		// Both paths alike: whether the scene has a rect light anywhere, not only in view (the GPU-driven path culls on the
+		// GPU), chooses the forward shaders that shade them. Drawn or not: the forms shade the rest of a pixel's light a little
+		// differently (the driver compiles the shader differently), so a light that flickers to no intensity, or is turned off
+		// and on, must not switch every pixel's shader with it; only adding or removing a rect light does.
+		m_AreaLightsFrame = lights.GetTypeCount(RenderData::c_LightRect) > 0;
 		m_Stats.AreaLightShading = m_AreaLightsFrame;
 		m_GPULightsFrame = m_GPUDrivenFrame && m_LightCullPipeline && m_LightCompactPipeline;
 		if (m_GPULightsFrame)

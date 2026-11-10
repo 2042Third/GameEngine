@@ -335,7 +335,8 @@ TEST_SUITE("GPU.Editor.Viewport")
 		const nlohmann::json& stats = result["renderStats"];
 		INFO(stats.dump(1));
 		for (const char* key : { "gpuDriven", "gpuCulled", "drawCommands", "draws", "opaqueDraws", "shadowDraws", "instances", "shadowCasters", "triangles", "visibleProxies",
-			"occludedProxies", "occludedCasters", "cachedCascades", "culledProxies", "instancesPerLod", "lights", "droppedLights", "materials", "pendingAssets", "extractMs", "sortMs", "proxyUpdates",
+			"occludedProxies", "occludedCasters", "cachedCascades", "culledProxies", "instancesPerLod", "lights", "areaLights", "areaLightShading", "droppedLights", "materials", "pendingAssets",
+			"extractMs", "sortMs", "proxyUpdates",
 			"instanceBytesUploaded", "deferredInstanceBytes", "geometryPool", "gpuMs", "gpuStatsFrame" })
 		{
 			CAPTURE(key);
@@ -349,6 +350,8 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(stats["drawCommands"].get<uint32_t>() >= 2);
 		CHECK(stats["triangles"] == 12);
 		CHECK(stats["lights"] == 1);
+		CHECK(stats["areaLights"] == 0);
+		CHECK(stats["areaLightShading"] == false);
 		CHECK(stats["instancesPerLod"].size() == SceneRendererStats::c_LODStatCount);
 		// The meshes' geometry lives in the renderer's pool.
 		REQUIRE(stats["geometryPool"].is_object());
@@ -379,6 +382,34 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(perf["renderStats"].is_object());
 		CHECK(perf["renderStats"]["instances"] == 1);
 		CHECK(perf.contains("gpu"));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A capture reports the rect lights in view and whether its frame shaded with the rect lights' shaders")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.AddScene();
+		// A panel above the cube, shining down: in view; then unlit, which keeps the shaders that shade rect lights.
+		const nlohmann::json panel = harness.Run("entity.create", { { "name", "Panel" }, { "components", {
+			{ "RectLight", { { "Intensity", 100.0 }, { "Width", 1.0 }, { "Height", 0.5 }, { "Range", 5.0 } } },
+			{ "Transform", { { "Translation", { 0, 2, 0 } }, { "Rotation", { -90, 0, 0 } } } } } } });
+		REQUIRE(panel.contains("id"));
+		nlohmann::json result;
+		harness.CaptureLoaded({ { "width", 64 }, { "height", 48 } }, &result);
+		INFO(result["renderStats"].dump(1));
+		CHECK(result["renderStats"]["areaLights"] == 1);
+		CHECK(result["renderStats"]["areaLightShading"] == true);
+		harness.Run("component.set", { { "entity", panel["id"] }, { "component", "RectLight" }, { "values", { { "Intensity", 0.0 } } } });
+		harness.CaptureLoaded({ { "width", 64 }, { "height", 48 } }, &result);
+		CHECK(result["renderStats"]["areaLights"] == 0);
+		CHECK(result["renderStats"]["areaLightShading"] == true);
+		harness.Run("entity.delete", { { "entities", nlohmann::json::array({ panel["id"] }) } });
+		harness.CaptureLoaded({ { "width", 64 }, { "height", 48 } }, &result);
+		CHECK(result["renderStats"]["areaLights"] == 0);
+		CHECK(result["renderStats"]["areaLightShading"] == false);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

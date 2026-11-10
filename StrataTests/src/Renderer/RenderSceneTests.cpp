@@ -1239,6 +1239,9 @@ TEST_SUITE("Renderer.RenderScene")
 		renderScene.Sync(nullptr);
 		const RenderLights& lights = renderScene.GetLights();
 		CHECK(lights.GetCount() == 2);
+		CHECK(lights.GetTypeCount(RenderData::c_LightRect) == 1);
+		CHECK(lights.GetTypeCount(RenderData::c_LightPoint) == 1);
+		CHECK(lights.GetTypeCount(RenderData::c_LightSpot) == 0);
 		const uint32_t rect = lights.Find(panel.GetHandle(), RenderData::c_LightRect);
 		REQUIRE(rect != RenderLights::c_InvalidIndex);
 		CHECK(rect != lights.Find(panel.GetHandle(), RenderData::c_LightPoint));
@@ -1311,6 +1314,8 @@ TEST_SUITE("Renderer.RenderScene")
 		panel.SetActive(false);
 		renderScene.Sync(nullptr);
 		CHECK(lights.GetRecords()[rect].SpotAngles.z == 0.0f);
+		// Undrawn records still count as their type's (the renderer picks its forward shaders by them).
+		CHECK(lights.GetTypeCount(RenderData::c_LightRect) == 1);
 		panel.SetActive(true);
 		renderScene.Sync(nullptr);
 		CHECK(lights.GetRecords()[rect].SpotAngles.z == RenderData::c_LightRecordDrawn);
@@ -1319,6 +1324,8 @@ TEST_SUITE("Renderer.RenderScene")
 		renderScene.Sync(nullptr);
 		CHECK(lights.Find(panel.GetHandle(), RenderData::c_LightRect) == RenderLights::c_InvalidIndex);
 		CHECK(lights.GetCount() == 1);
+		CHECK(lights.GetTypeCount(RenderData::c_LightRect) == 0);
+		CHECK(lights.GetTypeCount(RenderData::c_LightPoint) == 1);
 		CHECK_MESSAGE(renderScene.Validate(&error), error);
 	}
 

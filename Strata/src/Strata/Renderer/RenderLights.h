@@ -70,8 +70,9 @@ namespace Strata
 		uint32_t GetCapacity() const { return static_cast<uint32_t>(m_Records.size()); }
 		uint32_t GetCount() const { return m_Count; }
 		std::span<const RenderData::LightRecord> GetRecords() const { return m_Records; }
-		// The drawn records of a type (RenderData::c_LightPoint, c_LightSpot or c_LightRect).
-		uint32_t GetDrawnCount(uint32_t type) const { return type < RenderData::c_LightTypeCount ? m_DrawnCounts[type] : 0u; }
+		// The records of a type (RenderData::c_LightPoint, c_LightSpot or c_LightRect), drawn or not: the scene's entities with
+		// that light component and a world transform, also the inactive ones and those without light.
+		uint32_t GetTypeCount(uint32_t type) const { return type < RenderData::c_LightTypeCount ? m_TypeCounts[type] : 0u; }
 		// The record of an entity's point (RenderData::c_LightPoint), spot or rect light, or c_InvalidIndex.
 		uint32_t Find(entt::entity entity, uint32_t type) const;
 		entt::entity GetEntity(uint32_t record) const { return m_Entities[record]; }
@@ -116,7 +117,7 @@ namespace Strata
 		std::vector<uint32_t> m_FreeRecords;
 		std::vector<uint32_t> m_ByKey;         // Per entity index and type (GetKey): its record
 		uint32_t m_Count = 0;
-		std::array<uint32_t, RenderData::c_LightTypeCount> m_DrawnCounts = {}; // Per type: its drawn records
+		std::array<uint32_t, RenderData::c_LightTypeCount> m_TypeCounts = {}; // Per type: its records
 
 		// Entities whose light components were signaled since the last sync, each once per type.
 		struct QueuedLight

@@ -268,6 +268,7 @@ namespace Strata
 				{ "instancesPerLod", std::move(lods) },
 				{ "lights", stats.Lights },
 				{ "areaLights", stats.AreaLights },
+				{ "areaLightShading", stats.AreaLightShading },
 				{ "droppedLights", stats.DroppedLights },
 				{ "materials", stats.Materials },
 				{ "pendingAssets", stats.PendingAssets },
@@ -954,7 +955,8 @@ namespace Strata
 			"decide), localShadowFading (those fading the shadow they lost out), localShadowViewsDrawn (their shadow views drawn: none while nothing reaching them changed), localShadowViewsPending, "
 			"localShadowCasters, reflectionProbes (reflection probes the view shaded with), reflectionProbesPending (in view, their capture "
 			"still loading or waiting to be converted), culledProxies, "
-			"sizeCulledProxies (in view but below a pixel), instancesPerLod, lights, areaLights (of lights, the rect lights), droppedLights, "
+			"sizeCulledProxies (in view but below a pixel), instancesPerLod, lights, areaLights (of lights, the rect lights), areaLightShading (the forward passes used "
+			"the shaders that shade rect lights, a little costlier: the scene has a rect light, lit or not, in view or not), droppedLights, "
 			"materials, pendingAssets, extractMs, sortMs, proxyUpdates, instanceBytesUploaded, deferredInstanceBytes (new mesh renderers waiting for "
 			"their upload to the GPU), geometryPool "
 			"(the meshes' GPU geometry: usedMB, capacityMB, allocations, fragmentation, moves, growths), sceneMirrorMB (the GPU memory of the scenes' "

@@ -344,11 +344,12 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   TAA. Clear coats, glass, blended surfaces and reflection probe captures (diffuse only) take it; its Range fades it to
   zero at that distance from the face.
 - Rect lights cast no shadow yet (the stream's next stage): they light through objects.
-- Scenes without rect lights render as before, bit for bit, and pay nothing for them: the forward pass's rect-light code is
-  in shaders of its own, drawn only while a scene has a rect light.
+- Scenes without rect lights render as before, bit for bit, and their forward pass costs what it did: the rect-light code
+  is in shaders of their own, drawn while a scene has a rect light, lit or not (Known issues). Every light record grew by
+  32 bytes, and the light buffers carry a 48-byte face per light.
 - The Scene view's gizmo draws a rect light's outline, a stroke along the way it shines and, where ranges show, its
   reach; a scene lit only by rect lights is shown as it is, without the preview sun. `editor.perf` reports
-  `areaLights`, the rect lights in view.
+  `areaLights`, the rect lights in view, and `areaLightShading`, whether the frame drew with the shaders that shade them.
 - Scripts and agents reach it as every light: `Entity::SetProperty("RectLight", "Width", 1.5f)`, `component.set`.
 
 ## Defaults that change
@@ -575,6 +576,16 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   metal of roughness 0.3 to 0.6 seen 78 degrees from its normal reflects 0.912 to 0.918 of it (0.94 to 0.98 at 60 degrees)
   where it should reflect all of it.
 - Rect lights cast no shadows yet: Cast Shadows and its biases are kept, and nothing is shadowed.
+- A scene with a rect light, even an unlit one out of sight, draws every surface with the forward shaders that shade rect
+  lights: an unlit one added to the showcase costs its opaque pass 2.7% at Medium (shots 2 and 3, interleaved A/B) and
+  moves a few pixels (shot 3 without AA: two specks of 2,048 pixels by up to 117 codes; under TAA up to 4 codes in shot 2
+  and 27 in shot 3, about what those shots' own repeats differ by). Turning a light off and on keeps the shaders; adding
+  the first rect light to a running scene or removing the last (a spawned prefab, a streamed world cell) switches them,
+  and the frame that adds the first compiles the forms of the forward pipelines it draws on the main thread: 6.3-7.1 ms
+  for the one pipeline of a small test scene, first in its process, so tens of milliseconds for a scene drawing many kinds
+  of surfaces (skinned, mirrored, double-sided, transparent, glass). Compiling them ahead, or on a worker thread while the
+  old forms draw, is left for later: every pipeline the renderer has is made on first use, and making them ahead is a
+  change to all of them.
 
 **Showcase (the reflections' adoption)**
 

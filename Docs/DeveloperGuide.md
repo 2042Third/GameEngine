@@ -4527,7 +4527,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
   buffer in a parallel one (`RenderData::LightShape`, 48 bytes a light, zero for point and spot lights; scene set SRV 56,
   `u_LightShapes`): `CollectLights` fills it with the lights it uploads, `LightCompact.comp` writes it (its u7) at the
   light's place. The GPU counts the rect lights it packed (`CullCounters::VisibleAreaLights`, counter 27;
-  `SceneRendererStats::AreaLights`, `editor.perf`'s `areaLights`).
+  `SceneRendererStats::AreaLights`, `editor.perf`'s `areaLights`; whether the frame drew with the forms that shade them:
+  `AreaLightShading`, `areaLightShading`, "Area lights").
 - The cascades are one D32 array (`SceneRenderer::GetShadowMap`) of a layer per cascade the quality draws
   (`RendererQualitySettings::ShadowCascades`; thumbnails draw one), made by the first frame with a shadowed sun and kept
   across resizes; a zero viewport (a capture renderer between pictures, the editor's hidden Game view) releases it,
@@ -4987,14 +4988,23 @@ lights, Post Process and the sky), and never a resolution below the output's.
   A change to the shading changes both, and the test.
 - **Shading** (`ShadeAreaLight`, entered from the forward pass's cluster loop for lights of type `ST_LIGHT_RECT` and
   above, the same for every pixel of a light: point and spot lights never enter it). Only the forward shaders' forms with
-  `ST_AREA_LIGHTS` (`Scene/ForwardAreaLights.frag` and the transparent and glass ones) hold it, and a renderer draws with
-  them in frames whose scene has a drawn rect light anywhere (`RenderLights::GetDrawnCount`, `PipelineKey::AreaLights`,
-  both paths alike; `SceneRendererStats::AreaLightShading`); the other forms are the shaders of before, instruction for
-  instruction. Compiled into every frame, the branch cost the opaque pass of scenes without rect lights 3.1-6.6% at
-  Medium (interleaved A/B, the showcase's shot 2 and the look-dev room and overview) and moved their pictures (the
-  showcase's shot 3 by up to 117 codes at a few pixels, shot 2 under TAA by up to 4, every run alike): the driver compiles
-  the rest of the shader differently. With the forms apart the A/B is within its noise (-0.8% to +0.2%) and the look-dev
-  pictures of the Showcase and LookDev projects equal main's but for those whose own repeats differ.
+  `ST_AREA_LIGHTS` (`Scene/ForwardAreaLights.frag` and the transparent and glass ones, separate binaries rather than a
+  specialization constant, so that the others stay the shaders of before, instruction for instruction) hold it, and a
+  renderer draws with them in frames whose scene has a rect light anywhere, lit or not (`RenderLights::GetTypeCount`:
+  every `RectLightComponent` with a world transform, unlit and inactive ones too; `PipelineKey::AreaLights`, both paths
+  alike; `SceneRendererStats::AreaLightShading`, `editor.perf`'s `areaLightShading`). The forms cost more and shade a
+  little differently even where no rect light reaches, since the driver compiles the rest of the shader differently: an
+  unlit rect light added to the showcase costs its opaque pass 2.7% at Medium (shots 2 and 3, interleaved A/B; the frame
+  0.1-1.1%; the branch compiled into every frame measured 3.1-6.6% on shot 2 and the look-dev room and overview), and
+  moves a few pixels (shot 3 without AA: two specks, 2,048 pixels, by up to 117 codes; under TAA shot 2 by up to 4 codes,
+  shot 3 by up to 27; FXAA's pictures equal), as much as those shots' own repeats in one session differ (2,079 and 59
+  pixels without AA, 158,587 and 94,062 under TAA). So neither a light's intensity nor its activity switches the forms (a
+  sign flickering to nothing would flicker those pixels and that cost with it): only the first rect light added or the
+  last removed does, and that frame compiles the area forms of the forward pipelines it draws, on the main thread
+  (6.3-7.1 ms for the one opaque pipeline of `GPU.SceneRenderer.AreaLights`' scene, first in its process, then 0.6-0.8 ms
+  for the next renderer's; the release notes' Known issues). Scenes without rect lights: the A/B against main is within
+  its noise (-0.8% to +0.2%) and the look-dev pictures of the Showcase and LookDev projects equal main's but for those
+  whose own repeats differ.
   Diffuse is the face's exact form factor in its clipless form: the vector form factor (the sum of the
   edges' `IntegrateEdgeVec`, each edge's term `cross(d_i, e_i) / (|d_i| |d_i+1|)` with the exact edge `e_i` from the axes,
   so small or far lights keep float precision) and the table's horizon term for a sphere of the same vector form factor,

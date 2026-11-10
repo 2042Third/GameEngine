@@ -101,8 +101,14 @@ linearly transformed cosines), the same in every frame.
   only through global illumination's probes, with their coarse resolution. To make a panel light the room, place a Rect
   Light on its face (the Hierarchy's **Create > Rect Light**, then size and place it as the face), with the panel's
   emission as its Intensity in nits.
-- **What it costs**: each rect light costs every pixel it reaches a few hundred arithmetic operations (about twice a
-  point light's), and a clear-coated surface more. Lights that reach few pixels cost little.
+- **What it costs**: each rect light costs every pixel it reaches a few hundred arithmetic operations and twelve table
+  reads (an integral over its face for the diffuse light, another for the highlight), and a clear-coated surface a third
+  integral and eight reads more; lights that reach few pixels cost little. Besides, a scene that has a rect light, lit or
+  not and wherever it is, draws all its surfaces with the shaders that can shade one, which cost more everywhere: an unlit
+  rect light added to the showcase costs its opaque pass 2.7% at Medium and changes a few pixels slightly. Scenes without
+  rect lights pay none of this. Turning a light off and on keeps those shaders; adding the first rect light to a running
+  scene (or removing the last) switches them, and the first frame with one prepares them (about 6 ms for each kind of
+  surface drawn, more on a machine that has not run them yet).
 - **Its limits**: a light's highlight on surfaces of middling roughness seen at grazing angles is the fitted model's, which
   can be brighter than the real one near the reflection of the face, and under a light that fills the whole sky a white
   metal of roughness 0.3 to 0.6 reflects 0.91 to 0.92 of it seen 78 degrees from its normal (0.94 to 0.98 at 60 degrees)
