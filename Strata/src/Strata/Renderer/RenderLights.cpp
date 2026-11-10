@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Renderer/RenderLights.h"
 
+#include "Strata/Renderer/AreaLights.h"
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
@@ -37,7 +38,24 @@ namespace Strata
 			return std::memcmp(&a, &b, sizeof(RenderData::LightRecord)) == 0;
 		}
 
-		constexpr uint32_t c_LightTypes = 2;
+		constexpr uint32_t c_LightTypes = RenderData::c_LightTypeCount;
+
+		bool IsDrawn(const RenderData::LightRecord& record)
+		{
+			return record.SpotAngles.z != 0.0f;
+		}
+
+		// The record type of a light component.
+		template<typename Component>
+		constexpr uint32_t GetLightType()
+		{
+			if constexpr (std::is_same_v<Component, SpotLightComponent>)
+				return RenderData::c_LightSpot;
+			else if constexpr (std::is_same_v<Component, RectLightComponent>)
+				return RenderData::c_LightRect;
+			else
+				return RenderData::c_LightPoint;
+		}
 
 	}
 
@@ -83,6 +101,28 @@ namespace Strata
 		return record;
 	}
 
+	RenderData::LightRecord RenderLights::MakeAreaRecord(const glm::mat4& world, bool active, const glm::vec3& color, float luminance, const glm::vec2& halfExtents,
+		float range, bool twoSided)
+	{
+		RenderData::LightRecord record;
+		const AreaLights::Record area = AreaLights::MakeRecord(world, active, color, luminance, halfExtents, range, twoSided);
+		if (!area.Drawn)
+			return record; // Not drawn
+		// The shading's window takes 1 / range^2 (AreaLights::LoadAreaLight computes it alike).
+		const float inverseRangeSquared = 1.0f / (area.Range * area.Range);
+		if (!std::isfinite(inverseRangeSquared))
+			return record;
+		record.PositionRange = glm::vec4(area.Center, area.Range);
+		record.Color = glm::vec4(area.Radiance, inverseRangeSquared);
+		record.DirectionType = glm::vec4(area.Normal, static_cast<float>(RenderData::c_LightRect));
+		record.SpotAngles = glm::vec4(0.0f, 0.0f, RenderData::c_LightRecordDrawn, 0.0f);
+		record.Bounds = glm::vec4(area.Center, area.BoundsRadius);
+		record.Source = glm::vec4(0.0f, area.TwoSided ? RenderData::c_LightRecordTwoSided : 0.0f, 0.0f, 0.0f);
+		record.AxisX = glm::vec4(area.AxisX, area.HalfExtents.x);
+		record.AxisY = glm::vec4(area.AxisY, area.HalfExtents.y);
+		return record;
+	}
+
 	size_t RenderLights::GetKey(entt::entity entity, uint32_t type)
 	{
 		return static_cast<size_t>(entt::to_entity(entity)) * c_LightTypes + type;
@@ -96,6 +136,9 @@ namespace Strata
 		registry.on_construct<SpotLightComponent>().connect<&RenderLights::OnLightChanged<SpotLightComponent>>(*this);
 		registry.on_update<SpotLightComponent>().connect<&RenderLights::OnLightChanged<SpotLightComponent>>(*this);
 		registry.on_destroy<SpotLightComponent>().connect<&RenderLights::OnLightDestroyed<SpotLightComponent>>(*this);
+		registry.on_construct<RectLightComponent>().connect<&RenderLights::OnLightChanged<RectLightComponent>>(*this);
+		registry.on_update<RectLightComponent>().connect<&RenderLights::OnLightChanged<RectLightComponent>>(*this);
+		registry.on_destroy<RectLightComponent>().connect<&RenderLights::OnLightDestroyed<RectLightComponent>>(*this);
 	}
 
 	void RenderLights::QueueAll(const entt::registry& registry)
@@ -104,19 +147,21 @@ namespace Strata
 			Queue(entity, RenderData::c_LightPoint);
 		for (const entt::entity entity : registry.view<SpotLightComponent>())
 			Queue(entity, RenderData::c_LightSpot);
+		for (const entt::entity entity : registry.view<RectLightComponent>())
+			Queue(entity, RenderData::c_LightRect);
 	}
 
 	template<typename Component>
 	void RenderLights::OnLightChanged(entt::registry&, entt::entity entity)
 	{
-		Queue(entity, std::is_same_v<Component, SpotLightComponent> ? RenderData::c_LightSpot : RenderData::c_LightPoint);
+		Queue(entity, GetLightType<Component>());
 	}
 
 	template<typename Component>
 	void RenderLights::OnLightDestroyed(entt::registry&, entt::entity entity)
 	{
 		// At once: the entity (and its index) may be reused before the next sync.
-		constexpr uint32_t c_Type = std::is_same_v<Component, SpotLightComponent> ? RenderData::c_LightSpot : RenderData::c_LightPoint;
+		constexpr uint32_t c_Type = GetLightType<Component>();
 		Free(entity, c_Type);
 		const size_t key = GetKey(entity, c_Type);
 		if (key < m_QueuedKeys.size() && m_QueuedKeys[key])
@@ -173,6 +218,20 @@ namespace Strata
 			outShadow.NormalBias = sanitize(normalBias, outShadow.NormalBias, 10.0f);
 			outShadow.FilterRadius = sanitize(filterRadius, outShadow.FilterRadius, PointLightComponent::c_MaxShadowFilterRadius);
 		};
+		if (type == RenderData::c_LightRect)
+		{
+			const RectLightComponent* light = registry.try_get<RectLightComponent>(entity);
+			if (!light)
+				return false;
+			// The units' conversion takes the face's area in the world (a lumens light keeps its power as it is resized). The
+			// local shadows draw point and spot lights only, so the record is never marked shadowed and keeps the default
+			// settings.
+			const glm::vec2 halfExtents = glm::vec2(light->Width, light->Height) * 0.5f;
+			const float luminance = AreaLights::GetLuminance(light->Intensity, light->Units, AreaLights::GetWorldHalfExtents(placed, halfExtents), light->TwoSided);
+			outRecord = MakeAreaRecord(placed, world->ActiveInHierarchy, light->Color, luminance, halfExtents, light->Range, light->TwoSided);
+			outShadow = LightShadowSettings {};
+			return true;
+		}
 		if (type == RenderData::c_LightSpot)
 		{
 			const SpotLightComponent* light = registry.try_get<SpotLightComponent>(entity);
@@ -251,6 +310,10 @@ namespace Strata
 		{
 			return false;
 		}
+		if (IsDrawn(m_Records[index]))
+			m_DrawnCounts[type]--;
+		if (IsDrawn(record))
+			m_DrawnCounts[type]++;
 		m_Records[index] = record;
 		m_ShadowSettings[index] = shadow;
 		UpdateShadowed(index);
@@ -265,6 +328,8 @@ namespace Strata
 			return;
 		m_ByKey[GetKey(entity, type)] = c_InvalidIndex;
 		m_Entities[index] = entt::null;
+		if (IsDrawn(m_Records[index]))
+			m_DrawnCounts[type]--;
 		m_Records[index] = RenderData::LightRecord {};
 		m_ShadowSettings[index] = LightShadowSettings {};
 		UpdateShadowed(index);
@@ -351,6 +416,7 @@ namespace Strata
 			return false;
 		};
 		uint32_t count = 0;
+		std::array<uint32_t, c_LightTypes> drawn = {};
 		for (uint32_t index = 0; index < m_Entities.size(); index++)
 		{
 			const entt::entity entity = m_Entities[index];
@@ -361,6 +427,8 @@ namespace Strata
 				continue;
 			}
 			count++;
+			if (IsDrawn(m_Records[index]) && m_Types[index] < c_LightTypes)
+				drawn[m_Types[index]]++;
 			RenderData::LightRecord expected;
 			LightShadowSettings expectedShadow;
 			if (!ComputeRecord(scene, entity, m_Types[index], expected, expectedShadow))
@@ -374,6 +442,8 @@ namespace Strata
 		}
 		if (count != m_Count)
 			return fail("the light count differs from the records");
+		if (drawn != m_DrawnCounts)
+			return fail("the drawn lights' counts differ from the records");
 		for (uint32_t place = 0; place < m_Shadowed.size(); place++)
 		{
 			if (m_Shadowed[place] >= m_ShadowedIndex.size() || m_ShadowedIndex[m_Shadowed[place]] != place)
@@ -388,6 +458,11 @@ namespace Strata
 		{
 			if (Find(entity, RenderData::c_LightSpot) == c_InvalidIndex)
 				return fail("a spot light has no record");
+		}
+		for (const entt::entity entity : registry.view<RectLightComponent, WorldTransformComponent>())
+		{
+			if (Find(entity, RenderData::c_LightRect) == c_InvalidIndex)
+				return fail("a rect light has no record");
 		}
 		return true;
 	}

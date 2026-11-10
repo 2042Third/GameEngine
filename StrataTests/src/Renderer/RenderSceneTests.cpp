@@ -5,6 +5,7 @@
 #include "Scene/InterpolationTestUtils.h"
 #include "Scene/SceneTestUtils.h"
 #include "Strata/Asset/BuiltinAssets.h"
+#include "Strata/Renderer/AreaLights.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
@@ -19,7 +20,12 @@
 	#include "Animation/TestSkinningPoses.h"
 #endif
 
+#include <glm/gtc/constants.hpp>
+#include <glm/gtc/epsilon.hpp>
+#include <glm/gtc/quaternion.hpp>
+
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <random>
@@ -1211,6 +1217,109 @@ TEST_SUITE("Renderer.RenderScene")
 		clone->Sync(nullptr);
 		CHECK(clone->GetLights().GetRecords()[0].PositionRange.w == 2.0f);
 		CHECK(RenderScene::Get(*source).GetLights().GetRecords()[0].PositionRange.w == PointLightComponent().Range);
+	}
+
+	TEST_CASE("Rect lights are render scene records of their own type: face, luminance, bounds and their changes")
+	{
+		Scene scene("Rect lights");
+		Entity panel = scene.CreateEntity("Panel");
+		TransformComponent& transform = panel.GetComponent<TransformComponent>();
+		transform.Translation = glm::vec3(1.0f, 3.0f, -2.0f);
+		transform.Rotation = glm::angleAxis(glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f)); // Shines down (-Z to -Y)
+		transform.Scale = glm::vec3(2.0f, 1.0f, 1.0f);
+		RectLightComponent& light = panel.AddComponent<RectLightComponent>();
+		light.Width = 1.5f;
+		light.Height = 0.4f;
+		light.Intensity = 1200.0f;
+		light.Color = glm::vec3(1.0f, 0.5f, 0.25f);
+		light.Range = 6.0f;
+		// A point light and a rect light on one entity have a record each.
+		panel.AddComponent<PointLightComponent>();
+		RenderScene& renderScene = RenderScene::Get(scene);
+		renderScene.Sync(nullptr);
+		const RenderLights& lights = renderScene.GetLights();
+		CHECK(lights.GetCount() == 2);
+		const uint32_t rect = lights.Find(panel.GetHandle(), RenderData::c_LightRect);
+		REQUIRE(rect != RenderLights::c_InvalidIndex);
+		CHECK(rect != lights.Find(panel.GetHandle(), RenderData::c_LightPoint));
+		CHECK(lights.GetType(rect) == RenderData::c_LightRect);
+
+		// The face follows the scale (3 x 0.4 m), shines along the transformed -Z, its luminance in nits times its color.
+		const RenderData::LightRecord* record = &lights.GetRecords()[rect];
+		CHECK(glm::all(glm::epsilonEqual(glm::vec3(record->PositionRange), glm::vec3(1.0f, 3.0f, -2.0f), 1e-6f)));
+		CHECK(record->PositionRange.w == 6.0f);
+		CHECK(glm::all(glm::epsilonEqual(glm::vec3(record->Color), glm::vec3(1200.0f, 600.0f, 300.0f), 1e-3f)));
+		CHECK(record->Color.w == doctest::Approx(1.0f / 36.0f));
+		CHECK(glm::all(glm::epsilonEqual(glm::vec3(record->DirectionType), glm::vec3(0.0f, -1.0f, 0.0f), 1e-6f)));
+		CHECK(record->DirectionType.w == static_cast<float>(RenderData::c_LightRect));
+		CHECK(record->SpotAngles == glm::vec4(0.0f, 0.0f, RenderData::c_LightRecordDrawn, 0.0f));
+		CHECK(glm::all(glm::epsilonEqual(glm::vec3(record->AxisX), glm::vec3(1.0f, 0.0f, 0.0f), 1e-6f)));
+		CHECK(record->AxisX.w == doctest::Approx(1.5f));
+		CHECK(record->AxisY.w == doctest::Approx(0.2f));
+		// AxisY is cross(AxisX, the normal), so the corners run clockwise seen from the front.
+		CHECK(glm::all(glm::epsilonEqual(glm::vec3(record->AxisY), glm::cross(glm::vec3(record->AxisX), glm::vec3(record->DirectionType)), 1e-6f)));
+		CHECK(record->Bounds.w == doctest::Approx(6.0f + std::sqrt(1.5f * 1.5f + 0.2f * 0.2f)));
+		CHECK(record->Source == glm::vec4(0.0f));
+		// The record is what the shading's reference makes of the light (Renderer/AreaLights.h).
+		const AreaLights::Record area = AreaLights::MakeRecord(panel.GetComponent<WorldTransformComponent>().Matrix, true, light.Color, light.Intensity,
+			glm::vec2(0.75f, 0.2f), 6.0f, false);
+		CHECK(glm::vec3(record->AxisY) == area.AxisY);
+		CHECK(record->Bounds.w == area.BoundsRadius);
+		// The local shadows draw point and spot lights only: a rect light that asks for shadows is not listed among them.
+		CHECK(lights.GetShadowedRecords().empty());
+		std::string error;
+		CHECK_MESSAGE(renderScene.Validate(&error), error);
+
+		// Lumens over the face's area in the world, halved for two faces; resizing keeps the power.
+		const uint64_t version = lights.GetVersion();
+		scene.GetRegistry().patch<RectLightComponent>(panel.GetHandle(), [](RectLightComponent& changed)
+		{
+			changed.Units = AreaLightUnits::Lumens;
+			changed.Intensity = 1000.0f;
+			changed.Color = glm::vec3(1.0f);
+			changed.TwoSided = true;
+			changed.CastShadows = true;
+		});
+		renderScene.Sync(nullptr);
+		record = &lights.GetRecords()[rect];
+		const float area2 = 3.0f * 0.4f;
+		CHECK(record->Color.r == doctest::Approx(1000.0f / (glm::pi<float>() * area2 * 2.0f)).epsilon(1e-5));
+		CHECK(record->Source.y == RenderData::c_LightRecordTwoSided);
+		CHECK(lights.GetShadowedRecords().empty());
+		std::vector<uint32_t> changes;
+		REQUIRE(lights.GetChanges(version, changes));
+		CHECK(std::find(changes.begin(), changes.end(), rect) != changes.end());
+		transform.Scale = glm::vec3(4.0f, 1.0f, 1.0f);
+		panel.MarkModified<TransformComponent>();
+		renderScene.Sync(nullptr);
+		CHECK(lights.GetRecords()[rect].AxisX.w == doctest::Approx(3.0f));
+		CHECK(lights.GetRecords()[rect].Color.r == doctest::Approx(1000.0f / (glm::pi<float>() * 6.0f * 0.4f * 2.0f)).epsilon(1e-5));
+		CHECK_MESSAGE(renderScene.Validate(&error), error);
+
+		// A face below the least size, no intensity or an inactive entity: kept, not drawn; removing the component frees it.
+		scene.GetRegistry().patch<RectLightComponent>(panel.GetHandle(), [](RectLightComponent& changed) { changed.Height = 0.0001f; });
+		renderScene.Sync(nullptr);
+		CHECK(lights.GetRecords()[rect].SpotAngles.z == 0.0f);
+		scene.GetRegistry().patch<RectLightComponent>(panel.GetHandle(), [](RectLightComponent& changed)
+		{
+			changed.Height = 0.4f;
+			changed.Intensity = 0.0f;
+		});
+		renderScene.Sync(nullptr);
+		CHECK(lights.GetRecords()[rect].SpotAngles.z == 0.0f);
+		scene.GetRegistry().patch<RectLightComponent>(panel.GetHandle(), [](RectLightComponent& changed) { changed.Intensity = 10.0f; });
+		panel.SetActive(false);
+		renderScene.Sync(nullptr);
+		CHECK(lights.GetRecords()[rect].SpotAngles.z == 0.0f);
+		panel.SetActive(true);
+		renderScene.Sync(nullptr);
+		CHECK(lights.GetRecords()[rect].SpotAngles.z == RenderData::c_LightRecordDrawn);
+		CHECK_MESSAGE(renderScene.Validate(&error), error);
+		panel.RemoveComponent<RectLightComponent>();
+		renderScene.Sync(nullptr);
+		CHECK(lights.Find(panel.GetHandle(), RenderData::c_LightRect) == RenderLights::c_InvalidIndex);
+		CHECK(lights.GetCount() == 1);
+		CHECK_MESSAGE(renderScene.Validate(&error), error);
 	}
 
 	TEST_CASE("A light's source radius reaches its record")

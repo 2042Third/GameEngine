@@ -2,6 +2,7 @@
 
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/UUID.h"
+#include "Strata/Renderer/AreaLights.h"
 
 #include <glm/glm.hpp>
 
@@ -75,6 +76,31 @@ namespace Strata
 		float ShadowBias = 1.0f;         // As PointLightComponent's
 		float ShadowNormalBias = 1.5f;
 		float ShadowFilterRadius = 1.5f; // At most PointLightComponent::c_MaxShadowFilterRadius
+	};
+
+	// A rectangle of Width x Height in the entity's X-Y plane, centered on its origin, shining along its forward (-Z) direction
+	// (both ways when TwoSided) as a Lambertian emitter: the same luminance seen from every direction in front of it, shaded per
+	// pixel (Renderer/AreaLights.h). Its size follows the entity's world scale (a rectangle is geometry); Range does not, as no
+	// light's range does. Intensity is the face's luminance in nits (as an emissive material's), or with Units Lumens the power
+	// it emits: L = P / (pi A), half of it for a two-sided light, A the face's area in the world.
+	struct RectLightComponent
+	{
+		glm::vec3 Color = { 1.0f, 1.0f, 1.0f };
+		float Intensity = 25.0f;                   // Nits or lumens (Units), times Color
+		AreaLightUnits Units = AreaLightUnits::Nits;
+		float Width = 1.0f;                        // Meters along the entity's X axis, times its world scale
+		float Height = 0.5f;                       // Meters along its Y axis, times its world scale
+		bool TwoSided = false;
+		float Range = 10.0f;                       // Light fades to zero at this distance from the rectangle
+		// The local shadows draw point and spot lights only: a rect light keeps these settings but casts no shadow yet.
+		bool CastShadows = false;
+		float ShadowBias = 1.0f;                   // As PointLightComponent's, in texels of the light's shadow tiles
+		float ShadowNormalBias = 1.5f;
+
+		// Width and Height are kept within these (meters, before the scale); a face smaller than AreaLights::c_MinSize in the
+		// world is not drawn.
+		static constexpr float c_MinSize = AreaLights::c_MinSize;
+		static constexpr float c_MaxSize = 100.0f;
 	};
 
 	enum class SkyLightSource : uint8_t

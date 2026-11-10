@@ -266,6 +266,48 @@
 			{
 				"Components": {
 					"Name": {
+						"Name": "Feature Rect Light"
+					},
+					"RectLight": {
+						"CastShadows": true,
+						"Color": [
+							1,
+							0.9,
+							0.8
+						],
+						"Height": 0.4,
+						"Intensity": 1500,
+						"Range": 8,
+						"ShadowBias": 1.25,
+						"ShadowNormalBias": 2,
+						"TwoSided": true,
+						"Units": "Lumens",
+						"Width": 1.2
+					},
+					"Transform": {
+						"Rotation": [
+							-0.7071068,
+							0,
+							0,
+							0.7071068
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							-2,
+							3.5,
+							-3
+						]
+					}
+				},
+				"ID": "F7E0000000000091"
+			},
+			{
+				"Components": {
+					"Name": {
 						"Name": "Environment"
 					},
 					"PostProcess": {

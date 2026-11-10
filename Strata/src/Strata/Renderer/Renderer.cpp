@@ -2,6 +2,7 @@
 #include "Strata/Renderer/Renderer.h"
 
 #include "Strata/Core/Profiling.h"
+#include "Strata/Renderer/AreaLights.h"
 #include "Strata/Renderer/BlueNoise.h"
 #include "Strata/Renderer/RenderSceneGPU.h"
 #include "Strata/Renderer/Texture.h"
@@ -43,6 +44,7 @@ namespace Strata
 			nvrhi::TextureHandle BlackCubeTexture;
 			nvrhi::TextureHandle BlackCubeArrayTexture;
 			nvrhi::TextureHandle BlueNoiseTexture;
+			nvrhi::TextureHandle AreaLightTable;
 			nvrhi::TextureHandle Black3DTexture;
 			nvrhi::TextureHandle Zero3DUintTexture;
 		};
@@ -123,6 +125,25 @@ namespace Strata
 			if (s_Data->BlueNoiseTexture)
 				commandList->writeTexture(s_Data->BlueNoiseTexture, 0, 0, RenderData::c_BlueNoise, RenderData::c_BlueNoiseSize);
 		}
+		{
+			// Constant data, written in this command list so that it holds its values before any frame samples it.
+			nvrhi::TextureDesc desc;
+			desc.width = AreaLights::c_TableSize;
+			desc.height = AreaLights::c_TableSize;
+			desc.arraySize = AreaLights::c_TableLayers;
+			desc.dimension = nvrhi::TextureDimension::Texture2DArray;
+			desc.format = nvrhi::Format::RGBA32_FLOAT;
+			desc.debugName = "AreaLightTable";
+			desc.initialState = nvrhi::ResourceStates::ShaderResource;
+			desc.keepInitialState = true;
+			s_Data->AreaLightTable = nvrhiDevice->createTexture(desc);
+			if (s_Data->AreaLightTable)
+			{
+				for (uint32_t layer = 0; layer < AreaLights::c_TableLayers; layer++)
+					commandList->writeTexture(s_Data->AreaLightTable, layer, 0, AreaLights::GetTableLayer(layer).data(),
+						AreaLights::c_TableSize * AreaLights::c_TableChannels * sizeof(float));
+			}
+		}
 		s_Data->Black3DTexture = CreateSolidTexture(commandList, 0xFF000000u, "Black3DTexture", nvrhi::TextureDimension::Texture3D);
 		const uint32_t zero = 0;
 		s_Data->Zero3DUintTexture = CreateSolidTexture(commandList, &zero, sizeof(zero), nvrhi::Format::R32_UINT, "Zero3DUintTexture",
@@ -133,7 +154,7 @@ namespace Strata
 		s_Data->FrameCommandList = nvrhiDevice->createCommandList();
 		if (!s_Data->LinearClamp || !s_Data->LinearWrap || !s_Data->AnisotropicWrap || !s_Data->PointClamp || !s_Data->WhiteTexture
 			|| !s_Data->BlackTexture || !s_Data->FlatNormalTexture || !s_Data->BlackCubeTexture || !s_Data->BlackCubeArrayTexture || !s_Data->BlueNoiseTexture
-			|| !s_Data->Black3DTexture || !s_Data->Zero3DUintTexture || !s_Data->FrameCommandList)
+			|| !s_Data->AreaLightTable || !s_Data->Black3DTexture || !s_Data->Zero3DUintTexture || !s_Data->FrameCommandList)
 		{
 			ST_CORE_ERROR("Renderer: failed to create shared GPU resources");
 			Shutdown();
@@ -315,6 +336,7 @@ namespace Strata
 	nvrhi::ISampler* Renderer::GetAnisotropicWrapSampler() { return s_Data->AnisotropicWrap; }
 	nvrhi::ITexture* Renderer::GetWhiteTexture() { return s_Data->WhiteTexture; }
 	nvrhi::ITexture* Renderer::GetBlueNoiseTexture() { return s_Data->BlueNoiseTexture; }
+	nvrhi::ITexture* Renderer::GetAreaLightTable() { return s_Data->AreaLightTable; }
 	nvrhi::ITexture* Renderer::GetBlackTexture() { return s_Data->BlackTexture; }
 	nvrhi::ITexture* Renderer::GetFlatNormalTexture() { return s_Data->FlatNormalTexture; }
 	nvrhi::ITexture* Renderer::GetBlackCubeTexture() { return s_Data->BlackCubeTexture; }

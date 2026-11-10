@@ -148,6 +148,7 @@ namespace Strata
 		combined.SkinnedInstances += gpu.SkinnedInstances;
 		combined.Triangles += gpu.Triangles;
 		combined.Lights += gpu.Lights;
+		combined.AreaLights += gpu.AreaLights;
 		combined.CulledLights += gpu.CulledLights;
 		// The CPU counts every indexed proxy as visible or culled (on feedback frames only those it looked at as visible).
 		const uint32_t indexed = stats.VisibleProxies + stats.CulledInstances;
@@ -363,7 +364,8 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(3),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(4),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(5),
-			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(6)
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(6),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(7)  // The lights' faces (RenderData::LightShape)
 		};
 		m_LightCompactLayout = m_Device->createBindingLayout(compactLayout);
 		auto createPipeline = [&](const char* name, nvrhi::IBindingLayout* layout) -> nvrhi::ComputePipelineHandle
@@ -400,8 +402,8 @@ namespace Strata
 		nvrhi::IBuffer* records = m_SceneGPU->GetLightRecordBuffer();
 		if (!records)
 			return false;
-		const std::array<const nvrhi::IBuffer*, 7> bound = { records, m_LightVisibleBuffer.Get(), m_LightGroupCountBuffer.Get(), m_LightBuffer.Get(),
-			m_LightBoundsBuffer.Get(), m_LightCountBuffer.Get(), m_LightShadowSlotBuffer.Get() };
+		const std::array<const nvrhi::IBuffer*, 8> bound = { records, m_LightVisibleBuffer.Get(), m_LightGroupCountBuffer.Get(), m_LightBuffer.Get(),
+			m_LightBoundsBuffer.Get(), m_LightCountBuffer.Get(), m_LightShadowSlotBuffer.Get(), m_LightShapeBuffer.Get() };
 		if (m_LightCullBindingSet && m_LightCompactBindingSet && bound == m_LightCullBound)
 			return true;
 		nvrhi::BindingSetDesc cullSet;
@@ -424,7 +426,8 @@ namespace Strata
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(3, m_LightBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(4, m_LightBoundsBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(5, m_LightCountBuffer),
-			nvrhi::BindingSetItem::StructuredBuffer_UAV(6, m_CullCounterBuffer)
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(6, m_CullCounterBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(7, m_LightShapeBuffer)
 		};
 		m_LightCullBindingSet = m_Device->createBindingSet(cullSet, m_LightCullLayout);
 		m_LightCompactBindingSet = m_Device->createBindingSet(compactSet, m_LightCompactLayout);
@@ -1585,6 +1588,7 @@ namespace Strata
 		stats.SubTexelCasters = counters.SubTexelCasters;
 		stats.SkinnedInstances = counters.SkinnedInstances;
 		stats.Lights = counters.VisibleLights;
+		stats.AreaLights = counters.VisibleAreaLights;
 		stats.CulledLights = counters.DrawnLights > counters.VisibleLights ? counters.DrawnLights - counters.VisibleLights : 0u;
 		stats.Triangles = (static_cast<uint64_t>(counters.TrianglesHigh) << 32) | counters.TrianglesLow;
 		stats.DrawListEntries = counters.DrawListUsed;

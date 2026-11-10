@@ -31,6 +31,8 @@ namespace Strata
 
 		constexpr uint32_t c_LightPoint = 0u;
 		constexpr uint32_t c_LightSpot = 1u;
+		constexpr uint32_t c_LightRect = 2u; // A rect light (RectLightComponent): its face's axes ride in LightShape
+		constexpr uint32_t c_LightTypeCount = 3;
 
 		constexpr uint32_t c_SamplerCount = 6; // TextureFilter (2) x TextureWrap (3)
 
@@ -247,6 +249,9 @@ namespace Strata
 		};
 		static_assert(sizeof(MaterialData) == 144);
 
+		// A light of the frame's light buffer (scene set SRV 2), u_LightShapes (SRV 56, LightShape) beside it by index. A rect
+		// light's position is its face's center, its range is measured from the face, its color is its luminance (nits) times
+		// its color, its direction is its face's normal and its SpotAngles are (0, 0, its shadow slot plus one, 0).
 		struct LightData
 		{
 			glm::vec4 PositionRange; // xyz: camera-relative world position (as uploaded), w: range
@@ -258,9 +263,22 @@ namespace Strata
 		};
 		static_assert(sizeof(LightData) == 64);
 
-		// A point or spot light of a scene's render lights (RenderLights; mirrored by RenderSceneGPU), in world space: the GPU
-		// culls the records into the light buffer (Scene/LightCull.comp and LightCompact.comp: LightData, camera-relative,
-		// and LightBounds).
+		// The face of the light buffer's light of the same index (Include/AreaLights.slang): zero for point and spot lights.
+		// Directions are the same in world and camera-relative space (the view is rotation-only), so it is uploaded as recorded.
+		struct LightShape
+		{
+			glm::vec4 AxisX;      // xyz: the face's unit X axis, w: its half width (meters)
+			glm::vec4 AxisY;      // xyz: its unit Y axis (cross(AxisX, the normal)), w: its half height
+			glm::vec4 Parameters; // x: 1 when two-sided, y: the face's area in m^2, zw: 0
+		};
+		static_assert(sizeof(LightShape) == 48);
+
+		// A point, spot or rect light of a scene's render lights (RenderLights; mirrored by RenderSceneGPU), in world space: the
+		// GPU culls the records into the light buffer (Scene/LightCull.comp and LightCompact.comp: LightData, camera-relative,
+		// LightShape and LightBounds). A rect light's record (c_LightRect, AreaLights::MakeRecord) holds its face's center and
+		// Range, its luminance times its color and 1 / Range^2, its normal, (0, 0, drawn, 0: the local shadows take point and spot
+		// lights only), the sphere around its center of radius Range plus the face's half diagonal, (0, c_LightRecordTwoSided or
+		// 0, 0, 0) and its axes.
 		struct LightRecord
 		{
 			glm::vec4 PositionRange = glm::vec4(0.0f); // xyz: world position, w: range
@@ -269,14 +287,19 @@ namespace Strata
 			// x: cos(inner), y: cos(outer), z: c_LightRecordDrawn or 0, w: c_LightRecordShadowed or 0
 			glm::vec4 SpotAngles = glm::vec4(0.0f);
 			glm::vec4 Bounds = glm::vec4(0.0f);        // xyz: world center, w: radius of the region it reaches
-			// x: the source radius in meters (highlights only; the component's SourceRadius within [0, c_MaxSourceRadius]), yzw: 0
+			// x: the source radius in meters (highlights only; the component's SourceRadius within [0, c_MaxSourceRadius]), y: a rect
+			// light's c_LightRecordTwoSided or 0, zw: 0
 			glm::vec4 Source = glm::vec4(0.0f);
+			glm::vec4 AxisX = glm::vec4(0.0f);         // A rect light's LightShape::AxisX (0 for point and spot lights)
+			glm::vec4 AxisY = glm::vec4(0.0f);         // A rect light's LightShape::AxisY
 		};
-		static_assert(sizeof(LightRecord) == 96);
+		static_assert(sizeof(LightRecord) == 128);
 		// LightRecord::SpotAngles.z of a light that is drawn (active, lit, with a range).
 		constexpr float c_LightRecordDrawn = 1.0f;
 		// LightRecord::SpotAngles.w of a drawn light that casts shadows (its component's CastShadows).
 		constexpr float c_LightRecordShadowed = 1.0f;
+		// LightRecord::Source.y of a rect light that shines from both faces.
+		constexpr float c_LightRecordTwoSided = 1.0f;
 
 		// Shadows of point and spot lights (SceneRenderer's local shadows): a spot light has one view of the lights' atlas, a point
 		// light six (a cube's faces: +X, -X, +Y, -Y, +Z, -Z). RendererQualitySettings::MaxShadowedLocalLights is at most this many;

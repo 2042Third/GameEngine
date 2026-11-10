@@ -24,6 +24,14 @@ reference work as they are. Hover a light's **Intensity** in the Inspector to se
   wet ground show the light's highlight at that size, the same light spread wider, instead of a pin dot. Give it the real
   size, never more: a lantern's bulb about 0.03 to 0.06, a fire pit's flames about 0.2 to 0.3. Only the highlights change:
   the light's brightness on matte surfaces and its shadows stay as they are.
+- A **Rect Light** is a glowing rectangle: a ceiling panel, a lit sign, a window's glow, a photographer's softbox. It
+  shines from the entity's X-Y plane along its forward (-Z) axis (from both faces with **Two Sided**), **Width** by
+  **Height** meters times the entity's scale, so a light scaled with its panel stays the panel's size. Its **Intensity** is
+  the luminance of its face in **nits** (with **Units** Nits, the default: the same unit as an emissive material, so a
+  light over a panel copies the panel's emission), or the power it emits in **lumens** (Units Lumens, what lamp catalogues
+  give: a face of area A meters squared then shines with P / (3.14 A) nits, half of that from each face of a two-sided
+  light). Resizing a nits light keeps its brightness and lets its power grow with its area; resizing a lumens light keeps
+  its power. Its light reaches zero at **Range** from the face (not from its center). See Rect lights below.
 - The **Sky Light** lights the scene from every direction and draws the background. What it shows is luminance in
   **nits** (candela per square meter): an environment map's pixel values, or the procedural sky's colors, times
   **Intensity**. A uniform sky of L nits puts about 3.14 x L lux on the ground.
@@ -41,10 +49,15 @@ Some real values, with the exposure that suits a scene lit by them (see below):
 | Full moon | 0.1 to 0.3 lux | +3.5 to +5 |
 | Household lamp (800 lumens) | 64 cd | |
 | Candle | 1 cd | |
+| LED ceiling panel, 600 x 600 mm | 3,600 lm, about 3,200 nits | |
+| Photographer's softbox | 10,000 nits | |
+| Lit sign | 1,000 nits | |
+| Television | 300 nits | |
 
 New projects use real values: the Basic 3D template opens under the physical atmosphere with a 120,000 lux sun (the Clear
 preset below). New lights and scenes made from nothing still use small values (a 3 lux sun, a procedural sky of a fraction
-of a nit, 10 cd for a new point light), which look right at a manual exposure of 0; new scenes and most samples turn on
+of a nit, 10 cd for a new point light, 25 nits for a new rect light, whose 1 x 0.5 m face then gives about 10 lux 1 m
+below it), which look right at a manual exposure of 0; new scenes and most samples turn on
 automatic exposure (see below).
 Both work: what matters is that the lights of a scene agree with each other, and that the exposure matches them. A
 scene twice as bright at one stop less exposure looks exactly the same.
@@ -68,6 +81,33 @@ curve, color). In the units of this page:
   setting of EV100 corresponds to an **Exposure** of about 0.5 - EV100 (a sunny day, EV100 15, is about -14.5).
 - **Auto Exposure Min EV** and **Max EV** bound the average brightness automatic exposure adapts to, in stops of nits
   (EV100 minus 3): a night scene stays dark when its Min EV is above its brightness. Real sunlight needs **Max EV** 16.
+
+## Rect lights
+
+A rect light lights every pixel it reaches with its real light: a floor under a ceiling panel gets the panel's soft,
+wide light, falling off as a panel's does rather than as a bulb's, and smooth and wet surfaces show its face's
+reflection. A polished floor or a chrome sphere mirrors the rectangle with crisp edges, wet ground draws a streak shaped by
+it, rough metal a soft glow of its shape. Nothing is sampled and nothing needs anti-aliasing to look right: the light is
+worked out exactly for each pixel (the diffuse light) or from a fitted model of the highlight's shape (Heitz et al.'s
+linearly transformed cosines), the same in every frame.
+
+- **Where it shines**: one-sided lights (the default) light nothing behind their face, and nothing at all behind their
+  plane. Two-sided ones shine from both faces with the same luminance, twice the power.
+- **Range** fades the light smoothly to zero at that distance from the face. It does not change how the light falls off
+  before that: a panel's own falloff is physical. Make it reach what the light should light; a smaller range costs less.
+- **Shadows**: rect lights cast no shadow yet. They light through objects: a box under a panel is lit on its top and the
+  floor beneath it is lit too. **Cast Shadows** and its biases are kept for them.
+- **An emissive panel is not a light by itself.** A mesh with an emissive material shows its glow, but it lights the scene
+  only through global illumination's probes, with their coarse resolution. To make a panel light the room, place a Rect
+  Light on its face (the Hierarchy's **Create > Rect Light**, then size and place it as the face), with the panel's
+  emission as its Intensity in nits.
+- **What it costs**: each rect light costs every pixel it reaches a few hundred arithmetic operations (about twice a
+  point light's), and a clear-coated surface more. Lights that reach few pixels cost little.
+- **Its limits**: a light's highlight on surfaces of middling roughness seen at grazing angles is the fitted model's, which
+  can be brighter than the real one near the reflection of the face, and under a light that fills the whole sky a white
+  metal of roughness 0.3 to 0.6 reflects 0.91 to 0.92 of it seen 78 degrees from its normal (0.94 to 0.98 at 60 degrees)
+  where the real one would reflect all of it. Smooth and fully rough surfaces, and every surface seen from closer to its
+  normal, keep their light.
 
 ## The sky
 

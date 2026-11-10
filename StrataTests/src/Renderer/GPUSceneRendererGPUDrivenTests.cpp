@@ -590,6 +590,78 @@ namespace
 		return View(glm::vec3(0.0f, 2.0f, 6.0f), glm::vec3(0.0f, 1.5f, -100.0f));
 	}
 
+	// Twelve rect lights (one-sided, two-sided, tilted, scaled, one under a mirroring parent, one in lumens) with eight point and
+	// spot lights over a room of materials: both paths shade them from the same light and shape buffers.
+	SceneCamera BuildAreaLights(Scene& scene, SceneTestAssets& assets, TestSkinningPoses&)
+	{
+		AddNeutralPostProcess(scene);
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().AmbientColor = glm::vec3(0.002f);
+		MaterialProperties floor;
+		floor.BaseColor = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f);
+		floor.Roughness = 0.35f;
+		floor.Clearcoat = 0.5f;
+		floor.ClearcoatRoughness = 0.05f;
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(floor), glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(12.0f);
+		MaterialProperties metal;
+		metal.BaseColor = glm::vec4(0.95f, 0.8f, 0.6f, 1.0f);
+		metal.Metallic = 1.0f;
+		metal.Roughness = 0.2f;
+		AddMesh(scene, BuiltinAssets::SphereMesh, assets.AddMaterial(metal), glm::vec3(-0.8f, 0.5f, -1.0f), "Metal");
+		MaterialProperties paint;
+		paint.BaseColor = glm::vec4(0.2f, 0.5f, 0.8f, 1.0f);
+		paint.Roughness = 0.6f;
+		AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(paint), glm::vec3(1.0f, 0.5f, -1.5f), "Box");
+		MaterialProperties glass;
+		glass.BaseColor = glm::vec4(0.9f, 0.95f, 1.0f, 1.0f);
+		glass.Roughness = 0.1f;
+		glass.Transmission = 0.9f;
+		AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(glass), glm::vec3(0.0f, 0.4f, 0.2f), "Glass").GetComponent<TransformComponent>().Scale = glm::vec3(0.5f, 0.8f, 0.1f);
+		Entity mirror = scene.CreateEntity("Mirror");
+		mirror.GetComponent<TransformComponent>().Scale = glm::vec3(-1.0f, 1.0f, 1.0f);
+		for (int index = 0; index < 12; index++)
+		{
+			Entity panel = scene.CreateEntity("Panel");
+			const float angle = glm::radians(30.0f * static_cast<float>(index));
+			TransformComponent& transform = panel.GetComponent<TransformComponent>();
+			transform.Translation = glm::vec3(std::cos(angle) * 2.5f, 0.6f + 0.15f * static_cast<float>(index % 4), std::sin(angle) * 2.5f - 1.0f);
+			// Facing the room's middle, tilted down by turns.
+			transform.Rotation = glm::angleAxis(-angle - glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f))
+				* glm::angleAxis(glm::radians(-10.0f * static_cast<float>(index % 3)), glm::vec3(1.0f, 0.0f, 0.0f));
+			transform.Scale = glm::vec3(1.0f + 0.25f * static_cast<float>(index % 2), 1.0f, 1.0f);
+			RectLightComponent& light = panel.AddComponent<RectLightComponent>();
+			light.Width = 0.4f + 0.1f * static_cast<float>(index % 5);
+			light.Height = 0.2f + 0.05f * static_cast<float>(index % 3);
+			light.Intensity = 60.0f + 15.0f * static_cast<float>(index);
+			light.Color = glm::vec3(1.0f, 0.85f + 0.01f * static_cast<float>(index), 0.7f);
+			light.Range = 4.0f + 0.5f * static_cast<float>(index % 4);
+			light.TwoSided = index % 4 == 1;
+			if (index == 7)
+			{
+				light.Units = AreaLightUnits::Lumens;
+				light.Intensity = 400.0f;
+			}
+			if (index == 10)
+				REQUIRE(scene.SetParent(panel, mirror, false));
+		}
+		for (int index = 0; index < 8; index++)
+		{
+			const float angle = glm::radians(45.0f * static_cast<float>(index) + 20.0f);
+			const glm::vec3 position(std::cos(angle) * 1.6f, 1.2f, std::sin(angle) * 1.6f - 1.0f);
+			if (index % 2 == 0)
+			{
+				AddPointLight(scene, position, glm::vec3(0.8f, 0.9f, 1.0f), 2.0f, 3.0f);
+				continue;
+			}
+			Entity spot = scene.CreateEntity("Spot");
+			spot.GetComponent<TransformComponent>().Translation = position;
+			spot.GetComponent<TransformComponent>().Rotation = glm::angleAxis(glm::radians(-80.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+			SpotLightComponent& light = spot.AddComponent<SpotLightComponent>();
+			light.Intensity = 3.0f;
+			light.Range = 4.0f;
+		}
+		return View(glm::vec3(0.0f, 1.6f, 3.0f), glm::vec3(0.0f, 0.3f, -1.0f));
+	}
+
 	const TestScene c_Scenes[] = {
 		{ "Many meshes", BuildManyMeshes },
 		{ "Alpha-masked", BuildAlphaMasked },
@@ -605,6 +677,7 @@ namespace
 		{ "Atmosphere and aerial perspective", BuildAerialPerspective },
 		{ "Sized highlights", BuildSizedHighlights },
 		{ "Reflections and dielectrics", BuildReflectionsAndDielectrics },
+		{ "Area lights", BuildAreaLights },
 	};
 
 	void CompareScenes(GPUContext& gpu, IndirectDrawMode indirect, uint32_t maxDrawsPerCall = 0)
@@ -630,6 +703,15 @@ namespace
 				CHECK(frame.Counts.InstancesPerLOD[0] == 1);
 				CHECK(frame.Counts.InstancesPerLOD[1] == 1);
 				CHECK(frame.Counts.InstancesPerLOD[2] == 2);
+			}
+			if (name == "Area lights")
+			{
+				// Every light is in view: the GPU counts the rect lights it packed as the CPU path does.
+				const LightCounts gpuLights = GetLightCounts(comparison.GPU);
+				const LightCounts cpuLights = GetLightCounts(comparison.CPU);
+				CHECK(gpuLights.AreaLights == 12);
+				CHECK(gpuLights.AreaLights == cpuLights.AreaLights);
+				CHECK(gpuLights.Lights == cpuLights.Lights);
 			}
 			if (name == "Local shadows")
 			{

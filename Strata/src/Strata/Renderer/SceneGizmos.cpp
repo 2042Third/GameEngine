@@ -7,6 +7,7 @@
 #include "Strata/Math/Math.h"
 #include "Strata/Reflection/ComponentGizmo.h"
 #include "Strata/Reflection/ComponentRegistry.h"
+#include "Strata/Renderer/AreaLights.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
@@ -292,6 +293,50 @@ namespace Strata
 					continue;
 				}
 				debugDraw.Cone(position, direction, coneLength, outer, LightColor(light.Color), depth);
+			}
+			for (auto [entity, light, world] : registry.view<RectLightComponent, WorldTransformComponent>().each())
+			{
+				if (!world.ActiveInHierarchy)
+					continue;
+				// The face as the renderer shades it (its record's axes and size; an unlit light's face too), and its reach.
+				const AreaLights::Record face = AreaLights::MakeRecord(world.Matrix, true, glm::vec3(1.0f), 1.0f, glm::vec2(light.Width, light.Height) * 0.5f,
+					std::max(light.Range, 0.01f), light.TwoSided);
+				if (!face.Drawn)
+					continue;
+				const glm::vec3 axisX = face.AxisX * face.HalfExtents.x;
+				const glm::vec3 axisY = face.AxisY * face.HalfExtents.y;
+				const float halfDiagonal = glm::length(face.HalfExtents);
+				const bool ranged = settings.AllLightRanges || IsListed(settings.LightRangeEntities, scene, entity);
+				if (!view.IsVisible(face.Center, ranged ? face.BoundsRadius : halfDiagonal))
+					continue;
+				const glm::vec4 color = LightColor(light.Color);
+				if (view.IsIcon(face.Center, halfDiagonal))
+				{
+					// Far away, a rect light is a diamond with a small rectangle in it, facing the view.
+					const float size = view.GetIconSize(face.Center);
+					if (!view.IsVisible(face.Center, size))
+						continue;
+					const uint32_t packed = DebugDraw::PackColor(color);
+					const glm::vec3 right = view.GetView().Right * (size * 0.25f);
+					const glm::vec3 up = view.GetView().Up * (size * 0.125f);
+					view.DrawDiamond(debugDraw, face.Center, size, packed, depth);
+					debugDraw.Line(face.Center - right - up, face.Center + right - up, packed, depth);
+					debugDraw.Line(face.Center + right - up, face.Center + right + up, packed, depth);
+					debugDraw.Line(face.Center + right + up, face.Center - right + up, packed, depth);
+					debugDraw.Line(face.Center - right + up, face.Center - right - up, packed, depth);
+					continue;
+				}
+				// The face's outline, a stroke along the way it shines (both ways when two-sided) a quarter of its shorter side
+				// long, and its reach where ranges show.
+				const glm::vec3 corners[4] = { face.Center - axisX - axisY, face.Center + axisX - axisY, face.Center + axisX + axisY, face.Center - axisX + axisY };
+				for (uint32_t corner = 0; corner < 4; corner++)
+					debugDraw.Line(corners[corner], corners[(corner + 1) % 4], color, depth);
+				const float stroke = 0.5f * std::min(face.HalfExtents.x, face.HalfExtents.y);
+				debugDraw.Line(face.Center, face.Center + face.Normal * stroke, color, depth);
+				if (light.TwoSided)
+					debugDraw.Line(face.Center, face.Center - face.Normal * stroke, color, depth);
+				if (ranged)
+					debugDraw.Sphere(face.Center, face.BoundsRadius, color, depth);
 			}
 		}
 

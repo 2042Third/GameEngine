@@ -431,9 +431,10 @@ namespace Strata::Tests
 	// the GPU, frames later: waits for that frame's counts).
 	struct LightCounts
 	{
-		uint32_t Lights = 0;        // The directional light plus the point and spot lights in view
-		uint32_t CulledLights = 0;  // Point and spot lights outside the view
+		uint32_t Lights = 0;        // The directional light plus the point, spot and rect lights in view
+		uint32_t CulledLights = 0;  // Point, spot and rect lights outside the view
 		uint32_t DroppedLights = 0; // Beyond SceneRendererSpecification::MaxLights (the CPU path's cap)
+		uint32_t AreaLights = 0;    // Of Lights, the rect lights
 	};
 
 	inline LightCounts GetLightCounts(SceneRenderer& renderer)
@@ -447,7 +448,7 @@ namespace Strata::Tests
 			REQUIRE(gpu.CountersRender == renderer.GetRenderCount());
 			stats = AddGPUCounts(stats, gpu);
 		}
-		return LightCounts { stats.Lights, stats.CulledLights, stats.DroppedLights };
+		return LightCounts { stats.Lights, stats.CulledLights, stats.DroppedLights, stats.AreaLights };
 	}
 
 	inline MaterialProperties UnlitColor(const glm::vec4& color)

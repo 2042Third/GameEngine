@@ -212,7 +212,7 @@ TEST_SUITE("Scripting.API")
 			}
 		}
 		// The loop proves nothing over a (nearly) empty registry: every built-in component with data must have been probed.
-		std::vector<const char*> expected = { "Transform", "Camera", "MeshRenderer", "DirectionalLight", "PointLight", "SpotLight", "SkyLight",
+		std::vector<const char*> expected = { "Transform", "Camera", "MeshRenderer", "DirectionalLight", "PointLight", "SpotLight", "RectLight", "SkyLight",
 			"PostProcess", "Text", "PrefabInstance" };
 #if ST_WITH_PHYSICS
 		expected.insert(expected.end(), { "RigidBody", "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "CharacterController" });

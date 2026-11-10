@@ -106,6 +106,10 @@ namespace Strata
 		// The 64x64 blue-noise tile (R8_UNORM, RenderData::c_BlueNoise): per-pixel values whose neighbors differ, which filters
 		// index by the screen pixel (the sun's shadows turn their disk by it).
 		static nvrhi::ITexture* GetBlueNoiseTexture();
+		// The rect lights' LTC tables (Renderer/AreaLights.h, LTCTable.inl): a 2D array of AreaLights::c_TableLayers layers of
+		// 64 x 64 RGBA32F texels, written before the first frame and never changed (the scene sets bind it at SRV 55; shaders
+		// read it with Load and their own bilinear weights, as AreaLights::SampleTable does).
+		static nvrhi::ITexture* GetAreaLightTable();
 		// A 1x1x1 black 3D texture: what the scene passes bind as aerial perspective's volume in frames without it.
 		static nvrhi::ITexture* GetBlack3DTexture();
 		// A 1x1x1 R32_UINT 3D texture of 0: what the scene passes bind as the GI probes' depth moments in frames without GI.

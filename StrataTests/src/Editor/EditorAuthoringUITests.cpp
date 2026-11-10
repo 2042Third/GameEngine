@@ -682,6 +682,18 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		REQUIRE(light);
 		CHECK(light.HasComponent<PointLightComponent>());
 		CHECK_FALSE(light.GetParent());
+		// A rect light at its defaults, with the ceiling lamp's icon.
+		REQUIRE(editor.Click("Hierarchy.Create"));
+		REQUIRE(editor.Click("Create.Rect Light"));
+		const Entity panel = editor.Context().GetPrimarySelection();
+		REQUIRE(panel);
+		REQUIRE(panel.HasComponent<RectLightComponent>());
+		CHECK(panel.GetComponent<RectLightComponent>().Width == RectLightComponent().Width);
+		CHECK(panel.GetName() == "Rect Light");
+		CHECK(std::string(UI::GetEntityIcon(editor.Context().GetActiveScene()->GetRegistry(), panel.GetHandle())) == Icons::LampCeiling);
+		const ComponentInfo* rectInfo = ComponentRegistry::Find("RectLight");
+		REQUIRE(rectInfo);
+		CHECK(std::string(UI::GetComponentIcon(*rectInfo)) == Icons::LampCeiling);
 
 		// A right click selects the row and opens its menu.
 		editor.Pause();

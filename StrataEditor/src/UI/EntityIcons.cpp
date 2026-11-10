@@ -36,6 +36,7 @@ namespace Strata::UI
 			{ "DirectionalLight", Icons::Sun },
 			{ "PointLight", Icons::Lightbulb },
 			{ "SpotLight", Icons::Flashlight },
+			{ "RectLight", Icons::LampCeiling },
 			{ "SkyLight", Icons::CloudSun },
 			{ "PostProcess", Icons::Aperture },
 			{ "Text", Icons::Type },
@@ -87,6 +88,8 @@ namespace Strata::UI
 			return Icons::Lightbulb;
 		if (registry.all_of<SpotLightComponent>(entity))
 			return Icons::Flashlight;
+		if (registry.all_of<RectLightComponent>(entity))
+			return Icons::LampCeiling;
 		if (registry.all_of<SkyLightComponent>(entity))
 			return Icons::CloudSun;
 		if (registry.all_of<PostProcessComponent>(entity))

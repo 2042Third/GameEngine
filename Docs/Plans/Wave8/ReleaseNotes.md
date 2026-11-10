@@ -333,6 +333,24 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   (`localShadowRequested`), got one (`localShadowLights`), are fading theirs out (`localShadowFading`) and how many tiles
   of each size they have (`localShadowTileSizeCounts`).
 
+**area-lights (stage 1: rect lights, unshadowed)**
+
+- A new light, the **Rect Light** (Hierarchy: Create > Rect Light; component `RectLight`): a glowing rectangle (a ceiling
+  panel, a sign, a softbox) Width by Height meters times its entity's scale, shining from one face or both (Two Sided),
+  its Intensity the face's luminance in nits as an emissive material's, or its power in lumens (Units). It lights every
+  pixel with its exact diffuse light (the face's form factor) and a highlight shaped by the face (linearly transformed
+  cosines, Heitz et al. 2016, from the authors' published fit): a polished floor mirrors the rectangle with crisp edges,
+  wet ground draws a streak, rough metal a soft glow of its shape, with nothing sampled, no noise and nothing that needs
+  TAA. Clear coats, glass, blended surfaces and reflection probe captures (diffuse only) take it; its Range fades it to
+  zero at that distance from the face.
+- Rect lights cast no shadow yet (the stream's next stage): they light through objects.
+- Scenes without rect lights render as before, bit for bit, and pay nothing for them: the forward pass's rect-light code is
+  in shaders of its own, drawn only while a scene has a rect light.
+- The Scene view's gizmo draws a rect light's outline, a stroke along the way it shines and, where ranges show, its
+  reach; a scene lit only by rect lights is shown as it is, without the preview sun. `editor.perf` reports
+  `areaLights`, the rect lights in view.
+- Scripts and agents reach it as every light: `Entity::SetProperty("RectLight", "Width", 1.5f)`, `component.set`.
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and
@@ -545,6 +563,18 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   frame of the cut alone. Bounding it (past a number of moves, ordering that frame by importance alone) gives up the
   hysteresis in that frame and needs a test at hundreds of lights; it is left for later because only Custom counts far
   beyond Ultra's pay it, once per cut.
+
+**area-lights**
+
+- A rect light's highlight is the published fit's (the shading equals the CPU reference `Renderer/AreaLights.h` within
+  1.2e-3), which is less exact than GGX at grazing views of surfaces of middling roughness. Fitted lobe times magnitude
+  against GGX's quadrature, median and 95th percentile of the relative error: roughness 0.25: 0.026 and 0.70; 0.5: 0.086
+  and 0.96; 0.75: 0.063 and 0.86; views within 53.6 degrees of the normal stay under 3% median. Seen 87 degrees from the
+  normal, faces centered on the mirror direction get 1.1 to 1.4 times GGX's light at roughness 0.25 and 1.6 to 2.4 times
+  at 0.5; a metal floor of roughness 0.3 holds 0.934 of GGX's light in its highlight; under a light filling the sky a white
+  metal of roughness 0.3 to 0.6 seen 78 degrees from its normal reflects 0.912 to 0.918 of it (0.94 to 0.98 at 60 degrees)
+  where it should reflect all of it.
+- Rect lights cast no shadows yet: Cast Shadows and its biases are kept, and nothing is shadowed.
 
 **Showcase (the reflections' adoption)**
 

@@ -10,6 +10,8 @@
 #define ST_LIGHT_GROUP_SIZE 64u
 #define ST_COUNTER_VISIBLE_LIGHTS 21
 #define ST_COUNTER_DRAWN_LIGHTS   22
+// 23-26 are Include/Culling.slang's.
+#define ST_COUNTER_VISIBLE_AREA_LIGHTS 27
 
 struct LightRecord
 {
@@ -18,7 +20,9 @@ struct LightRecord
 	float4 DirectionType; // xyz: direction, w: type
 	float4 SpotAngles;    // x: cos(inner), y: cos(outer), z: 1 when drawn
 	float4 Bounds;        // xyz: world center, w: radius
-	float4 Source;        // x: the source radius in meters (highlights only)
+	float4 Source;        // x: the source radius in meters (highlights only), y: a rect light's 1 when two-sided
+	float4 AxisX;         // A rect light's face (LightShape::AxisX; 0 for point and spot lights)
+	float4 AxisY;
 };
 
 struct LightCullParameters

@@ -440,7 +440,8 @@ namespace Strata
 		const Ref<Scene>& scene = context.GetActiveScene();
 		const bool previewNeeded = scene && SceneRenderer::NeedsPreviewLighting(*scene);
 		const char* previewTooltip = !settings.PreviewLighting
-			? "Light scenes without any light of their own with a preview sun and sky, so their shapes read (editor view only: the game stays unlit)"
+			? "Light scenes without any light of their own (directional, point, spot, rect or sky light) with a preview sun and sky, so their shapes "
+			  "read (editor view only: the game stays unlit)"
 			: (previewNeeded ? "This scene has no light of its own: a preview sun and sky light it here so its shapes read. The game will be unlit "
 							   "until it gets lights (the scene camera shows it as the game will)."
 							 : "This scene has lights of its own, so it shows as the game will. Preview lighting lights scenes without any light.");

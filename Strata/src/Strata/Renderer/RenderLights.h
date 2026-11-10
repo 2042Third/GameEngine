@@ -5,6 +5,7 @@
 #include <entt/entity/fwd.hpp>
 #include <glm/glm.hpp>
 
+#include <array>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -15,8 +16,8 @@ namespace Strata
 
 	class Scene;
 
-	// The point and spot lights of a scene as records the GPU culls into the light clusters (RenderScene owns one and syncs
-	// it; RenderSceneGPU mirrors the records). A record per light component (an entity with a PointLightComponent and a
+	// The point, spot and rect lights of a scene as records the GPU culls into the light clusters (RenderScene owns one and
+	// syncs it; RenderSceneGPU mirrors the records). A record per light component (an entity with a PointLightComponent and a
 	// SpotLightComponent has two), kept from component signals and the scene's world transform changes like the mesh
 	// proxies, with a change log the mirror follows. Records of inactive or unlit lights stay, marked not drawn
 	// (RenderData::c_LightRecordDrawn), so that lights switched on and off cost no allocation. Main thread.
@@ -44,6 +45,12 @@ namespace Strata
 		// PointLightComponent::c_MaxSourceRadius], 0 when not finite.
 		static RenderData::LightRecord MakeRecord(const glm::mat4& world, bool active, const glm::vec3& color, float intensity, float range, uint32_t type,
 			float innerDegrees, float outerDegrees, float sourceRadius);
+		// A rect light's record (RenderData::c_LightRect): AreaLights::MakeRecord's face, radiance and bounds in the record's
+		// fields (RenderData::LightRecord). `luminance` in nits (AreaLights::GetLuminance converts lumens); `halfExtents` along
+		// the transform's X and Y before its scale. Not drawn where AreaLights::MakeRecord's is not, or when 1 / range^2 is not
+		// finite.
+		static RenderData::LightRecord MakeAreaRecord(const glm::mat4& world, bool active, const glm::vec3& color, float luminance, const glm::vec2& halfExtents,
+			float range, bool twoSided);
 		// The smallest sphere around the region a spot light reaches (apex `position`, unit `direction`): the part of its range
 		// sphere inside the cone.
 		static glm::vec4 GetSpotBounds(const glm::vec3& position, const glm::vec3& direction, float range, float cosOuter, float sinOuter);
@@ -63,7 +70,9 @@ namespace Strata
 		uint32_t GetCapacity() const { return static_cast<uint32_t>(m_Records.size()); }
 		uint32_t GetCount() const { return m_Count; }
 		std::span<const RenderData::LightRecord> GetRecords() const { return m_Records; }
-		// The record of an entity's point (RenderData::c_LightPoint) or spot light, or c_InvalidIndex.
+		// The drawn records of a type (RenderData::c_LightPoint, c_LightSpot or c_LightRect).
+		uint32_t GetDrawnCount(uint32_t type) const { return type < RenderData::c_LightTypeCount ? m_DrawnCounts[type] : 0u; }
+		// The record of an entity's point (RenderData::c_LightPoint), spot or rect light, or c_InvalidIndex.
 		uint32_t Find(entt::entity entity, uint32_t type) const;
 		entt::entity GetEntity(uint32_t record) const { return m_Entities[record]; }
 		uint32_t GetType(uint32_t record) const { return m_Types[record]; }
@@ -107,6 +116,7 @@ namespace Strata
 		std::vector<uint32_t> m_FreeRecords;
 		std::vector<uint32_t> m_ByKey;         // Per entity index and type (GetKey): its record
 		uint32_t m_Count = 0;
+		std::array<uint32_t, RenderData::c_LightTypeCount> m_DrawnCounts = {}; // Per type: its drawn records
 
 		// Entities whose light components were signaled since the last sync, each once per type.
 		struct QueuedLight

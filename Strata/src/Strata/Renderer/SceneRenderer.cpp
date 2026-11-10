@@ -179,9 +179,11 @@ namespace Strata
 
 	bool SceneRenderer::NeedsPreviewLighting(Scene& scene)
 	{
-		// Any light means the scene is lit the way it is meant to be, a night scene lit by a torch as well as a day.
+		// Any light means the scene is lit the way it is meant to be, a night scene lit by a torch as well as a day, a room lit
+		// by its ceiling panels too.
 		return !HasActiveComponent<DirectionalLightComponent>(scene) && !HasActiveComponent<SkyLightComponent>(scene)
-			&& !HasActiveComponent<PointLightComponent>(scene) && !HasActiveComponent<SpotLightComponent>(scene);
+			&& !HasActiveComponent<PointLightComponent>(scene) && !HasActiveComponent<SpotLightComponent>(scene)
+			&& !HasActiveComponent<RectLightComponent>(scene);
 	}
 
 	SceneCamera SceneCamera::FromEntity(const Scene& scene, Entity entity, float aspectRatio)
@@ -300,6 +302,9 @@ namespace Strata
 		m_ForwardPixelShader = shaders.Get("Scene/Forward.frag");
 		m_ForwardTransparentPixelShader = shaders.Get("Scene/ForwardTransparent.frag");
 		m_GlassPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/ForwardGlass.frag" : "Scene/ForwardGlassNoEntityIDs.frag");
+		m_ForwardAreaPixelShader = shaders.Get("Scene/ForwardAreaLights.frag");
+		m_ForwardTransparentAreaPixelShader = shaders.Get("Scene/ForwardTransparentAreaLights.frag");
+		m_GlassAreaPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/ForwardGlassAreaLights.frag" : "Scene/ForwardGlassNoEntityIDsAreaLights.frag");
 		m_FullscreenVertexShader = shaders.Get("PostProcess/Fullscreen.vert");
 		m_TonemapPixelShader = shaders.Get("PostProcess/Tonemap.frag");
 		m_SkyboxPixelShader = shaders.Get("Scene/Skybox.frag");
@@ -313,7 +318,8 @@ namespace Strata
 		m_SelectionMaskPixelShader = shaders.Get("Scene/SelectionMask.frag");
 		m_LocalShadowVertexShader = shaders.Get("Scene/LocalShadowMesh.vert");
 		m_SkinnedLocalShadowVertexShader = shaders.Get("Scene/LocalShadowMeshSkinned.vert");
-		ST_CORE_VERIFY(m_MeshVertexShader && m_PrepassPixelShader && m_ForwardPixelShader && m_ForwardTransparentPixelShader && m_GlassPixelShader && m_FullscreenVertexShader
+		ST_CORE_VERIFY(m_MeshVertexShader && m_PrepassPixelShader && m_ForwardPixelShader && m_ForwardTransparentPixelShader && m_GlassPixelShader
+			&& m_ForwardAreaPixelShader && m_ForwardTransparentAreaPixelShader && m_GlassAreaPixelShader && m_FullscreenVertexShader
 			&& m_TonemapPixelShader && m_SkyboxPixelShader && m_AtmosphereSkyboxPixelShader && m_ShadowVertexShader && m_ShadowMaskPixelShader && m_FXAAPixelShader && m_SkinnedMeshVertexShader
 			&& m_SkinnedShadowVertexShader && m_SelectionMaskPixelShader && m_LocalShadowVertexShader && m_SkinnedLocalShadowVertexShader && m_MorphologicalEdgesShader
 			&& m_MorphologicalWeightsShader && m_MorphologicalBlendShader,
@@ -395,6 +401,8 @@ namespace Strata
 			nvrhi::BindingLayoutItem::Texture_SRV(39),
 			nvrhi::BindingLayoutItem::Texture_SRV(40),
 			nvrhi::BindingLayoutItem::Texture_SRV(54),
+			nvrhi::BindingLayoutItem::Texture_SRV(55),          // The rect lights' LTC table (Renderer::GetAreaLightTable)
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(56), // The lights' faces (RenderData::LightShape, parallel to SRV 2)
 			nvrhi::BindingLayoutItem::Sampler(0).setSize(RenderData::c_SamplerCount),
 			nvrhi::BindingLayoutItem::Sampler(8),
 			nvrhi::BindingLayoutItem::Sampler(9),
@@ -504,6 +512,7 @@ namespace Strata
 		bool recreated = false;
 		const bool buffersCreated = EnsureBufferCapacity(m_DrawListBuffer, 1024, sizeof(uint32_t), "DrawList", recreated)
 			&& EnsureBufferCapacity(m_LightBuffer, 64, sizeof(RenderData::LightData), "Lights", recreated, BufferKind::StructuredUAV)
+			&& EnsureBufferCapacity(m_LightShapeBuffer, 64, sizeof(RenderData::LightShape), "LightShapes", recreated, BufferKind::StructuredUAV)
 			&& EnsureBufferCapacity(m_LightBoundsBuffer, 64, sizeof(RenderData::LightBounds), "LightBounds", recreated, BufferKind::StructuredUAV)
 			&& EnsureBufferCapacity(m_LightCountBuffer, 1, sizeof(uint32_t), "LightCount", recreated, BufferKind::StructuredUAV)
 			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, 1024, sizeof(uint32_t), "ShadowDrawList", recreated);
@@ -1102,6 +1111,9 @@ namespace Strata
 				nvrhi::BindingSetItem::Texture_SRV(39, giTextures[3], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
 				nvrhi::BindingSetItem::Texture_SRV(40, giTextures[4], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
 				nvrhi::BindingSetItem::Texture_SRV(54, giTextures[5], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
+				nvrhi::BindingSetItem::Texture_SRV(55, Renderer::GetAreaLightTable(), nvrhi::Format::UNKNOWN, nvrhi::AllSubresources,
+					nvrhi::TextureDimension::Texture2DArray),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(56, m_LightShapeBuffer),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SceneGPU->GetMaterialBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment->Irradiance.Get() : blackCube),
@@ -1189,7 +1201,10 @@ namespace Strata
 			m_SkinnedMeshVelocityVertexShader = shaders.Get("Scene/MeshSkinnedVelocity.vert");
 			m_PrepassVelocityPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/DepthPrepassVelocity.frag" : "Scene/DepthPrepassNoEntityIDsVelocity.frag");
 			m_GlassVelocityPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/ForwardGlassVelocity.frag" : "Scene/ForwardGlassNoEntityIDsVelocity.frag");
-			ST_CORE_VERIFY(m_MeshVelocityVertexShader && m_SkinnedMeshVelocityVertexShader && m_PrepassVelocityPixelShader && m_GlassVelocityPixelShader,
+			m_GlassVelocityAreaPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/ForwardGlassVelocityAreaLights.frag"
+				: "Scene/ForwardGlassNoEntityIDsVelocityAreaLights.frag");
+			ST_CORE_VERIFY(m_MeshVelocityVertexShader && m_SkinnedMeshVelocityVertexShader && m_PrepassVelocityPixelShader && m_GlassVelocityPixelShader
+				&& m_GlassVelocityAreaPixelShader,
 				"SceneRenderer: the velocity shaders are missing");
 		}
 		if (!m_VelocityTexture)
@@ -2421,8 +2436,11 @@ namespace Strata
 		return true;
 	}
 
-	nvrhi::IGraphicsPipeline* SceneRenderer::GetScenePipeline(const PipelineKey& key)
+	nvrhi::IGraphicsPipeline* SceneRenderer::GetScenePipeline(const PipelineKey& requested)
 	{
+		// The forward passes of a frame whose scene has a drawn rect light take the shaders' forms that shade them.
+		PipelineKey key = requested;
+		key.AreaLights = m_AreaLightsFrame && (key.PassType == Pass::Opaque || key.PassType == Pass::Transparent || key.PassType == Pass::Glass);
 		for (const auto& [cachedKey, pipeline] : m_ScenePipelines)
 		{
 			if (cachedKey == key)
@@ -2453,9 +2471,12 @@ namespace Strata
 			case Pass::LocalShadowMasked: desc.PS = m_ShadowMaskPixelShader; break;
 			case Pass::Shadow:
 			case Pass::LocalShadow:  desc.PS = nullptr; break; // Depth only
-			case Pass::Transparent:  desc.PS = m_ForwardTransparentPixelShader; break;
-			case Pass::Glass:        desc.PS = key.Velocity ? m_GlassVelocityPixelShader : m_GlassPixelShader; break;
-			case Pass::Opaque:       desc.PS = m_ForwardPixelShader; break;
+			case Pass::Transparent:  desc.PS = key.AreaLights ? m_ForwardTransparentAreaPixelShader : m_ForwardTransparentPixelShader; break;
+			case Pass::Glass:
+				desc.PS = key.Velocity ? (key.AreaLights ? m_GlassVelocityAreaPixelShader : m_GlassVelocityPixelShader)
+					: (key.AreaLights ? m_GlassAreaPixelShader : m_GlassPixelShader);
+				break;
+			case Pass::Opaque:       desc.PS = key.AreaLights ? m_ForwardAreaPixelShader : m_ForwardPixelShader; break;
 			case Pass::SelectionMask: desc.PS = m_SelectionMaskPixelShader; break;
 		}
 		desc.bindingLayouts = { m_SceneBindingLayout, Renderer::GetBindlessTextures().GetLayout() };
@@ -2620,9 +2641,14 @@ namespace Strata
 
 		m_LightCandidates.clear();
 		m_Lights.clear();
+		m_LightShapes.clear();
 		m_LightBounds.clear();
 		m_LightRecordIndices.clear();
 		const RenderLights& lights = renderScene.GetLights();
+		// Both paths alike: whether the scene has a rect light drawn anywhere, not only in view (the GPU-driven path culls on
+		// the GPU), chooses the forward shaders that shade them.
+		m_AreaLightsFrame = lights.GetDrawnCount(RenderData::c_LightRect) > 0;
+		m_Stats.AreaLightShading = m_AreaLightsFrame;
 		m_GPULightsFrame = m_GPUDrivenFrame && m_LightCullPipeline && m_LightCompactPipeline;
 		if (m_GPULightsFrame)
 		{
@@ -2632,8 +2658,8 @@ namespace Strata
 			return;
 		}
 
-		// Point and spot lights: frustum culled by the bounding sphere of the region they reach, then ranked by
-		// relevance (lights containing the camera first, then by the projected size of that sphere).
+		// Point, spot and rect lights: frustum culled by the bounding sphere of the region they reach, then ranked by
+		// relevance (lights containing the camera first, then by the projected size of that sphere), whatever their type.
 		const Frustum frustum(camera.Projection * camera.View);
 		const std::span<const RenderData::LightRecord> records = lights.GetRecords();
 		for (uint32_t index = 0; index < records.size(); index++)
@@ -2652,6 +2678,10 @@ namespace Strata
 			candidate.Data.Color = record.Color;
 			candidate.Data.DirectionType = record.DirectionType;
 			candidate.Data.SpotAngles = glm::vec4(record.SpotAngles.x, record.SpotAngles.y, 0.0f, record.Source.x);
+			// A rect light's face, as LightCompact.comp writes it (zero for point and spot lights).
+			candidate.Shape.AxisX = record.AxisX;
+			candidate.Shape.AxisY = record.AxisY;
+			candidate.Shape.Parameters = glm::vec4(record.Source.y, 4.0f * record.AxisX.w * record.AxisY.w, 0.0f, 0.0f);
 			const float distance = glm::length(glm::vec3(candidate.Bounds) - camera.Position);
 			if (camera.Orthographic)
 				candidate.Relevance = candidate.Bounds.w; // The projected size does not depend on the distance
@@ -2674,7 +2704,7 @@ namespace Strata
 			m_LightCandidates.resize(m_Specification.MaxLights);
 			if (!m_WarnedLightOverflow)
 			{
-				ST_CORE_WARN("SceneRenderer '{}': more than {} point and spot lights are visible; the least relevant ones are not rendered", m_Specification.DebugName,
+				ST_CORE_WARN("SceneRenderer '{}': more than {} point, spot and rect lights are visible; the least relevant ones are not rendered", m_Specification.DebugName,
 					m_Specification.MaxLights);
 				m_WarnedLightOverflow = true;
 			}
@@ -2689,6 +2719,9 @@ namespace Strata
 			RenderData::LightData light = candidate.Data;
 			light.PositionRange = glm::vec4(glm::vec3(glm::dvec3(glm::vec3(light.PositionRange)) - cameraPosition), light.PositionRange.w);
 			m_Lights.push_back(light);
+			m_LightShapes.push_back(candidate.Shape);
+			if (static_cast<uint32_t>(light.DirectionType.w) >= RenderData::c_LightRect)
+				m_Stats.AreaLights++;
 			m_LightRecordIndices.push_back(candidate.Order);
 			const glm::vec3 relativeCenter(glm::dvec3(glm::vec3(candidate.Bounds)) - cameraPosition);
 			m_LightBounds.push_back(RenderData::LightBounds { glm::vec4(viewRotation * relativeCenter, candidate.Bounds.w) });
@@ -3274,6 +3307,8 @@ namespace Strata
 			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, m_ShadowDrawInstancesBuild.size(), sizeof(uint32_t), "ShadowDrawList", drawListsRecreated)
 			&& EnsureBufferCapacity(m_LightBuffer, m_GPULightsFrame ? m_GPULightRecords : m_Lights.size(), sizeof(RenderData::LightData), "Lights", buffersRecreated,
 				BufferKind::StructuredUAV)
+			&& EnsureBufferCapacity(m_LightShapeBuffer, m_GPULightsFrame ? m_GPULightRecords : m_LightShapes.size(), sizeof(RenderData::LightShape), "LightShapes",
+				buffersRecreated, BufferKind::StructuredUAV)
 			&& EnsureBufferCapacity(m_LightBoundsBuffer, m_GPULightsFrame ? m_GPULightRecords : m_LightBounds.size(), sizeof(RenderData::LightBounds), "LightBounds",
 				buffersRecreated, BufferKind::StructuredUAV)
 			&& EnsureBufferCapacity(m_LocalShadowBuffer, m_LocalShadowData.size(), sizeof(RenderData::LocalShadowData), "LocalShadows", buffersRecreated)
@@ -3356,6 +3391,7 @@ namespace Strata
 		if (!m_Lights.empty())
 		{
 			commandList->writeBuffer(m_LightBuffer, m_Lights.data(), m_Lights.size() * sizeof(RenderData::LightData));
+			commandList->writeBuffer(m_LightShapeBuffer, m_LightShapes.data(), m_LightShapes.size() * sizeof(RenderData::LightShape));
 			commandList->writeBuffer(m_LightBoundsBuffer, m_LightBounds.data(), m_LightBounds.size() * sizeof(RenderData::LightBounds));
 		}
 

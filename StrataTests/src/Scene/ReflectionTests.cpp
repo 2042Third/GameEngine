@@ -43,7 +43,7 @@ TEST_SUITE("Reflection")
 	{
 		const char* expected[] = {
 			"ID", "Name", "Transform", "Relationship", "Tag", "Inactive", "PrefabInstance", "Camera", "MeshRenderer",
-			"DirectionalLight", "PointLight", "SpotLight", "SkyLight", "HeightFog", "ReflectionProbe", "PostProcess", "Text",
+			"DirectionalLight", "PointLight", "SpotLight", "RectLight", "SkyLight", "HeightFog", "ReflectionProbe", "PostProcess", "Text",
 #if ST_WITH_PHYSICS
 			"RigidBody", "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "CharacterController",
 #endif
@@ -268,6 +268,43 @@ TEST_SUITE("Reflection")
 		}
 		CHECK(PointLightComponent().SourceRadius == 0.0f);
 		CHECK(SpotLightComponent().SourceRadius == 0.0f);
+
+		// Rect lights: their sizes within [c_MinSize, c_MaxSize] meters, their range above 0, their units by name, shadows off
+		// by default with a point light's biases; the Intensity tooltip names both units.
+		const ComponentInfo* rectInfo = ComponentRegistry::Find("RectLight");
+		REQUIRE(rectInfo);
+		CHECK(rectInfo->DisplayName == "Rect Light");
+		CHECK(rectInfo->Category == "Lighting");
+		for (const char* size : { "Width", "Height" })
+		{
+			CAPTURE(size);
+			const PropertyInfo* found = rectInfo->FindProperty(size);
+			REQUIRE(found);
+			CHECK(found->Min == RectLightComponent::c_MinSize);
+			CHECK(found->Max == RectLightComponent::c_MaxSize);
+		}
+		const PropertyInfo* rectIntensity = rectInfo->FindProperty("Intensity");
+		REQUIRE(rectIntensity);
+		CHECK(rectIntensity->Tooltip.find("nits") != std::string::npos);
+		CHECK(rectIntensity->Tooltip.find("lumens") != std::string::npos);
+		const PropertyInfo* units = rectInfo->FindProperty("Units");
+		REQUIRE(units);
+		REQUIRE(units->EnumValues.size() == 2);
+		CHECK(units->EnumValues[0].Name == "Nits");
+		CHECK(units->EnumValues[1].Name == "Lumens");
+		CHECK(rectInfo->FindProperty("Range")->Min > 0.0f);
+		RectLightComponent panel;
+		CHECK(panel.Units == AreaLightUnits::Nits);
+		CHECK(panel.Width == 1.0f);
+		CHECK(panel.Height == 0.5f);
+		CHECK_FALSE(panel.TwoSided);
+		CHECK_FALSE(panel.CastShadows);
+		CHECK(panel.ShadowBias == 1.0f);
+		CHECK(panel.ShadowNormalBias == 1.5f);
+		const PropertyInfo* width = rectInfo->FindProperty("Width");
+		CHECK(width->SetValue(&panel, PropertyValue(0.0f)));
+		CHECK(panel.Width == RectLightComponent::c_MinSize);
+		CHECK_FALSE(width->SetValue(&panel, std::numeric_limits<float>::quiet_NaN()));
 		CHECK(PointLightComponent::c_MaxSourceRadius == 2.0f);
 		PointLightComponent lamp;
 		CHECK_FALSE(lamp.CastShadows);
@@ -530,6 +567,15 @@ TEST_SUITE("Scene.InactiveProperties")
 			for (const char* property : { "ShadowBias", "ShadowNormalBias", "ShadowFilterRadius" })
 				CHECK_MESSAGE(reason(component, property).empty(), component, ".", property);
 		}
+		// Rect lights' alike.
+		RectLightComponent& panel = entity.AddComponent<RectLightComponent>();
+		for (const char* property : { "ShadowBias", "ShadowNormalBias" })
+			CHECK_MESSAGE(reason("RectLight", property) == "Cast Shadows is off", property);
+		for (const char* property : { "Intensity", "Units", "Width", "Height", "TwoSided", "Range", "CastShadows" })
+			CHECK_MESSAGE(reason("RectLight", property).empty(), property);
+		panel.CastShadows = true;
+		for (const char* property : { "ShadowBias", "ShadowNormalBias" })
+			CHECK_MESSAGE(reason("RectLight", property).empty(), property);
 
 		// The sky: the map's properties with the procedural sky, the procedural sky's with a map, the ambient color with either.
 		SkyLightComponent& sky = entity.AddComponent<SkyLightComponent>();

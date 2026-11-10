@@ -351,6 +351,18 @@ TEST_SUITE("GPU.ProceduralSky")
 		const ReadbackImage spotOnly = render({});
 		CHECK(MaxDifference(render(preview), spotOnly) == 0);
 		CHECK_FALSE(renderer.GetStats().PreviewLighting);
+		// So does a rect light (a room lit only by its ceiling panel, as a Cornell box is).
+		scene.DestroyEntity(spot);
+		CHECK(SceneRenderer::NeedsPreviewLighting(scene));
+		Entity panel = scene.CreateEntity("Panel");
+		panel.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 3.0f, 0.0f);
+		panel.GetComponent<TransformComponent>().Rotation = glm::quat(glm::radians(glm::vec3(-90.0f, 0.0f, 0.0f)));
+		panel.AddComponent<RectLightComponent>().Range = 8.0f;
+		CHECK_FALSE(SceneRenderer::NeedsPreviewLighting(scene));
+		const ReadbackImage panelOnly = render({});
+		CHECK(MaxDifference(render(preview), panelOnly) == 0);
+		CHECK_FALSE(renderer.GetStats().PreviewLighting);
+		CHECK(GetLightCounts(renderer).AreaLights == 1);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

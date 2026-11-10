@@ -34,9 +34,10 @@ namespace Strata
 		// Colliders of every entity, or (false) only of ColliderEntities, e.g. the selection, sorted by entity handle.
 		bool AllColliders = true;
 		std::span<const Entity> ColliderEntities;
-		// The range spheres of point lights and the cones of spot lights for every light, or (false) only for
-		// LightRangeEntities, e.g. the selection, sorted by entity handle: with a view the other lights are drawn as their
-		// icons (a light's range would cover what is near it), without one they are left out.
+		// The range spheres of point lights, the cones of spot lights and the reach of rect lights for every light, or (false)
+		// only for LightRangeEntities, e.g. the selection, sorted by entity handle: with a view the other lights are drawn as
+		// their icons (a light's range would cover what is near it; a rect light keeps its face's outline), without one they
+		// are left out (rect lights keep their outline).
 		bool AllLightRanges = true;
 		std::span<const Entity> LightRangeEntities;
 		float CameraAspectRatio = 16.0f / 9.0f; // Shape of the camera frustums
@@ -55,7 +56,8 @@ namespace Strata
 	};
 
 	// Adds the editor gizmo shapes of a scene's active components to a debug draw list: directional lights (an arrow along
-	// the light), point lights (their range), spot lights (their outer cone), cameras (their view frustum), and the
+	// the light), point lights (their range), spot lights (their outer cone), rect lights (their face's outline with a stroke
+	// along the way it shines, and the sphere they reach where ranges show), cameras (their view frustum), and the
 	// components whose registration gives a collider gizmo (ComponentInfoBuilder::Gizmo with ComponentGizmoGroup::Collider:
 	// physics' colliders and character controller, a game's own), in the shapes their modules compute, type by type in
 	// registration order. Physics' collider shapes follow the entity's scale like rigid bodies do: box extents per axis,

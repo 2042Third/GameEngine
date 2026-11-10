@@ -244,7 +244,8 @@ namespace Strata::RenderData
 		uint32_t SecondPhaseShadowDraws = 0; // Of ShadowDraws, the cascades' second phase's
 		uint32_t LocalShadowInstances = 0;   // Instances drawn into local shadow views, summed over views
 		uint32_t LocalShadowDraws = 0;       // Records drawn into local shadow views
-		uint32_t Reserved[5] = {};
+		uint32_t VisibleAreaLights = 0;      // Of VisibleLights, the rect lights
+		uint32_t Reserved[4] = {};
 	};
 	static_assert(sizeof(CullCounters) == 128);
 	// Include/Lights.slang's ST_COUNTER_VISIBLE_LIGHTS and ST_COUNTER_DRAWN_LIGHTS.
@@ -254,5 +255,7 @@ namespace Strata::RenderData
 	// Include/Culling.slang's ST_COUNTER_SECOND_PHASE_SHADOW_DRAWS, ST_COUNTER_LOCAL_SHADOW_INSTANCES and ST_COUNTER_LOCAL_SHADOW_DRAWS.
 	static_assert(offsetof(CullCounters, SecondPhaseShadowDraws) == 24 * sizeof(uint32_t));
 	static_assert(offsetof(CullCounters, LocalShadowInstances) == 25 * sizeof(uint32_t) && offsetof(CullCounters, LocalShadowDraws) == 26 * sizeof(uint32_t));
+	// Include/Lights.slang's ST_COUNTER_VISIBLE_AREA_LIGHTS.
+	static_assert(offsetof(CullCounters, VisibleAreaLights) == 27 * sizeof(uint32_t));
 
 }

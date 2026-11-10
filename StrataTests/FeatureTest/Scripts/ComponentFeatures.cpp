@@ -113,6 +113,11 @@ private:
 
 		Expect(Scratch.AddComponent("PointLight") && Scratch.SetProperty("PointLight", "Color", glm::vec3(0.25f, 0.5f, 1.0f))
 			&& Near(Scratch.GetProperty<glm::vec3>("PointLight", "Color").value_or(glm::vec3(0.0f)), glm::vec3(0.25f, 0.5f, 1.0f)), "write color3");
+		// A rect light through the generic component API: its size and its units by value.
+		Expect(Scratch.AddComponent("RectLight") && Scratch.SetProperty("RectLight", "Width", 1.5f)
+			&& Near(Scratch.GetProperty<float>("RectLight", "Width").value_or(0.0f), 1.5f), "write a rect light's width");
+		Expect(Scratch.SetProperty("RectLight", "Units", 1) && Scratch.GetProperty<int32_t>("RectLight", "Units") == 1, "write a rect light's units");
+		Expect(Scratch.RemoveComponent("RectLight") && !Scratch.HasComponent("RectLight"), "RemoveComponent of a rect light");
 
 		Expect(Scratch.AddComponent("RigidBody") && Scratch.SetProperty("RigidBody", "Type", 2), "a kinematic scratch body");
 		Expect(Scratch.SetProperty("RigidBody", "Layer", 7u) && Scratch.GetProperty<uint32_t>("RigidBody", "Layer") == 7u, "write uint");

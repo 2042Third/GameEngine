@@ -354,6 +354,31 @@ namespace Strata
 				WithTooltip(Range(0.0f, PointLightComponent::c_MaxShadowFilterRadius, 0.01f), c_LocalShadowFilterTooltip));
 		SetInactiveReasons<SpotLightComponent>({ "ShadowBias", "ShadowNormalBias", "ShadowFilterRadius" }, &WithShadows<SpotLightComponent>);
 
+		ComponentRegistry::Register<RectLightComponent>("RectLight")
+			.DisplayName("Rect Light")
+			.Category("Lighting")
+			.Description("Rectangle light shining along the entity's forward (-Z) direction from its X-Y plane, lighting every pixel with its "
+				"face's diffuse light and highlight; its intensity is the luminance of its face in nits, or its power in lumens")
+			.Property("Color", &RectLightComponent::Color, WithTooltip(Color(), "Linear color of the light, times Intensity"))
+			.Property("Intensity", &RectLightComponent::Intensity,
+				WithTooltip(Range(0.0f, c_Unbounded, 0.1f), "Luminance of the face in nits (cd/m\xC2\xB2), times Color, with Units Nits (an LED ceiling "
+					"panel about 3,000, a lit sign 1,000, a softbox 10,000); its power in lumens with Units Lumens (an LED panel of 60 x 60 cm about "
+					"3,600 lm)"))
+			.EnumProperty("Units", &RectLightComponent::Units, { { "Nits", 0 }, { "Lumens", 1 } },
+				{ .Tooltip = "Nits: Intensity is the face's luminance, as an emissive material's (resizing keeps its brightness); Lumens: the power the "
+					"light emits, spread over its face (resizing keeps its power; a two-sided light shares it between its faces)" })
+			.Property("Width", &RectLightComponent::Width,
+				WithTooltip(Range(RectLightComponent::c_MinSize, RectLightComponent::c_MaxSize, 0.01f), "Meters along the entity's X axis, times its scale"))
+			.Property("Height", &RectLightComponent::Height,
+				WithTooltip(Range(RectLightComponent::c_MinSize, RectLightComponent::c_MaxSize, 0.01f), "Meters along the entity's Y axis, times its scale"))
+			.Property("TwoSided", &RectLightComponent::TwoSided, WithTooltip({}, "Emits from both faces with the same luminance (twice the power)"))
+			.Property("Range", &RectLightComponent::Range, WithTooltip(Range(0.01f, c_Unbounded, 0.1f), "Light fades to zero at this distance from the rectangle"))
+			.Property("CastShadows", &RectLightComponent::CastShadows,
+				WithTooltip({}, "Kept for the light's shadows: rect lights cast no shadow yet, so they light through objects"))
+			.Property("ShadowBias", &RectLightComponent::ShadowBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), c_LocalShadowBiasTooltip))
+			.Property("ShadowNormalBias", &RectLightComponent::ShadowNormalBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), c_LocalShadowNormalBiasTooltip));
+		SetInactiveReasons<RectLightComponent>({ "ShadowBias", "ShadowNormalBias" }, &WithShadows<RectLightComponent>);
+
 		ComponentRegistry::Register<SkyLightComponent>("SkyLight")
 			.DisplayName("Sky Light")
 			.Category("Lighting")

@@ -391,7 +391,7 @@ namespace Strata
 	// shows it.
 	struct SceneRenderOptions
 	{
-		// Editor preview lighting: a scene without any active light (directional, point, spot or sky light;
+		// Editor preview lighting: a scene without any active light (directional, point, spot, rect or sky light;
 		// SceneRenderer::NeedsPreviewLighting) is lit by a preview sun (a default directional light shining from
 		// SceneRenderer::GetPreviewSunDirection) and a procedural sky with the default SkyLightComponent colors, so unlit
 		// content shows its shape. Scenes with any lighting of their own, also a dark one lit by a torch, render unchanged.
@@ -543,10 +543,11 @@ namespace Strata
 		uint64_t Triangles = 0;
 		// Drawn submesh instances per selected level of detail; the last entry also counts all higher levels.
 		std::array<uint32_t, c_LODStatCount> InstancesPerLOD = {};
-		uint32_t Lights = 0;          // Rendered lights: the directional light plus the point and spot lights (the GPU-driven path's
-		                              // point and spot lights are counted on the GPU: SceneRendererGPUStats::Lights, AddGPUCounts)
-		uint32_t CulledLights = 0;    // Point and spot lights outside the view frustum
-		uint32_t DroppedLights = 0;   // Visible point and spot lights beyond SceneRendererSpecification::MaxLights
+		uint32_t Lights = 0;          // Rendered lights: the directional light plus the point, spot and rect lights (the GPU-driven
+		                              // path's are counted on the GPU: SceneRendererGPUStats::Lights, AddGPUCounts)
+		uint32_t AreaLights = 0;      // Of Lights, the rect lights (the GPU-driven path's: SceneRendererGPUStats::AreaLights)
+		uint32_t CulledLights = 0;    // Point, spot and rect lights outside the view frustum
+		uint32_t DroppedLights = 0;   // Visible point, spot and rect lights beyond SceneRendererSpecification::MaxLights
 		uint32_t Materials = 0;       // Distinct materials drawn
 		// Of the materials drawn and casting shadows, those whose flags and texture maps the frame took over from an earlier
 		// frame's (the same materials and textures used the same ways: still frames), with their assets looked up in one call
@@ -596,6 +597,8 @@ namespace Strata
 		bool EnvironmentRefreshPending = false;
 		glm::vec3 SunTransmittance = glm::vec3(1.0f);
 		bool PreviewLighting = false;     // SceneRenderOptions::PreviewEnvironment lit the scene (it has no light of its own)
+		// The forward passes drew with the shaders that shade rect lights: the scene has a drawn rect light (in view or not)
+		bool AreaLightShading = false;
 		bool HeightFog = false;           // The scene's height fog (SceneRenderer::FindHeightFog) was drawn
 		uint32_t ShadowCasters = 0;       // Instances drawn into shadow cascades (summed over cascades)
 		// GPU-driven frames: the cascades (a bit each) that kept their shadow map layer from the previous frame
@@ -778,8 +781,9 @@ namespace Strata
 		uint32_t OccludedCasters = 0;  // In a cascade's box, hidden behind what the cascade draws (summed over cascades)
 		uint32_t SubTexelCasters = 0;
 		uint32_t SkinnedInstances = 0;
-		uint32_t Lights = 0;           // Point and spot lights in the view (all of them: no SceneRendererSpecification::MaxLights)
-		uint32_t CulledLights = 0;     // Point and spot lights outside the view
+		uint32_t Lights = 0;           // Point, spot and rect lights in the view (all of them: no SceneRendererSpecification::MaxLights)
+		uint32_t AreaLights = 0;       // Of Lights, the rect lights
+		uint32_t CulledLights = 0;     // Point, spot and rect lights outside the view
 		uint64_t Triangles = 0;        // Of the view's instances
 		uint32_t DrawListEntries = 0;  // Instances in the draw list (view and cascades)
 		uint32_t Overflow = 0;         // Instances there was no room for (not drawn): 0 unless the buffers could not grow
@@ -1137,6 +1141,9 @@ namespace Strata
 			bool Velocity = false;
 			// The prepass of a frame with screen-space reflections (always with Velocity): it writes the surface target too.
 			bool Surface = false;
+			// The forward passes (Opaque, Transparent, Glass) of a frame whose scene has a drawn rect light: the shaders' forms
+			// that shade rect lights (ST_AREA_LIGHTS). GetScenePipeline sets it from the frame.
+			bool AreaLights = false;
 			bool operator==(const PipelineKey&) const = default;
 		};
 
@@ -1263,6 +1270,7 @@ namespace Strata
 		struct LightCandidate
 		{
 			RenderData::LightData Data;
+			RenderData::LightShape Shape; // A rect light's face (zero for point and spot lights)
 			glm::vec4 Bounds; // World-space bounding sphere of the lit region (xyz: center, w: radius)
 			float Relevance = 0.0f;
 			uint32_t Order = 0; // Registry order, which breaks ties between equally relevant lights
@@ -2127,6 +2135,13 @@ namespace Strata
 		nvrhi::ShaderHandle m_ForwardPixelShader;
 		nvrhi::ShaderHandle m_ForwardTransparentPixelShader;
 		nvrhi::ShaderHandle m_GlassPixelShader; // With or without entity ids, as the renderer writes them
+		// The forward shaders' forms that shade rect lights (ST_AREA_LIGHTS: Include/AreaLights.slang), for frames whose scene has
+		// a drawn rect light (m_AreaLightsFrame); the others leave them out, so that frames without them pay nothing.
+		nvrhi::ShaderHandle m_ForwardAreaPixelShader;
+		nvrhi::ShaderHandle m_ForwardTransparentAreaPixelShader;
+		nvrhi::ShaderHandle m_GlassAreaPixelShader;
+		nvrhi::ShaderHandle m_GlassVelocityAreaPixelShader;
+		bool m_AreaLightsFrame = false;
 		nvrhi::ShaderHandle m_FullscreenVertexShader;
 		nvrhi::ShaderHandle m_TonemapPixelShader;
 		nvrhi::ShaderHandle m_SkyboxPixelShader;
@@ -2329,6 +2344,7 @@ namespace Strata
 		uint64_t m_BoundSceneGPUVersion = 0;
 		uint64_t m_BoundTextureTableVersion = 0; // TextureTable::GetBufferVersion the binding sets were made for
 		nvrhi::BufferHandle m_LightBuffer;
+		nvrhi::BufferHandle m_LightShapeBuffer; // The lights' faces (RenderData::LightShape, scene set SRV 56), parallel to m_LightBuffer
 		nvrhi::BufferHandle m_LightCountBuffer; // The lights in m_LightBuffer where the GPU culled them (LightCounts.y)
 		// The shadow cascades' projections (RenderData::CascadeData), fitted on the GPU every frame with shadows
 		// (Scene/CascadeFit.comp) from m_CascadeFit and, on the GPU-driven path, the nearest casters its culling found.
@@ -2571,6 +2587,7 @@ namespace Strata
 
 		// Lights gathered per frame (kept between frames to reuse the allocations)
 		std::vector<RenderData::LightData> m_Lights;
+		std::vector<RenderData::LightShape> m_LightShapes; // Per entry of m_Lights: its face (zero for point and spot lights)
 		std::vector<RenderData::LightBounds> m_LightBounds;
 		std::vector<uint32_t> m_LightRecordIndices; // Per entry of m_Lights: its RenderLights record
 		std::vector<LightCandidate> m_LightCandidates;
@@ -2652,7 +2669,7 @@ namespace Strata
 		nvrhi::BindingSetHandle m_LightCompactBindingSet;
 		nvrhi::BufferHandle m_LightVisibleBuffer;    // Per light record: whether it is in view
 		nvrhi::BufferHandle m_LightGroupCountBuffer; // Per work group of records: its lights in view
-		std::array<const nvrhi::IBuffer*, 7> m_LightCullBound = {}; // The buffers the binding sets name
+		std::array<const nvrhi::IBuffer*, 8> m_LightCullBound = {}; // The buffers the binding sets name
 		// Per light record its shadow slot plus one (Scene/LightCompact.comp): what the buffer holds, the records set in it, and
 		// how many of its first entries are up to date (the records of the latest frame that culled lights on the GPU).
 		nvrhi::BufferHandle m_LightShadowSlotBuffer;

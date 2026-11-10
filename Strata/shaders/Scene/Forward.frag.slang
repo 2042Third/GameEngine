@@ -6,6 +6,10 @@
 #include "Include/Shadows.slang"
 #define ST_LOCAL_SHADOW_SAMPLING
 #include "Include/LocalShadows.slang"
+#ifdef ST_AREA_LIGHTS
+#define ST_AREA_LIGHT_SHADING
+#include "Include/AreaLights.slang"
+#endif
 #include "Include/Clusters.slang"
 #include "Include/Fog.slang"
 #include "Include/AerialPerspective.slang"
@@ -26,7 +30,11 @@
 //   entity ids (without ST_NO_ENTITY_IDS: ForwardGlassNoEntityIDs.frag) and, with ST_VELOCITY (ForwardGlassVelocity.frag,
 //   ForwardGlassNoEntityIDsVelocity.frag, after Scene/MeshVelocity.vert), their motion, into the attachments after the
 //   color, as the prepass does for opaque surfaces. Their HDR alpha is 1: the TAA does not take them for blended surfaces.
-// Every variant shades a clear coat where the material has one (a branch on its flag, the same for a whole draw).
+// Every variant shades a clear coat where the material has one (a branch on its flag, the same for a whole draw). Each has a
+// form with ST_AREA_LIGHTS (Scene/ForwardAreaLights.frag, ForwardTransparentAreaLights.frag, ...): the one that shades rect
+// lights (Include/AreaLights.slang), drawn in frames whose scene has a drawn rect light. The forms without it are the shaders
+// of before rect lights, instruction for instruction: a frame without rect lights pays nothing for their code (its registers
+// would cost every pixel) and shows the same bits.
 
 #ifndef ST_FORWARD_TRANSPARENT
 #define ST_EARLY_FRAGMENT_TESTS [earlydepthstencil]
@@ -189,8 +197,9 @@ float3 ShadeGlobalIlluminationView(uint lightingView, SurfaceData surface, float
 	return field.rgb * (diffuseOcclusion / ST_GI_RADIANCE_SCALE) * field.a + today * (1.0 - field.a);
 }
 
-// The lit surface's color: the sun with its shadow, the punctual lights of the pixel's cluster (those with shadows through
-// their views, Include/LocalShadows.slang), the reflection probes' and the sky's image-based light (or the constant ambient)
+// The lit surface's color: the sun with its shadow, the point and spot lights of the pixel's cluster (those with shadows
+// through their views, Include/LocalShadows.slang) and its rect lights (Include/AreaLights.slang, unshadowed), the reflection
+// probes' and the sky's image-based light (or the constant ambient)
 // and the emission, under the clear coat where the material has one. `roughness` is the perceptual roughness widened by
 // specular anti-aliasing (main); `diffuseWeight` is the share of the diffuse light the surface scatters (1 - its transmission
 // in the glass variant; 1 elsewhere). The lighting debug views Indirect and AmbientOcclusion return only the indirect light and
@@ -246,14 +255,30 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 			u_Frame.ReflectionParams.w) * shadow;
 	}
 
-	// Punctual lights reaching this pixel's cluster.
+	// The lights reaching this pixel's cluster.
 	if (u_Frame.LightCounts.x > 0u)
 	{
 		uint clusterBase = GetClusterIndex(st_FragCoord.xy, viewDepth) * GetClusterStride();
 		uint clusterLights = min(u_ClusterLights[clusterBase], u_Frame.ClusterGrid.w);
 		for (uint index = 0u; index < clusterLights; index++)
 		{
-			LightData light = u_Lights[u_ClusterLights[clusterBase + 1u + index]];
+			uint lightIndex = u_ClusterLights[clusterBase + 1u + index];
+			LightData light = u_Lights[lightIndex];
+#ifdef ST_AREA_LIGHTS
+			// Rect lights take their own branch, the same for every pixel of the light: point and spot lights never enter it.
+			// Their face rides in u_LightShapes beside the light.
+			if (uint(light.DirectionType.w) >= ST_LIGHT_RECT)
+			{
+#ifdef ST_FORWARD_GLASS
+				float areaDiffuseWeight = diffuseWeight;
+#else
+				float areaDiffuseWeight = 1.0;
+#endif
+				color += ShadeAreaLight(surface, coat, coatDFG, dfg, areaDiffuseWeight, LoadAreaLight(light, u_LightShapes[lightIndex]),
+					1.0 - u_Frame.MaterialParams.w);
+				continue;
+			}
+#endif
 			float3 toLight = light.PositionRange.xyz - surface.Position;
 			float distanceSquared = dot(toLight, toLight);
 			float range = light.PositionRange.w;

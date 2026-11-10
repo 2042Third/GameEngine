@@ -312,6 +312,71 @@ TEST_SUITE("Renderer.DebugDraw")
 		}
 	}
 
+	TEST_CASE("Rect lights show their face's outline, the way they shine and their reach; far away an icon")
+	{
+		Scene scene;
+		Entity panel = scene.CreateEntity("Panel");
+		TransformComponent& transform = panel.GetComponent<TransformComponent>();
+		transform.Translation = glm::vec3(0.0f, 3.0f, -6.0f);
+		transform.Rotation = glm::angleAxis(glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f)); // Shines down
+		transform.Scale = glm::vec3(2.0f, 1.0f, 1.0f);
+		RectLightComponent& light = panel.AddComponent<RectLightComponent>(); // 1 x 0.5 m: 2 x 0.5 m in the world
+		light.Color = glm::vec3(0.0f, 1.0f, 0.0f);
+		light.Range = 4.0f;
+		Entity off = scene.CreateEntity("Off");
+		off.AddComponent<RectLightComponent>();
+		off.SetActive(false);
+		scene.UpdateWorldTransforms();
+
+		DebugDraw debugDraw;
+		SceneGizmoSettings settings;
+		settings.Cameras = false;
+		settings.Colliders = false;
+		DrawSceneGizmos(debugDraw, scene, settings);
+		// The outline (4), the stroke along the normal (1) and the reach (3 x 32): the inactive light draws nothing.
+		const std::span<const DebugLineVertex> lines = debugDraw.GetLines(DebugDrawDepth::Tested);
+		REQUIRE(debugDraw.GetLineCount() == 4 + 1 + 96);
+		CHECK(lines[0].Color == DebugDraw::PackColor(glm::vec4(0.0f, 1.0f, 0.0f, 1.0f)));
+		for (const DebugLineVertex& vertex : lines.subspan(0, 2 * 4))
+		{
+			CHECK(std::abs(vertex.Position.x) == doctest::Approx(1.0f));
+			CHECK(vertex.Position.y == doctest::Approx(3.0f));
+			CHECK(std::abs(vertex.Position.z + 6.0f) == doctest::Approx(0.25f));
+		}
+		// The stroke goes down from the center, a quarter of the shorter side long.
+		CHECK(lines[8].Position == glm::vec3(0.0f, 3.0f, -6.0f));
+		CHECK(glm::length(lines[9].Position - glm::vec3(0.0f, 2.875f, -6.0f)) < 1e-5f);
+		const float reach = 4.0f + std::sqrt(1.0f + 0.25f * 0.25f);
+		CHECK(MaxDistance(lines.subspan(2 * 5, 2 * 96), glm::vec3(0.0f, 3.0f, -6.0f)) == doctest::Approx(reach));
+
+		// Two-sided: a stroke each way. Without its range listed, the outline and strokes alone.
+		light.TwoSided = true;
+		const Entity none[] = { off };
+		settings.AllLightRanges = false;
+		settings.LightRangeEntities = none;
+		debugDraw.Clear();
+		DrawSceneGizmos(debugDraw, scene, settings);
+		REQUIRE(debugDraw.GetLineCount() == 4 + 2);
+		CHECK(glm::length(debugDraw.GetLines(DebugDrawDepth::Tested)[11].Position - glm::vec3(0.0f, 3.125f, -6.0f)) < 1e-5f);
+
+		// Seen from far away (its face under MinShapePixels on screen): a diamond with a small rectangle in it.
+		SceneGizmoView view;
+		view.ViewProjection = Math::PerspectiveReverseZ(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 5000.0f) * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -300.0f));
+		view.Position = glm::vec3(0.0f, 0.0f, 300.0f);
+		view.ViewportHeight = 720.0f;
+		settings.View = view;
+		debugDraw.Clear();
+		DrawSceneGizmos(debugDraw, scene, settings);
+		CHECK(debugDraw.GetLineCount() == 4 + 4);
+		// Near it, the outline again.
+		view.ViewProjection = Math::PerspectiveReverseZ(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 5000.0f) * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -2.0f));
+		view.Position = glm::vec3(0.0f, 0.0f, 2.0f);
+		settings.View = view;
+		debugDraw.Clear();
+		DrawSceneGizmos(debugDraw, scene, settings);
+		CHECK(debugDraw.GetLineCount() == 4 + 2);
+	}
+
 #if ST_WITH_PHYSICS
 	TEST_CASE("Gizmos for a view leave out what is out of view or too far, draw small lights and cameras as icons, and colliders of the selection")
 	{

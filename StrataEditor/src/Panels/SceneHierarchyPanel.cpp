@@ -107,6 +107,7 @@ namespace Strata
 				{ Icons::Sun, "Directional Light", "Directional Light", { { "DirectionalLight", nlohmann::json::object() } } },
 				{ Icons::Lightbulb, "Point Light", "Point Light", { { "PointLight", nlohmann::json::object() } } },
 				{ Icons::Flashlight, "Spot Light", "Spot Light", { { "SpotLight", nlohmann::json::object() } } },
+				{ Icons::LampCeiling, "Rect Light", "Rect Light", { { "RectLight", nlohmann::json::object() } } },
 				{ Icons::CloudSun, "Sky Light", "Sky Light", { { "SkyLight", nlohmann::json::object() } } },
 				{ Icons::Aperture, "Post Process", "Post Process", { { "PostProcess", nlohmann::json::object() } } },
 				{ Icons::Type, "3D Text", "Text", { { "Text", nlohmann::json::object() } } },

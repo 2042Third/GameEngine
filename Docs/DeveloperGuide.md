@@ -296,8 +296,8 @@ on an Apple M2 Max with MoltenVK 1.4.2 (Homebrew), where every test of the `gpu`
   two: indirect draws without a count from the GPU (culled draws get no instances), depth pyramids reduced without
   min/max samplers.
 - **Tight limits**: 31 storage buffers per shader stage and 32 KiB of compute shared memory, and 16 samplers per stage.
-  The scene set uses 12 storage buffers (the reflection probes' among them), 9 samplers and the scene-color copy as one
-  more sampled image (SRV 19), the GPU culling's layout 23
+  The scene set uses 13 storage buffers (the reflection probes' and the lights' shapes among them), 9 samplers and the
+  scene-color copy and the rect lights' table as more sampled images (SRV 19, 55), the GPU culling's layout 23
   storage buffers (the local shadow views' among them): a new binding counts against these.
 - **Bindless tables**: the descriptor set support query rejects any set beyond `maxPerSetDescriptors` (1,212), also
   update-after-bind sets within the update-after-bind limits (a million sampled images), and MoltenVK samples every slot
@@ -4508,7 +4508,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 ### Lights, shadows and HDR
 
-- Point and spot lights are records of the render scene (`RenderLights`, kept from their components' signals and the
+- Point, spot and rect lights are records of the render scene (`RenderLights`, kept from their components' signals and the
   world transform changes, mirrored by `RenderSceneGPU`). The GPU-driven path culls every record on the GPU
   (`Scene/LightCull.comp`, then `LightCompact.comp` packs the lights in view in record order) without a cap; the CPU path
   frustum culls the records, ranks them by relevance (projected size of their range) and caps them at `MaxLights`.
@@ -4517,10 +4517,17 @@ lights, Post Process and the sky), and never a resolution below the output's.
   `GetLightRelevance`, `Include/Clusters.slang`), and `Forward.frag` loops only over its pixel's cluster. The GPU's light
   counts come back with its other counts (`SceneRendererGPUStats::Lights`, `CulledLights`; `Tests::GetLightCounts`).
   The directional light's shadows are cascades; point and spot lights' are views in an atlas ("Local light shadows").
-  A record (`RenderData::LightRecord`, 96 bytes; every reader sizes by `sizeof`, and `Include/Lights.slang` mirrors it)
-  ends with `Source`, whose x is the light's `SourceRadius` (highlights only, "Lighting"): both paths copy it into
+  A record (`RenderData::LightRecord`, 128 bytes; every reader sizes by `sizeof`, and `Include/Lights.slang` mirrors it)
+  holds `Source`, whose x is the light's `SourceRadius` (highlights only, "Lighting"): both paths copy it into
   `LightData::SpotAngles.w` (the CPU path in `CollectLights`, the GPU-driven one in `LightCompact.comp`), which stays 64
-  bytes.
+  bytes. A rect light (`RectLightComponent`, type `c_LightRect`, "Area lights") is a record like the others: its face's
+  center and Range, its luminance times its color, its normal as the direction, its bounds the sphere of radius Range plus
+  the face's half diagonal (so it is culled, ranked, clustered and capped with them), `Source.y` its two sides and the
+  record's last two vectors, `AxisX` and `AxisY`, its face's axes with its half sizes. Its face rides beside the light
+  buffer in a parallel one (`RenderData::LightShape`, 48 bytes a light, zero for point and spot lights; scene set SRV 56,
+  `u_LightShapes`): `CollectLights` fills it with the lights it uploads, `LightCompact.comp` writes it (its u7) at the
+  light's place. The GPU counts the rect lights it packed (`CullCounters::VisibleAreaLights`, counter 27;
+  `SceneRendererStats::AreaLights`, `editor.perf`'s `areaLights`).
 - The cascades are one D32 array (`SceneRenderer::GetShadowMap`) of a layer per cascade the quality draws
   (`RendererQualitySettings::ShadowCascades`; thumbnails draw one), made by the first frame with a shadowed sun and kept
   across resizes; a zero viewport (a capture renderer between pictures, the editor's hidden Game view) releases it,
@@ -4750,6 +4757,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 ### Local light shadows
 
+- Rect lights cast no shadow yet: their components keep `CastShadows` and its biases, but `RenderLights` never marks their
+  records shadowed, so no view, tile or filter of this section sees them, and their branch of the forward pass samples
+  nothing.
 - Point and spot lights cast shadows with `CastShadows` (off by default, so scenes saved before it render as they did), with
   `ShadowBias` and `ShadowNormalBias` (texels of the light's tiles) and `ShadowFilterRadius` (texels, at most 8). A renderer
   gives tiles of one D32 atlas (`RendererQualitySettings::LocalShadowAtlasSize`: 4096 texels, 64 MiB; made with the first
@@ -4854,6 +4864,11 @@ lights, Post Process and the sky), and never a resolution below the output's.
   (0.31 of it at roughness 1 before; `GPU.SceneRenderer.Lighting`'s furnace cases): check every shading change with them,
   and with the look-dev furnace (`lookdev.furnace`, Tonemapper None, so the PNG's decoded values at the sphere centers are
   linear).
+- **Rect lights keep their energy as the other lights do** ("Area lights"): diffuse gets what the specular lobe's
+  Fresnel-weighted albedo leaves (as image light's), the highlight takes the BRDF table's reflectance and
+  `GetSpecularEnergy`, a coat covers both with its directional reflectance. `GPU.SceneRenderer.AreaLights` checks a floor
+  against the analytic form factor (within 0.08% measured) and a white furnace under a light filling the sky (diffuse and
+  coated surfaces within 1.3%; metals short by the fit's own error, "Area lights").
 - **Specular anti-aliasing** (`PBR.slang`'s `WidenRoughness`, `SceneRendererSpecification::SpecularAntiAliasing`, on by
   default, `MaterialParams.z`): a highlight narrower than a pixel lands on some pixels and misses their neighbors, so
   normal-mapped and curved surfaces sparkle at 4K and as they move. The shading normal's change across the pixel is a spread
@@ -4948,6 +4963,69 @@ lights, Post Process and the sky), and never a resolution below the output's.
   with one, a 16x16-group pass over the image and a fullscreen draw in `GPU.Overlays`. The pipelines stay once made (the
   capture renderer releases its targets after every picture), the statistics buffer and readbacks (about 4 KB) go with the
   targets on `SetViewportSize(0, 0)`.
+
+### Area lights
+
+- **Rect lights** (`RectLightComponent`, Lighting): a Width x Height rectangle in the entity's X-Y plane, shining along
+  -Z (both ways when `TwoSided`), its size times the entity's world scale. `Intensity` is the face's luminance in nits, or
+  with `Units` Lumens its power (`AreaLights::GetLuminance`: `L = P / (pi A)`, halved for two faces, A the face's area in
+  the world). `Range` windows the light from the face: `(1 - (d^2 / R^2)^2)^2` with d the distance to the face's nearest
+  point (`AreaLights::GetRangeWindow`), never its falloff, which the form factor holds. The record
+  (`RenderLights::MakeAreaRecord` from `AreaLights::MakeRecord`) keeps the transform's X axis, makes the normal
+  perpendicular to X and Y on the transformed -Z's side and AxisY `cross(AxisX, normal)`, so a mirroring parent lights the
+  front as its unmirrored twin does; a degenerate transform, a face under `AreaLights::c_MinSize` (1 mm) or no intensity
+  or range is not drawn. Editor: the create preset "Rect Light", the ceiling lamp's icon, a gizmo of the face's outline,
+  a stroke along the normal (both ways when two-sided) and the reach sphere where ranges show (an icon far away). A scene
+  lit only by rect lights needs no preview light (`SceneRenderer::NeedsPreviewLighting`).
+- **The CPU reference is the contract.** `Renderer/AreaLights.h/.cpp` (stage 0 of the `area-lights` stream,
+  `Renderer.AreaLights`) is the shading in float, operation for operation as `Include/AreaLights.slang` runs it, and
+  `GPU.SceneRenderer.AreaLights` renders planes under rect lights for every roughness of the fit's tests, views from the
+  normal to 87 degrees off it, metals, dielectrics, coats, glass, blended surfaces, two sides and lights across the
+  receiver's horizon, and compares every pixel with `AreaLights::Shade`: within 1.22e-3 relative and 1.2e-3 of the peak
+  (measured; the half-float target rounds to 4.9e-4, the rest is the GPU's divisions and its sampler's weights in the
+  BRDF table), allowing where the light changes faster than the rasterizer's placement of a pixel (1/256 of a pixel).
+  A change to the shading changes both, and the test.
+- **Shading** (`ShadeAreaLight`, entered from the forward pass's cluster loop for lights of type `ST_LIGHT_RECT` and
+  above, the same for every pixel of a light: point and spot lights never enter it). Only the forward shaders' forms with
+  `ST_AREA_LIGHTS` (`Scene/ForwardAreaLights.frag` and the transparent and glass ones) hold it, and a renderer draws with
+  them in frames whose scene has a drawn rect light anywhere (`RenderLights::GetDrawnCount`, `PipelineKey::AreaLights`,
+  both paths alike; `SceneRendererStats::AreaLightShading`); the other forms are the shaders of before, instruction for
+  instruction. Compiled into every frame, the branch cost the opaque pass of scenes without rect lights 3.1-6.6% at
+  Medium (interleaved A/B, the showcase's shot 2 and the look-dev room and overview) and moved their pictures (the
+  showcase's shot 3 by up to 117 codes at a few pixels, shot 2 under TAA by up to 4, every run alike): the driver compiles
+  the rest of the shader differently. With the forms apart the A/B is within its noise (-0.8% to +0.2%) and the look-dev
+  pictures of the Showcase and LookDev projects equal main's but for those whose own repeats differ.
+  Diffuse is the face's exact form factor in its clipless form: the vector form factor (the sum of the
+  edges' `IntegrateEdgeVec`, each edge's term `cross(d_i, e_i) / (|d_i| |d_i+1|)` with the exact edge `e_i` from the axes,
+  so small or far lights keep float precision) and the table's horizon term for a sphere of the same vector form factor,
+  exact while that sphere's cap is above the horizon. The highlight is the share of the GGX lobe the face covers under the
+  fit's inverse transform (layer 0 at the widened perceptual roughness and `sqrt(1 - NoV)`), times `F0 dfg.x + dfg.y` from
+  `u_BRDFLut` (the engine's own integral, so rect, punctual and image light agree on energy) and `GetSpecularEnergy`. The
+  clear coat adds a third evaluation at its roughness and normal and covers the base by `Strength (0.04 coatDFG.x +
+  coatDFG.y) SpecularEnergy`. Glass weights diffuse by `1 - Transmission`; probe captures (`MaterialParams.w`) evaluate no
+  lobe. Behind a one-sided face, on its plane and beyond Range: exactly 0. Camera-relative: the CPU path subtracts the
+  center in double, `LightCompact.comp` in float, as for points; the axes are directions.
+- **The table** (`Renderer/LTCTable.inl`, written by `Tools/ConvertLTCTable.py` from selfshadow/ltc_code at 31e5e96b,
+  `fit/results/ltc.js`, value for value; BSD 2-clause with a third condition, citing Heitz, Dupuy, Hill and Neubelt,
+  "Real-Time Polygonal-Light Shading with Linearly Transformed Cosines", ACM TOG 35(4), 2016, and for the clipless form the
+  2016 course "Real-Time Area Lighting: a Journey from Research to Production" (Hill, Heitz): `ThirdPartyNotices.md`):
+  two layers of 64 x 64 RGBA32F texels in one `Texture2DArray` (`Renderer::GetAreaLightTable`, 128 KiB per device,
+  written in `Renderer::Init`'s command list, so it holds its values before any frame), scene set SRV 55. Shaders read it
+  with `Load` and bilinear weights of their own (`SampleAreaLightTable`, four loads a lookup): linear filtering of 32-bit
+  floats is an optional device feature, and a sampler's 8-bit weights would be too coarse. `Include/AreaLights.slang`
+  declares the table, the shapes and the shading only under `ST_AREA_LIGHT_SHADING` (the forward pass); the clipped form
+  factor, the nearest point and the window take plain values, for passes without the scene set.
+- **The fit's error** (the reference's, documented, not a defect of the port): the fitted lobe keeps part of itself under
+  the horizon at grazing views and puts more than GGX near the mirror direction there. Fitted lobe times magnitude against
+  GGX's quadrature, median and 95th percentile of the relative error: roughness 0.25: 0.026 and 0.70; 0.5: 0.086 and 0.96;
+  0.75: 0.063 and 0.86; views within 53.6 degrees of the normal stay under 3% median (stage 0's measurement). In the
+  renderer: a rough-ish metal floor's highlight (roughness 0.3) holds 0.934 of GGX's light over the face; a white metal
+  under a light filling the sky reflects 0.912 (roughness 0.3) and 0.918 (0.6) seen 78 degrees off its normal, 0.98 and
+  0.94 at 60 degrees, and all of it at roughness 0.05 and 1 and seen along the normal. The polished floor's mirror image
+  has its half-peak edges within 0.17 pixels of the face's mirror image at 1920 x 1080.
+- **Cost**: setup and the one-sided test, the diffuse integral (four edges), the specular transform and integral (four
+  more) and two table lookups (eight loads) per light and pixel, a coat's evaluation more on coated materials; probe
+  captures skip the lobes. Memory: the table, and 48 bytes per light in view.
 
 ### Ambient occlusion
 

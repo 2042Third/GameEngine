@@ -1,11 +1,13 @@
 #include "Include/Common.slang"
 
 #include "Include/Lights.slang"
+#include "Include/AreaLights.slang"
 
 // The second of the GPU's light culling passes: packs the visible lights (Scene/LightCull.comp) into the light buffer in
 // record order, so that what the clusters list and the forward pass adds up does not depend on scheduling. Each work group
 // finds where its lights go from the counts of the groups before it and a scan of its own; group 0 also writes the total.
-// The lights go camera-relative (the shaders' space) with their view-space bounding spheres, as CollectLights uploads them.
+// The lights go camera-relative (the shaders' space) with their view-space bounding spheres and their faces (LightShape,
+// zero for point and spot lights), as CollectLights uploads them.
 
 StructuredBuffer<uint> u_LightVisible : register(t19);
 StructuredBuffer<uint> u_LightGroupCounts : register(t20);
@@ -16,6 +18,7 @@ RWStructuredBuffer<LightData> o_Lights : register(u3);
 RWStructuredBuffer<float4> o_LightBounds : register(u4);
 RWStructuredBuffer<uint> o_LightCount : register(u5);
 RWStructuredBuffer<uint> u_Counters : register(u6);
+RWStructuredBuffer<LightShape> o_LightShapes : register(u7);
 
 groupshared uint s_Values[ST_LIGHT_GROUP_SIZE];
 
@@ -70,6 +73,13 @@ void st_Main()
 		o_Lights[position] = data;
 		float3 center = light.Bounds.xyz - u_Frame.CameraPosition.xyz;
 		o_LightBounds[position] = float4(mul(((float3x3)(u_Frame.View)), center), light.Bounds.w);
+		LightShape shape;
+		shape.AxisX = light.AxisX;
+		shape.AxisY = light.AxisY;
+		shape.Parameters = float4(light.Source.y, 4.0 * light.AxisX.w * light.AxisY.w, 0.0, 0.0);
+		o_LightShapes[position] = shape;
+		if (uint(light.DirectionType.w) >= ST_LIGHT_RECT)
+			InterlockedAdd(u_Counters[ST_COUNTER_VISIBLE_AREA_LIGHTS], 1u);
 	}
 
 	if (st_WorkGroupID.x == 0u)
