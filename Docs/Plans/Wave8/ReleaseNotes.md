@@ -280,9 +280,13 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - No light's shadow waits long for an update while nearer lights move every frame: a quarter of each frame's shadow
   updates goes to those that waited longest. Graphics Quality's new **Point and spot shadow updates per frame** (12, 12,
   24, 48) sets how many views are drawn again per frame.
-- The point and spot shadows' filter noise no longer turns from frame to frame under TAA: it looked right only with TAA
-  and could crawl without it; images without TAA are unchanged to the bit.
-- Lights behind a surface skip their shadow's taps: less GPU time for many shadowed lights.
+- The point and spot shadows' filter noise no longer turns from frame to frame under TAA, so a soft shadow edge no
+  longer needs the history to look right. A still image under TAA now shows the filter's fine fixed pattern, as images
+  without TAA always did, where 0.7.0's history averaged it away: a serration of one or two pixels along soft edges at
+  twice the size of a 3840x2160 capture, not seen at the capture's own size. Without TAA the filter is unchanged.
+- Lights behind a surface skip their shadow's taps. In a town of 256 lanterns at 3840x2160 and Ultra, what their shadows
+  add to the opaque pass falls from 0.15 ms to 0.07 ms (226 shadowed), and from 0.78 ms to 0.34 ms with their ranges set
+  to 25 m (244 shadowed). Where the lights hang over what they light, nothing lies behind a surface and nothing changes.
 - Casters that keep moving under many shadowed lights cost the main thread little: with 1,000 casters moving every
   frame under 256 shadowed point lights at Ultra, deciding which shadow views to draw again takes 0.33 ms a frame
   (`SceneRendererStats::LocalShadowFindMs`; the perf case `PerfGPU.Renderer.LocalShadows256LightsUltraMoving1kFind`).
