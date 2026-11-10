@@ -284,17 +284,22 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   the nine threads that sum the coefficients evaluated them again for every ray, and the border of a probe's depth tile
   is copied from the tile's interior instead of being filtered a second time. 0.29-0.31 ms less GPU time for a 3840 x
   2160 frame in the sun room and 0.23-0.24 ms in the yard, every global illumination test reporting the numbers it
-  reported before. In all, batch 2 costs that frame about 0.1 ms of GPU time: 0.05 ms more in the sun room and 0.09 ms
-  in the yard than the build before it in three interleaved runs of each (8.96 against 8.92 ms and 8.38 against 8.29 ms;
-  `GPU.RadianceCascades` 4.20 and 4.16 ms against 4.27 and 4.07, `GPU.Opaque` 1.07 and 0.84 ms against 1.00 and 0.75),
-  0.12-0.15 and 0.04 ms as the sum of its separately measured steps. Without global illumination it costs nothing: a
-  frame that does not read the field draws with forward shaders that hold nothing of it. (Compiled in behind a branch such
-  a frame never takes, the field's gather had cost its opaque pass 6-11% at 3840 x 2160, 0.017-0.021 ms, in the review's
-  interleaved runs.) In three interleaved pairs against the build before batch 2, the look-dev project's shots without
-  global illumination at 3840 x 2160 spend 0.94-1.02 of that build's time in `GPU.Opaque` at High (eight shots without
-  anti-aliasing, six with TAA; medians 0.99 and 0.98; -0.010 to +0.007 ms) and 0.96-1.01 at Medium (medians 0.98; -0.008
-  to +0.003 ms). Without anti-aliasing seven of the eight pictures are that build's to the bit in all three captures, the
-  eighth (polished metal) in two of three, with 3 pixels one level apart in the third; with TAA all six are, in all three.
+  reported before. In all, batch 2 costs that frame about 0.1 ms of GPU time, in the opaque pass's gather: `GPU.Opaque`
+  reads 1.10 ms in the sun room and 0.86 ms in the yard against 1.00 and 0.74 ms in the build before it (medians of
+  three interleaved runs of each, this build's own within 0.005 ms of each other). Of that, 0.02-0.03 ms came with the
+  review's two additions to the gather, the floor at the probes' cubes (three more reads a probe) and the thin gaps'
+  light on top of the probes': the pass read 1.07 and 0.84 ms before them, in another session's runs, not measured as a
+  pair. `GPU.RadianceCascades` reads 4.24 and 4.28 ms against 4.16 and 4.31, and the frame's busy time 8.88 against 8.93
+  ms and 8.31 against 8.32 ms: no difference beyond the runs' own spread (the stage 3.84 to 4.32 ms in this build's
+  yard, the busy time 8.63 to 9.01 ms in the other's sun room). The batch's separately measured steps had summed to
+  0.12-0.15 and 0.04 ms before those additions. Without global illumination it costs nothing: a frame that does not read
+  the field draws with forward shaders that hold nothing of it. (Compiled in behind a branch such a frame never takes,
+  the field's gather had cost its opaque pass 6-11% at 3840 x 2160, 0.017-0.021 ms, in the review's interleaved runs.)
+  In three interleaved pairs against the build before batch 2, the look-dev project's shots without global illumination
+  at 3840 x 2160 spend 0.94-1.02 of that build's time in `GPU.Opaque` at High (eight shots without anti-aliasing, six
+  with TAA; medians 0.99 and 0.98; -0.010 to +0.007 ms) and 0.96-1.01 at Medium (medians 0.98; -0.008 to +0.003 ms).
+  Without anti-aliasing seven of the eight pictures are that build's to the bit in all three captures, the eighth
+  (polished metal) in two of three, with 3 pixels one level apart in the third; with TAA all six are, in all three.
 - A camera that stands still gets the same probes every frame, to the bit. The pass that sums the finest cascade's rays
   now rounds every product, sum and quotient as written: left free, this machine's driver (NVIDIA 621.1) ran those sums
   in two ways from one frame to the next, a unit in the last place apart (a face of one probe, the harmonics of some
@@ -421,12 +426,13 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   its rim, or up to 10% where a probe lies within a voxel of it (3% is the goal: what is left lies in the probes' light
   beside the sphere, whose skimming rays the voxels absorb, not in how the probes store it).
 - It costs about 4.2 ms of GPU time at 3840 x 2160 at High (`GPU.RadianceCascades`; 1-2 ms aimed at; the perf cases
-  `PerfGPU.Renderer.GlobalIllumination4K*`: medians of 4.20 ms in the sun room and 4.16 ms in the yard), and the forward
-  pass's gather adds 0.3-0.8 ms to `GPU.Opaque` (look-dev: the sun room, the yard and ThirdPerson's course). Of the
-  stage, the march of the three coarser cascades takes 2.6 ms, summing the finest one's rays into the field about 1.1 ms
-  (1.35 ms measured per pass, less the 0.23-0.31 ms batch 2's two cuts of it took off the frame; not measured per pass
-  again), lighting the voxels 0.53 ms and their downsample 0.08 ms. What is left is the marches themselves, of which no
-  cheap cut was found.
+  `PerfGPU.Renderer.GlobalIllumination4K*`: medians of 4.24 ms in the sun room and 4.28 ms in the yard), and the forward
+  pass's gather adds to `GPU.Opaque`: 0.3-0.8 ms before batch 2 (look-dev: the sun room, the yard and ThirdPerson's
+  course), and 0.10-0.12 ms more with it (the perf cases; look-dev's captures at like readings: 0.11 ms in the sun room,
+  0.10 ms in the yard and 0.16 ms in the Cornell box). Of the stage, the march of the three coarser cascades takes 2.6
+  ms, summing the finest one's rays into the field about 1.1 ms (1.35 ms measured per pass, less the 0.23-0.31 ms batch
+  2's two cuts of it took off the frame; not measured per pass again), lighting the voxels 0.53 ms and their downsample
+  0.08 ms. What is left is the marches themselves, of which no cheap cut was found.
 - In the lit image, a surface that the probes around it see little of gets little indirect light, darker than without
   global illumination: gaps, recesses and ledges thinner than about two voxels (20 cm at High, 40 cm at Low) and the bases
   of walls beside bright patches can go nearly black. A surface that none of its probes sees takes the thin gaps' light
@@ -494,18 +500,34 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   measure again, and is not made in this batch.
 - Global illumination's own stage at 3840 x 2160 read about 4.4 ms in some runs and about 6.5 ms in others of the same
   build (the sun room and the yard, High): the difference lay in the pass that sums cascade 0's rays into the field (1.2
-  or 3.6 ms), with the opaque pass's time unchanged. Every slow run was measured on one day before 15:00; afterwards
-  neither that build (54 blocks of 60 frames in three processes) nor the one before it (16 runs) read slow once, with
-  the same work in every frame, nor did any of the 61 later runs of five sessions (4.73 ms at most). The cause is not
-  established: another program's work on the GPU falling into the frame's longest stage fits the readings but was not
-  reproduced. This machine's readings do have states of their own: without global illumination, the 100,000 cubes' frame
-  read 1.57, 1.77 or 2.31 ms by session, in every build measured, the one before batch 2 included. A lead, not a cause:
-  on this driver that same pass's sums ran in two ways from frame to frame, a unit in the last place apart (batch 2's
-  last item above), and two compiled forms of the pass would fit both findings; nothing ties them together yet, and
-  neither the build with the sums rounded as written nor the one before it read slow in six runs each (4.53 ms at most).
-  The stage's reading moves by itself, too: in those runs the yard's read 3.83 to 4.53 ms in one build and 4.08 to 4.51
-  in the other, the frame's busy time following by 0.17 ms at most. Until the slow mode is explained, a single reading
-  of the stage can be 2 ms high: compare builds only by interleaved runs, and by the frame's busy time first.
+  or 3.6 ms), with the opaque pass's time unchanged in those runs. Every slow run was measured on one day before 15:00;
+  afterwards neither that build (54 blocks of 60 frames in three processes) nor the one before it (16 runs) read slow
+  once, with the same work in every frame, nor did any of the 61 later runs of five sessions (4.73 ms at most). The
+  cause is not established: another program's work on the GPU falling into the frame's longest stage fits the readings
+  but was not reproduced. This machine's readings do have states of their own: without global illumination, the 100,000
+  cubes' frame read 1.57, 1.77 or 2.31 ms by session, in every build measured, the one before batch 2 included. A lead,
+  not a cause: on this driver that same pass's sums ran in two ways from frame to frame, a unit in the last place apart
+  (batch 2's last item above), and two compiled forms of the pass would fit both findings; nothing ties them together
+  yet, and neither the build with the sums rounded as written nor the one before it read slow in six runs each (4.53 ms
+  at most). The stage's reading moves by itself, too: in those runs the yard's read 3.83 to 4.53 ms in one build and
+  4.08 to 4.51 in the other, the frame's busy time following by 0.17 ms at most. Until the slow mode is explained, a
+  single reading of the stage can be 2 ms high: compare builds only by interleaved runs, and by the frame's busy time
+  first. The review's captures added a stretch in between: one of three look-dev sessions of the build before batch 2
+  read the sun room's stage at 5.3-5.7 ms in all ten of its captures (3.8-4.7 ms in that build's other two sessions and
+  in this build's three), and single captures of the yard read 5.8, 6.7 and 20.0 ms among others of 3.8-4.7, while
+  another agent built and ran GPU tests on the machine.
+- With global illumination on, the opaque pass's reading has two states of its own, 0.3-0.4 ms apart, in this build and
+  in the one before batch 2, and they change from one capture to the next within a session. Of 30 look-dev captures of
+  the sun room at 3840 x 2160 (three sessions, without anti-aliasing and with TAA), `GPU.Opaque` read 1.10-1.12 ms in 21
+  and 1.38-1.49 ms in 9 in this build, and 1.00-1.01 ms in 17 and 1.35-1.39 ms in 13 in the build before. The Cornell
+  box read 1.68-1.69 ms in 8 captures and 1.98-2.11 ms in 21 before the batch (2.36 ms once) and 1.84-1.88 ms in all 30
+  of this build's; the yard 0.75-0.81 ms in 27 before (1.04, 1.29 and 3.01 ms once each) and 0.87-0.92 ms in 29 now
+  (1.10 ms once). The perf case shows it too: the yard's three runs of the build before the batch read 0.74, 0.74 and
+  1.06 ms. Where the pass reads high, the stage often reads lower by about as much (five captures in a row of the sun
+  room: `GPU.Opaque` 1.38, 1.39, 1.11, 1.12 and 1.12 ms, `GPU.RadianceCascades` 3.82, 3.83, 4.09, 4.08 and 4.04 ms), and
+  the frame's busy time stays (the yard's run that read 1.06 ms: 8.25 ms busy against 8.32). The cause is not
+  established. One reading of `GPU.Opaque` is no more comparable than one of the stage: compare like readings of several
+  interleaved runs, and the frame's busy time first.
 - Two captures of one still shot are not always equal, with or without global illumination, in this build and in the one
   before batch 2. Consecutive frames of a still camera are identical, and tested to be, with every bounce too; this is
   about pictures the editor's `viewport.capture` takes one after another. Look-dev captures each shot several times in a

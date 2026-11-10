@@ -5212,28 +5212,37 @@ probe-field levels and local lights follow.
   filtered like its 64 interior ones, a second pass over every ray (now copied from the interior, `s_Depths`: 0.09-0.10
   ms); together 0.29-0.31 ms in the sun room and 0.23-0.24 ms in the yard, the 66 cases of the
   `GPU.SceneRenderer.GlobalIllumination*` suites reporting the numbers they reported before. That leaves the stage at
-  about 4.2 ms (the perf cases `PerfGPU.Renderer.GlobalIllumination4K*`: medians of 4.20 ms in the sun room and 4.16 ms
-  in the yard, `GPU.Opaque` 1.07 and 0.84 ms; the reduce about 1.1 ms by the frame's time, not measured per pass again)
-  and all of batch 2 at about 0.1 ms of a frame's GPU time over the build before it: 0.05 ms in the sun room and 0.09 ms
-  in the yard in three interleaved runs of each (8.96 against 8.92 ms, 8.38 against 8.29 ms), 0.12-0.15 and 0.04 ms as
-  the sum of its steps (the window's shift 0.12-0.15 and 0.02 ms, the thin gaps' light 0.06-0.08 and 0-0.03 ms, the
-  harmonics 0.23-0.25 ms in both, less the cuts). Compare builds by the frame's GPU time (the cases' `GPU ... ms busy`),
-  not by one stage's reading: with the frame's time within 0.03 ms, one binary's runs read the yard's `GPU.Opaque` at
-  1.07 and 0.75 ms and the stage at 4.16 and 4.41 ms. 1-2 ms is the goal. What is left is the marches themselves (2.6
-  ms, and most of the reduce's 1.1), and no cheap cut of them was found (untried: groups of rays that end alike, since a
-  ray that ends early waits for its group's longest; skipping empty space by the coarser levels). **Two modes:** some
-  runs read the stage at about 6.5 ms instead (the reduce 3.6 ms for 1.2, `GPU.Opaque`'s median the same, the frame's
-  GPU time 2 ms longer): one binary read 6.65, 4.32 and 5.92 ms in three runs, and single look-dev shots read 5.5-7.4 ms
-  among others of 4.0-4.8. Every slow reading was taken on one day before 15:00; from 17:00 on none of 54 blocks of 60
-  frames of the same code read slow, nor did 16 runs of the code before it (4.1-4.5 ms), whose look-dev shots had, with
-  nothing voxelized, queued or pending in any block, nor any of the 61 later runs of five sessions (4.73 ms at most). A
-  settled frame's work depends on the layout alone, so the slow mode is not work this code chooses to do; a time slice
-  of another program's GPU work falling into the frame's longest stage fits what was seen (other agents worked on the
-  machine that day) but was neither reproduced nor ruled out. The machine's readings do have states of their own:
-  without GI, `PerfGPU.Renderer`'s 100,000 cubes' frame read 1.57, 1.77 or 2.31 ms by session, in every build measured,
-  the one before batch 2 included (at 2.31 ms its prepass and opaque pass 0.26 ms longer each, dropping back within the
-  session). A lead, not a cause: this driver ran the reduce's sums in two ways from dispatch to dispatch (above), and two
-  compiled forms of the pass would fit the two times as well; nothing ties them together yet. Rounding the sums as
+  about 4.2 ms (the perf cases `PerfGPU.Renderer.GlobalIllumination4K*`: medians of 4.24 ms in the sun room and 4.28 ms
+  in the yard, `GPU.Opaque` 1.10 and 0.86 ms; the reduce about 1.1 ms by the frame's time, not measured per pass again)
+  and all of batch 2 at about 0.1 ms of a frame's GPU time over the build before it, in the opaque pass's gather:
+  `GPU.Opaque` 1.10 against 1.00 ms in the sun room and 0.86 against 0.74 ms in the yard in three interleaved runs of
+  each, the stage (4.24 against 4.16 ms, 4.28 against 4.31) and the frame's time (8.88 against 8.93 ms, 8.31 against
+  8.32) within their runs' spread. Its steps, measured one by one, summed to 0.12-0.15 and 0.04 ms (the window's shift
+  0.12-0.15 and 0.02 ms, the thin gaps' light 0.06-0.08 and 0-0.03 ms, the harmonics 0.23-0.25 ms in both, less the
+  cuts), and the read's floor at the cubes (three more reads a probe) and the thin gaps' light on top of the probes'
+  came after them and cost 0.02-0.03 ms more (`GPU.Opaque` read 1.07 and 0.84 ms before the two, in other runs). Compare
+  builds by the frame's GPU time (the cases' `GPU ... ms busy`) and by like readings of a stage over several runs, never
+  by one reading. `GPU.Opaque` has two readings with GI on, 0.3-0.4 ms apart, that change from capture to capture (the
+  sun room: 1.10-1.12 ms in 21 of 30 look-dev captures and 1.38-1.49 ms in 9; before batch 2, 1.00-1.01 ms in 17 and
+  1.35-1.39 ms in 13), and the stage's reading often moves the other way: with the frame's time within 0.03 ms, one
+  binary's runs read the yard's `GPU.Opaque` at 1.07 and 0.75 ms and the stage at 4.16 and 4.41 ms. 1-2 ms is the goal.
+  What is left is the marches themselves (2.6 ms, and most of the reduce's 1.1), and no cheap cut of them was found
+  (untried: groups of rays that end alike, since a ray that ends early waits for its group's longest; skipping empty
+  space by the coarser levels). **Two modes:** some runs read the stage at about 6.5 ms instead (the reduce 3.6 ms for
+  1.2, `GPU.Opaque`'s median the same, the frame's GPU time 2 ms longer): one binary read 6.65, 4.32 and 5.92 ms in
+  three runs, and single look-dev shots read 5.5-7.4 ms among others of 4.0-4.8. Every slow reading was taken on one day
+  before 15:00; from 17:00 on none of 54 blocks of 60 frames of the same code read slow, nor did 16 runs of the code
+  before it (4.1-4.5 ms), whose look-dev shots had, with nothing voxelized, queued or pending in any block, nor any of
+  the 61 later runs of five sessions (4.73 ms at most). The review's captures added a stretch in between: one of three
+  look-dev sessions of the code before batch 2 read the sun room's stage at 5.3-5.7 ms in all ten captures (3.8-4.7 ms
+  in every other session of either build), while another agent built and ran GPU tests on the machine. A settled frame's
+  work depends on the layout alone, so the slow mode is not work this code chooses to do; a time slice of another
+  program's GPU work falling into the frame's longest stage fits what was seen (other agents worked on the machine that
+  day) but was neither reproduced nor ruled out. The machine's readings do have states of their own: without GI,
+  `PerfGPU.Renderer`'s 100,000 cubes' frame read 1.57, 1.77 or 2.31 ms by session, in every build measured, the one
+  before batch 2 included (at 2.31 ms its prepass and opaque pass 0.26 ms longer each, dropping back within the
+  session). A lead, not a cause: this driver ran the reduce's sums in two ways from dispatch to dispatch (above), and
+  two compiled forms of the pass would fit the two times as well; nothing ties them together yet. Rounding the sums as
   written cost nothing six interleaved pairs of runs could measure (the frame's GPU time 8.76 against 8.78 ms in the sun
   room and 8.23 against 8.20 ms in the yard), and neither binary read slow; the yard's stage alone read 3.83 to 4.53 ms
   in the one and 4.08 to 4.51 in the other, the frame's time following by 0.17 ms at most. Compare builds only by
