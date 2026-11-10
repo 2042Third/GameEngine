@@ -352,6 +352,8 @@ fences.
   - Its light fades out from 7.5 m to 9.5 m around the camera and from 5.5 m to 7.5 m above and below it at High
     (Low: 7 m to 9 m, and 2.8 m to 4.8 m), and outdoors that edge can show.
   - Round objects read a few percent dark at their sides.
+  - A wall that stands at an angle to the world's axes glows softly around a patch of sunlight on it (up to about two
+    and a half times the bounce light of its shadowed part).
   - It costs about 4 ms of GPU time at 3840 x 2160 at High.
 
   Use it for interiors and look at them with the **GI** debug view.

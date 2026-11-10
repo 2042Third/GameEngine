@@ -2,9 +2,9 @@
 #define STRATA_GI_FIELD_SLANG
 
 // Global illumination's irradiance field as the scene passes read it (Docs/DeveloperGuide.md, "Global illumination"): b3 of the
-// scene layout (RenderData::GIFieldConstants, zero without GI), the field's faces (SRV 35), cascade 0's validity (SRV 37), its
-// probes' depth moments (SRV 54) and voxel levels 0-2 (SRV 38-40) for the gather's visibility. Everything is world data: no screen
-// input.
+// scene layout (RenderData::GIFieldConstants, zero without GI), the field's harmonics (SRV 35) and ambient cubes (SRV 55), cascade
+// 0's validity (SRV 37), its probes' depth moments (SRV 54) and voxel levels 0-2 (SRV 38-40) for the gather's visibility. Everything
+// is world data: no screen input.
 
 #include "Include/Common.slang"
 
@@ -24,7 +24,12 @@ struct GIFieldConstants
 };
 ConstantBuffer<GIFieldConstants> u_GIField : register(b3);
 
-Texture3D<float4> u_GIFieldFaces : register(t35);
+#ifdef ST_GI_FIELD_AMBIENT_CUBE
+Texture3D<float4> u_GIFieldCubes : register(t35);
+#else
+Texture3D<float4> u_GIFieldHarmonics : register(t35);
+Texture3D<float4> u_GIFieldCubes : register(t55);
+#endif
 Texture3D<float4> u_GIFieldValidity : register(t37);
 Texture3D<float4> u_GIFieldVoxels0 : register(t38);
 Texture3D<float4> u_GIFieldVoxels1 : register(t39);
@@ -45,29 +50,36 @@ float4 ReadAmbientCube(int3 probe, float3 normal)
 {
 	int3 base = int3(probe.x * 3, probe.y * 2, probe.z);
 	float3 squared = normal * normal;
-	float4 x = u_GIFieldFaces.Load(int4(base + (normal.x >= 0.0 ? int3(0, 0, 0) : int3(1, 0, 0)), 0));
-	float4 y = u_GIFieldFaces.Load(int4(base + (normal.y >= 0.0 ? int3(2, 0, 0) : int3(0, 1, 0)), 0));
-	float4 z = u_GIFieldFaces.Load(int4(base + (normal.z >= 0.0 ? int3(1, 1, 0) : int3(2, 1, 0)), 0));
+	float4 x = u_GIFieldCubes.Load(int4(base + (normal.x >= 0.0 ? int3(0, 0, 0) : int3(1, 0, 0)), 0));
+	float4 y = u_GIFieldCubes.Load(int4(base + (normal.y >= 0.0 ? int3(2, 0, 0) : int3(0, 1, 0)), 0));
+	float4 z = u_GIFieldCubes.Load(int4(base + (normal.z >= 0.0 ? int3(1, 1, 0) : int3(2, 1, 0)), 0));
 	return squared.x * x + squared.y * y + squared.z * z;
 }
 
-// A cascade-0 probe's irradiance for a shading normal (rgb irradiance over pi times ST_GI_RADIANCE_SCALE, a the sky share). Scene
-// passes read SRV 35 as the probes' spherical harmonics (FieldReduce.comp's coefficients times the basis at the normal, never below
-// zero: band 2 rings a little past a sharp edge of light). The re-injection (GI/VoxelInject.comp) and the probes view bind the
-// ambient cubes there (they define ST_GI_FIELD_AMBIENT_CUBE): their weights are never negative, so the bounces' series rises to
-// its limit and stays there (the harmonics' negative lobes made it cycle by a rounding step, and still frames differed).
+// A cascade-0 probe's irradiance for a shading normal (rgb irradiance over pi times ST_GI_RADIANCE_SCALE, a the sky share), never
+// below zero. Scene passes read the probe's spherical harmonics (SRV 35: FieldReduce.comp's coefficients times the basis at the
+// normal), which turn smoothly with the normal, and never less than its ambient cube (SRV 55). The harmonics' kernel over the
+// cosine mu to the normal, 1/4 + mu/2 + 5/32 (3 mu^2 - 1), follows the clamped cosine but is negative from 104 to 145 degrees off
+// the normal (-0.04 at 122): a probe that sees a strong light behind the surface's plane, as the probes in front of a wall see the
+// sun's patch on that wall, would read dark to black there. The cube's weights are negative nowhere: along an axis its face holds
+// the light of the wall's own hemisphere and nothing from behind it, and between the axes it blends the axes' hemispheres, which
+// reads low under even light (a rim 7% low: there the harmonics win) and takes some light from behind the plane (a wall between
+// the axes glows around a sun patch on it; never black). The re-injection (GI/VoxelInject.comp) and the probes view read only the
+// cubes, at SRV 35 (they define ST_GI_FIELD_AMBIENT_CUBE): their weights are never negative, so the bounces' series rises to its
+// limit and stays there (the harmonics' negative lobes made it cycle by a rounding step, and still frames differed).
 float4 ReadProbeIrradiance(int3 probe, float3 normal)
 {
+	float4 cube = ReadAmbientCube(probe, normal);
 #ifdef ST_GI_FIELD_AMBIENT_CUBE
-	return ReadAmbientCube(probe, normal);
+	return cube;
 #else
 	float basis[9];
 	ProbeSHBasis(normal, basis);
 	float4 sum = float4(0.0, 0.0, 0.0, 0.0);
 	[unroll]
 	for (uint coefficient = 0u; coefficient < 9u; coefficient++)
-		sum += basis[coefficient] * u_GIFieldFaces.Load(int4(probe.x * 3 + int(coefficient % 3u), probe.y * 3 + int(coefficient / 3u), probe.z, 0));
-	return max(sum, float4(0.0, 0.0, 0.0, 0.0));
+		sum += basis[coefficient] * u_GIFieldHarmonics.Load(int4(probe.x * 3 + int(coefficient % 3u), probe.y * 3 + int(coefficient / 3u), probe.z, 0));
+	return max(sum, cube);
 #endif
 }
 

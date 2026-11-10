@@ -2030,9 +2030,9 @@ namespace Strata
 		bool RecordGlobalIlluminationLight(nvrhi::ICommandList* commandList);
 		void SubmitGlobalIlluminationReadback();
 		void ResolveGlobalIlluminationCounters(bool wait);
-		// What the scene binding sets bind at SRV 35, 37 and 38-40: the field, cascade 0's validity and voxel levels 0-2's material
-		// once made, else the black 3D texture.
-		std::array<nvrhi::ITexture*, 6> GetBoundGITextures() const;
+		// What the scene binding sets bind at SRV 35, 37, 38-40, 54 and 55: the field's harmonics, cascade 0's validity, voxel
+		// levels 0-2's material, the probes' depth moments and the field's ambient cubes once made, else the black 3D textures.
+		std::array<nvrhi::ITexture*, 7> GetBoundGITextures() const;
 	private:
 		SceneRendererSpecification m_Specification;
 		nvrhi::IDevice* m_Device = nullptr;
@@ -2850,7 +2850,7 @@ namespace Strata
 		// whether the frame runs it, and the voxel levels the scene binding sets name at SRV 38-40.
 		Scope<GlobalIlluminationResources> m_GI;
 		bool m_GIFrame = false;
-		std::array<nvrhi::ITexture*, 6> m_BoundGITextures = {};
+		std::array<nvrhi::ITexture*, 7> m_BoundGITextures = {};
 	};
 
 }

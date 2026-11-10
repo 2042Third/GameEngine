@@ -245,11 +245,16 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   off the ground) seen from 6 m, the ground 0.2-0.5 m under its edge keeps 6% of the open ground's light and 0.5-1 m in
   1% (it was black; seen from 4 m, where the finest voxels hold the gap, 6% and 0.5%). Closed rooms stay dark. 0.06-0.08
   ms of GPU time in the sun room, at most 0.03 ms in the yard.
-- Round objects take their light more evenly: surfaces read each probe's light as spherical harmonics, smooth at every
-  angle, where an ambient cube blended the light of the axes. A white sphere under a uniform sky now reads 3.5% dark at
-  its rim (7% before) and 2% at its center. The bounces keep the cubes, so the light still settles to the same frame and
-  still pictures repeat exactly. 6.3 MiB more memory per view at High (0.8 MiB at Low) and, as first written, 0.23-0.25
-  ms of GPU time, which the next item's two cuts make up for.
+- Round objects take their light more evenly: surfaces read each probe's light as spherical harmonics, which turn
+  smoothly with the surface, where an ambient cube blended the light of the axes. A white sphere under a uniform sky now
+  reads 3.5% dark at its rim (7% before) and 2% at its center. The bounces keep the cubes, so the light still settles to
+  the same frame and still pictures repeat exactly. 6.3 MiB more memory per view at High (0.8 MiB at Low) and, as first
+  written, 0.23-0.25 ms of GPU time, which the next item's two cuts make up for. A surface never reads less than its
+  probes' cubes hold for it: the harmonics weigh light from behind a surface's plane a little below zero, and alone they
+  put dark to black blotches on a wall at and around a patch of sunlight on it (the sun room's north wall under a low
+  sun read 0.48 to 0.74 of the cubes there, now 1.00 to 1.09; the back wall of the showcase's hut went black around the
+  door's and the window's patches). Walls that stand at an angle to the world's axes glow softly around such a patch,
+  as they did before this batch (Known issues).
 - Summing the finest cascade's rays into the probes costs less: each ray's thread evaluates its harmonics once, where
   the nine threads that sum the coefficients evaluated them again for every ray, and the border of a probe's depth tile
   is copied from the tile's interior instead of being filtered a second time. 0.29-0.31 ms less GPU time for a 3840 x
@@ -399,6 +404,15 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   and in a strip along the base of the yard's pool box, sky-lit without it; indoors as a dark band about 0.3 m high where
   the floor meets the wall under the sun room's window. With the sun high, the bounce on the window wall ends in sharp
   vertical edges either side of the patch's light.
+- A wall that stands at an angle to the world's axes glows softly around a patch of sunlight on it, as it did before
+  batch 2. A surface never reads less than its probes' ambient cubes hold for it, and between the axes a cube blends
+  the light of the two or three axes the wall's normal lies between, some of which is the patch's own. On a test panel
+  turned 30 degrees, the wall at the patch reads 2.2 to 2.7 times its shadowed part's indirect light, under sunlight
+  hundreds of times as bright, and the shadow 0.75 m beside the patch 3% more than the harmonics alone give it (the
+  harmonics alone read 0.79 to 1.17 at the patch and left the wall of a room that such patches alone light black around
+  them: the showcase's hut). Walls along the axes read 1.00 to 1.09 of their cubes' faces. Six faces or nine
+  coefficients a probe do not hold the light of every direction a wall can face: a read that is right at every angle
+  needs more of them.
 - Its light ends at the probe field's edge around the camera (High: full within 7.5 m horizontally, 5.5 m up and down;
   Low: 7 m and 2.8 m; faded to the light without it over 2 m): outdoors the edge of a bubble can show.
 - The owner's Cornell box at High, with every bounce: the probes are 0.5 m apart (1 m at Low), and the light still

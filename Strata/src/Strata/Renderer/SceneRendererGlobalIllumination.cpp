@@ -232,10 +232,10 @@ namespace Strata
 		return m_GI ? m_GI->MemoryBytes : 0;
 	}
 
-	std::array<nvrhi::ITexture*, 6> SceneRenderer::GetBoundGITextures() const
+	std::array<nvrhi::ITexture*, 7> SceneRenderer::GetBoundGITextures() const
 	{
 		nvrhi::ITexture* black = Renderer::GetBlack3DTexture();
-		std::array<nvrhi::ITexture*, 6> textures = { black, black, black, black, black, Renderer::GetZero3DUintTexture() };
+		std::array<nvrhi::ITexture*, 7> textures = { black, black, black, black, black, Renderer::GetZero3DUintTexture(), black };
 		if (!m_GI)
 			return textures;
 		if (m_GI->FieldIrradiance)
@@ -246,6 +246,8 @@ namespace Strata
 			textures[2 + level] = m_GI->Levels[level].Material;
 		if (m_GI->FieldDepth)
 			textures[5] = m_GI->FieldDepth;
+		if (m_GI->Field)
+			textures[6] = m_GI->Field;
 		return textures;
 	}
 

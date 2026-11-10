@@ -5126,9 +5126,27 @@ probe-field levels and local lights follow.
   re-injection reads; and the same rays projected on the real spherical harmonics of bands 0-2, each band times the cosine
   lobe's factor over pi (1, 2/3, 1/4), less what a uniform radiance leaves in a coefficient through the 64 directions'
   quadrature, nine RGBA16F texels a probe (`FieldIrradiance`), which drawn surfaces read; cascade 0 has no atlas). Drawn
-  surfaces read the harmonics (`ReadProbeIrradiance`, never below zero): the faces blend the axes' hemispheres for a normal
-  between them, which take directions behind its plane, and beside a white sphere under a uniform sky the probes a few
-  centimeters off it read its rim 7% dark (the harmonics 3.5%). Re-injection and the probes view keep the faces
+  surfaces read the harmonics (`ReadProbeIrradiance`, never below zero), which turn smoothly with the normal: the faces
+  blend the axes' hemispheres for a normal between them, which take directions behind its plane, and beside a white sphere
+  under a uniform sky the probes a few centimeters off it read its rim 7% dark (the harmonics 3.5%). The harmonics' weight
+  over the cosine mu to the normal, 1/4 + mu/2 + 5/32 (3 mu^2 - 1), is negative from 104 to 145 degrees off the normal
+  (-0.04 at 122), so a probe that sees a strong light behind the surface's plane reads dark: the probes in front of a wall
+  the sun shines on, at the patch and around it. Under a sun 6 degrees up, the harmonics alone read the sun room's north
+  wall at 0.48 to 0.67 of its probes' faces on the patch and 0.74 above it, dark to black blotches, and the back wall of
+  the showcase's hut, which the sun's patches on it alone light, black around them. So the read is the larger of the
+  harmonics' and the faces' (`ReadProbeIrradiance`; the faces are bound to the scene passes at SRV 55): the faces' weights
+  are negative nowhere. Along an axis a face holds the light of its own hemisphere and nothing from behind it: that wall
+  reads 0.999 to 1.085 of its faces ("The north wall keeps its light around the sun's patch on it"). Between the axes the
+  faces' blend takes some light from behind the plane, so a wall there glows around a sun patch on it, as it did when
+  surfaces read the faces alone: on a panel turned 30 degrees the patch reads 2.2 to 2.7 times the panel's shadowed part
+  (the harmonics alone 0.79 to 1.17), under sunlight hundreds of times as bright, and the shadow 0.75 m from the patch 3%
+  more than the harmonics' ("A wall between the axes keeps its light at the sun's patch on it"). Not kept: the faces as
+  the floor only near the axes (all of them within 13 degrees, none beyond 30), which left the hut's wall, turned 45
+  degrees, black around its patches; as the floor between the axes, the harmonics with bands 1 and 2 scaled by 0.866 and
+  0.8, the least scaling whose weight is negative nowhere, which adds a fifteenth of the light behind the plane (that
+  panel's patch read 2.1 to 2.3 times its shadowed part, no better than the faces, for nine more reads a probe); the
+  faces instead of the harmonics along the axes, which read the furnace's center 0.894 with the sphere off the probes'
+  grid (0.902). Re-injection and the probes view keep the faces
   (`ST_GI_FIELD_AMBIENT_CUBE`): their weights are never negative, so the bounces' series rises to its limit and stays there
   (re-injected through the harmonics, the series fell into a rounding cycle: still frames differed, settling missed its
   frame). A 16-direction cascade 0 reduced apart gated four of cascade 1's directions with one ray and put an

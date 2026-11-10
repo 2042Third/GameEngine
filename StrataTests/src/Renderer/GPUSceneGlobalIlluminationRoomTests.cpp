@@ -1226,6 +1226,118 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The north wall keeps its light around the sun's patch on it")
+	{
+		// A sun 6 degrees above the horizon shines through the south window onto the north wall: its patch there (x -11 to -9, y 0.27
+		// to 1.55) is some 18,000 nits, on a wall the room's bounces light to a few hundred. A point of the wall takes nothing from
+		// the patch, which lies in its own plane, but the probes 0.25 m in front of the wall see the patch behind that plane. Their
+		// ambient cubes' +Z faces leave it out (a face holds the light of its own hemisphere); a read that weighs light from behind
+		// the normal's plane shows there as a glow or, where the weight is negative, as dark blotches (the harmonics alone, whose
+		// kernel is negative from 104 to 145 degrees off the normal, read 0.48 to 0.67 of the faces on the patch and 0.74 above it).
+		// So the gi view of the wall, at the points behind the probes of four rows, against those probes' +Z faces: on the patch,
+		// beside it, above it and away from it. Measured with the cubes as the read's floor (Include/GIField.slang's
+		// ReadProbeIrradiance): 0.999 to 1.085 (the harmonics weigh the light straight ahead 6% above the cosine, so a wall facing
+		// a lit room reads a little over its face).
+		constexpr float c_Below = 0.03f;
+		constexpr float c_Above = 0.15f;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SunRoomOptions room;
+		room.SunDirection = SunRoomDirection(-6.0f, 0.0f);
+		std::vector<RoomPoint> points;
+		for (float y : { 0.75f, 1.25f, 1.75f, 2.25f })
+		{
+			for (float x = -12.75f; x < -7.0f; x += 0.5f)
+				points.push_back({ fmt::format("north wall x {} y {}", x, y), { x, y, -5.0f }, -c_North });
+		}
+		RoomRender render(room, c_RoomSize, RoomSpecification(GlobalIlluminationLevel::High, 1.0f));
+		const SceneCamera camera = MakeCamera(glm::vec3(-10.0f, 1.5f, -0.6f), glm::vec3(-10.0f, 1.0f, -5.0f), 70.0f, c_RoomSize);
+		const std::vector<glm::vec3> values = render.Measure(camera, points, c_BounceFrames);
+		std::vector<uint8_t> field;
+		REQUIRE(render.Renderer->ReadGlobalIlluminationField(field));
+		std::string table = "The north wall's gi view over its probes' +Z faces (rows y 0.75, 1.25, 1.75, 2.25; the patch: x -11 to -9, y 0.27 to 1.55):";
+		float lowest = std::numeric_limits<float>::max();
+		float highest = 0.0f;
+		for (size_t index = 0; index < points.size(); index++)
+		{
+			const float value = Luminance(values[index]);
+			const float face = ReadFieldFace(*render.Renderer, camera, field, points[index].Point + glm::vec3(0.0f, 0.0f, 0.25f), 4);
+			if (index % 12 == 0)
+				table += "\n ";
+			table += fmt::format(" {:5.0f}/{:<5.0f}", value, face);
+			INFO(points[index].Name << ": " << value << " against the face's " << face);
+			REQUIRE(face > 0.0f);
+			lowest = std::min(lowest, value / face);
+			highest = std::max(highest, value / face);
+			CHECK(value >= (1.0f - c_Below) * face);
+			CHECK(value <= (1.0f + c_Above) * face);
+		}
+		MESSAGE(table);
+		MESSAGE("gi view over the face: " << lowest << " to " << highest);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A wall between the axes keeps its light at the sun's patch on it")
+	{
+		// The same low sun onto a plaster panel that stands in the room turned 30 degrees about Y: the sun lights the panel's face
+		// west of x -9 (y 0.5 to 1.8) and leaves the rest in the south wall's shadow. The room lights the whole face about evenly,
+		// so its gi view on the patch against its gi view in the shadow, at two heights. The harmonics alone read 0.79 to 1.17 of
+		// the shadowed part's mean there: the patch's light behind the plane took up to a fifth away (in a room that the patch
+		// alone lights, the showcase's hut, the wall around it went black). With the probes' cubes as the read's floor
+		// (Include/GIField.slang's ReadProbeIrradiance) the patch reads 2.2 to 2.7 times the shadowed part: between the axes a
+		// cube blends the hemispheres of two axes, which hold some of the patch's own light. That is the read of the build before,
+		// under sunlight hundreds of times as bright; 0.75 m into the shadow it is 3% above the harmonics', 1.25 m in 1%. So the
+		// patch never reads below c_Lowest of the shadowed part (the blotches), nor above c_Highest of it (a read that takes more
+		// from behind the plane than the cubes do).
+		constexpr float c_Lowest = 0.9f;
+		constexpr float c_Highest = 3.0f;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SunRoomOptions room;
+		room.SunDirection = SunRoomDirection(-6.0f, 0.0f);
+		RoomRender render(room, c_RoomSize, RoomSpecification(GlobalIlluminationLevel::High, 1.0f));
+		const glm::quat turn = glm::angleAxis(glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		const glm::vec3 normal = turn * glm::vec3(0.0f, 0.0f, 1.0f);
+		const glm::vec3 along = turn * glm::vec3(1.0f, 0.0f, 0.0f);
+		const glm::vec3 faceCenter(-9.0f, 1.3f, -3.2f);
+		MaterialProperties plaster;
+		plaster.BaseColor = glm::vec4(glm::vec3(0.58f), 1.0f);
+		plaster.Roughness = 1.0f;
+		plaster.Metallic = 0.0f;
+		Entity panel = AddMesh(render.SceneData, BuiltinAssets::CubeMesh, render.Assets.AddMaterial(plaster), faceCenter - 0.15f * normal, "Panel");
+		TransformComponent& transform = panel.GetComponent<TransformComponent>();
+		transform.Scale = glm::vec3(3.8f, 2.4f, 0.3f);
+		transform.Rotation = turn;
+		panel.MarkModified<TransformComponent>();
+		std::vector<RoomPoint> points;
+		constexpr size_t c_LitPoints = 6;
+		for (float offset : { -1.5f, -1.0f, -0.5f, 0.75f, 1.25f })
+		{
+			for (float y : { 1.0f, 1.25f })
+				points.push_back({ fmt::format("panel {} m along, y {}", offset, y), glm::vec3(faceCenter.x, y, faceCenter.z) + offset * along, normal });
+		}
+		const SceneCamera camera = MakeCamera(faceCenter + 2.4f * normal + glm::vec3(0.0f, 0.2f, 0.0f), faceCenter - glm::vec3(0.0f, 0.2f, 0.0f), 70.0f, c_RoomSize);
+		const std::vector<glm::vec3> values = render.Measure(camera, points, c_BounceFrames);
+		float shadow = 0.0f;
+		for (size_t index = c_LitPoints; index < points.size(); index++)
+			shadow += Luminance(values[index]) / static_cast<float>(points.size() - c_LitPoints);
+		REQUIRE(shadow > 0.0f);
+		std::string row;
+		for (size_t index = 0; index < points.size(); index++)
+		{
+			const float value = Luminance(values[index]);
+			row += fmt::format(" {:.0f}", value);
+			if (index >= c_LitPoints)
+				continue;
+			INFO(points[index].Name << ": " << value << " against the shadowed part's " << shadow);
+			CHECK(value >= c_Lowest * shadow);
+			CHECK(value <= c_Highest * shadow);
+		}
+		MESSAGE("The panel's gi view (on the patch 1.5, 1.0 and 0.5 m from its edge, then 0.75 and 1.25 m into the shadow; y 1.0 and 1.25 each):"
+			<< row << "; the shadowed part's mean " << shadow);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A sealed room stays dark")
 	{
 		// The window filled with plaster: the nineteen points' mean at most erhe's 0.0017 of the open room's, and every junction of
@@ -1535,7 +1647,9 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationJoin")
 		// The sphere is convex: every point of it sees the whole sky, and anything less is light the field lost.
 		// - The probes' ambient cubes read the rim 7% dark (0.932, 0.952 with every bounce: a normal between the axes blends the axes'
 		//   hemispheres, and takes what the probes beside the sphere see of it behind the normal's plane). Drawn surfaces read the probes'
-		//   spherical harmonics, whose kernel is the cosine's about the normal itself: 0.979 at the center, 0.965 at the rim.
+		//   spherical harmonics, whose kernel is the cosine's about the normal itself: 0.979 at the center, 0.965 at the rim. (The
+		//   read's floor, Include/GIField.slang's ReadProbeIrradiance, changes neither: the cube's face along the camera's axis
+		//   reads the center no higher, and the rim's normal lies between the axes, where even light leaves the floor below.)
 		// - Every bounce (what a renderer draws by default) does not close the rest (0.979 and 0.970): it is not light the
 		//   sphere's voxels could return. A probe within two voxels of the sphere loses the rays that skim it to the voxels'
 		//   layer about the surface, which absorbs them at a grazing angle and sends nothing back (measured: a probe 8 cm off
