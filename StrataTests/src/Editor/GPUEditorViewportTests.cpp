@@ -2579,8 +2579,11 @@ TEST_SUITE("GPU.Editor.Viewport")
 		const glm::uvec2 size(1280, 720);
 		ViewportRenderer* game = viewport.GetGameRenderer();
 		REQUIRE(game);
+		// The fade goes by the wall clock between the renderer's frames, so the wait is bounded by the clock, not by frames: an
+		// idle machine renders this scene in a fraction of a millisecond, so hundreds of frames can end before the fade does.
 		int settled = 0;
-		for (int frame = 0; frame < 600 && settled < 2; frame++)
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		while (settled < 2 && std::chrono::steady_clock::now() < deadline)
 		{
 			REQUIRE(gpu.GetDevice().BeginFrame());
 			Renderer::BeginFrame();
