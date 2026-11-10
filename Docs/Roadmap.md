@@ -940,7 +940,7 @@ Open items and deferrals later waves own:
   point and spot lights per view are as many as the quality allows (4, 16, 64 and 256 by preset) and the atlas holds
   (about 37, 149 and 597 point lights in a 2048, 4096 and 8192 atlas). Left for later (also in "Later" below): MSAA
   (rendering below native resolution and temporal upscaling are ruled out: the owner's direction of 2026-10-26, in
-  "Later"); layered shadow rendering, occlusion culling of local shadow views, more than 16 shadowed lights (wave 8: 64 at High, 256 at Ultra), sized local lights' diffuse light and
+  "Later"); layered shadow rendering, occlusion culling of local shadow views, sized local lights' diffuse light and
   shadows (PCSS; their highlights take `SourceRadius` since wave 8) and their contact shadows (wave 7 gave the sun both); run-time probe capture, cube texture assets and clustered probe lists; SSR
   for transparent surfaces; volumetric fog and light shafts, the atmosphere from altitude (wave 7 added aerial
   perspective); thickness maps, sheen, specular, iridescence and anisotropy, EXR import and area lights; shadows of a
