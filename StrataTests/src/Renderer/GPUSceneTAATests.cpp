@@ -20,13 +20,13 @@ using namespace Strata::Tests::TAA;
 namespace
 {
 
-	// The local lights' shadow filter turns its noise every frame with TAA, and the history smooths it: the converged penumbra's
-	// roughness stays below `bound` times one frame's under `preset`; `custom` (when set) is the look, under Custom. The penumbra is
-	// a shadowed spot light's (Include/LocalShadows.slang turns its taps by TemporalParams.z): the sun's shadow has no noise left to
-	// turn (Include/Shadows.slang, GPU.SceneRenderer.ShadowFilter and .ScreenShadows: the same in every frame, its disk's grain
-	// blurred in the frame), so it would measure nothing. The ambient occlusion never turns: it resolves its pattern within the
-	// frame, the same in every frame of a still view.
-	void CheckNoiseSmoothed(TemporalAntiAliasingPreset preset, const TemporalAntiAliasingSettings* custom, double bound)
+	// The local lights' shadow filter keeps its noise still with TAA, as the sun's does (Include/LocalShadows.slang: a fixed
+	// rotation per pixel; a pattern that turned every frame looked right only under TAA): two frames of one jitter phase match,
+	// and the converged penumbra's roughness stays below `bound` times one frame's under `preset`, so the history adds no grain
+	// and still averages what the jitter moves (a resolve that kept no history would leave about as much as one frame);
+	// `custom` (when set) is the look, under Custom. The penumbra is a shadowed spot light's. The ambient occlusion holds still
+	// too: it resolves its pattern within the frame, the same in every frame of a still view.
+	void CheckNoiseHeld(TemporalAntiAliasingPreset preset, const TemporalAntiAliasingSettings* custom, double bound)
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -117,7 +117,7 @@ namespace
 		REQUIRE(renderer.GetStats().LocalShadowLights == 1);
 		renderer.ResetHistory();
 
-		// Frames 1 and 9 have the same jitter phase: only the noise's turn tells them apart.
+		// Frames 1 and 9 have the same jitter phase: a noise that turned would tell them apart.
 		std::vector<float> first;
 		std::vector<float> ninth;
 		std::vector<uint8_t> firstOcclusion;
@@ -141,7 +141,7 @@ namespace
 			changed += first[pixel] != ninth[pixel] ? 1u : 0u;
 		}
 		REQUIRE(groundPixels > c_Size * c_Size / 2);
-		CHECK(changed > c_Size);
+		CHECK(changed == 0);
 		CHECK(firstOcclusion == ninthOcclusion);
 
 		const std::vector<float> converged = groundLuminance(ReadHDR(renderer.GetResolvedHDRTexture()));
@@ -166,6 +166,7 @@ namespace
 		const double singleEnergy = roughness(first);
 		const double convergedEnergy = roughness(converged);
 		INFO("changed " << changed << " of " << groundPixels << ", penumbra " << penumbraPixels << ", roughness " << singleEnergy << " -> " << convergedEnergy);
+		MESSAGE("converged penumbra's roughness: ", convergedEnergy / singleEnergy, " of one frame's (bound ", bound, ")");
 		CHECK(convergedEnergy < bound * singleEnergy);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
@@ -522,22 +523,22 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("With TAA the local lights' shadows' noise turns every frame, and the history smooths it; the ambient occlusion holds still")
+	TEST_CASE("With TAA the local lights' shadows' noise holds still and the history adds no grain; the ambient occlusion holds still")
 	{
-		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Original, nullptr, 0.5);
+		CheckNoiseHeld(TemporalAntiAliasingPreset::Original, nullptr, 0.8); // Measured 0.71
 	}
 
-	TEST_CASE("Variance clipping keeps the history smoothing the local lights' shadows' noise")
+	TEST_CASE("Variance clipping adds no grain to the local lights' still shadow noise")
 	{
 		TemporalAntiAliasingSettings settings = c_TAAOriginalSettings;
 		settings.HistoryClamp = TemporalHistoryClamp::Variance;
 		settings.ClipWidth = 1.25f;
-		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Custom, &settings, 0.6);
+		CheckNoiseHeld(TemporalAntiAliasingPreset::Custom, &settings, 0.65); // Measured 0.55
 	}
 
-	TEST_CASE("Sharp keeps the history smoothing the local lights' shadows' noise")
+	TEST_CASE("Sharp adds no grain to the local lights' still shadow noise")
 	{
-		CheckNoiseSmoothed(TemporalAntiAliasingPreset::Sharp, nullptr, 0.6);
+		CheckNoiseHeld(TemporalAntiAliasingPreset::Sharp, nullptr, 0.65); // Measured 0.55
 	}
 
 	TEST_CASE("Both paths resolve the same image over sixteen frames of a moving scene")

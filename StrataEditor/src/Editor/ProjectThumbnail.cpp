@@ -94,6 +94,12 @@ namespace Strata
 		m_Readback.reset();
 	}
 
+	bool ProjectThumbnail::IsRendering() const
+	{
+		// Once its frame is being read back the picture renders no more, and its render targets are released.
+		return m_Requested && !m_Readback;
+	}
+
 	bool ProjectThumbnail::IsPending() const
 	{
 		return m_Requested || m_Write->Running.load() > 0;

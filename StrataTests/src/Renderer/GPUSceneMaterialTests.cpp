@@ -86,6 +86,36 @@ namespace
 		return ReadHDR(renderer.GetHDRTexture());
 	}
 
+	// What RenderLampPlane drew: the image, and which of its pixels show the plane.
+	struct LampPlaneFrame
+	{
+		std::vector<glm::vec3> HDR;
+		std::vector<bool> OnPlane;
+	};
+
+	// A plane seen from above, drawn with `material` under a lamp one unit over its center: nothing else lights it (a sky
+	// light without a map, whose ambient color is black, in place of the default ambient light).
+	LampPlaneFrame RenderLampPlane(GPUContext& gpu, SceneTestAssets& assets, const MaterialProperties& material)
+	{
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().AmbientColor = glm::vec3(0.0f);
+		AddPointLight(scene, glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(1.0f), 50.0f, 30.0f);
+		Entity plane = AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(material), glm::vec3(0.0f), "Plane");
+		plane.GetComponent<TransformComponent>().Scale = glm::vec3(10.0f);
+		SceneRenderer renderer = CreateMaterialRenderer("LampCoat", false);
+		renderer.SetViewportSize(c_ViewSize, c_ViewSize);
+		RenderSettled(gpu, renderer, scene, LookAt(glm::vec3(0.0f, 6.0f, 6.0f), glm::vec3(0.0f)), false);
+		LampPlaneFrame frame;
+		frame.HDR = ReadHDR(renderer.GetHDRTexture());
+		const std::vector<uint32_t> ids = ReadIDs(renderer);
+		REQUIRE(ids.size() == frame.HDR.size());
+		frame.OnPlane.resize(ids.size());
+		for (size_t index = 0; index < ids.size(); index++)
+			frame.OnPlane[index] = ids[index] == GetID(plane);
+		return frame;
+	}
+
 	// Spheres in a uniform sky under a sun, drawn with `material`.
 	std::vector<glm::vec3> RenderLitSpheres(GPUContext& gpu, SceneTestAssets& assets, const MaterialProperties& material, AssetHandle sky)
 	{
@@ -259,6 +289,59 @@ TEST_SUITE("GPU.SceneRenderer.Materials")
 		const size_t first = static_cast<size_t>(baseHighlight.y) * c_ViewSize + baseHighlight.x;
 		CHECK(Luminance(withCoat[first]) > 0.8f * Luminance(plain[first]));
 		CHECK(Luminance(withCoat[first]) < Luminance(plain[first]) + Luminance(withCoat[second]));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A lamp behind a coated surface's base normal still lights its coat")
+	{
+		// The forward pass leaves a point or spot light out, before its shadow's taps, where the light lies behind the surface's
+		// normal: the base reflects nothing of it. A clear coat has a normal of its own, so a coated surface keeps the light.
+		// Here a normal map turns the base 60 degrees while the coat stays flat: on one side of the lamp the base faces away
+		// from it and is black, and only the coat shows the lamp there.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadAssets(assets);
+		MaterialProperties base;
+		base.BaseColor = glm::vec4(0.4f, 0.4f, 0.4f, 1.0f);
+		base.Roughness = 0.5f;
+		base.NormalMap = assets.AddSolidTexture(glm::u8vec4(238, 128, 255, 255), TextureFormat::RGBA8);
+		const LampPlaneFrame plain = RenderLampPlane(gpu, assets, base);
+
+		MaterialProperties coated = base;
+		coated.Clearcoat = 1.0f;
+		coated.ClearcoatRoughness = 0.6f;
+		const LampPlaneFrame withCoat = RenderLampPlane(gpu, assets, coated);
+
+		uint32_t facing = 0;
+		uint32_t turnedAway = 0;
+		uint32_t litByCoat = 0;
+		float brightest = 0.0f;
+		for (size_t index = 0; index < plain.HDR.size(); index++)
+		{
+			if (!plain.OnPlane[index] || !withCoat.OnPlane[index])
+				continue;
+			if (Luminance(plain.HDR[index]) > 0.0f)
+			{
+				facing++;
+				continue;
+			}
+			turnedAway++;
+			const float coat = Luminance(withCoat.HDR[index]);
+			if (coat > 0.0f)
+				litByCoat++;
+			brightest = std::max(brightest, coat);
+		}
+		CAPTURE(facing);
+		CAPTURE(turnedAway);
+		CAPTURE(litByCoat);
+		CAPTURE(brightest);
+		// The uncoated base is lit on one side of the lamp and black on the other...
+		REQUIRE(facing > 500);
+		REQUIRE(turnedAway > 500);
+		// ...where the coat reflects the lamp, in every pixel.
+		CHECK(litByCoat == turnedAway);
+		CHECK(brightest > 0.01f);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

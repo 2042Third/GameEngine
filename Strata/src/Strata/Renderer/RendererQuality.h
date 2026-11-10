@@ -127,13 +127,16 @@ namespace Strata
 		uint32_t ShadowCascades = 4; // 1 to RenderData::c_MaxCascades
 		// Point and spot lights with CastShadows: the renderer's depth atlas of this many texels each way (a power of two from
 		// 512 to 8192; made when the first such light is drawn, released with the render targets: 64 MiB at 4096). The
-		// MaxShadowedLocalLights most relevant of them in view (at most RenderData::c_MaxShadowedLocalLights; ranked as the
-		// light clusters rank lights) get tiles of it, a spot light one, a point light six (the faces of a cube), of 128 to
-		// LocalShadowMaxTile texels following how large the light's range looks on screen; when they do not fit, the less
-		// relevant lights' tiles get smaller first (SceneRendererStats::LocalShadowLights, LocalShadowTileSizes).
+		// MaxShadowedLocalLights of them in view that matter most (at most RenderData::c_MaxShadowedLocalLights, and what the
+		// atlas holds: SceneRenderer::GetLocalShadowImportance) get tiles of it, a spot light one, a point light six (the faces of
+		// a cube), of 128 to LocalShadowMaxTile texels following how large the light's range looks on screen; when they do not
+		// fit, the less important lights' tiles get smaller first (SceneRendererStats::LocalShadowLights, LocalShadowTileSizes).
+		// At most LocalShadowViewsPerFrame of their views are drawn again per frame (where SceneRendererSpecification::
+		// SpreadLightingUpdates spreads them; 1 to 1024).
 		uint32_t LocalShadowAtlasSize = 4096;
 		uint32_t LocalShadowMaxTile = 1024; // A power of two from 128 to the atlas size
-		uint32_t MaxShadowedLocalLights = RenderData::c_MaxShadowedLocalLights;
+		uint32_t MaxShadowedLocalLights = 16;
+		uint32_t LocalShadowViewsPerFrame = 12;
 		// Levels of detail with errors (MeshLOD::Error, which generated levels have): the most simplified level whose error,
 		// projected onto the screen, spans at most this many pixels of the viewport height is drawn. 0 draws full detail.
 		float LODErrorPixels = 1.0f;
@@ -186,7 +189,7 @@ namespace Strata
 	namespace RendererQuality
 	{
 		constexpr std::string_view c_SectionId = "Renderer.Quality";
-		constexpr uint32_t c_SectionVersion = 6; // Each landing of a row adds one (Docs/DeveloperGuide.md, "Quality settings")
+		constexpr uint32_t c_SectionVersion = 7; // Each landing of a row adds one (Docs/DeveloperGuide.md, "Quality settings")
 		constexpr uint32_t c_HighResolutionRows = 1440;
 		constexpr uint32_t c_MaxShadowMapSize = 8192; // The most texels each way of a cascade (SceneRenderer applies it)
 

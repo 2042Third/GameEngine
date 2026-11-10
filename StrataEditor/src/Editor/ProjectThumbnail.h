@@ -62,6 +62,10 @@ namespace Strata
 		void Cancel();
 		// Once per frame.
 		void Update(EditorContext& context);
+		// Whether the picture renders on the coming frames, through the viewport's capture renderer at a size of its own. A
+		// capture rendering in the same frames would start the picture's history again every frame, and the picture the
+		// capture's, so captures start after it (it ends by itself, within the limits above).
+		bool IsRendering() const;
 		// Whether a picture is being made or waits to be; how many were written (tests).
 		bool IsPending() const;
 		uint64_t GetWrittenCount() const;

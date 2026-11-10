@@ -7,11 +7,14 @@ The outputs are committed and a CTest (StrataTools.ShowcaseTerrain) keeps them e
     python3 -I Tools/GenerateShowcaseTerrain.py check
     python3 -I Tools/GenerateShowcaseTerrain.py stations [--json <file>]
     python3 -I Tools/GenerateShowcaseTerrain.py selftest --committed Samples/Showcase/Assets/Generated/Terrain
-        --stations Samples/Showcase/Scripts/Stations.h --work <dir>
+        --stations Samples/Showcase/Scripts/Stations.h --sample Samples/Showcase
+        --render-commands StrataTests/Editor/ShowcaseRenderCommands.json --work <dir>
     python3 -I Tools/GenerateShowcaseTerrain.py layout --output <Layout.json>
     python3 -I Tools/GenerateShowcaseTerrain.py controls --output <Controls.json>
     python3 -I Tools/GenerateShowcaseTerrain.py dress --output <Dress.json>
     python3 -I Tools/GenerateShowcaseTerrain.py bake --output <Bake.json>
+    python3 -I Tools/GenerateShowcaseTerrain.py pictures --output <Pictures.json>
+    python3 -I Tools/GenerateShowcaseTerrain.py picture --project Samples/Showcase
     python3 -I Tools/GenerateShowcaseTerrain.py setup --station Dawn|Golden|Dusk --format lookdev|script [--output <file>]
     python3 -I Tools/GenerateShowcaseTerrain.py checkshots --capture <LookDev output directory> [--live]
 
@@ -43,15 +46,30 @@ check     evaluates the design's rules on the generated surfaces and exits 1 whe
              azimuths 135-145 (the dawn sun is 5), 3. every pad's footprint is flat (at most 3 cm and 2 degrees),
              4. the inner terrain meets the ring within 2 cm, 5. within 140 m slopes above 45 degrees lie only in the
              cliff band (reported, not fatal), 6. the apron's edge stays at least 2 cm above the terrain and its skirt
-             reaches at least 3 cm below it.
+             reaches at least 3 cm below it, 7. from each of shot 6's subjects and the hut's door wall the dusk sun
+             stands at least 0.75 degrees beside the bus's footprint and 0.15 degrees above the terrain (a probe holds
+             no sun, so what the bus shades at dusk came out near black).
 stations  prints the three times of day (Dawn, Golden, Dusk) and, per shot of the tour, its cameras (key, from, to),
           look target, field of view, where its subjects fall in a 16:9 picture and the mirror points of shots 2-4
           (where the camera sees the sun reflected: on the bus's letterboard and the oil tank's shell as
           GenerateShowcaseProps.py builds them, measured from its meshes, and on the first puddle); --json writes the
           same as JSON.
 selftest  check, terrain twice (byte-equal), each model byte-equal to the committed one (--committed), shots 2-4's
-          mirror relations within 1 cm and 0.1 degree, and the rows of c_Stations in the scripts' Stations.h (--stations)
-          equal to this file's STATIONS.
+          mirror relations within 1 cm and 0.1 degree, rule 7 failing with the dusk sun at its old azimuth (32, behind
+          the bus), and the rows of c_Stations in the scripts' Stations.h (--stations) equal to this file's STATIONS.
+          The bake script opens the scene, bakes every station once in BAKE_ORDER (Golden, the saved one, last), each
+          one's two probes BAKE_PASSES (eight) times right after its steps, where and with the box the probes' table
+          bakes them, puts a moved probe back before the next station's steps or the save, and ends with its one
+          scene.save (scripts with one of these wrong must fail the check). Then what the pictures rest on: the
+          pictures script takes each picture right after its station's steps, from its LookDev shot's camera
+          (LookDev/Shots.json's showcase.shot<N>), at its size, at High, without overlays and expecting a complete,
+          settled picture, and ends at Golden with a scene.save and a wait long enough for the thumbnail (scripts with
+          one of these wrong must fail the check); the stations' steps
+          that other files hold are the ones setup writes (--render-commands: every sky preset of
+          ShowcaseRenderCommands.json is part of a station's script steps and all three are there; in LookDev/Shots.json
+          the Setup of every showcase.shot<N> of a station other than the saved one begins with that station's LookDev
+          steps, and no other showcase shot sets a sky); the sample's Picture.png (--sample) shows what its
+          Screenshots/Shot2.png shows; and picture refuses what it must (in --work).
 layout    writes the editor command script that builds the scene's entities in Scenes/Outpost.stscene (which holds the
           sky, the sun, the terrain and the Post Process, and with the materials and prefabs of GenerateShowcaseProps.py
           present): the ground's materials, the fog, the camera rig, the props on the surfaces under them, the seeded rocks
@@ -62,11 +80,23 @@ controls  writes the command script of the director's controls: the project's in
 dress     writes the command script of the dressing, run once on the laid-out scene: drums and tyres along the bus's sill
           on shot 4's side (they break the straight edge its puddles reflect), stones on the apron's edge and rocks on
           the rim framing shot 1.
-bake     writes the command script that bakes the six probes: per station (Dawn, Dusk, Golden last, the saved one) its
-          edit-mode steps with only its two probes on, then lighting.bakeProbes of them twice (the second adds a bounce).
+bake      writes the command script that bakes the six probes: per station (Dawn, Dusk, Golden last, the saved one) its
+          edit-mode steps with only its two probes on, then lighting.bakeProbes of them eight times: a bake draws the
+          probes' present captures, so each pass adds a bounce, and after eight the captures no longer depend on those
+          the project held (one run reproduces the committed ones).
+pictures  writes the command script that retakes the sample's pictures after a change to its look: Screenshots/Shot1.png
+          to Shot6.png (960 x 540 at High, each shot's key camera at its station, no overlays), Assets/Icon.png (256 x 256
+          of shot 2) and, by a scene.save at Golden (the scene's camera stands at shot 2's key), the project's thumbnail
+          (.strata/Thumbnail.png). Every capture must report a complete picture (nothing loading, textures at the levels
+          the view wants, the local lights' shadows and the probes drawn, the exposure and temporal anti-aliasing's
+          history settled) or the script stops. Run it on the sample in place after bake, in a session of its own.
+picture   copies the project's thumbnail (--project's .strata/Thumbnail.png) to its Picture.png, the last step of a
+          retake. It refuses (exit 1, nothing copied) a thumbnail that is missing, not 480 x 270, older than a screenshot
+          or the icon (the pictures script did not write it), or that does not show what Screenshots/Shot2.png shows
+          (the scene was saved at another station or from another camera).
 setup     prints a station's edit-mode steps: the GoldenHour preset turned to its sun, the sun's intensity and shadow
-          distance, the fog, the exposure, the local lights, the embers and wicks, and its probes on (LookDev Setup
-          entries naming entities, or command steps that find them).
+          distance, the fog, the exposure, the local lights (their intensity and source radius), the embers and wicks, and
+          its probes on (LookDev Setup entries naming entities, or command steps that find them).
 checkshots reads a LookDev capture: the brightest 0.1% of shot 2's letterboard within 40 px of the computed highlight, the
           brightest column of shot 3's tank within 30 px of the computed streak, and the shell beside the streak with
           and without the yard's probe (at least 8 codes apart; at 1920 x 1080 with TAA); with --live the highlights' shimmer in the live shots (the
@@ -75,11 +105,13 @@ Exit codes: 0 done, 1 a check failed, 2 usage.
 """
 
 import argparse
+import copy
 import json
 import math
 import os
 import random
 import re
+import shutil
 import struct
 import sys
 
@@ -116,6 +148,10 @@ APRON_SKIRT_BELOW = 0.05
 PAD_MARGIN = 1.5
 PAD_BLEND = 6.0
 APRON_PAD_GROWTH = 1.0  # The apron's footprint is its outline grown by 1 m
+# The puddles' water: the base color and roughness of the sample's Water material, which the props generator makes from
+# these two, and of Water.glb's stand-in for it (the material's IOR, 1.33, is its own: the model's factors hold none).
+WATER_COLOR = (0.035, 0.037, 0.040)
+WATER_ROUGHNESS = 0.03
 
 # The layout's anchors (the showcase spec's D3; the props generator and the layout use the same numbers).
 BUS = {"center": (11.8, 0.1), "half": (1.22, 5.4), "yaw": 0}
@@ -134,10 +170,12 @@ WALK_RADIUS = 140.0
 
 # The three times of day (the showcase spec's D4): name, photo hour, sun elevation, elevation the light is drawn at,
 # azimuth, light scale, fog density, exposure compensation (EV), shadow distance (m), local lights on.
+# Dusk's azimuth is where the last sun passes beside the bus (the checks' rule 7): at 32 the bus's shadow lay over the
+# hut, the fire and the fuel tank's near end, which then had only the sky's light (the probes hold no sun).
 STATIONS = (
     ("Dawn", 6.5, 5.0, 5.0, 140.0, 1.0, 0.006, 0.0, 600.0, False),
     ("Golden", 17.75, 6.0, 6.0, 45.0, 1.0, 0.0006, -0.7, 200.0, False),
-    ("Dusk", 19.0, 1.0, 2.0, 32.0, 0.002, 0.0015, -2.5, 150.0, True),
+    ("Dusk", 19.0, 1.0, 2.0, 16.0, 0.002, 0.0015, -2.5, 150.0, True),
 )
 SUN_LUX = 120000.0
 
@@ -1104,7 +1142,7 @@ def terrain_models(world):
     models["Apron.glb"] = glb.bytes(generator)
 
     glb = Glb("Puddles")
-    water = glb.material("Water", (0.018, 0.020, 0.022), 0.03)
+    water = glb.material("Water", WATER_COLOR, WATER_ROUGHNESS)
     for index, hole in enumerate(world.apron.holes):
         glb.node("Puddle_%d" % index, [glb.primitive(world.apron.water_mesh(hole), water)])
     models["Water.glb"] = glb.bytes(generator)
@@ -1143,7 +1181,7 @@ def shot1_camera(ground):
 
 
 def run_checks(world, verbose=True):
-    """Evaluates the six rules; returns a list of failures (rule 5 only reports)."""
+    """Evaluates the seven rules; returns a list of failures (rule 5 only reports)."""
     ground = world.ground
     layout = world.layout
     apron = world.apron
@@ -1246,7 +1284,49 @@ def run_checks(world, verbose=True):
            % (above, below))
     if above < 0.02 or below < 0.03:
         failures.append("rule 6")
+
+    # 7. The dusk sun reaches shot 6's subjects. A reflection probe holds no sun (a bake draws neither its disk nor the
+    # highlights it makes), so what the sun does not reach at dusk has the sky's light and the fire's alone: with the bus's
+    # shadow over them, the hut's front, the fire's ground and the fuel tank's near end came out near black. Seen from each
+    # subject, the sun stands beside the bus's footprint and above the terrain, where the light is drawn.
+    dusk = station("Dusk")
+    beside, over = dusk_sun_reach(world, dusk[4])
+    report("rule 7: the dusk sun (azimuth %g, drawn at %g degrees) stands %.2f degrees beside the bus from %s (at least %g) and %.2f degrees "
+           "above the terrain from %s (at least %g)" % (dusk[4], dusk[3], beside[0], beside[1], DUSK_SUN_BESIDE, over[0], over[1], DUSK_SUN_OVER))
+    if beside[0] < DUSK_SUN_BESIDE or over[0] < DUSK_SUN_OVER:
+        failures.append("rule 7")
     return failures
+
+
+# Rule 7's margins (degrees): how far beside the bus's footprint and how far above the terrain the dusk sun stands from
+# each of shot 6's subjects. Beside the bus they lie between two pictures: at azimuth 17 (0.25 from the fire, none from
+# lantern A) the shadow's soft edge crossed the fire pit, at 16 (1.25 and 1.0) it lies clear of both. Above the terrain
+# the limit holds the light's one direction clear of a horizon sampled every metre; it is less than the disk's radius,
+# which the shadow map does not draw.
+DUSK_SUN_BESIDE = 0.75
+DUSK_SUN_OVER = 0.15
+# Where the dusk sun stood before rule 7: the bus covers it from the fire, lantern A and the hut's door wall.
+DUSK_AZIMUTH_BEHIND_BUS = 32.0
+
+
+def dusk_sun_reach(world, azimuth):
+    """How the dusk sun at an azimuth reaches shot 6's subjects and the hut's door wall: (degrees beside the bus's
+    footprint, subject) and (degrees above the terrain, subject) of the subject with the least of each. Beside the bus
+    is 0 where its footprint covers the sun's azimuth (at the drawn elevation its body does then)."""
+    drawn = station("Dusk")[3]
+    subjects = {name: point for name, point in [shot for shot in shots(world) if shot["shot"] == 6][0]["subjects"].items() if name != "dusk sun"}
+    subjects["the hut's door wall"] = hut_point((0.0, 1.2, HUT["half"][1]))
+    corners = [local_to_world(BUS["center"], BUS["yaw"], sx * BUS["half"][0], sz * BUS["half"][1]) for sx in (-1, 1) for sz in (-1, 1)]
+    beside = (360.0, None)
+    over = (90.0, None)
+    for name, point in subjects.items():
+        # The corners' azimuths from the subject, from the sun's: the footprint covers the sun when they lie on both sides
+        # of it (seen from outside, a convex outline spans less than half a turn).
+        offsets = [(math.degrees(math.atan2(z - point[2], x - point[0])) - azimuth + 180.0) % 360.0 - 180.0 for x, z in corners]
+        covered = min(offsets) < 0.0 < max(offsets) and max(offsets) - min(offsets) < 180.0
+        beside = min(beside, (0.0 if covered else min(abs(offset) for offset in offsets), name))
+        over = min(over, (drawn - horizon(world.ground, point, azimuth), name))
+    return beside, over
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -1517,8 +1597,8 @@ def hut_point(local):
 # lean-to, the ground around the hut, the roof's top) takes the dark interior's light instead of the yard's. Its capture is taken in the back corner
 # away from the door's and the window's sun beams (hut-local (1.9, 0.7, -1.3)): taken in the middle, it faces the low
 # sun's patch on the back wall, and the dark corner D15 measures came out only 0.3 EV below the yard. So the bake puts the
-# probe there, with a box about it that still holds the interior (the second pass sees the interior lit by the first),
-# then back. A probe whose capture was taken off its box's center projects no box: the capture is looked up as a distant
+# probe there, with a box about it that still holds the interior (every pass after the first sees the interior lit by
+# the capture of the pass before: BAKE_PASSES), then back. A probe whose capture was taken off its box's center projects no box: the capture is looked up as a distant
 # environment, which the rough plaster and planks inside cannot tell apart.
 HUT_PROBE_BOX = ((0.0, 1.15, 0.0), (2.6, 1.3, 2.2))
 HUT_PROBE_CAPTURE = (1.9, 0.7, -1.3)
@@ -1528,8 +1608,9 @@ PROBES = (
     ("Hut", hut_point(HUT_PROBE_BOX[0]), HUT["yaw"], HUT_PROBE_BOX[1], 0.2, 2, False,
      (hut_point(HUT_PROBE_CAPTURE), HUT_PROBE_BAKE_EXTENTS)),
 )
-# The local lights at dusk (candela) and the glowing embers and wicks, which only burn at dusk.
-LOCAL_LIGHTS = (("Fire", 400.0), ("LanternA.Light", 40.0), ("LanternB.Light", 25.0))
+# The local lights: their candela at dusk and their source radius (m: the flames' size, which widens only their highlights;
+# the Manual's fire pit 0.2-0.3, lantern 0.03-0.06), and the glowing embers and wicks, which only burn at dusk.
+LOCAL_LIGHTS = (("Fire", 400.0, 0.25), ("LanternA.Light", 40.0, 0.04), ("LanternB.Light", 25.0, 0.04))
 GLOWS = ("FirePit.Embers", "LanternA.Wick", "LanternB.Wick")
 FOG = {"BaseHeight": -8.0, "HeightFalloff": 0.10, "StartDistance": 80.0, "MaxOpacity": 0.7, "ColorFromSky": True, "SunScattering": 0.6}
 EYE_HEIGHT = 1.6
@@ -1662,7 +1743,7 @@ def station_steps(name, script_form):
                 parameters = dict({"entityName": entity}, **parameters)
             steps.append({"Command": command, "Parameters": parameters})
 
-    names = ["Sun", "Fog", "Post Process"] + [light for light, _ in LOCAL_LIGHTS] + list(GLOWS)
+    names = ["Sun", "Fog", "Post Process"] + [light for light, *_ in LOCAL_LIGHTS] + list(GLOWS)
     names += ["Probe.%s.%s" % (s[0], part[0]) for s in STATIONS for part in PROBES]
     if script_form:
         for entity in names:
@@ -1674,8 +1755,8 @@ def station_steps(name, script_form):
     step("component.set", "Sun", {"component": "DirectionalLight", "values": {"Intensity": SUN_LUX * scale, "ShadowDistance": shadow}})
     step("component.set", "Fog", {"component": "HeightFog", "values": {"Density": fog}})
     step("component.set", "Post Process", {"component": "PostProcess", "values": {"Exposure": exposure}})
-    for light, candela in LOCAL_LIGHTS:
-        step("component.set", light, {"component": "PointLight", "values": {"Intensity": candela if local else 0.0}})
+    for light, candela, radius in LOCAL_LIGHTS:
+        step("component.set", light, {"component": "PointLight", "values": {"Intensity": candela if local else 0.0, "SourceRadius": radius}})
     for glow in GLOWS:
         step("entity.setActive", glow, {"active": local})
     for other in STATIONS:
@@ -1898,7 +1979,7 @@ def layout_script(world):
     s.add("entity.setActive", {"entities": [{"$ref": "Fade"}, {"$ref": "Caption"}], "active": False})
 
     # The director, and the flicker of the fire's and the lanterns' flames.
-    for light, _ in LOCAL_LIGHTS:
+    for light, *_ in LOCAL_LIGHTS:
         s.add("script.add", {"entity": s.find(light, "flicker_" + bind_name(light)), "class": "Flicker"})
     fields = {"Sun": s.find("Sun"), "Fog": {"$ref": "Fog"}, "PostProcess": s.find("Post Process", "PostProcess"),
               "Player": player, "Eye": eye, "FadeImage": {"$ref": "Fade"}, "Caption": {"$ref": "Caption"},
@@ -2028,13 +2109,26 @@ def controls_script():
     return s.steps
 
 
+# The stations in the order the bake takes them: the saved one last, so the scene it saves is that station's.
+BAKE_ORDER = ("Dawn", "Dusk", "Golden")
+# How often the bake runs lighting.bakeProbes at a station. A bake draws the probes' present captures, the baked probe's
+# own included, so every pass adds the light the last one found (a bounce), and what a few passes leave depends on the
+# captures the project held before: two passes from the sample's earlier captures left the dusk hut's 18% above the one
+# further passes settle at. Measured in the hut, where the capture's own light counts most, a pass leaves about 0.16 of
+# the difference to the settled capture. After eight nothing of the start is left: bakes begun from two different sets of
+# captures agree in the mean of every 64 x 64 block to 0.01%, so one run of the script reproduces the committed captures
+# whatever the project held (a pass of a station's two probes takes the editor about a third of a second).
+BAKE_PASSES = 8
+
+
 def bake_script():
     """The probes' bake (D10): each station's edit-mode steps with only its own probes on, then lighting.bakeProbes of its
-    two twice (the second pass adds the bounce the first gives), Golden last so the saved scene is Golden's. A probe baked
-    elsewhere (the hut's) is moved to its bake position and box first and back to its own after; its box and blend are set
-    with them, so the script also brings a scene laid out with other values to the table's."""
+    two BAKE_PASSES times (until the captures no longer depend on those the project held), the saved station last so the
+    saved scene is its. A probe baked elsewhere (the hut's) is moved to its bake position and box first and back to its
+    own after; its box and blend are set with them, so the script also brings a scene laid out with other values to the
+    table's."""
     steps = [{"command": "scene.open", "parameters": {"scene": SCENE}}]
-    for name in ("Dawn", "Dusk", "Golden"):
+    for name in BAKE_ORDER:
         steps += station_steps(name, True)
         probes = [{"$ref": "station_Probe.%s.%s" % (name, part[0])} for part in PROBES]
         moved = [part for part in PROBES if part[7] is not None]
@@ -2044,7 +2138,7 @@ def bake_script():
                                                                      "values": {"Translation": rounded(bake[0])}}})
             steps.append({"command": "component.set", "parameters": {"entity": entity, "component": "ReflectionProbe",
                                                                      "values": {"Extents": rounded(bake[1])}}})
-        for _ in range(2):
+        for _ in range(BAKE_PASSES):
             steps.append({"command": "lighting.bakeProbes", "parameters": {"entities": probes}})
         for part, position, yaw_degrees, extents, blend, priority, box_projection, bake in moved:
             entity = {"$ref": "station_Probe.%s.%s" % (name, part)}
@@ -2057,18 +2151,503 @@ def bake_script():
     return steps
 
 
+SAVED_STATION = "Golden"     # The station the scene is saved at: the one the game starts in and the thumbnail shows
+SHOT_COUNT = 6               # The tour's shots (shots), one screenshot each
+PICTURE_SIZE = (960, 540)    # Screenshots/Shot<N>.png
+ICON_SIZE = 256              # Assets/Icon.png, of shot 2
+THUMBNAIL_SIZE = (480, 270)  # .strata/Thumbnail.png and Picture.png (ProjectThumbnail's c_Width and c_Height)
+# What a picture's capture must report. viewport.capture waits for all of it, but only so long, and then returns the
+# picture as it is, saying what it lacks: assets still loading, textures below the level the view wants, local lights'
+# shadow views or probes' captures not drawn yet, an exposure still adapting, or a history of temporal anti-aliasing that
+# holds fewer than the jitter's eight phases (a soft or noisy picture).
+PICTURE_COMPLETE = {"/pendingAssets": {"equals": 0}, "/texturesBelowWanted": {"equals": 0},
+                    "/localShadowViewsPending": {"equals": 0}, "/reflectionProbesPending": {"equals": 0},
+                    "/preExposureSettled": {"equals": True}, "/temporalFrames": {"min": 8}}
+# The project's thumbnail renders over the frames after a save, within ProjectThumbnail's limits (c_MaxFrames 120,
+# c_MaxTemporalFrames 16, c_MaxExposureFrames 8, c_MaxGIFrames 54 and c_MaxReflectionFrames 2: 200 frames if each ran
+# out in turn), is read back and then written in the background; a script that quits right after its scene.save leaves
+# none. The script waits three times that; picture refuses a thumbnail the wait did not bring.
+THUMBNAIL_RENDER_FRAMES = 200
+THUMBNAIL_FRAMES = 3 * THUMBNAIL_RENDER_FRAMES
+# Picture.png against Screenshots/Shot2.png, both averaged over 16 x 9 blocks: how far the blocks' mean codes may lie
+# apart on average and in any block. The two are one view rendered twice, at 1440 x 810 and at 960 x 540 (measured 0.51
+# and 1.67 on the pictures of wave 8's reflections; the pictures taken before them against the ones after: 1.09 and 7.71).
+PICTURE_BLOCK = 30
+PICTURE_LIMITS = (1.0, 4.0)
+
+
+def pictures_script(world):
+    """The pictures' retake (D14's pictures): each shot's key camera at its station, captured at High without overlays into
+    Screenshots/Shot<N>.png, shot 2 also into Assets/Icon.png (256 x 256; the asset keeps its handle), then the saved
+    station and a scene.save, after which the editor renders the project's thumbnail (.strata/Thumbnail.png, 480 x 270,
+    from the scene's camera, which the layout stands at shot 2's key) that picture copies to Picture.png. A capture that
+    reports an incomplete or unsettled picture stops the script (PICTURE_COMPLETE)."""
+    steps = [{"command": "scene.open", "parameters": {"scene": SCENE}}]
+    for shot in shots(world):
+        camera = {"position": rounded(shot["key"], 3), "target": rounded(shot["look"], 3), "fov": shot["fov"]}
+        steps += station_steps(shot["station"], True)
+        pictures = [("Screenshots/Shot%d.png" % shot["shot"], PICTURE_SIZE)]
+        if shot["shot"] == 2:
+            pictures.append(("Assets/Icon.png", (ICON_SIZE, ICON_SIZE)))
+        for picture, (width, height) in pictures:
+            parameters = dict(camera, width=width, height=height, quality="high", overlays=False, path=picture, overwrite=True)
+            steps.append({"command": "viewport.capture", "parameters": parameters, "expect": copy.deepcopy(PICTURE_COMPLETE)})
+    steps += station_steps(SAVED_STATION, True)
+    steps.append({"command": "scene.save"})
+    steps.append({"command": "editor.wait", "parameters": {"frames": THUMBNAIL_FRAMES}})
+    return steps
+
+
+def station_block_at(steps, index, blocks):
+    """The station whose steps (blocks: station_steps per name) start at steps[index] and follow without a gap, or None."""
+    for name, block in blocks.items():
+        if steps[index:index + len(block)] == block:
+            return name
+    return None
+
+
+def check_pictures(world, shots_file, steps=None):
+    """The pictures script (steps; pictures_script's when None) against the shots: it opens the scene, takes each
+    screenshot (and the icon, of shot 2) right after its station's steps, from the camera of its LookDev shot (shots_file's
+    showcase.shot<N>), at its size, at High, without overlays and expecting a complete picture, and ends at the saved
+    station with a scene.save and a wait long enough for the thumbnail the save starts. Returns the failures."""
+    failures = []
+    with open(shots_file, encoding="utf-8") as file:
+        lookdev = {shot["Name"]: shot for shot in json.load(file)["Shots"]}
+    if steps is None:
+        steps = pictures_script(world)
+    blocks = {row[0]: station_steps(row[0], True) for row in STATIONS}
+    expected = {"Screenshots/Shot%d.png" % shot["shot"]: (shot, PICTURE_SIZE) for shot in shots(world)}
+    if sorted(expected) != ["Screenshots/Shot%d.png" % (number + 1) for number in range(SHOT_COUNT)]:
+        return ["the tour's shots are not numbered 1 to %d" % SHOT_COUNT]
+    expected["Assets/Icon.png"] = (expected["Screenshots/Shot2.png"][0], (ICON_SIZE, ICON_SIZE))
+    if not steps or steps[0] != {"command": "scene.open", "parameters": {"scene": SCENE}}:
+        failures.append("the pictures script does not start by opening %s" % SCENE)
+    station = None  # The station whose steps were the last thing before this step, captures aside
+    taken = []
+    saved = []
+    index = 0
+    while index < len(steps):
+        name = station_block_at(steps, index, blocks)
+        if name is not None:
+            station = name
+            index += len(blocks[name])
+            continue
+        step = steps[index]
+        index += 1
+        if step.get("command") == "scene.save":
+            saved.append(station)
+            continue
+        if step.get("command") != "viewport.capture":
+            station = None  # Anything else, a station's step out of its place included, leaves the scene at no station
+            continue
+        parameters = step.get("parameters", {})
+        path = parameters.get("path")
+        taken.append(path)
+        if path not in expected:
+            failures.append("the pictures script captures %s, which is no picture of the sample" % path)
+            continue
+        shot, (width, height) = expected[path]
+        if station != shot["station"]:
+            failures.append("%s is not taken right after the steps of %s, shot %d's station" % (path, shot["station"], shot["shot"]))
+        reference = lookdev.get("showcase.shot%d" % shot["shot"])
+        if reference is None:
+            failures.append("%s has no LookDev shot showcase.shot%d" % (shots_file, shot["shot"]))
+            continue
+        wanted = {"position": reference["Position"], "target": reference["Target"], "fov": reference["Fov"],
+                  "width": width, "height": height, "quality": "high", "overlays": False, "path": path, "overwrite": True}
+        if sorted(parameters) != sorted(wanted):
+            failures.append("%s is captured with the parameters %s, not %s" % (path, sorted(parameters), sorted(wanted)))
+            continue
+        camera = list(parameters["position"]) + list(parameters["target"]) + [parameters["fov"]]
+        lookdev_camera = list(wanted["position"]) + list(wanted["target"]) + [wanted["fov"]]
+        if len(camera) != len(lookdev_camera) or any(abs(a - b) > 1e-3 for a, b in zip(camera, lookdev_camera)):
+            failures.append("%s looks from %s, LookDev's showcase.shot%d from %s" % (path, camera, shot["shot"], lookdev_camera))
+        for key in ("width", "height", "quality", "overlays", "overwrite"):
+            if parameters[key] != wanted[key] or type(parameters[key]) is not type(wanted[key]):
+                failures.append("%s is captured with %s %s, not %s" % (path, key, json.dumps(parameters[key]), json.dumps(wanted[key])))
+        if step.get("expect") != PICTURE_COMPLETE:
+            failures.append("%s's capture does not expect a complete, settled picture (%s)" % (path, ", ".join(sorted(PICTURE_COMPLETE))))
+    if sorted(taken) != sorted(expected):
+        failures.append("the pictures script captures %s, not %s" % (sorted(str(path) for path in taken), sorted(expected)))
+    wait = steps[-1] if steps else {}
+    frames = wait.get("parameters", {}).get("frames", 0) if wait.get("command") == "editor.wait" else 0
+    if saved != [SAVED_STATION] or len(steps) < 2 or steps[-2].get("command") != "scene.save":
+        failures.append("the pictures script does not end with one scene.save right after %s's steps and a wait" % SAVED_STATION)
+    if not isinstance(frames, int) or frames < THUMBNAIL_FRAMES:
+        failures.append("the pictures script does not end with a wait of at least %d frames for the thumbnail" % THUMBNAIL_FRAMES)
+    return failures
+
+
+def picture_mutations(world):
+    """The pictures script with one thing wrong at a time, each of which check_pictures must report: (what, steps)."""
+    base = pictures_script(world)
+    captures = [index for index, step in enumerate(base) if step["command"] == "viewport.capture"]
+    saved_block = len(station_steps(SAVED_STATION, True))
+    mutations = []
+
+    def mutate(what, change):
+        steps = copy.deepcopy(base)
+        change(steps)
+        mutations.append((what, steps))
+
+    def set_parameter(index, key, value):
+        return lambda steps: steps[index]["parameters"].__setitem__(key, value)
+
+    mutate("a picture of another size", set_parameter(captures[0], "width", 1920))
+    mutate("a picture at another quality", set_parameter(captures[1], "quality", "medium"))
+    mutate("a picture with the editor's overlays", set_parameter(captures[2], "overlays", True))
+    mutate("a picture from another camera", set_parameter(captures[3], "fov", base[captures[3]]["parameters"]["fov"] + 5.0))
+    mutate("a picture that keeps an older file", set_parameter(captures[4], "overwrite", False))
+    mutate("a picture of another name", set_parameter(captures[5], "path", "Screenshots/Shot7.png"))
+    mutate("a picture with a debug view", set_parameter(captures[6], "debugView", "lighting"))
+    mutate("a capture that expects nothing", lambda steps: steps[captures[0]].pop("expect"))
+    for key in sorted(PICTURE_COMPLETE):
+        mutate("a capture that does not expect %s" % key, lambda steps, key=key: steps[captures[-1]]["expect"].pop(key))
+    mutate("a missing picture", lambda steps: steps.pop(captures[0]))
+    mutate("a station's step changed by hand", set_parameter(captures[-1] - 1, "active", False))
+    mutate("a step between a station's steps and its picture",
+           lambda steps: steps.insert(captures[-1], {"command": "editor.wait", "parameters": {"frames": 1}}))
+    mutate("a picture at another station", lambda steps: steps.__delitem__(slice(captures[-1] - len(station_steps("Dusk", True)), captures[-1])))
+    mutate("a scene that is not opened", lambda steps: steps.pop(0))
+    mutate("a save at another station", lambda steps: steps.__delitem__(slice(len(steps) - 2 - saved_block, len(steps) - 2)))
+    mutate("no save", lambda steps: steps.pop(len(steps) - 2))
+    mutate("a wait too short for the thumbnail", set_parameter(len(base) - 1, "frames", THUMBNAIL_RENDER_FRAMES))
+    mutate("no wait", lambda steps: steps.pop())
+    return mutations
+
+
+def probe_reference(station_name, part):
+    """How a station's steps name one of its probes (station_steps' binding of the entity it found)."""
+    return {"$ref": "station_" + bind_name("Probe.%s.%s" % (station_name, part))}
+
+
+def check_bake(steps=None):
+    """The bake's script (steps; bake_script's when None) against the probes' table: it opens the scene; every station is
+    baked once, the saved one last; a station's bakes follow its steps with nothing between but component.set steps of its
+    probes, and are BAKE_PASSES bakes of exactly its probes, each standing where the table bakes it, with the box it is
+    baked with; when another station's steps or the save follow, a probe that was moved is back at the table's place, box,
+    blend and projection; and the script ends with its one scene.save. Returns the failures."""
+    failures = []
+    if steps is None:
+        steps = bake_script()
+    blocks = {row[0]: station_steps(row[0], True) for row in STATIONS}
+    opened = bool(steps) and steps[0] == {"command": "scene.open", "parameters": {"scene": SCENE}}
+    if not opened:
+        failures.append("the bake script does not start by opening %s" % SCENE)
+
+    def same(first, second):
+        return json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+
+    def close(name, placed, passes):
+        """A station's bakes are over (another station's steps or the save follow): how many there were, and where its
+        moved probes were left."""
+        if passes != BAKE_PASSES:
+            failures.append("%s's probes are baked %d times, not %d" % (name, passes, BAKE_PASSES))
+        for part, position, yaw_degrees, extents, blend, priority, box_projection, bake in PROBES:
+            if bake is None:
+                continue
+            wanted = {"Translation": rounded(position), "Extents": rounded(extents), "BlendDistance": blend, "BoxProjection": box_projection}
+            left = {field: placed.get((part, field)) for field in wanted}
+            if not same(left, wanted):
+                failures.append("Probe.%s.%s is left with %s after its bakes, not the table's %s"
+                                % (name, part, json.dumps(left, sort_keys=True), json.dumps(wanted, sort_keys=True)))
+
+    station = None  # The station whose steps came last
+    placed = {}     # What the script set on that station's probes since: (part, field) -> value
+    passes = 0      # That station's bakes so far
+    order = []
+    saves = 0
+    foreign = []
+    index = 1 if opened else 0
+    while index < len(steps):
+        name = station_block_at(steps, index, blocks)
+        if name is not None:
+            if station is not None:
+                close(station, placed, passes)
+            station, placed, passes = name, {}, 0
+            order.append(name)
+            index += len(blocks[name])
+            continue
+        step = steps[index]
+        index += 1
+        command, parameters = step.get("command"), step.get("parameters", {})
+        if command == "scene.save":
+            saves += 1
+            if station is not None:
+                close(station, placed, passes)
+            station, placed, passes = None, {}, 0
+            continue
+        parts = [] if station is None else [part[0] for part in PROBES if same(parameters.get("entity"), probe_reference(station, part[0]))]
+        if (command == "component.set" and parts and sorted(parameters) == ["component", "entity", "values"]
+                and parameters["component"] in ("Transform", "ReflectionProbe") and isinstance(parameters["values"], dict)):
+            for field, value in parameters["values"].items():
+                placed[(parts[0], field)] = value
+            continue
+        if command == "lighting.bakeProbes" and station is not None:
+            passes += 1
+            wanted = {"entities": [probe_reference(station, part[0]) for part in PROBES]}
+            if not same(parameters, wanted):
+                failures.append("a bake at %s has the parameters %s, not %s" % (station, json.dumps(parameters, sort_keys=True), json.dumps(wanted, sort_keys=True)))
+            for part, position, yaw_degrees, extents, blend, priority, box_projection, bake in PROBES:
+                stands = {field: placed.get((part, field)) for field in ("Translation", "Extents")}
+                wanted = {"Translation": None, "Extents": None} if bake is None else {"Translation": rounded(bake[0]), "Extents": rounded(bake[1])}
+                if not same(stands, wanted):
+                    failures.append("Probe.%s.%s is baked with %s set, not %s (null: as the scene has it)"
+                                    % (station, part, json.dumps(stands, sort_keys=True), json.dumps(wanted, sort_keys=True)))
+            continue
+        foreign.append("step %d (%s)" % (index, command))
+    if station is not None:
+        close(station, placed, passes)
+    if foreign:
+        failures.append("the bake script holds what is no part of a station's bake: %s%s" % (", ".join(foreign[:3]), " and more" if len(foreign) > 3 else ""))
+    if sorted(order) != sorted(blocks):
+        failures.append("the bake script bakes the stations %s, not each of %s once" % (order, sorted(blocks)))
+    elif order[-1] != SAVED_STATION:
+        failures.append("the bake script bakes %s last, not %s, the station the scene is saved at" % (order[-1], SAVED_STATION))
+    if saves != 1 or not steps or steps[-1].get("command") != "scene.save":
+        failures.append("the bake script does not end with its one scene.save")
+    return failures
+
+
+def bake_mutations():
+    """The bake's script with one thing wrong at a time, each of which check_bake must report: (what, steps)."""
+    base = bake_script()
+    blocks = {row[0]: station_steps(row[0], True) for row in STATIONS}
+    starts = [index for index in range(len(base)) if station_block_at(base, index, blocks) is not None]
+    first_end = starts[0] + len(blocks[station_block_at(base, starts[0], blocks)])
+    bakes = [index for index in range(first_end, starts[1]) if base[index]["command"] == "lighting.bakeProbes"]
+    # The first station's steps for the probes it moves: to the bake's place and box before the bakes, back after them.
+    before = [index for index in range(first_end, bakes[0]) if base[index]["command"] == "component.set"]
+    after = [index for index in range(bakes[-1] + 1, starts[1]) if base[index]["command"] == "component.set"]
+    unmoved = [part[0] for part in PROBES if part[7] is None]
+    first_name = station_block_at(base, starts[0], blocks)
+    mutations = []
+
+    def mutate(what, change):
+        steps = copy.deepcopy(base)
+        change(steps)
+        mutations.append((what, steps))
+
+    def set_value(index, key, value):
+        return lambda steps: steps[index]["parameters"]["values"].__setitem__(key, value)
+
+    mutate("a pass fewer", lambda steps: steps.pop(bakes[0]))
+    mutate("a pass more", lambda steps: steps.insert(bakes[0], copy.deepcopy(steps[bakes[0]])))
+    mutate("a bake of one probe only", lambda steps: steps[bakes[1]]["parameters"]["entities"].pop())
+    mutate("a bake of another station's probes",
+           lambda steps: steps[bakes[0]]["parameters"].__setitem__("entities", copy.deepcopy(steps[len(steps) - 2 - len(after)]["parameters"]["entities"])))
+    mutate("a bake with a parameter of its own", lambda steps: steps[bakes[-1]]["parameters"].__setitem__("resolution", 256))
+    mutate("a probe baked where it stands, not where the table bakes it", lambda steps: steps.pop(before[0]))
+    mutate("a probe baked with its own box, not the bake's", lambda steps: steps.pop(before[1]))
+    mutate("a probe put back before its last bake", lambda steps: steps.insert(bakes[-1], steps.pop(after[0])))
+    mutate("a probe left where it was baked", lambda steps: steps.pop(after[0]))
+    mutate("a probe left with the bake's box", lambda steps: steps.pop(after[-1]))
+    mutate("a probe left with another blend distance", set_value(after[-1], "BlendDistance", base[after[-1]]["parameters"]["values"]["BlendDistance"] + 0.1))
+    mutate("a probe left with its box projection turned", set_value(after[-1], "BoxProjection", not base[after[-1]]["parameters"]["values"]["BoxProjection"]))
+    if unmoved:
+        mutate("a probe moved that the table bakes where it stands",
+               lambda steps: steps.insert(bakes[0], {"command": "component.set", "parameters": {
+                   "entity": probe_reference(first_name, unmoved[0]), "component": "Transform", "values": {"Translation": [0.0, 1.0, 0.0]}}}))
+    mutate("a station left out", lambda steps: steps.__delitem__(slice(starts[1], starts[2])))
+    mutate("a station baked twice", lambda steps: steps.__setitem__(slice(starts[1], starts[1]), copy.deepcopy(steps[starts[0]:starts[1]])))
+    mutate("the saved station baked first",
+           lambda steps: steps.__setitem__(slice(starts[0], len(steps) - 1), steps[starts[-1]:len(steps) - 1] + steps[starts[0]:starts[-1]]))
+    mutate("a station's step changed by hand", lambda steps: steps[first_end - 1]["parameters"].__setitem__("active", not steps[first_end - 1]["parameters"]["active"]))
+    mutate("a step between a station's steps and its bakes", lambda steps: steps.insert(first_end, {"command": "editor.wait", "parameters": {"frames": 1}}))
+    mutate("a scene that is not opened", lambda steps: steps.pop(0))
+    mutate("a save before the end", lambda steps: steps.insert(starts[1], {"command": "scene.save"}))
+    mutate("no save", lambda steps: steps.pop())
+    return mutations
+
+
+LOOKDEV_SHOT_NAME = re.compile(r"^showcase\.shot(\d+)(?:\.|$)")
+
+
+def check_station_copies(world, render_file, shots_file):
+    """The stations' steps where other files hold them: every lighting.applySkyPreset of the render test's commands
+    (render_file) is part of a station's steps as station_steps writes them (the script form), with all three stations
+    there; in LookDev's shots (shots_file) the Setup of every showcase.shot<N>, variants included, of a station other than
+    the saved one begins with that station's steps (the LookDev form), and no other showcase shot sets a sky (edit-mode
+    shots show the saved scene, live ones the director's stations). Returns the failures."""
+    failures = []
+    blocks = {row[0]: station_steps(row[0], True) for row in STATIONS}
+    render_name = os.path.basename(render_file)
+    with open(render_file, encoding="utf-8") as file:
+        steps = json.load(file)
+    found = set()
+    index = 0
+    while index < len(steps):
+        name = station_block_at(steps, index, blocks)
+        if name is not None:
+            found.add(name)
+            index += len(blocks[name])
+            continue
+        if steps[index].get("command") == "lighting.applySkyPreset":
+            failures.append("%s: the sky preset of step %d is not part of a station's steps as `setup --format script` writes them"
+                            % (render_name, index))
+        index += 1
+    for row in STATIONS:
+        if row[0] not in found:
+            failures.append("%s holds no steps of %s as `setup --station %s --format script` writes them" % (render_name, row[0], row[0]))
+
+    shots_name = os.path.basename(shots_file)
+    lookdev_blocks = {row[0]: station_steps(row[0], False) for row in STATIONS}
+    stations_of = {shot["shot"]: shot["station"] for shot in shots(world)}
+    with open(shots_file, encoding="utf-8") as file:
+        lookdev = json.load(file)["Shots"]
+    for shot in lookdev:
+        if shot.get("Project") != "Showcase":
+            continue
+        setup = shot.get("Setup", [])
+        presets = sum(1 for entry in setup if entry.get("Command") == "lighting.applySkyPreset")
+        match = LOOKDEV_SHOT_NAME.match(shot["Name"])
+        wanted = stations_of.get(int(match.group(1))) if match else None
+        if wanted is None or wanted == SAVED_STATION:
+            if presets:
+                failures.append("%s: %s sets a sky, but shows %s" % (shots_name, shot["Name"], "the saved scene" if not shot.get("Live") else "the director's stations"))
+            continue
+        block = lookdev_blocks[wanted]
+        if setup[:len(block)] != block or presets != 1:
+            failures.append("%s: %s's Setup does not begin with %s's steps as `setup --station %s --format lookdev` prints them"
+                            % (shots_name, shot["Name"], wanted, wanted))
+    return failures
+
+
+def lookdev_module():
+    """Tools/LookDev.py, for its PNG reader and writer (8-bit RGB and RGBA, all five filters)."""
+    tools = os.path.dirname(os.path.abspath(__file__))
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    import LookDev
+    return LookDev
+
+
+def block_means(image, size):
+    """The mean code of an image's red, green and blue over each size x size block, row by row."""
+    means = []
+    for top in range(0, image.height - size + 1, size):
+        for left in range(0, image.width - size + 1, size):
+            total = 0
+            for y in range(top, top + size):
+                start = (y * image.width + left) * image.channels
+                row = image.data[start:start + size * image.channels]
+                total += sum(row[0::image.channels]) + sum(row[1::image.channels]) + sum(row[2::image.channels])
+            means.append(total / (size * size * 3.0))
+    return means
+
+
+def check_picture(picture, shot2):
+    """A project picture (the thumbnail, or Picture.png) against Screenshots/Shot2.png: 480 x 270, and the same view at the
+    same station, by the mean codes of 16 x 9 blocks (PICTURE_LIMITS). Returns the failures."""
+    lookdev = lookdev_module()
+    images = []
+    for path, size in ((picture, THUMBNAIL_SIZE), (shot2, PICTURE_SIZE)):
+        try:
+            image = lookdev.read_png(path)
+        except (OSError, lookdev.ToolError) as error:
+            return ["%s cannot be read: %s" % (path, error)]
+        if (image.width, image.height) != size:
+            return ["%s is %d x %d, not %d x %d" % (path, image.width, image.height, size[0], size[1])]
+        images.append(image)
+    small = block_means(images[0], PICTURE_BLOCK)
+    large = block_means(images[1], PICTURE_BLOCK * PICTURE_SIZE[0] // THUMBNAIL_SIZE[0])
+    differences = [abs(a - b) for a, b in zip(small, large)]
+    mean, most = sum(differences) / len(differences), max(differences)
+    if mean > PICTURE_LIMITS[0] or most > PICTURE_LIMITS[1]:
+        return ["%s does not show what %s shows: their blocks' mean codes differ by %.2f on average and %.2f at most (limits %.1f and %.1f); "
+                "retake them together (pictures, then picture)" % (picture, shot2, mean, most, PICTURE_LIMITS[0], PICTURE_LIMITS[1])]
+    return []
+
+
+def copy_picture(project):
+    """picture: copies the project's thumbnail to its Picture.png, once it is the one the pictures script left: there,
+    480 x 270, not older than the screenshots and the icon that script took before its save, and showing what
+    Screenshots/Shot2.png shows. Returns the failures; nothing is copied when there are any."""
+    thumbnail = os.path.join(project, ".strata", "Thumbnail.png")
+    if not os.path.isfile(thumbnail):
+        return ["%s does not exist: run the pictures script on the project first" % thumbnail]
+    failures = []
+    written = os.path.getmtime(thumbnail)
+    taken = ["Screenshots/Shot%d.png" % (index + 1) for index in range(SHOT_COUNT)] + ["Assets/Icon.png"]
+    for relative in taken:
+        path = os.path.join(project, *relative.split("/"))
+        if not os.path.isfile(path):
+            failures.append("%s does not exist" % path)
+        elif os.path.getmtime(path) > written:
+            # Equal times pass: file systems keep them in steps of up to two seconds.
+            failures.append("%s is newer than %s: the pictures script did not write that thumbnail" % (path, thumbnail))
+    if failures:
+        return failures
+    failures = check_picture(thumbnail, os.path.join(project, "Screenshots", "Shot2.png"))
+    if failures:
+        return failures
+    shutil.copyfile(thumbnail, os.path.join(project, "Picture.png"))
+    return []
+
+
+def check_copy_picture(sample, work):
+    """picture on stand-ins of the project under work: it copies the sample's picture when it is the thumbnail the script
+    left, and refuses a thumbnail that is missing, of another size, older than a screenshot or of another view."""
+    lookdev = lookdev_module()
+    failures = []
+    project = os.path.join(work, "picture")
+    shutil.rmtree(project, ignore_errors=True)
+    os.makedirs(os.path.join(project, "Screenshots"))
+    os.makedirs(os.path.join(project, "Assets"))
+    os.makedirs(os.path.join(project, ".strata"))
+    for index in range(SHOT_COUNT):
+        shutil.copyfile(os.path.join(sample, "Screenshots", "Shot%d.png" % (index + 1)), os.path.join(project, "Screenshots", "Shot%d.png" % (index + 1)))
+    shutil.copyfile(os.path.join(sample, "Assets", "Icon.png"), os.path.join(project, "Assets", "Icon.png"))
+    thumbnail = os.path.join(project, ".strata", "Thumbnail.png")
+    picture = os.path.join(project, "Picture.png")
+    taken = [os.path.join(project, "Screenshots", "Shot%d.png" % (index + 1)) for index in range(SHOT_COUNT)] + [os.path.join(project, "Assets", "Icon.png")]
+
+    def stamp(thumbnail_time, picture_time):
+        for path in taken:
+            os.utime(path, (picture_time, picture_time))
+        os.utime(thumbnail, (thumbnail_time, thumbnail_time))
+
+    def refused(what):
+        if not copy_picture(project):
+            failures.append("picture copies %s" % what)
+        elif os.path.exists(picture):
+            failures.append("picture refuses %s, but writes Picture.png" % what)
+
+    refused("a thumbnail that does not exist")
+    shutil.copyfile(os.path.join(sample, "Screenshots", "Shot2.png"), thumbnail)
+    stamp(2000000000, 2000000000)
+    refused("a thumbnail of another size")
+    shutil.copyfile(os.path.join(sample, "Picture.png"), thumbnail)
+    stamp(2000000000, 2000000010)
+    refused("a thumbnail older than the screenshots")
+    image = lookdev.read_png(os.path.join(sample, "Picture.png"))
+    stride = image.width * image.channels
+    rows = [image.data[y * stride:(y + 1) * stride] for y in range(image.height)]
+    image.data[:] = b"".join(reversed(rows))  # Upside down: the sky's codes where the ground's were
+    lookdev.write_png(thumbnail, image)
+    stamp(2000000010, 2000000000)
+    refused("a thumbnail of another view")
+    shutil.copyfile(os.path.join(sample, "Picture.png"), thumbnail)
+    stamp(2000000000, 2000000000)
+    problems = copy_picture(project)
+    if problems:
+        failures.append("picture refuses the thumbnail the script left: %s" % "; ".join(problems))
+    else:
+        with open(picture, "rb") as copied, open(thumbnail, "rb") as source:
+            if copied.read() != source.read():
+                failures.append("picture's Picture.png differs from the thumbnail")
+    return failures
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Checking captured shots (LookDev's output)
 
 def read_capture(directory, name):
-    tools = os.path.dirname(os.path.abspath(__file__))
-    if tools not in sys.path:
-        sys.path.insert(0, tools)
-    import LookDev  # Its PNG reader (8-bit RGB and RGBA, all five filters)
     path = os.path.join(directory, "shots", name)
     if not os.path.isfile(path):
         return None
-    return LookDev.read_png(path)
+    return lookdev_module().read_png(path)
 
 
 def luma(image, x, y):
@@ -2303,9 +2882,40 @@ def command_selftest(arguments):
               % (shot["shot"], off, angle, "on the surface" if inside else "OFF the surface"))
         if off > 0.01 or angle > 0.1 or not inside:
             failures.append("shot %d's mirror relation" % shot["shot"])
+    behind = dusk_sun_reach(world, DUSK_AZIMUTH_BEHIND_BUS)[0]
+    print("rule 7 at azimuth %g: the dusk sun stands %.2f degrees beside the bus from %s" % (DUSK_AZIMUTH_BEHIND_BUS, behind[0], behind[1]))
+    if behind[0] >= DUSK_SUN_BESIDE:
+        failures.append("rule 7 passes the dusk sun behind the bus")
     station_failures = check_station_rows(arguments.stations)
     print("Stations.h: %s" % ("; ".join(station_failures) if station_failures else "its c_Stations rows equal the generator's"))
     failures += station_failures
+    shots_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "LookDev", "Shots.json")
+    bake_failures = check_bake()
+    mutations = bake_mutations()
+    for what, steps in mutations:
+        if not check_bake(steps):
+            bake_failures.append("the check of the bake script passes %s" % what)
+    print("bake script: %s" % ("; ".join(bake_failures) if bake_failures else
+                               "each station's probes baked %d times where the table bakes them, %s last; %d wrong scripts caught"
+                               % (BAKE_PASSES, SAVED_STATION, len(mutations))))
+    failures += bake_failures
+    picture_failures = check_pictures(world, shots_file)
+    mutations = picture_mutations(world)
+    for what, steps in mutations:
+        if not check_pictures(world, shots_file, steps):
+            picture_failures.append("the check of the pictures script passes %s" % what)
+    print("pictures script: %s" % ("; ".join(picture_failures) if picture_failures else
+                                   "each picture taken complete at its station from its LookDev shot's camera; %d wrong scripts caught" % len(mutations)))
+    failures += picture_failures
+    copy_failures = check_station_copies(world, arguments.render_commands, shots_file)
+    print("stations' steps: %s" % ("; ".join(copy_failures) if copy_failures else
+                                   "%s and %s hold them as setup writes them" % (os.path.basename(arguments.render_commands), os.path.basename(shots_file))))
+    failures += copy_failures
+    sample_failures = check_picture(os.path.join(arguments.sample, "Picture.png"), os.path.join(arguments.sample, "Screenshots", "Shot2.png"))
+    # picture is tried on the sample's own pictures, so only once they belong together.
+    sample_failures += [] if sample_failures else check_copy_picture(arguments.sample, arguments.work)
+    print("Picture.png: %s" % ("; ".join(sample_failures) if sample_failures else "shows what Screenshots/Shot2.png shows; picture copies only such a thumbnail"))
+    failures += sample_failures
     print("FAIL: %s" % "; ".join(failures) if failures else "PASS")
     return 1 if failures else 0
 
@@ -2417,6 +3027,20 @@ def command_bake(arguments):
     return 0
 
 
+def command_pictures(arguments):
+    write_steps(pictures_script(World()), arguments.output)
+    return 0
+
+
+def command_picture(arguments):
+    failures = copy_picture(arguments.project)
+    if failures:
+        print("FAIL: %s; nothing copied" % "; ".join(failures))
+        return 1
+    print("%s: the project's thumbnail" % os.path.join(arguments.project, "Picture.png"))
+    return 0
+
+
 def command_setup(arguments):
     steps = station_steps(arguments.station, arguments.format == "script")
     if arguments.output:
@@ -2447,6 +3071,8 @@ def main():
     selftest.add_argument("--committed", required=True, help="The committed models' directory")
     selftest.add_argument("--work", required=True, help="A directory to write into")
     selftest.add_argument("--stations", required=True, help="The scripts' Stations.h, whose c_Stations rows must equal the table")
+    selftest.add_argument("--sample", required=True, help="The sample's directory, whose Picture.png must show what its Screenshots/Shot2.png shows")
+    selftest.add_argument("--render-commands", required=True, help="The render test's command script, whose stations' steps must be setup's")
     layout_parser = commands.add_parser("layout", help="Write the command script that builds the scene's entities")
     layout_parser.add_argument("--output", required=True, help="The command script to write (.json)")
     controls = commands.add_parser("controls", help="Write the command script of the input actions, the photo mode and the loading scene")
@@ -2455,6 +3081,10 @@ def main():
     dress.add_argument("--output", required=True, help="The command script to write (.json)")
     bake = commands.add_parser("bake", help="Write the command script that bakes the six probes")
     bake.add_argument("--output", required=True, help="The command script to write (.json)")
+    pictures = commands.add_parser("pictures", help="Write the command script that retakes the screenshots, the icon and the thumbnail")
+    pictures.add_argument("--output", required=True, help="The command script to write (.json)")
+    picture = commands.add_parser("picture", help="Copy the project's thumbnail to its Picture.png, once it is the one the pictures script left")
+    picture.add_argument("--project", required=True, help="The sample's directory (holding .strata/Thumbnail.png)")
     setup = commands.add_parser("setup", help="Print a station's edit-mode steps")
     setup.add_argument("--station", required=True, choices=[row[0] for row in STATIONS])
     setup.add_argument("--format", required=True, choices=("lookdev", "script"), help="LookDev Setup entries or command steps")
@@ -2466,7 +3096,7 @@ def main():
     try:
         return {"terrain": command_terrain, "check": command_check, "stations": command_stations,
                 "selftest": command_selftest, "layout": command_layout, "controls": command_controls, "dress": command_dress,
-                "bake": command_bake, "setup": command_setup,
+                "bake": command_bake, "pictures": command_pictures, "picture": command_picture, "setup": command_setup,
                 "checkshots": command_checkshots}[arguments.command](arguments)
     except CheckFailed as error:
         print("FAIL: %s" % error)

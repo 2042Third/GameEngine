@@ -85,9 +85,14 @@ namespace
 		return glm::unpackHalf1x16(value);
 	}
 
+	// Frames 1/30 s apart, whatever the machine's clock says: a shadow's fade then takes its c_LocalShadowFadeFrames frames.
 	ReadbackImage RenderHDR(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera)
 	{
-		REQUIRE(renderer.Render(scene, camera));
+		constexpr float c_FrameSeconds = 1.0f / 30.0f;
+		static_assert(c_FrameSeconds >= SceneRenderer::c_LocalShadowFadeSeconds / static_cast<float>(SceneRenderer::c_LocalShadowFadeFrames));
+		SceneRenderOptions options;
+		options.AdaptationSeconds = c_FrameSeconds;
+		REQUIRE(renderer.Render(scene, camera, nullptr, options));
 		ReadbackImage image;
 		REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
 		REQUIRE(image.Format == nvrhi::Format::RGBA16_FLOAT);
@@ -303,6 +308,76 @@ TEST_SUITE("GPU.SceneRenderer.LocalShadows")
 			CHECK(renderer.GetStats().LocalShadowViewsDrawn == 6);
 			REQUIRE(renderer.Render(scene, camera));
 			CHECK(renderer.GetStats().LocalShadowViewsDrawn == 0);
+			gpu.GetDevice().WaitForIdle();
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A caster's change redraws the views it reaches where its lamp moved to, and beside a caster destroyed in the same frame")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			CAPTURE(static_cast<int>(mode));
+			TwoLampScene twoLamps;
+			Scene& scene = twoLamps.SceneData;
+			// Cubes below and above lamp A (each in one face, like the cube beside it), and one on the ground lamp B moves to.
+			Entity below = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(-10.0f, 1.0f, 0.0f), "Below");
+			below.GetComponent<TransformComponent>().Scale = glm::vec3(0.5f);
+			Entity above = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(-10.0f, 5.0f, 0.0f), "Above");
+			above.GetComponent<TransformComponent>().Scale = glm::vec3(0.5f);
+			Entity distant = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(26.0f, 1.0f, 0.0f), "Distant");
+			distant.GetComponent<TransformComponent>().Scale = glm::vec3(0.5f);
+			SceneRenderer renderer(LocalShadowSpecification(mode));
+			renderer.SetViewportSize(c_Size, c_Size);
+			// Both lamps are in view wherever lamp B stands.
+			const SceneCamera camera = LookAt(glm::vec3(8.0f, 40.0f, 30.0f), glm::vec3(8.0f, 0.0f, 0.0f));
+			const auto settle = [&]()
+			{
+				for (uint32_t frame = 0; frame < 16; frame++)
+				{
+					REQUIRE(renderer.Render(scene, camera));
+					if (renderer.GetStats().LocalShadowViewsDrawn == 0 && renderer.GetStats().LocalShadowViewsPending == 0)
+						return true;
+				}
+				return false;
+			};
+			REQUIRE(renderer.Render(scene, camera));
+			CHECK(renderer.GetStats().LocalShadowLights == 2);
+			REQUIRE(settle());
+
+			// A change while the lamps stand where their views were drawn: what finds a change's lamps is made for these places.
+			Move(twoLamps.CubeA, glm::vec3(-8.0f, 3.0f, 0.05f));
+			REQUIRE(renderer.Render(scene, camera));
+			CHECK(renderer.GetStats().LocalShadowViewsDrawn == 1);
+			REQUIRE(settle());
+
+			// Lamp B moves more than two ranges away, which changes no proxy. The cube below its new place then moves: the view
+			// below lamp B is drawn, which a search among the lamps' old places would miss.
+			Move(twoLamps.LampB, glm::vec3(26.0f, 3.0f, 0.0f));
+			REQUIRE(renderer.Render(scene, camera));
+			CHECK(renderer.GetStats().LocalShadowViewsDrawn >= 6);
+			REQUIRE(settle());
+			Move(distant, glm::vec3(26.0f, 1.0f, 0.05f));
+			REQUIRE(renderer.Render(scene, camera));
+			CHECK(renderer.GetStats().LocalShadowViewsDrawn == 1);
+			REQUIRE(settle());
+
+			// In one frame a caster is destroyed and a neighbour in another face of the lamp moves, then two neighbours are
+			// destroyed: both faces are drawn each time, whichever change is seen first (a destroyed proxy has no bounds to
+			// look lamps up with, and the lamps found for the change before it are not the next change's).
+			scene.DestroyEntity(below);
+			Move(twoLamps.CubeA, glm::vec3(-8.0f, 3.0f, 0.1f));
+			REQUIRE(renderer.Render(scene, camera));
+			CHECK(renderer.GetStats().LocalShadowViewsDrawn == 2);
+			REQUIRE(settle());
+			scene.DestroyEntity(above);
+			scene.DestroyEntity(twoLamps.CubeA);
+			REQUIRE(renderer.Render(scene, camera));
+			CHECK(renderer.GetStats().LocalShadowViewsDrawn == 2);
+			REQUIRE(settle());
 			gpu.GetDevice().WaitForIdle();
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -757,7 +832,7 @@ TEST_SUITE("GPU.SceneRenderer.LocalShadows")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("With more proxies in the lights' ranges than it follows, a caster that leaves a view still redraws it")
+	TEST_CASE("With more proxies in the lights' ranges than it follows, a caster that leaves a view still redraws it; more shadowed lights follow more")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -768,7 +843,8 @@ TEST_SUITE("GPU.SceneRenderer.LocalShadows")
 		AddShadowedPointLight(scene, glm::vec3(0.0f, 3.0f, 0.0f), 20.0f, 40.0f);
 		Entity caster = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(1.5f, 3.0f, 0.0f), "Caster");
 		caster.GetComponent<TransformComponent>().Scale = glm::vec3(0.4f);
-		// More than the 65,536 proxies the renderer follows, within the lamp's range, behind the camera and casting no shadows.
+		// More than the 65,536 proxies the renderer follows at Medium (4,096 per shadowed light), within the lamp's range, behind
+		// the camera and casting no shadows, and one far from the lamp.
 		constexpr uint32_t c_Side = 260;
 		for (uint32_t index = 0; index < c_Side * c_Side; index++)
 		{
@@ -777,17 +853,38 @@ TEST_SUITE("GPU.SceneRenderer.LocalShadows")
 			grain.GetComponent<TransformComponent>().Scale = glm::vec3(0.01f);
 			grain.GetComponent<MeshRendererComponent>().CastShadows = false;
 		}
+		Entity distant = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(200.0f, 0.5f, 0.0f), "Distant");
 		const SceneCamera camera = LookAt(glm::vec3(0.0f, 8.0f, 8.0f), glm::vec3(0.0f));
 		SceneRenderer renderer(AtOnceSpecification(GPUDrivenMode::Off));
 		renderer.SetViewportSize(c_Size, c_Size);
-		REQUIRE(renderer.Render(scene, camera));
-		CHECK(renderer.GetStats().LocalShadowViewsDrawn == 6);
-		REQUIRE(renderer.Render(scene, camera));
-		CHECK(renderer.GetStats().LocalShadowViewsDrawn == 0);
+		// At 256 shadowed lights (Ultra), it follows 1,048,576.
+		SceneRendererSpecification manySpecification = AtOnceSpecification(GPUDrivenMode::Off);
+		manySpecification.Quality.MaxShadowedLocalLights = 256;
+		SceneRenderer following(manySpecification);
+		following.SetViewportSize(c_Size, c_Size);
+		for (SceneRenderer* drawn : { &renderer, &following })
+		{
+			REQUIRE(drawn->Render(scene, camera));
+			CHECK(drawn->GetStats().LocalShadowViewsDrawn == 6);
+			REQUIRE(drawn->Render(scene, camera));
+			CHECK(drawn->GetStats().LocalShadowViewsDrawn == 0);
+		}
 		// The caster leaves the lamp's range: the view that showed it is drawn again.
 		Move(caster, glm::vec3(100.0f, 3.0f, 0.0f));
+		for (SceneRenderer* drawn : { &renderer, &following })
+		{
+			REQUIRE(drawn->Render(scene, camera));
+			CHECK(drawn->GetStats().LocalShadowViewsDrawn > 0);
+			REQUIRE(drawn->Render(scene, camera));
+			CHECK(drawn->GetStats().LocalShadowViewsDrawn == 0);
+		}
+		// A proxy far from the lamp moves: the renderer that could not follow every proxy within the lamp's range cannot tell
+		// that it reached no view and draws them all again; the one that follows them draws none.
+		Move(distant, glm::vec3(201.0f, 0.5f, 0.0f));
 		REQUIRE(renderer.Render(scene, camera));
-		CHECK(renderer.GetStats().LocalShadowViewsDrawn > 0);
+		CHECK(renderer.GetStats().LocalShadowViewsDrawn == 6);
+		REQUIRE(following.Render(scene, camera));
+		CHECK(following.GetStats().LocalShadowViewsDrawn == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

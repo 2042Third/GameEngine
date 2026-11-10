@@ -539,8 +539,10 @@ pace: neither is the limit) or `"unknown"` (no GPU times: `--no-gpu`, or a drive
 (`gameRenderStats` for the Game view's frame, null while it is hidden; and every `viewport.capture` result's, for the
 captured frame) says what a frame drew: `quality` (the Graphics Quality it drew with, as `project.setSettings` takes
 it), `shadowMapSize` (the sun's cascades' texels), `cascades` (each sun cascade's slice `near`/`far` in meters of view
-distance and `texelSize` in meters; stable cascades, which depend on the view alone), `localShadowTileSizes` (each
-shadowed point and spot light's tile),
+distance and `texelSize` in meters; stable cascades, which depend on the view alone), `localShadowTileSizes` (the
+first 64 shadowed point and spot lights' tiles by rank) and `localShadowTileSizeCounts` (how many have each size), with
+`localShadowRequested`, `localShadowLights` and `localShadowFading` (shadowed lights in view, given a shadow, fading one
+out),
 `exposure` (automatic exposure's metered `ev100`, its key's `keyStops` and the sun's gray card `cardEv100`; null with
 manual exposure), `motionBlur` (`samples`, `tileSize` on frames that blurred; editor views and captures never blur, only
 the Game view while the game plays), `depthOfField` (`focusDistance`, `focalLength`, `fNumber`, `infinityBlurPixels` of

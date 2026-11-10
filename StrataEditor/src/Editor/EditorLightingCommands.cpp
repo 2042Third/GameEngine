@@ -870,8 +870,8 @@ namespace Strata
 	void RegisterLightingCommands(EditorCommandRegistry& registry)
 	{
 		registry.Register(MayDefer({ "lighting.bakeProbes",
-			"Bakes reflection probes: renders what each one sees from its position (the edited scene as it is: lights, sky, fog and the "
-			"other probes' current captures, so baking twice adds a second bounce) into a new equirectangular HDR texture, "
+			"Bakes reflection probes: renders what each one sees from where it stands now (the edited scene as it is: lights, sky, fog and "
+			"the probes' current captures, its own included, so every further bake adds a bounce) into a new equirectangular HDR texture, "
 			"Assets/Lighting/<scene>/<probe id>.hdr (' (n)' added when the name is taken), and sets the probe's Capture to it. The capture "
 			"an earlier bake made for the probe goes to the trash once nothing else uses it (the open scene as it is in memory, even while its "
 			"saved file still names it); any other texture Capture named stays. One undo "
@@ -936,7 +936,9 @@ namespace Strata
 					BakeProbe probe;
 					probe.Entity = entity.GetUUID();
 					probe.Name = entity.GetName();
-					probe.Position = glm::vec3(entity.GetComponent<WorldTransformComponent>().Matrix[3]);
+					// Where the probe stands now: the cached matrix follows only with the frame's update, and a command
+					// of this frame may have moved the probe (a script that moves it and bakes it baked the old place).
+					probe.Position = glm::vec3(scene->GetWorldTransform(entity)[3]);
 					state->Probes.push_back(std::move(probe));
 				}
 				state->Renderer = CreateScope<SceneRenderer>(SceneRendererSpecification::ForBake());

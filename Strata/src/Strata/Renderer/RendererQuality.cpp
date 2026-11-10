@@ -40,7 +40,10 @@ namespace Strata
 		constexpr PresetRow<uint32_t> c_ShadowCascadesRow = { 3, 4, 5, 5 };
 		constexpr PresetRow<uint32_t> c_LocalShadowAtlasSizeRow = { 2048, 4096, 4096, 8192 };
 		constexpr PresetRow<uint32_t> c_LocalShadowMaxTileRow = { 512, 1024, 1024, 2048 };
-		constexpr PresetRow<uint32_t> c_MaxShadowedLocalLightsRow = { 4, 16, 16, 16 };
+		// High and Ultra shadow more point and spot lights at the same atlas sizes, and draw more of their views a frame so that
+		// they settle as fast.
+		constexpr PresetRow<uint32_t> c_MaxShadowedLocalLightsRow = { 4, 16, 64, 256 };
+		constexpr PresetRow<uint32_t> c_LocalShadowViewsPerFrameRow = { 12, 12, 24, 48 };
 		constexpr PresetRow<float> c_LODErrorPixelsRow = { 2.0f, 1.0f, 1.0f, 0.5f };
 		constexpr PresetRow<float> c_MinProjectedPixelsRow = { 1.0f, 0.5f, 0.5f, 0.25f };
 		constexpr PresetRow<uint32_t> c_ShadowFilterQualityRow = { 8, 16, 24, 32 };
@@ -159,7 +162,8 @@ namespace Strata
 			{ "ShadowCascades", true, "GPU.Shadows", nullptr }, // Counted with ShadowResolution
 			{ "LocalShadowAtlasSize", true, "GPU.Shadows", &LocalShadowAtlasBytes },
 			{ "LocalShadowMaxTile", true, "GPU.Shadows", nullptr },
-			{ "MaxShadowedLocalLights", true, "GPU.Shadows", nullptr },
+			{ "MaxShadowedLocalLights", true, "GPU.Shadows", nullptr }, // The atlas's tiles, counted with LocalShadowAtlasSize; sampled in GPU.Opaque
+			{ "LocalShadowViewsPerFrame", true, "GPU.Shadows", nullptr },
 			{ "LODErrorPixels", true, "GPU.Opaque", nullptr },
 			{ "MinProjectedPixels", true, "GPU.Opaque", nullptr },
 			{ "ShadowFilterQuality", true, "GPU.ScreenShadows", nullptr }, // The filter runs in the mask's pass; taps allocate nothing
@@ -181,6 +185,7 @@ namespace Strata
 		constexpr uint32_t c_MinLocalShadowAtlasSize = 512;
 		constexpr uint32_t c_MaxLocalShadowAtlasSize = 8192;
 		constexpr uint32_t c_MinLocalShadowTile = 128;
+		constexpr uint32_t c_MaxLocalShadowViewsPerFrame = 1024;
 		constexpr float c_MaxPixels = 8.0f;
 		// Contact shadows march no steps (off) or 4 to 32 (RendererQualitySettings::ContactShadows): fewer reach too little.
 		constexpr uint32_t c_MinContactShadowSteps = 4;
@@ -454,6 +459,7 @@ namespace Strata
 					settings.LocalShadowAtlasSize = c_LocalShadowAtlasSizeRow[index];
 					settings.LocalShadowMaxTile = c_LocalShadowMaxTileRow[index];
 					settings.MaxShadowedLocalLights = c_MaxShadowedLocalLightsRow[index];
+					settings.LocalShadowViewsPerFrame = c_LocalShadowViewsPerFrameRow[index];
 					settings.LODErrorPixels = c_LODErrorPixelsRow[index];
 					settings.MinProjectedPixels = c_MinProjectedPixelsRow[index];
 					settings.ShadowFilterQuality = c_ShadowFilterQualityRow[index];
@@ -487,6 +493,7 @@ namespace Strata
 			clamped.LocalShadowAtlasSize = FloorPowerOfTwo(std::clamp(clamped.LocalShadowAtlasSize, c_MinLocalShadowAtlasSize, c_MaxLocalShadowAtlasSize));
 			clamped.LocalShadowMaxTile = FloorPowerOfTwo(std::clamp(clamped.LocalShadowMaxTile, c_MinLocalShadowTile, clamped.LocalShadowAtlasSize));
 			clamped.MaxShadowedLocalLights = std::min(clamped.MaxShadowedLocalLights, RenderData::c_MaxShadowedLocalLights);
+			clamped.LocalShadowViewsPerFrame = std::clamp(clamped.LocalShadowViewsPerFrame, 1u, c_MaxLocalShadowViewsPerFrame);
 			clamped.LODErrorPixels = ClampPixels(clamped.LODErrorPixels, medium.LODErrorPixels);
 			clamped.MinProjectedPixels = ClampPixels(clamped.MinProjectedPixels, medium.MinProjectedPixels);
 			// The next option at or above the value, at most the largest.
@@ -745,8 +752,13 @@ namespace Strata
 				"spot light's shadow gets (at most the atlas): tiles follow how large the light looks on screen, and larger ones are sharper.",
 				SizeOptions(c_MaxTileOptions), std::to_string(high.LocalShadowMaxTile)));
 			section.Fields.push_back(NumberField("MaxShadowedLocalLights", "Shadowed point and spot lights", "Point and spot lights that cast "
-				"shadows in a view, the most relevant first: more cost more GPU time.", SettingsFieldType::Int, 0, RenderData::c_MaxShadowedLocalLights,
-				high.MaxShadowedLocalLights));
+				"shadows in a view, those that matter most first (nearer, larger on screen, brighter); the others light without shadows. "
+				"More cost more GPU time; the atlas holds at most about 37, 149 and 597 point lights at 2048, 4096 and 8192 texels.",
+				SettingsFieldType::Int, 0, RenderData::c_MaxShadowedLocalLights, high.MaxShadowedLocalLights));
+			section.Fields.push_back(NumberField("LocalShadowViewsPerFrame", "Point and spot shadow updates per frame", "Shadow views of point "
+				"and spot lights drawn again per frame when lights or what they shine on move (a point light has six, a spot light one): more "
+				"keep many moving lights' shadows current and fill a new view's shadows sooner, for more GPU time in such frames.",
+				SettingsFieldType::Int, 1, c_MaxLocalShadowViewsPerFrame, high.LocalShadowViewsPerFrame));
 			section.Fields.push_back(NumberField("LODErrorPixels", "Level of detail error (pixels)", "Levels of detail are chosen so that their "
 				"error spans at most this many pixels on screen: lower draws more triangles (0: full detail).", SettingsFieldType::Float, 0.0,
 				c_MaxPixels, high.LODErrorPixels));
@@ -825,6 +837,7 @@ namespace Strata
 				ReadField(*value, "LocalShadowAtlasSize", settings.LocalShadowAtlasSize);
 				ReadField(*value, "LocalShadowMaxTile", settings.LocalShadowMaxTile);
 				ReadField(*value, "MaxShadowedLocalLights", settings.MaxShadowedLocalLights);
+				ReadField(*value, "LocalShadowViewsPerFrame", settings.LocalShadowViewsPerFrame);
 				ReadField(*value, "LODErrorPixels", settings.LODErrorPixels);
 				ReadField(*value, "MinProjectedPixels", settings.MinProjectedPixels);
 				ReadField(*value, "ShadowFilterQuality", settings.ShadowFilterQuality);
@@ -857,6 +870,7 @@ namespace Strata
 				{ "LocalShadowAtlasSize", std::to_string(settings.LocalShadowAtlasSize) },
 				{ "LocalShadowMaxTile", std::to_string(settings.LocalShadowMaxTile) },
 				{ "MaxShadowedLocalLights", settings.MaxShadowedLocalLights },
+				{ "LocalShadowViewsPerFrame", settings.LocalShadowViewsPerFrame },
 				{ "LODErrorPixels", settings.LODErrorPixels },
 				{ "MinProjectedPixels", settings.MinProjectedPixels },
 				{ "ShadowFilterQuality", std::to_string(settings.ShadowFilterQuality) },

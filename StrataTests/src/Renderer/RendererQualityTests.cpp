@@ -33,7 +33,8 @@ namespace
 	constexpr std::array<uint32_t, 4> c_ShadowCascades = { 3, 4, 5, 5 };
 	constexpr std::array<uint32_t, 4> c_LocalShadowAtlasSize = { 2048, 4096, 4096, 8192 };
 	constexpr std::array<uint32_t, 4> c_LocalShadowMaxTile = { 512, 1024, 1024, 2048 };
-	constexpr std::array<uint32_t, 4> c_MaxShadowedLocalLights = { 4, 16, 16, 16 };
+	constexpr std::array<uint32_t, 4> c_MaxShadowedLocalLights = { 4, 16, 64, 256 };
+	constexpr std::array<uint32_t, 4> c_LocalShadowViewsPerFrame = { 12, 12, 24, 48 };
 	constexpr std::array<float, 4> c_LODErrorPixels = { 2.0f, 1.0f, 1.0f, 0.5f };
 	constexpr std::array<float, 4> c_MinProjectedPixels = { 1.0f, 0.5f, 0.5f, 0.25f };
 	constexpr std::array<uint32_t, 4> c_ShadowFilterQuality = { 8, 16, 24, 32 };
@@ -55,6 +56,7 @@ namespace
 		CHECK(settings.LocalShadowAtlasSize == c_LocalShadowAtlasSize[column]);
 		CHECK(settings.LocalShadowMaxTile == c_LocalShadowMaxTile[column]);
 		CHECK(settings.MaxShadowedLocalLights == c_MaxShadowedLocalLights[column]);
+		CHECK(settings.LocalShadowViewsPerFrame == c_LocalShadowViewsPerFrame[column]);
 		CHECK(settings.LODErrorPixels == c_LODErrorPixels[column]);
 		CHECK(settings.MinProjectedPixels == c_MinProjectedPixels[column]);
 		CHECK(settings.ShadowFilterQuality == c_ShadowFilterQuality[column]);
@@ -272,6 +274,12 @@ TEST_SUITE("Renderer.Quality")
 			CHECK(resolved.GlobalIllumination == GlobalIlluminationLevel::High);
 			CHECK(medium.GlobalIllumination == GlobalIlluminationLevel::Off);
 			resolved.GlobalIllumination = medium.GlobalIllumination;
+			// High shadows 64 point and spot lights where Medium shadows 16, and draws 24 of their views a frame where Medium draws
+			// 12: costs of scenes with many shadowed lights, at every size.
+			CHECK(resolved.MaxShadowedLocalLights == 64);
+			CHECK(resolved.LocalShadowViewsPerFrame == 24);
+			resolved.MaxShadowedLocalLights = medium.MaxShadowedLocalLights;
+			resolved.LocalShadowViewsPerFrame = medium.LocalShadowViewsPerFrame;
 			CHECK(resolved.HasSameKnobs(medium));
 		}
 		CHECK(RendererQuality::ResolveShadowMapSize(high.ShadowResolution, 1440) == 8192);
@@ -513,7 +521,8 @@ TEST_SUITE("Renderer.Quality")
 		wild.ShadowCascades = 0;
 		wild.LocalShadowAtlasSize = 100'000;
 		wild.LocalShadowMaxTile = 3'000;
-		wild.MaxShadowedLocalLights = 1'000;
+		wild.MaxShadowedLocalLights = 100'000;
+		wild.LocalShadowViewsPerFrame = 0;
 		wild.LODErrorPixels = std::numeric_limits<float>::quiet_NaN();
 		wild.MinProjectedPixels = -1.0f;
 		wild.GlobalIllumination = static_cast<GlobalIlluminationLevel>(7);
@@ -523,6 +532,7 @@ TEST_SUITE("Renderer.Quality")
 		CHECK(clamped.LocalShadowAtlasSize == 8192);
 		CHECK(clamped.LocalShadowMaxTile == 2048);
 		CHECK(clamped.MaxShadowedLocalLights == RenderData::c_MaxShadowedLocalLights);
+		CHECK(clamped.LocalShadowViewsPerFrame == 1);
 		CHECK(clamped.LODErrorPixels == 1.0f);
 		CHECK(clamped.MinProjectedPixels == 0.5f);
 

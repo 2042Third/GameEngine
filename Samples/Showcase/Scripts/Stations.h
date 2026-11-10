@@ -39,7 +39,7 @@ namespace Showcase
 	constexpr std::array<StationValues, 3> c_Stations = { {
 		{ 6.5f, 5.0f, 5.0f, 140.0f, 1.0f, 0.006f, 0.0f, 600.0f, false },
 		{ 17.75f, 6.0f, 6.0f, 45.0f, 1.0f, 0.0006f, -0.7f, 200.0f, false },
-		{ 19.0f, 1.0f, 2.0f, 32.0f, 0.002f, 0.0015f, -2.5f, 150.0f, true },
+		{ 19.0f, 1.0f, 2.0f, 16.0f, 0.002f, 0.0015f, -2.5f, 150.0f, true },
 	} };
 
 	constexpr const char* c_StationNames[] = { "Dawn", "Golden", "Dusk" };

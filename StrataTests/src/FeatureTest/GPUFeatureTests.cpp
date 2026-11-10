@@ -56,6 +56,7 @@ TEST_SUITE("GPU.FeatureTest")
 		CHECK(quality.LocalShadowAtlasSize == 2048);
 		CHECK(quality.LocalShadowMaxTile == 512);
 		CHECK(quality.MaxShadowedLocalLights == 8);
+		CHECK(quality.LocalShadowViewsPerFrame == 20);
 		CHECK(quality.LODErrorPixels == 1.5f);
 		CHECK(quality.MinProjectedPixels == 0.75f);
 		CHECK(quality.AmbientOcclusionQuality == AmbientOcclusionLevel::Low);

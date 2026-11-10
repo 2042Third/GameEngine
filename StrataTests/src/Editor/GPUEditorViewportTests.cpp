@@ -46,6 +46,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -1436,6 +1437,173 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A capture and the picture a save asks for render one after the other, and both settle their history")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		EditorContext& context = harness.Context;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("CaptureAfterSave") / "Game";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		// One editor frame, as the application runs it: the context's update, in which the project's picture renders, then
+		// the runner's, in which the capture does. `betweenUpdates` runs between the two.
+		const auto runFrame = [&](const std::function<void()>& betweenUpdates = nullptr)
+		{
+			REQUIRE(gpu.GetDevice().BeginFrame());
+			Renderer::BeginFrame();
+			context.Update(Timestep(1.0f / 60.0f));
+			if (betweenUpdates)
+				betweenUpdates();
+			harness.Runner.Update(context);
+			gpu.GetDevice().EndFrame();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		};
+		// The new project's own picture first.
+		for (int frame = 0; frame < 3000 && context.GetProjectThumbnail().IsPending(); frame++)
+			runFrame();
+		REQUIRE_FALSE(context.GetProjectThumbnail().IsPending());
+
+		Scene& scene = *context.GetActiveScene();
+		Entity postProcessEntity = scene.FindEntityByName("Post Process");
+		if (!postProcessEntity)
+		{
+			postProcessEntity = scene.CreateEntity("Post Process");
+			postProcessEntity.AddComponent<PostProcessComponent>();
+		}
+		PostProcessComponent& postProcess = postProcessEntity.GetComponent<PostProcessComponent>();
+		postProcess.AntiAliasing = true;
+		postProcess.AntiAliasingMethod = AntiAliasingMode::TAA;
+		Tests::AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f), "Cube");
+		harness.Run("camera.set", { { "position", { 0.0, 1.0, 4.0 } }, { "target", { 0.0, 0.0, 0.0 } } });
+
+		// Starts a capture (of another size than the picture's 1440x810) and returns where its result arrives.
+		const auto startCapture = [&]()
+		{
+			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+			harness.Runner.Run(context, harness.Commands, "viewport.capture", { { "width", 64 }, { "height", 64 }, { "overlays", false } },
+				[completed](const EditorCommandResult& result) { *completed = result; });
+			return completed;
+		};
+		// Runs frames until the capture completed: the picture and the capture each hold a settled history when read back.
+		const auto finishBoth = [&](const std::shared_ptr<std::optional<EditorCommandResult>>& completed)
+		{
+			const uint64_t written = context.GetProjectThumbnail().GetWrittenCount();
+			uint32_t pictureHistory = 0; // The frames the picture's history held when it was read back
+			for (int frame = 0; frame < 20000 && !*completed; frame++)
+			{
+				const bool rendering = context.GetProjectThumbnail().IsRendering();
+				runFrame([&]()
+				{
+					if (!rendering || context.GetProjectThumbnail().IsRendering())
+						return;
+					// The picture's last frame was rendered in this update, and the capture has not rendered since.
+					ViewportRenderer* captureRenderer = context.GetViewport().GetCaptureRenderer();
+					REQUIRE(captureRenderer);
+					CHECK(captureRenderer->GetStats().TemporalAntiAliasing);
+					pictureHistory = captureRenderer->GetStats().TemporalFrames;
+				});
+			}
+			REQUIRE(*completed);
+			INFO((*completed)->Error);
+			REQUIRE((*completed)->Success);
+			CHECK(pictureHistory == c_TemporalSettleFrames);
+			CHECK((*completed)->Value["temporalFrames"] == c_TemporalSettleFrames);
+			for (int frame = 0; frame < 3000 && context.GetProjectThumbnail().IsPending(); frame++)
+				runFrame();
+			REQUIRE_FALSE(context.GetProjectThumbnail().IsPending());
+			CHECK(context.GetProjectThumbnail().GetWrittenCount() == written + 1);
+		};
+
+		// The save asks for the project's picture, which renders through the capture renderer on the next frames. Rendering in
+		// the same frames, each would start the other's history again every frame, and both would be read back with a frame or
+		// two of it: the capture asked for now renders after the picture.
+		harness.Run("scene.saveAs", { { "path", "Scenes/Main.stscene" } });
+		REQUIRE(context.GetProjectThumbnail().IsRendering());
+		finishBoth(startCapture());
+
+		// The other order: a save while a capture renders. The capture lets the picture render, then goes on.
+		const std::shared_ptr<std::optional<EditorCommandResult>> interrupted = startCapture();
+		for (int frame = 0; frame < 3; frame++)
+			runFrame();
+		REQUIRE_FALSE(*interrupted); // Its history needs eight frames
+		harness.Run("entity.create", { { "name", "Marker" } });
+		harness.Run("scene.save");
+		REQUIRE(context.GetProjectThumbnail().IsRendering());
+		finishBoth(interrupted);
+		CHECK(FileSystem::Exists(ProjectThumbnail::GetFile(directory)));
+
+		// A capture the picture interrupts starts over after it. The picture rendered its own view, settled the pre-exposure for
+		// it and released the targets; without temporal anti-aliasing nothing else would hold the capture back, so going on
+		// with its old progress it would be read back at once, with the picture's pre-exposure reported as its own and its
+		// waits counted from before the picture. Both views are the scene camera's, over a floor in 100,000 lux of sun: the
+		// picture's pre-exposure (far from 1) fits the capture's too, and only a capture that starts over meters it again.
+		Entity postProcessAgain = scene.FindEntityByName("Post Process");
+		REQUIRE(postProcessAgain);
+		REQUIRE(postProcessAgain.GetComponent<PostProcessComponent>().AutoExposure);
+		postProcessAgain.GetComponent<PostProcessComponent>().AntiAliasing = false;
+		Entity floor = scene.CreateEntity("Floor");
+		floor.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, -0.5f, 0.0f);
+		floor.GetComponent<TransformComponent>().Scale = glm::vec3(60.0f, 1.0f, 60.0f);
+		floor.MarkModified<TransformComponent>();
+		floor.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		floor.MarkModified<MeshRendererComponent>();
+		Entity sun = scene.CreateEntity("Sun");
+		sun.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::normalize(glm::vec3(0.3f, -1.0f, 0.2f)));
+		sun.MarkModified<TransformComponent>();
+		sun.AddComponent<DirectionalLightComponent>().Intensity = 100000.0f;
+		sun.MarkModified<DirectionalLightComponent>();
+		const glm::vec3 eye(0.0f, 6.0f, 8.0f);
+		Entity sceneCamera = scene.CreateEntity("Camera");
+		sceneCamera.GetComponent<TransformComponent>().Translation = eye;
+		sceneCamera.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::normalize(-eye));
+		sceneCamera.MarkModified<TransformComponent>();
+		sceneCamera.AddComponent<CameraComponent>().Primary = true;
+		auto restarted = std::make_shared<std::optional<EditorCommandResult>>();
+		harness.Runner.Run(context, harness.Commands, "viewport.capture", { { "width", 64 }, { "height", 64 }, { "camera", "scene" }, { "overlays", false } },
+			[restarted](const EditorCommandResult& result) { *restarted = result; });
+		runFrame();
+		REQUIRE_FALSE(*restarted);
+		ViewportRenderer* captureRenderer = context.GetViewport().GetCaptureRenderer();
+		REQUIRE(captureRenderer);
+		REQUIRE_FALSE(captureRenderer->GetStats().PreExposureSettled); // Its metering comes back frames later
+		harness.Run("entity.create", { { "name", "Second Marker" } });
+		harness.Run("scene.save");
+		REQUIRE(context.GetProjectThumbnail().IsRendering());
+		bool pictureEnded = false;
+		uint64_t pictureRenders = 0; // The capture renderer's frames once the picture's last one was rendered
+		for (int frame = 0; frame < 3000 && !pictureEnded; frame++)
+		{
+			runFrame([&]()
+			{
+				if (context.GetProjectThumbnail().IsRendering())
+					return;
+				pictureEnded = true;
+				pictureRenders = captureRenderer->GetSceneRenderer().GetRenderCount();
+			});
+		}
+		REQUIRE(pictureEnded);
+		REQUIRE_FALSE(*restarted);
+		// The capture's first frame after the picture started the pre-exposure again.
+		CHECK(captureRenderer->GetSceneRenderer().GetRenderCount() == pictureRenders + 1);
+		CHECK_FALSE(captureRenderer->GetStats().PreExposureSettled);
+		CHECK(captureRenderer->GetStats().PreExposure == 1.0f);
+		for (int frame = 0; frame < 20000 && !*restarted; frame++)
+			runFrame();
+		REQUIRE(*restarted);
+		INFO((*restarted)->Error);
+		REQUIRE((*restarted)->Success);
+		CHECK((*restarted)->Value["preExposureSettled"] == true);
+		// It waited for its own metering, and reports only the frames it waited after the picture.
+		const uint64_t rendersAfterPicture = captureRenderer->GetSceneRenderer().GetRenderCount() - pictureRenders;
+		CHECK(rendersAfterPicture >= 2);
+		CHECK((*restarted)->Value["waitedFrames"].get<uint64_t>() < rendersAfterPicture);
+		for (int frame = 0; frame < 3000 && context.GetProjectThumbnail().IsPending(); frame++)
+			runFrame();
+		REQUIRE_FALSE(context.GetProjectThumbnail().IsPending());
+		gpu.GetDevice().WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A capture of a 100,000 lux scene waits for its pre-exposure to settle")
 	{
 		Tests::GPUContext gpu;
@@ -2405,14 +2573,17 @@ TEST_SUITE("GPU.Editor.Viewport")
 		light.Range = 10.0f;
 		light.CastShadows = true;
 
-		// The Game view at 1280 x 720 until every shadow view is drawn and its fade is done.
+		// The Game view at 1280 x 720 until every shadow view is drawn and its fade, by the clock, is done.
 		EditorContext& context = harness.Context;
 		EditorViewport& viewport = context.GetViewport();
 		const glm::uvec2 size(1280, 720);
 		ViewportRenderer* game = viewport.GetGameRenderer();
 		REQUIRE(game);
+		// The fade goes by the wall clock between the renderer's frames, so the wait is bounded by the clock, not by frames: an
+		// idle machine renders this scene in a fraction of a millisecond, so hundreds of frames can end before the fade does.
 		int settled = 0;
-		for (int frame = 0; frame < 600 && settled < static_cast<int>(SceneRenderer::c_LocalShadowFadeFrames) + 2; frame++)
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		while (settled < 2 && std::chrono::steady_clock::now() < deadline)
 		{
 			REQUIRE(gpu.GetDevice().BeginFrame());
 			Renderer::BeginFrame();
@@ -2422,9 +2593,10 @@ TEST_SUITE("GPU.Editor.Viewport")
 			REQUIRE(game->Render(context, size, *view, viewport.GetSettings(), false, RendererQuality::GetProjectQuality()));
 			gpu.GetDevice().EndFrame();
 			const SceneRendererStats& stats = game->GetStats();
-			settled = stats.LocalShadowLights == 1 && stats.LocalShadowViewsPending == 0 && stats.PendingAssets == 0 ? settled + 1 : 0;
+			settled = stats.LocalShadowLights == 1 && stats.LocalShadowViewsPending == 0 && stats.LocalShadowFadingIn == 0 && stats.PendingAssets == 0
+				? settled + 1 : 0;
 		}
-		REQUIRE(settled > 0);
+		REQUIRE(settled == 2);
 		const SceneRendererStats gameStats = game->GetStats();
 		CHECK(gameStats.LocalShadowTileSizes[0] == 1024);
 		ReadbackImage gameImage;
@@ -2434,6 +2606,10 @@ TEST_SUITE("GPU.Editor.Viewport")
 		const DecodedImage captured = harness.CaptureLoaded({ { "camera", "scene" }, { "width", size.x }, { "height", size.y }, { "overlays", false } }, &result);
 		CHECK(result["renderStats"]["localShadowLights"] == 1);
 		CHECK(result["renderStats"]["localShadowTileSizes"] == nlohmann::json::array({ gameStats.LocalShadowTileSizes[0] }));
+		// The shadowed lights in view that asked for a shadow, those fading one out, and the tiles by size.
+		CHECK(result["renderStats"]["localShadowRequested"] == 1);
+		CHECK(result["renderStats"]["localShadowFading"] == 0);
+		CHECK(result["renderStats"]["localShadowTileSizeCounts"] == nlohmann::json { { std::to_string(gameStats.LocalShadowTileSizes[0]), 1 } });
 		CHECK(result["renderStats"]["quality"] == RendererQuality::ToSectionValue(game->GetSceneRenderer().GetQuality()));
 		REQUIRE(captured.Width == static_cast<int>(gameImage.Width));
 		REQUIRE(captured.Height == static_cast<int>(gameImage.Height));

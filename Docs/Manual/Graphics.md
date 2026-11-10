@@ -17,7 +17,8 @@ what each one costs:
 | Sun shadow cascades | 3 | 4 | 5 | 5 |
 | Point and spot shadow atlas | 2048 | 4096 | 4096 | 8192 |
 | Largest point and spot shadow tile | 512 | 1024 | 1024 | 2048 |
-| Point and spot lights with shadows | 4 | 16 | 16 | 16 |
+| Point and spot lights with shadows | 4 | 16 | 64 | 256 |
+| Point and spot shadow updates per frame (views) | 12 | 12 | 24 | 48 |
 | Level of detail error (pixels) | 2 | 1 | 1 | 0.5 |
 | Smallest drawn size (pixels) | 1 | 0.5 | 0.5 | 0.25 |
 | Sun shadow filter taps (wide soft edges) | 8 | 16 | 24 | 32 |

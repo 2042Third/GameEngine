@@ -286,8 +286,9 @@ namespace Strata
 			&& EnsureBufferCapacity(m_CullBucketCountBuffer, RenderData::c_CullBuckets, sizeof(uint32_t), "CullBucketCounts", recreated, BufferKind::IndirectArgumentsUAV)
 			&& EnsureBufferCapacity(m_CullCounterBuffer, sizeof(RenderData::CullCounters) / sizeof(uint32_t), sizeof(uint32_t), "CullCounters", recreated,
 				BufferKind::StructuredUAV);
+		// Sixteen point lights' views to begin with; grown with the frame's views (EnsureCullBuffers).
 		m_CullLocalViewBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
-			.setByteSize(RenderData::c_MaxShadowedLocalLights * RenderData::c_LocalShadowFaces * sizeof(RenderData::CullLocalShadowView))
+			.setByteSize(16 * RenderData::c_LocalShadowFaces * sizeof(RenderData::CullLocalShadowView))
 			.setStructStride(sizeof(RenderData::CullLocalShadowView))
 			.setInitialState(nvrhi::ResourceStates::ShaderResource)
 			.setKeepInitialState(true)
@@ -775,6 +776,7 @@ namespace Strata
 				sizeof(uint32_t), "FeedbackLists", outRecreated, BufferKind::StructuredUAV)
 			&& EnsureBufferCapacity(m_FeedbackRecordBuffer, 1 + static_cast<size_t>(constants.MeshSlotCount) + constants.MaterialSlotCount,
 				sizeof(RenderData::FeedbackRecord), "FeedbackRecords", outRecreated, BufferKind::StructuredUAV)
+			&& EnsureBufferCapacity(m_CullLocalViewBuffer, m_CullLocalViews.size(), sizeof(RenderData::CullLocalShadowView), "CullLocalShadowViews", outRecreated)
 			&& EnsureVisibilityBuffer(outRecreated) && EnsureLODFadeBuffer(outRecreated);
 	}
 
@@ -1450,8 +1452,11 @@ namespace Strata
 
 	uint32_t SceneRenderer::GetLocalShadowCullMode(uint32_t firstView, uint32_t viewCount)
 	{
-		ST_CORE_ASSERT(firstView < 256 && viewCount <= RenderData::c_CullMaxLocalShadowViews, "a batch of local shadow views out of range");
-		return (firstView << 8) | (viewCount << 16);
+		// The first view in 16 bits, the count in 8 (Scene/Cull.comp): a frame draws at most RenderData::c_MaxShadowedLocalLights
+		// point lights' views, which the 16 bits hold.
+		static_assert(RenderData::c_MaxShadowedLocalLights * RenderData::c_LocalShadowFaces <= 0xFFFFu && RenderData::c_CullMaxLocalShadowViews <= 0xFFu);
+		ST_CORE_ASSERT(firstView <= 0xFFFFu && viewCount <= RenderData::c_CullMaxLocalShadowViews, "a batch of local shadow views out of range");
+		return ((firstView & 0xFFFFu) << 8) | (viewCount << 24);
 	}
 
 	void SceneRenderer::RunLocalShadowCulling(nvrhi::ICommandList* commandList, uint32_t firstView, uint32_t viewCount, bool lastBatch)

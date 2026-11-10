@@ -44,8 +44,11 @@ The photo mode sets the time of day (6:30 to 19:00: the light follows the hour, 
 the three baked times), the exposure, the field of view, the focus (by hand or automatic), the f-number and depth of
 field, and the players' graphics options (the quality preset and anti-aliasing) for the session. The scene, its probes
 and the director's controls were made by the generators' command scripts (`GenerateShowcaseProps.py materials`, `tune`
-and `prefabs`, `GenerateShowcaseTerrain.py layout`, `controls`, `dress` and `bake`), run in the editor; the exported
-game shows a loading scene while the outpost streams in.
+and `prefabs`, `GenerateShowcaseTerrain.py layout`, `controls`, `dress` and `bake`), run in the editor, and its pictures
+were taken by `GenerateShowcaseTerrain.py pictures` and `picture`; the exported game shows a loading scene while the
+outpost streams in. The probes are baked without the sun's disk and highlights, which the sun and the lights draw
+themselves: the fire's light has the radius of its flames (Source Radius 0.25 m) and the lanterns' of theirs (0.04 m),
+which widens only their highlights, and the puddles are water (IOR 1.33).
 
 ## Known limits
 

@@ -1,6 +1,7 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/ProjectThumbnail.h"
 #include "Editor/ViewportRenderer.h"
 
 #include <Strata/Core/Base64.h>
@@ -737,6 +738,19 @@ namespace Strata
 			ViewportRenderer* renderer = viewport.GetCaptureRenderer();
 			if (!renderer)
 				return EditorCommandResult::Fail("viewport.capture needs a GPU: the renderer is not running");
+			// The project's picture renders through this renderer in the frames after a save, at a size of its own: in shared
+			// frames each would start the other's history again, and both would be read back with a single frame of it. The
+			// picture ends by itself (ProjectThumbnail's limits), so the capture renders after it. A capture that had rendered
+			// starts over: the picture settled the pre-exposure for its own view and released the targets, so nothing the
+			// capture had rendered or waited for holds afterwards. Its first frame after the picture starts the pre-exposure
+			// again, and its waits have their whole budgets. Its progress holds nothing else yet: these polls end where its
+			// readback starts.
+			if (context.GetProjectThumbnail().IsRendering())
+			{
+				if (progress.Rendered)
+					progress = CaptureProgress {};
+				return std::nullopt;
+			}
 
 			std::string error;
 			const float aspectRatio = static_cast<float>(request.Size.x) / static_cast<float>(request.Size.y);

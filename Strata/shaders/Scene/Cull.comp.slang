@@ -363,8 +363,9 @@ void EmitLocalShadowInstances(GPUProxy proxy, GeometryEntry entry, float fractio
 // view's tile (casters marked for feedback like the cascades', whether their meshes are loaded or not).
 void CullLocalShadowViews(GPUProxy proxy, bool meshDrawable, GeometryEntry entry, uint geometry, uint mirrored, bool feedback)
 {
-	uint first = (u_Parameters.Mode >> 8) & 0xFFu;
-	uint count = (u_Parameters.Mode >> 16) & 0xFFu;
+	// SceneRenderer::GetLocalShadowCullMode: the batch's first view in bits 8 to 23, its count in 24 to 31.
+	uint first = (u_Parameters.Mode >> 8) & 0xFFFFu;
+	uint count = (u_Parameters.Mode >> 24) & 0xFFu;
 	if (count == 0u)
 		return;
 	float3 relativeMin = proxy.WorldMin - u_Cull.CameraPosition.xyz;

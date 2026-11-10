@@ -159,6 +159,7 @@
 				"LODErrorPixels": 1.5,
 				"LocalShadowAtlasSize": "2048",
 				"LocalShadowMaxTile": "512",
+				"LocalShadowViewsPerFrame": 20,
 				"MaxShadowedLocalLights": 8,
 				"MinProjectedPixels": 0.75,
 				"MotionBlur": "Scene",
@@ -171,7 +172,7 @@
 				"ShadowFilterQuality": "32",
 				"ShadowResolution": "1024"
 			},
-			"Version": 6
+			"Version": 7
 		},
 		"Scene.CollisionLayers": {
 			"Value": {

@@ -113,6 +113,17 @@ namespace Strata::ViewportToolbar
 			if (shown > 0)
 				gpuLine += ")";
 		}
+		// Shadowed point and spot lights: those in view that ask for a shadow, those given one with their tiles' sizes (largest
+		// first), and those fading theirs out.
+		std::string localShadowLine = fmt::format("{} of {} shadowed lights", stats.LocalShadowLights, stats.LocalShadowRequested);
+		for (size_t sizeClass = stats.LocalShadowSizeCounts.size(); sizeClass-- > 0;)
+		{
+			if (stats.LocalShadowSizeCounts[sizeClass] > 0)
+				localShadowLine += fmt::format(", {} x {}", stats.LocalShadowSizeCounts[sizeClass], 128u << sizeClass);
+		}
+		if (stats.LocalShadowFading > 0)
+			localShadowLine += fmt::format(", {} fading", stats.LocalShadowFading);
+		localShadowLine += fmt::format("; {} views drawn, {} waiting", stats.LocalShadowViewsDrawn, stats.LocalShadowViewsPending);
 		// The frame's own time: while the editor idles, its frame rate is capped, which says nothing about what frames cost.
 		const std::vector<std::string> lines = {
 			fmt::format("{:.2f} ms ({:.0f} FPS{})", frame.WorkMilliseconds, frame.FramesPerSecond, frame.Idle ? ", idle" : ""),
@@ -122,6 +133,7 @@ namespace Strata::ViewportToolbar
 			fmt::format("{} draw commands{}, {} occluded, {} occluded casters", stats.DrawCommands, stats.GPUDriven ? " (culled by the GPU)" : "",
 				stats.OccludedProxies, stats.OccludedCasters),
 			fmt::format("{} triangles, {} lights, {} materials", stats.Triangles, stats.Lights, stats.Materials),
+			localShadowLine,
 			fmt::format("{} visible of {} proxies, {} updated", stats.VisibleProxies, stats.VisibleProxies + stats.CulledInstances, stats.ProxyUpdates),
 			fmt::format("extract {:.2f} ms, sort {:.2f} ms", stats.ExtractMs, stats.SortMs),
 			fmt::format("{:.1f} KB instances, {:.1f} KB materials uploaded", static_cast<double>(stats.InstanceBytesUploaded) / 1024.0,

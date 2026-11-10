@@ -9,9 +9,9 @@
 		],
 		"AttenuationDistance": 0,
 		"BaseColor": [
-			0.018,
-			0.02,
-			0.022,
+			0.035,
+			0.037,
+			0.04,
 			1
 		],
 		"BaseColorMap": "0000000000000000",
@@ -28,7 +28,7 @@
 		],
 		"EmissiveIntensity": 1,
 		"EmissiveMap": "0000000000000000",
-		"IOR": 1.5,
+		"IOR": 1.33,
 		"Metallic": 0,
 		"MetallicRoughnessMap": "0000000000000000",
 		"NormalMap": "0000000000000000",

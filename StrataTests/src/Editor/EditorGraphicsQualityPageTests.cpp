@@ -162,10 +162,11 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 				CHECK(IsDrawn(PageKey("Cell." + field + "." + preset)));
 			CHECK(IsDrawn(PageKey("Custom." + field)));
 		}
-		// Shadows and detail (7), the sun's filter taps and contact shadows, the ambient occlusion's samples, the sky's reflection
-		// map, the screen-space reflections, the motion blur's samples, the reflection probes' resolution, global illumination;
-		// the players' anti-aliasing, motion blur, depth of field, film grain and chromatic aberration.
-		CHECK(RendererQuality::GetRowTraits().size() == 20);
+		// Shadows and detail (8, with the point and spot shadows' views per frame), the sun's filter taps and contact shadows,
+		// the ambient occlusion's samples, the sky's reflection map, the screen-space reflections, the motion blur's samples, the
+		// reflection probes' resolution, global illumination; the players' anti-aliasing, motion blur, depth of field, film grain
+		// and chromatic aberration.
+		CHECK(RendererQuality::GetRowTraits().size() == 21);
 		CHECK(choices == 5);
 		// The project's preset, High (the default), is chosen: its header and cells on the accent's highlight.
 		for (const char* preset : { "Low", "Medium", "High", "Ultra", "Custom" })
@@ -180,6 +181,8 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		CHECK(TextOf(PageKey("Cell.ShadowResolution.Ultra")) == "8192");
 		CHECK(TextOf(PageKey("Cell.LODErrorPixels.Ultra")) == "0.5");
 		CHECK(TextOf(PageKey("Cell.MaxShadowedLocalLights.Low")) == "4");
+		CHECK(TextOf(PageKey("Cell.MaxShadowedLocalLights.Ultra")) == "256");
+		CHECK(TextOf(PageKey("Cell.LocalShadowViewsPerFrame.High")) == "24");
 	}
 
 	TEST_CASE("The memory rows match the estimates and the GPU line names the Scene view's stages")
