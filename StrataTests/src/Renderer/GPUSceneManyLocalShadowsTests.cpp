@@ -1,5 +1,6 @@
 #include "Renderer/SceneRendererTestUtils.h"
 
+#include "Strata/Math/Math.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/RendererQuality.h"
@@ -639,6 +640,79 @@ TEST_SUITE("GPU.SceneRenderer.ManyLocalShadows")
 			}
 			MESSAGE("frames until the far view was drawn: ", frames + 1);
 			CHECK(frames < 8);
+			gpu.GetDevice().WaitForIdle();
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("With one view drawn a frame, a new light's views are drawn while another light's view changes every frame")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		constexpr uint32_t c_ImageSize = 256;
+		constexpr uint32_t c_PointViews = 6;
+		// A spot light whose caster moves every frame (its one view changes every frame), then a point lamp switched on: its
+		// six views without content wait beside that view for the one place a frame.
+		LampField field({ glm::vec3(0.0f, 3.0f, 0.0f) }, 4.5f, glm::vec3(-10.0f, -1.0f, -10.0f), glm::vec3(20.0f, 0.0f, 10.0f));
+		Entity lamp = field.Lamps[0];
+		Entity spot = field.SceneData.CreateEntity("Spot");
+		spot.GetComponent<TransformComponent>().Translation = glm::vec3(10.0f, 4.0f, 0.0f);
+		spot.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		SpotLightComponent& spotLight = spot.AddComponent<SpotLightComponent>();
+		spotLight.Intensity = 60.0f;
+		spotLight.Range = 6.0f;
+		spotLight.OuterConeAngle = 40.0f;
+		spotLight.CastShadows = true;
+		MaterialProperties matte;
+		matte.BaseColor = glm::vec4(0.8f, 0.8f, 0.8f, 1.0f);
+		const AssetHandle material = field.Assets.AddMaterial(matte);
+		Entity swaying = AddBox(field.SceneData, material, glm::vec3(9.75f, 1.75f, -0.25f), glm::vec3(10.25f, 2.25f, 0.25f), "Swaying");
+		const auto sway = [&](uint32_t frame)
+		{
+			Move(swaying, glm::vec3(10.0f + 0.02f * static_cast<float>(frame % 5), 2.0f, 0.0f));
+		};
+		const SceneCamera camera = LookAt(glm::vec3(5.0f, 12.0f, 12.0f), glm::vec3(5.0f, 0.0f, 0.0f));
+		const glm::uvec2 pixel = ProjectToPixel(camera, field.ShadowCenters[0], c_ImageSize);
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			CAPTURE(static_cast<int>(mode));
+			SceneRenderer unshadowed(ManySpecification(mode, false));
+			unshadowed.SetViewportSize(c_ImageSize, c_ImageSize);
+			SceneRenderer full(ManySpecification(mode, false));
+			full.SetViewportSize(c_ImageSize, c_ImageSize);
+			const float dark = ReadRed(RenderHDR(full, field.SceneData, camera), pixel);
+			const float lit = ReadRed(field.RenderUnshadowed(unshadowed, camera), pixel);
+			REQUIRE(lit - dark > lit * 0.5f);
+
+			SetCastShadows(lamp, false);
+			SceneRendererSpecification specification = ManySpecification(mode, true);
+			specification.Quality.LocalShadowViewsPerFrame = 1;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_ImageSize, c_ImageSize);
+			for (uint32_t frame = 0; frame < 4 + SceneRenderer::c_LocalShadowFadeFrames; frame++)
+			{
+				sway(frame);
+				RenderHDR(renderer, field.SceneData, camera);
+				CHECK(renderer.GetStats().LocalShadowViewsDrawn == 1);
+			}
+			REQUIRE(renderer.GetStats().LocalShadowLights == 1);
+
+			// The lamp's views take the place while they waited at least as long as the spot light's; the spot light's view
+			// takes it whenever it waited longer. The lamp's shadow is then whole once its fade is done.
+			SetCastShadows(lamp, true);
+			const uint32_t bound = 2 * c_PointViews + SceneRenderer::c_LocalShadowFadeFrames;
+			uint32_t frames = 0;
+			for (; frames < bound + 20; frames++)
+			{
+				sway(frames);
+				const ReadbackImage image = RenderHDR(renderer, field.SceneData, camera);
+				CHECK(renderer.GetStats().LocalShadowViewsDrawn == 1);
+				if ((lit - ReadRed(image, pixel)) / (lit - dark) > 0.99f)
+					break;
+			}
+			MESSAGE("frames until the new lamp's shadow was whole: ", frames + 1, " (bound ", bound, ")");
+			CHECK(frames + 1 <= bound);
+			CHECK(renderer.GetStats().LocalShadowLights == 2);
 			gpu.GetDevice().WaitForIdle();
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);

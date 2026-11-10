@@ -904,7 +904,7 @@ namespace Strata
 			}
 			// Of each order only the first are taken (far fewer than wait where this matters): sorted no further.
 			const uint32_t aged = std::max(budget / c_LocalShadowAgedShare, 1u);
-			const size_t agedPlaces = std::min<size_t>(aged, order.size());
+			size_t agedPlaces = std::min<size_t>(aged, order.size());
 			std::partial_sort(order.begin(), order.begin() + static_cast<std::ptrdiff_t>(agedPlaces), order.end(), [&waiting](uint32_t a, uint32_t b)
 			{
 				const Waiting& first = waiting[a];
@@ -913,6 +913,15 @@ namespace Strata
 					return first.Waited > second.Waited;
 				return first.Score != second.Score ? first.Score > second.Score : a < b;
 			});
+			// A budget of one view a frame is all the share: the view with content takes it only if it waited longer than the
+			// view without content the budget would take otherwise (the first in the lights' order; on a tie, views without
+			// content first), so that while a view with content changes every frame a new light's views are still drawn.
+			if (agedPlaces >= budget)
+			{
+				const auto empty = std::find_if(waiting.begin(), waiting.end(), [](const Waiting& view) { return view.Empty; });
+				if (empty != waiting.end() && !(waiting[order[0]].Waited > empty->Waited))
+					agedPlaces = 0;
+			}
 			uint32_t taken = 0;
 			for (size_t place = 0; place < agedPlaces; place++, taken++)
 				chosen[order[place]] = 1;

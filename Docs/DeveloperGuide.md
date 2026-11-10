@@ -4795,18 +4795,20 @@ lights, Post Process and the sky), and never a resolution below the output's.
 - `SpreadLightingUpdates` (on by default) draws at most `Quality.LocalShadowViewsPerFrame` views per frame (12, 12, 24,
   48 by preset): views without content first (a light casts nothing until all its views hold content; in the lights'
   order, a light's views together), a quarter of the budget to the views with content that waited longest
-  (`c_LocalShadowAgedShare`), so none starves while nearer lights change every frame, and the rest by frames waited
-  times importance. A light that gains a shadow fades it in once all its views hold content, one that loses it fades it
-  out as fast, by the time since the renderer's previous frame (`SceneRenderOptions::AdaptationSeconds`, which tests
-  set): over `SceneRenderer::c_LocalShadowFadeSeconds` (0.2 s) and at least `c_LocalShadowFadeFrames` (8) frames, so a
-  fade lasts as long at 240 Hz as at 60 and a shadow changes by at most an eighth a frame where frames are slow
-  (`SceneRendererStats::LocalShadowFadingIn` counts the lights still fading in). Off (renderers of single images: the
-  editor's capture renderer, which also draws the project's picture at the quality of the view it shows, and the
-  thumbnails' renderer with a 2048 atlas, 16 MiB), every view that is not up to date is drawn in the frame, every light
-  takes its size at once and nothing fades; captures and the project's picture still count views left pending as
-  incomplete. `CacheLocalShadows` off draws every view of every shadowed light every frame (the perf tests' worst case),
-  and nothing fades. `SceneRendererStats::LocalShadowViewsDrawn` and `LocalShadowViewsPending` say what a frame drew and
-  left waiting, `LocalShadowFindMs` what deciding it took of the main thread (within `ExtractMs`).
+  (`c_LocalShadowAgedShare`), so none starves while nearer lights change every frame (at a budget of one view a frame,
+  that view takes the place only when it waited longer than the view without content the budget would take otherwise),
+  and the rest by frames waited times importance. A light that gains a shadow fades it in once all its views hold
+  content, one that loses it fades it out as fast, by the time since the renderer's previous frame
+  (`SceneRenderOptions::AdaptationSeconds`, which tests set): over `SceneRenderer::c_LocalShadowFadeSeconds` (0.2 s) and
+  at least `c_LocalShadowFadeFrames` (8) frames, so a fade lasts as long at 240 Hz as at 60 and a shadow changes by at
+  most an eighth a frame where frames are slow (`SceneRendererStats::LocalShadowFadingIn` counts the lights still fading
+  in). Off (renderers of single images: the editor's capture renderer, which also draws the project's picture at the
+  quality of the view it shows, and the thumbnails' renderer with a 2048 atlas, 16 MiB), every view that is not up to
+  date is drawn in the frame, every light takes its size at once and nothing fades; captures and the project's picture
+  still count views left pending as incomplete. `CacheLocalShadows` off draws every view of every shadowed light every
+  frame (the perf tests' worst case), and nothing fades. `SceneRendererStats::LocalShadowViewsDrawn` and
+  `LocalShadowViewsPending` say what a frame drew and left waiting, `LocalShadowFindMs` what deciding it took of the
+  main thread (within `ExtractMs`).
 - Which views a frame draws is the CPU's decision on both paths (`FindLocalShadowCasters`: `RankLocalShadowLights`,
   `PlaceLocalShadowTiles`, `TrackLocalShadowChanges`, `ScheduleLocalShadowViews`, then one job per drawn light: a sphere
   query of its range, then the exact tests per view on the CPU path); what each view draws is decided twice
