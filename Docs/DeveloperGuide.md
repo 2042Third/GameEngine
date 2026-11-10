@@ -4778,20 +4778,23 @@ lights, Post Process and the sky), and never a resolution below the output's.
 - Views are cached like the cascades: a view is drawn again only when its key changes (the light's position, direction,
   range and cone, its tile, its guard band), when what casters are drawn with changes (`LocalShadowContent`: the scene's
   GPU copy's tables and deferred proxies, the geometry pool's content, the texture table's entries while materials are
-  alpha-masked, read through `TextureTable::GetEntryVersion` so renderers of one scene decide alike), or when a proxy whose
-  bounds before or after its change reach the view changes. A grid of the lights' reach (cells twice the median range,
-  sorted again only in a frame with changes whose lights' reach or cell size differ from the grid's; lights or bounds
-  spanning more than 64 cells are tested without it) finds the lights a change can reach. Most changes pass a light
-  without testing its views: a drawn view keeps a box no change that reaches it misses (`LocalShadowView::DrawnBox`: its
-  range's box cut by the planes that face along an axis, so a cube face keeps the half before it), a light the box of
-  its views no change has reached yet (`LocalShadowReach`), and the boxes are compared without a branch per side
-  (`BoxesTouch`: which side fails first is as good as random there). A caster that keeps moving on the ground thus costs
-  one comparison per lamp around it once the views it reaches wait to be drawn: the boxes of the views that look up lie
-  above it. A change to a view's test changes its box with it (`GetLocalShadowChangeBox`). The bounds of every proxy
-  within a light's range are recorded when its views are drawn, so even a caster's first move redraws only the views it
-  reaches; beyond 65,536 followed proxies the following starts over. The camera is not part of a view's key: the
-  matrices that draw and sample a tile are made relative to the frame's camera in double from what the tile was drawn
-  with, so a light that moved keeps its old shadow until its views are drawn again.
+  alpha-masked, read through `TextureTable::GetEntryVersion` so renderers of one scene decide alike), or when a proxy
+  whose bounds before or after its change reach the view changes. A grid of the lights' reach (cells twice the median
+  range, sorted again only in a frame with changes whose lights' reach or cell size differ from the grid's; lights or
+  bounds spanning more than 64 cells are tested without it) finds the lights a change can reach. Most changes pass a
+  light without testing its views: a drawn view keeps a box no change that reaches it misses
+  (`LocalShadowView::DrawnBox`: its range's box cut by the planes that face along an axis, so a cube face keeps the half
+  before it), a light the box of its views no change has reached yet (`LocalShadowReach`), and the boxes are compared
+  without a branch per side (`BoxesTouch`: which side fails first is as good as random there). A caster that keeps
+  moving on the ground thus costs one comparison per lamp around it once the views it reaches wait to be drawn: the
+  boxes of the views that look up lie above it. A change to a view's test changes its box with it
+  (`GetLocalShadowChangeBox`). The bounds of every proxy within a light's range are recorded when its views are drawn,
+  so even a caster's first move redraws only the views it reaches. At most 4,096 proxies are followed per light the
+  quality shadows (`MaxShadowedLocalLights`, counted as at least 16: 65,536 at Low and Medium, 1,048,576 at Ultra);
+  beyond, the following starts over, and until every view is drawn again within one following, a change of any proxy not
+  followed (even one far from every light) draws every view again. The camera is not part of a view's key: the matrices
+  that draw and sample a tile are made relative to the frame's camera in double from what the tile was drawn with, so a
+  light that moved keeps its old shadow until its views are drawn again.
 - `SpreadLightingUpdates` (on by default) draws at most `Quality.LocalShadowViewsPerFrame` views per frame (12, 12, 24,
   48 by preset): views without content first (a light casts nothing until all its views hold content; in the lights'
   order, a light's views together), a quarter of the budget to the views with content that waited longest

@@ -832,7 +832,7 @@ TEST_SUITE("GPU.SceneRenderer.LocalShadows")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("With more proxies in the lights' ranges than it follows, a caster that leaves a view still redraws it")
+	TEST_CASE("With more proxies in the lights' ranges than it follows, a caster that leaves a view still redraws it; more shadowed lights follow more")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -843,7 +843,8 @@ TEST_SUITE("GPU.SceneRenderer.LocalShadows")
 		AddShadowedPointLight(scene, glm::vec3(0.0f, 3.0f, 0.0f), 20.0f, 40.0f);
 		Entity caster = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(1.5f, 3.0f, 0.0f), "Caster");
 		caster.GetComponent<TransformComponent>().Scale = glm::vec3(0.4f);
-		// More than the 65,536 proxies the renderer follows, within the lamp's range, behind the camera and casting no shadows.
+		// More than the 65,536 proxies the renderer follows at Medium (4,096 per shadowed light), within the lamp's range, behind
+		// the camera and casting no shadows, and one far from the lamp.
 		constexpr uint32_t c_Side = 260;
 		for (uint32_t index = 0; index < c_Side * c_Side; index++)
 		{
@@ -852,17 +853,38 @@ TEST_SUITE("GPU.SceneRenderer.LocalShadows")
 			grain.GetComponent<TransformComponent>().Scale = glm::vec3(0.01f);
 			grain.GetComponent<MeshRendererComponent>().CastShadows = false;
 		}
+		Entity far = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(200.0f, 0.5f, 0.0f), "Far");
 		const SceneCamera camera = LookAt(glm::vec3(0.0f, 8.0f, 8.0f), glm::vec3(0.0f));
 		SceneRenderer renderer(AtOnceSpecification(GPUDrivenMode::Off));
 		renderer.SetViewportSize(c_Size, c_Size);
-		REQUIRE(renderer.Render(scene, camera));
-		CHECK(renderer.GetStats().LocalShadowViewsDrawn == 6);
-		REQUIRE(renderer.Render(scene, camera));
-		CHECK(renderer.GetStats().LocalShadowViewsDrawn == 0);
+		// At 256 shadowed lights (Ultra), it follows 1,048,576.
+		SceneRendererSpecification manySpecification = AtOnceSpecification(GPUDrivenMode::Off);
+		manySpecification.Quality.MaxShadowedLocalLights = 256;
+		SceneRenderer following(manySpecification);
+		following.SetViewportSize(c_Size, c_Size);
+		for (SceneRenderer* drawn : { &renderer, &following })
+		{
+			REQUIRE(drawn->Render(scene, camera));
+			CHECK(drawn->GetStats().LocalShadowViewsDrawn == 6);
+			REQUIRE(drawn->Render(scene, camera));
+			CHECK(drawn->GetStats().LocalShadowViewsDrawn == 0);
+		}
 		// The caster leaves the lamp's range: the view that showed it is drawn again.
 		Move(caster, glm::vec3(100.0f, 3.0f, 0.0f));
+		for (SceneRenderer* drawn : { &renderer, &following })
+		{
+			REQUIRE(drawn->Render(scene, camera));
+			CHECK(drawn->GetStats().LocalShadowViewsDrawn > 0);
+			REQUIRE(drawn->Render(scene, camera));
+			CHECK(drawn->GetStats().LocalShadowViewsDrawn == 0);
+		}
+		// A proxy far from the lamp moves: the renderer that could not follow every proxy within the lamp's range cannot tell
+		// that it reached no view and draws them all again; the one that follows them draws none.
+		Move(far, glm::vec3(201.0f, 0.5f, 0.0f));
 		REQUIRE(renderer.Render(scene, camera));
-		CHECK(renderer.GetStats().LocalShadowViewsDrawn > 0);
+		CHECK(renderer.GetStats().LocalShadowViewsDrawn == 6);
+		REQUIRE(following.Render(scene, camera));
+		CHECK(following.GetStats().LocalShadowViewsDrawn == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

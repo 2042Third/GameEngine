@@ -82,9 +82,12 @@ namespace Strata
 		// (in camera-relative coordinates, on either path) can take.
 		constexpr float c_CasterQueryScale = 1.001f;
 		constexpr float c_CasterQueryMargin = 0.01f;
-		// The bounds of at most this many proxies within shadowed lights' ranges are followed; beyond, the views are drawn again
-		// and the following starts over (m_LocalShadowEpoch).
-		constexpr size_t c_MaxLocalShadowBounds = 65536;
+		// The bounds of at most this many proxies within shadowed lights' ranges are followed per light the quality shadows
+		// (Quality.MaxShadowedLocalLights, counted as at least c_MinFollowedLocalShadowLights: 65,536 proxies, 0.7.0's for its
+		// 16 lights); beyond, the views are drawn again and the following starts over (m_LocalShadowEpoch). The map never holds
+		// more than the render scene's proxies.
+		constexpr size_t c_LocalShadowBoundsPerLight = 4096;
+		constexpr size_t c_MinFollowedLocalShadowLights = 16;
 
 		// A point light's views: the cube's faces in the order the shaders pick them by the major axis.
 		constexpr std::array<glm::vec3, RenderData::c_LocalShadowFaces> c_FaceDirections = {
@@ -298,6 +301,11 @@ namespace Strata
 		// A dim light's shadow shows less: the square root of its luminous intensity (color times intensity, as the record holds it).
 		const float luminance = glm::dot(glm::vec3(record.Color), glm::vec3(0.2126f, 0.7152f, 0.0722f));
 		return coverage * std::sqrt(std::max(luminance, 1e-6f));
+	}
+
+	size_t SceneRenderer::GetMaxLocalShadowBounds() const
+	{
+		return c_LocalShadowBoundsPerLight * std::max<size_t>(m_Specification.Quality.MaxShadowedLocalLights, c_MinFollowedLocalShadowLights);
 	}
 
 	void SceneRenderer::ResetLocalShadows()
@@ -846,7 +854,7 @@ namespace Strata
 			}
 		}
 		m_LocalShadowProxyVersion = proxyVersion;
-		if (m_LocalShadowBounds.size() > c_MaxLocalShadowBounds)
+		if (m_LocalShadowBounds.size() > GetMaxLocalShadowBounds())
 		{
 			dirtyAll();
 			m_LocalShadowBounds.clear();
@@ -1130,6 +1138,7 @@ namespace Strata
 
 		// Merged in order: the views' casters, the marks, the animators and the proxies to follow (and to bound the GPU's draws
 		// with).
+		const size_t maxBounds = GetMaxLocalShadowBounds();
 		bool overflowed = false;
 		for (uint32_t group = 0; group < lightGroups.size(); group++)
 		{
@@ -1160,7 +1169,7 @@ namespace Strata
 			{
 				if (renderScene.GetEntity(proxy) == entt::null)
 					continue;
-				if (m_LocalShadowBounds.size() >= c_MaxLocalShadowBounds && m_LocalShadowBounds.find(proxy) == m_LocalShadowBounds.end())
+				if (m_LocalShadowBounds.size() >= maxBounds && m_LocalShadowBounds.find(proxy) == m_LocalShadowBounds.end())
 				{
 					overflowed = true;
 					break;

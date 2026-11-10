@@ -1879,6 +1879,9 @@ namespace Strata
 		// Marks the views a proxy's change reached (its bounds before, as followed, or after), and follows the proxies within
 		// the lights' ranges.
 		void TrackLocalShadowChanges(RenderScene& renderScene);
+		// How many proxies within the shadowed lights' ranges TrackLocalShadowChanges follows at most (more than that draws
+		// every view again and starts over): a number per light the quality shadows.
+		size_t GetMaxLocalShadowBounds() const;
 		// Chooses the views the frame draws (m_LocalShadowViews); returns how many of the ranked lights' views wait.
 		uint32_t ScheduleLocalShadowViews(bool spread);
 		// How much a shadowed light matters to the view: the projected size of its range (more within it, the nearer its center)
