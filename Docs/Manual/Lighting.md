@@ -185,7 +185,10 @@ They cost more than the sun's shadows, so use them where they show:
   one clearly matters more, so shadows neither pop nor flicker while the camera moves. The others still light the scene,
   without shadows.
 - A light's shadow is sharper the larger its range looks on screen; when there are many, the less important ones get
-  smaller shadow maps. A light whose shadow map changes size keeps its old shadow until the new one is drawn.
+  smaller shadow maps. When the shadow atlas is full every light's map steps down in turn, so at High and Ultra, with
+  many lamps in view, even the nearest lamps' shadows can be softer than at Medium, which shadows 16: under Custom,
+  **Shadowed point and spot lights** 16 keeps their detail. A light whose shadow map changes size keeps its old shadow
+  until the new one is drawn.
 - A light's shadow is drawn again only when something in its range moves or changes, or the light itself does: a still
   lantern over a still room costs nothing after its first frame, while a light carried around, or one over moving
   characters, redraws every frame. A point light costs six times what a spot light costs. A few lights redraw per frame

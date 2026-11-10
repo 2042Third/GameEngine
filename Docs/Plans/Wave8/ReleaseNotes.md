@@ -276,7 +276,9 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   0.2 s at any frame rate (at least eight frames where frames are slower than 40 a second), and one near the cut keeps it
   until another clearly matters more: shadows no longer pop or blink while the camera moves.
 - A light whose shadow map changes size keeps its old shadow until the new one is drawn (0.7.0 showed it unshadowed for a
-  frame or more), and the atlas is never laid out again all at once.
+  frame or more), and the atlas is never laid out again all at once. The new map then takes over in one frame, so the
+  shadow's edge changes softness at once (in a walk past lanterns at High and 1280x720, an edge narrowed from 3 to 2
+  pixels from one frame to the next).
 - No light's shadow waits long for an update while nearer lights move every frame: a quarter of each frame's shadow
   updates goes to those that waited longest. Graphics Quality's new **Point and spot shadow updates per frame** (12, 12,
   24, 48) sets how many views are drawn again per frame.
@@ -288,7 +290,7 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   add to the opaque pass falls from 0.15 ms to 0.07 ms (226 shadowed), and from 0.78 ms to 0.34 ms with their ranges set
   to 25 m (244 shadowed). Where the lights hang over what they light, nothing lies behind a surface and nothing changes.
 - Casters that keep moving under many shadowed lights cost the main thread little: with 1,000 casters moving every
-  frame under 256 shadowed point lights at Ultra, deciding which shadow views to draw again takes 0.33 ms a frame
+  frame under 256 shadowed point lights at Ultra, deciding which shadow views to draw again takes 0.31 ms a frame
   (`SceneRendererStats::LocalShadowFindMs`; the perf case `PerfGPU.Renderer.LocalShadows256LightsUltraMoving1kFind`).
 - The Scene view's statistics and `editor.perf` report how many shadowed lights in view asked for a shadow
   (`localShadowRequested`), got one (`localShadowLights`), are fading theirs out (`localShadowFading`) and how many tiles
@@ -477,4 +479,25 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   at 30 degrees, 1.24 against 8.35 (p90 1.48 against 9.93; no shadow edge shows in it); the look-dev sun room seen from
   behind, 0.88 against 1.61; the Third-Person and Physics Playground editor views from high above, 0.31 and 0.57
   against 0.96, still under a pixel.
+
+**local-lights**
+
+- At High and Ultra, with many lamps in view, the nearest lamps' shadows are softer than 0.7.0's and Medium's: the extra
+  lights share the same atlas, and while the tiles do not fit seven eighths of it every light's tiles step down in turn,
+  the nearest ones' too. In the lantern town at 3840x2160, High gives the 8 nearest lamps two 512-texel and six
+  256-texel tiles (0.7.0 and Medium: 512 each) beside 47 lamps at 128, and a crate's wall shadow edge widens from 2-3 to
+  5 pixels without anti-aliasing; at Ultra the nearest lamp's tiles fall from 2048 to 1024 texels with 143 lamps
+  shadowed, and its shadow's edge widens from 3 to 4-6 pixels. Keeping the nearest lamps' sizes would take shadows from
+  the farther lamps instead (the walk over a full atlas checks that no lamp loses the shadow it shows), a choice left to
+  the owner. Graphics Quality Custom with **Shadowed point and spot lights** 16 gives High Medium's tiles. At Medium the
+  eighth kept free for resizes alone turns the eighth or ninth lamp's 512 texels into 256.
+- Under TAA a still soft point or spot shadow edge keeps the filter's fixed pattern, which 0.7.0's turning noise let the
+  history average away: in the `GPU.SceneRenderer.TAA` scene the converged penumbra keeps 0.71 of one frame's roughness
+  under Original and 0.55 under variance clipping and Sharp (0.7.0: 0.042 and 0.047), and in the lantern town at Medium a
+  crate's shadow edge shows a stipple at three times the capture's size where 0.7.0's was smooth. Without anti-aliasing
+  and with FXAA the images are unchanged. Turning the taps with the sun's fixed blue-noise tile, or filtering the shadow
+  within the frame, may hide it; neither has been judged in look-dev yet.
+- Beyond 4,096 proxies per shadowed light the quality allows within their lights' ranges (1,048,576 at Ultra), the
+  shadow views' following starts over, and any proxy's change then draws every view again until one following holds
+  them all.
 
