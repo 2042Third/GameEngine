@@ -3187,8 +3187,10 @@ namespace Strata
 		{
 			ResetLocalShadows(); // Reported; no light casts a local shadow this frame
 			m_Stats.LocalShadowLights = 0;
+			m_Stats.LocalShadowFading = 0;
 			m_Stats.LocalShadowFadingIn = 0;
 			m_Stats.LocalShadowTileSizes = {};
+			m_Stats.LocalShadowSizeCounts = {};
 			m_Stats.LocalShadowViewsDrawn = 0;
 			m_Stats.LocalShadowViewsPending = 0;
 			degraded = true;

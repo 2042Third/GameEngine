@@ -17,6 +17,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <limits>
 
@@ -131,7 +132,11 @@ namespace Strata
 			uint64_t GetCellCount() const
 			{
 				const glm::i64vec3 extent = glm::i64vec3(Max) - glm::i64vec3(Min) + glm::i64vec3(1);
-				return extent.x <= 0 || extent.y <= 0 || extent.z <= 0 ? 0 : static_cast<uint64_t>(extent.x * extent.y * extent.z);
+				if (extent.x <= 0 || extent.y <= 0 || extent.z <= 0)
+					return 0;
+				// Unsigned: an extent spans at most 2^21 cells (GetGridCell), and three of them multiply to at most 2^63, one past
+				// what a signed product holds.
+				return static_cast<uint64_t>(extent.x) * static_cast<uint64_t>(extent.y) * static_cast<uint64_t>(extent.z);
 			}
 		};
 
