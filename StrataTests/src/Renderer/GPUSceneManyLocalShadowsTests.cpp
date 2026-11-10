@@ -652,16 +652,17 @@ TEST_SUITE("GPU.SceneRenderer.ManyLocalShadows")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("With one view drawn a frame, a new light's views are drawn while another light's view changes every frame")
+	TEST_CASE("With one view drawn a frame, new lights' views are drawn and a view that changes every frame does not starve")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		constexpr uint32_t c_ImageSize = 256;
 		constexpr uint32_t c_PointViews = 6;
-		// A spot light whose caster moves every frame (its one view changes every frame), then a point lamp switched on: its
-		// six views without content wait beside that view for the one place a frame.
-		LampField field({ glm::vec3(0.0f, 3.0f, 0.0f) }, 4.5f, glm::vec3(-10.0f, -1.0f, -10.0f), glm::vec3(20.0f, 0.0f, 10.0f));
-		Entity lamp = field.Lamps[0];
+		// A spot light whose caster moves every frame (its one view changes every frame), then point lamps switched on: their
+		// views without content wait beside that view for the one place a frame. Lamp 0 first, alone; then lamp 1, and lamp 2
+		// once the spot light's view has waited a few frames: lamp 2's views, which waited less, do not keep the place from it.
+		LampField field({ glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(0.0f, 3.0f, -7.0f), glm::vec3(8.0f, 3.0f, -7.0f) }, 4.5f,
+			glm::vec3(-10.0f, -1.0f, -20.0f), glm::vec3(20.0f, 0.0f, 10.0f));
 		Entity spot = field.SceneData.CreateEntity("Spot");
 		spot.GetComponent<TransformComponent>().Translation = glm::vec3(10.0f, 4.0f, 0.0f);
 		spot.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
@@ -674,12 +675,18 @@ TEST_SUITE("GPU.SceneRenderer.ManyLocalShadows")
 		matte.BaseColor = glm::vec4(0.8f, 0.8f, 0.8f, 1.0f);
 		const AssetHandle material = field.Assets.AddMaterial(matte);
 		Entity swaying = AddBox(field.SceneData, material, glm::vec3(9.75f, 1.75f, -0.25f), glm::vec3(10.25f, 2.25f, 0.25f), "Swaying");
-		const auto sway = [&](uint32_t frame)
+		// The caster sways about 2 m under the spot light; later it jumps 1 m along X, its shadow 2 m (around X = 12).
+		const glm::vec3 standing(10.0f, 2.0f, 0.0f);
+		const glm::vec3 jumped(11.0f, 2.0f, 0.0f);
+		const auto sway = [&](uint32_t frame, const glm::vec3& center)
 		{
-			Move(swaying, glm::vec3(10.0f + 0.02f * static_cast<float>(frame % 5), 2.0f, 0.0f));
+			Move(swaying, center + glm::vec3(0.02f * static_cast<float>(frame % 5), 0.0f, 0.0f));
 		};
 		const SceneCamera camera = LookAt(glm::vec3(5.0f, 12.0f, 12.0f), glm::vec3(5.0f, 0.0f, 0.0f));
-		const glm::uvec2 pixel = ProjectToPixel(camera, field.ShadowCenters[0], c_ImageSize);
+		std::array<glm::uvec2, 3> pixels = {};
+		for (size_t lamp = 0; lamp < pixels.size(); lamp++)
+			pixels[lamp] = ProjectToPixel(camera, field.ShadowCenters[lamp], c_ImageSize);
+		const glm::uvec2 jumpedPixel = ProjectToPixel(camera, glm::vec3(12.1f, 0.0f, 0.0f), c_ImageSize);
 		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
 		{
 			CAPTURE(static_cast<int>(mode));
@@ -687,39 +694,90 @@ TEST_SUITE("GPU.SceneRenderer.ManyLocalShadows")
 			unshadowed.SetViewportSize(c_ImageSize, c_ImageSize);
 			SceneRenderer full(ManySpecification(mode, false));
 			full.SetViewportSize(c_ImageSize, c_ImageSize);
-			const float dark = ReadRed(RenderHDR(full, field.SceneData, camera), pixel);
-			const float lit = ReadRed(field.RenderUnshadowed(unshadowed, camera), pixel);
-			REQUIRE(lit - dark > lit * 0.5f);
+			sway(0, standing);
+			const ReadbackImage fullImage = RenderHDR(full, field.SceneData, camera);
+			const ReadbackImage litImage = field.RenderUnshadowed(unshadowed, camera);
+			std::array<float, 3> dark = {};
+			std::array<float, 3> lit = {};
+			for (size_t lamp = 0; lamp < pixels.size(); lamp++)
+			{
+				dark[lamp] = ReadRed(fullImage, pixels[lamp]);
+				lit[lamp] = ReadRed(litImage, pixels[lamp]);
+				REQUIRE(lit[lamp] - dark[lamp] > lit[lamp] * 0.5f);
+			}
+			const auto isWhole = [&](const ReadbackImage& image, size_t lamp)
+			{
+				return (lit[lamp] - ReadRed(image, pixels[lamp])) / (lit[lamp] - dark[lamp]) > 0.99f;
+			};
+			// Where the jumped caster's shadow falls: lit before the jump, in its shadow after.
+			const float jumpLit = ReadRed(fullImage, jumpedPixel);
+			sway(0, jumped);
+			const float jumpDark = ReadRed(RenderHDR(full, field.SceneData, camera), jumpedPixel);
+			REQUIRE(jumpLit - jumpDark > jumpLit * 0.5f);
 
-			SetCastShadows(lamp, false);
+			for (Entity lamp : field.Lamps)
+				SetCastShadows(lamp, false);
 			SceneRendererSpecification specification = ManySpecification(mode, true);
 			specification.Quality.LocalShadowViewsPerFrame = 1;
 			SceneRenderer renderer(specification);
 			renderer.SetViewportSize(c_ImageSize, c_ImageSize);
 			for (uint32_t frame = 0; frame < 4 + SceneRenderer::c_LocalShadowFadeFrames; frame++)
 			{
-				sway(frame);
+				sway(frame, standing);
 				RenderHDR(renderer, field.SceneData, camera);
 				CHECK(renderer.GetStats().LocalShadowViewsDrawn == 1);
 			}
 			REQUIRE(renderer.GetStats().LocalShadowLights == 1);
 
-			// The lamp's views take the place while they waited at least as long as the spot light's; the spot light's view
-			// takes it whenever it waited longer. The lamp's shadow is then whole once its fade is done.
-			SetCastShadows(lamp, true);
+			// The lamp's views take the place while they waited at least as long as the spot light's view (they arrive the
+			// frame after it was drawn, so they always do). The lamp's shadow is then whole once its fade is done.
+			SetCastShadows(field.Lamps[0], true);
 			const uint32_t bound = 2 * c_PointViews + SceneRenderer::c_LocalShadowFadeFrames;
 			uint32_t frames = 0;
 			for (; frames < bound + 20; frames++)
 			{
-				sway(frames);
+				sway(frames, standing);
 				const ReadbackImage image = RenderHDR(renderer, field.SceneData, camera);
 				CHECK(renderer.GetStats().LocalShadowViewsDrawn == 1);
-				if ((lit - ReadRed(image, pixel)) / (lit - dark) > 0.99f)
+				if (isWhole(image, 0))
 					break;
 			}
 			MESSAGE("frames until the new lamp's shadow was whole: ", frames + 1, " (bound ", bound, ")");
 			CHECK(frames + 1 <= bound);
-			CHECK(renderer.GetStats().LocalShadowLights == 2);
+			REQUIRE(renderer.GetStats().LocalShadowLights == 2);
+			REQUIRE(renderer.GetStats().LocalShadowViewsPending == 0);
+
+			// Lamp 1 switched on: its views take the place for three frames, while the spot light's view waits as long. Then
+			// the caster jumps and lamp 2 is switched on. Lamp 2 matters about as much as lamp 1 (not the quarter more it would
+			// take to pass a light holding a shadow), so it comes after it in the lights' order: the spot light's view waits
+			// for lamp 1's three views left, which waited as long, then takes the place ahead of lamp 2's six, which waited
+			// less. Its shadow follows the jump within 3 + 1 frames; were it to take the place only once no view without
+			// content waits, after 3 + 6 + 1. Every lamp's shadow is still whole within its views, the spot light's places and
+			// the fades.
+			constexpr uint32_t c_BeforeJump = 3;
+			const uint32_t jumpBound = c_PointViews - c_BeforeJump + 1;
+			const uint32_t lampsBound = 2 * 2 * c_PointViews + SceneRenderer::c_LocalShadowFadeFrames;
+			SetCastShadows(field.Lamps[1], true);
+			std::optional<uint32_t> jumpFrames;
+			frames = 0;
+			for (; frames < lampsBound + 20; frames++)
+			{
+				if (frames == c_BeforeJump)
+					SetCastShadows(field.Lamps[2], true);
+				sway(frames, frames < c_BeforeJump ? standing : jumped);
+				const ReadbackImage image = RenderHDR(renderer, field.SceneData, camera);
+				CHECK(renderer.GetStats().LocalShadowViewsDrawn == 1);
+				if (frames >= c_BeforeJump && !jumpFrames && ReadRed(image, jumpedPixel) < (jumpLit + jumpDark) * 0.5f)
+					jumpFrames = frames - c_BeforeJump + 1;
+				if (jumpFrames && isWhole(image, 1) && isWhole(image, 2))
+					break;
+			}
+			REQUIRE(jumpFrames.has_value());
+			MESSAGE("frames until the spot light's shadow followed its caster's jump: ", *jumpFrames, " (bound ", jumpBound, ")");
+			MESSAGE("frames until both new lamps' shadows were whole: ", frames + 1, " (bound ", lampsBound, ")");
+			CHECK(*jumpFrames <= jumpBound);
+			CHECK(frames + 1 <= lampsBound);
+			CHECK(renderer.GetStats().LocalShadowLights == 4);
 			gpu.GetDevice().WaitForIdle();
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
