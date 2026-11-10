@@ -207,9 +207,10 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   direction, and a surface weighs the probes around it by how surely they see it, so the light changes smoothly across
   walls, floors and ceilings. In the owner's Cornell box at High, the bands at probe-cell borders on the walls are gone
   (the largest step across a probe plane fell from 25% to 8% of the light), the black staircase around the sphere's foot
-  and the blocky rectangle of its indirect shadow became a soft shadow, and the dark square at the tall box's foot is gone.
-  The room's concave corners keep their light up to the junction. Closed rooms stay dark. Probes that sat in a wall move
-  out of it into the room. Look-dev: `lookdev.cornell`, `lookdev.sunroom`.
+  and the blocky rectangle of its indirect shadow became a soft shadow, and the dark square at the tall box's foot is gone
+  (batch 2 below darkens the floor along that box's left face again, softly: Known issues). The room's concave corners
+  keep their light up to the junction. Closed rooms stay dark. Probes that sat in a wall move out of it into the room.
+  Look-dev: `lookdev.cornell`, `lookdev.sunroom`.
 - What it costs at 3840 x 2160 at High: about 0.3 ms more in global illumination's own stage (4.3 ms in the sun room and
   the yard) and 0.25-0.3 ms more in the opaque pass; 35 MiB more memory per view at High (4.4 MiB at Low).
 
@@ -219,8 +220,9 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   around it by whether the voxels between them leave it in sight, no longer by each probe's blurred distances. In the
   owner's Cornell box at High, the large black, ragged blotch under the sphere and the black slot at the tall box's foot are
   gone: the darkest floor point under the sphere against its neighbour 0.1 m away went from 0.021 to 0.083 of its light, at
-  the tall box's foot from 0.10 to 0.23, and the corners keep at least 0.58 (0.53 before). A row of small hard-edged notches
-  remains at the sphere's foot (Known issues). Closed rooms stay dark. Look-dev: `lookdev.cornell` (lit and GI view).
+  the tall box's foot from 0.10 to 0.23 (0.22 since batch 2), and the corners keep at least 0.58 (0.53 before, and 0.53
+  again since batch 2's first item). A row of small hard-edged notches remains at the sphere's foot (Known issues). Closed
+  rooms stay dark. Look-dev: `lookdev.cornell` (lit and GI view).
 - A probe's move is a function of the world's voxels: as the camera walks, probes glide where the voxel levels hand over
   (a 2 cm step moves one at most 0.021 m) instead of jumping up to 0.35 m in one frame in a ring about 5.5 m away.
 - What it costs at 3840 x 2160 at High: the probes' search takes 0.006 ms of global illumination's own stage, the opaque
@@ -235,11 +237,21 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 
 - At High the finest voxels reach further down than up: their window lies 0.8 m below the camera, so floors and what
   rests on them keep 10 cm voxels down to about 3 m below the eye (ceilings more than about 1.5 m above it take 20 cm
-  ones). In the owner's Cornell box seen from half its height, the floor under the sphere's overhang no longer falls to
-  black against its neighbour: the darkest point there keeps 0.53 of its neighbour's light 0.1 m away (0.083 before).
-  The price is paid at that room's ceiling, 2.75 m above the camera and in 20 cm voxels now: where the side walls meet
-  it the darkest point keeps 0.53 and 0.64 of the light 0.1 m below (0.58 and 0.73 before; the back wall there 0.92,
-  0.89 before). No memory; 0.12-0.15 ms more GPU time for a 3840 x 2160 frame in the sun room, 0.02 ms in the yard.
+  ones). In the owner's Cornell box seen from half its height, the outer ring of the floor the sphere overhangs (0.6 to
+  0.9 m from its contact point) no longer falls to black against its neighbour: the darkest point there keeps 0.53 of
+  its neighbour's light 0.1 m away (0.083 before), and in the lit picture at 3840 x 2160 none of that ring's 55,968
+  pixels is left at a luma of 12 of 255 or under (298 before the batch). Nearer the contact nothing is gained: the ring
+  0.3 to 0.6 m from it is darker than before the batch, smoothly (its mean green 24 of 255 against 34; 3,008 of its
+  24,503 pixels at 12 or under against 1,435), and within 0.3 m the black notches are as they were (887 of 1,225 pixels
+  at 6 or under, 892 before). There are two prices. That room's ceiling, 2.75 m above the camera, is in 20 cm voxels
+  now: where the side walls meet it the darkest point keeps 0.53 and 0.64 of the light 0.1 m below (0.58 and 0.73
+  before; the back wall there 0.92, 0.89 before). And floors beside what stands on them got darker (Known issues): in
+  the Cornell box a soft dark patch lies on the floor along the tall box's left face, where the floor ran evenly up to
+  the box before the batch (from the box's front corner 0.6 m back and 0.2 m wide the lit picture reads under half of
+  what it read: 2,555 pixels, the darkest 0.26 of before, 92 to 24 of 255), and three points in one of ThirdPerson's
+  ground folds read about half as bright (green 20-24 of 255 against 44-45). The review's captures of the batch's steps
+  place both at this item; what in the finer voxels darkens them is not established. No memory; 0.12-0.15 ms more GPU
+  time for a 3840 x 2160 frame in the sun room, 0.02 ms in the yard.
 - Thin gaps that the voxels close no longer go black: where the probes around a surface cannot see it, it takes the
   light of the gap's opening as the camera sees it, darkened by how far in it lies. Under the yard's covered car (0.15 m
   off the ground) seen from 6 m, the ground 0.2-0.5 m under its edge keeps 7% of the open ground's light and 0.5-1 m in
@@ -249,6 +261,10 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   540 view of the car from 6 m were darker with the gap's light than without it, the darkest at 0.18 of itself). It
   falls off smoothly under the object: as first written its depth was counted in steps of half a voxel and the light
   fell in bands, up to 1.5 times from one pixel to the next through a long lens (1.12 now). Closed rooms stay dark.
+  In pictures the change is small. Captured before and after through a 25 degree lens at 3840 x 2160, the slot under
+  the car stays nearly black in the lit picture from 6 m: 20-25 of 255 where it read 20 (the car's shadow on the open
+  ground in front of it reads 44-66, sunlit ground 167); the GI view shows a faint gradient at the slot's near edge,
+  1-13 of 255 where it read 0-2 (68-99 on the ground in front). From 4 m both pictures are what they were.
   0.06-0.08 ms of GPU time in the sun room, at most 0.03 ms in the yard.
 - Round objects take their light more evenly: surfaces read each probe's light as spherical harmonics, which turn
   smoothly with the surface, where an ambient cube blended the light of the axes. A white sphere under a uniform sky now
@@ -408,12 +424,17 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   (1.35 ms measured per pass, less the 0.23-0.31 ms batch 2's two cuts of it took off the frame; not measured per pass
   again), lighting the voxels 0.53 ms and their downsample 0.08 ms. What is left is the marches themselves, of which no
   cheap cut was found.
-- In the lit image, a surface that sees none of the probes around it gets no indirect light at all, darker than without
+- In the lit image, a surface that the probes around it see little of gets little indirect light, darker than without
   global illumination: gaps, recesses and ledges thinner than about two voxels (20 cm at High, 40 cm at Low) and the bases
-  of walls beside bright patches can go nearly black. Outdoors this shows on ThirdPerson's ground ledges and fence rails
-  and in a strip along the base of the yard's pool box, sky-lit without it; indoors as a dark band about 0.3 m high where
-  the floor meets the wall under the sun room's window. With the sun high, the bounce on the window wall ends in sharp
-  vertical edges either side of the patch's light.
+  of walls beside bright patches can go nearly black. A surface that none of its probes sees takes the thin gaps' light
+  since batch 2 (the light at the gap's opening, darkened by its depth: a few percent of the open ground's), no longer
+  none at all. Outdoors this shows on ThirdPerson's ground ledges and fence rails and in a strip along the base of the
+  yard's pool box, sky-lit without it; indoors as a dark band about 0.3 m high where the floor meets the wall under the
+  sun room's window. ThirdPerson's ground folds are darker since batch 2, not lighter (with the finest voxels' lower
+  window, by the review's captures of the batch's steps): in the course's lit look-dev picture at 3840 x 2160, three
+  points of one fold read (5,20,13), (5,23,16) and (6,24,17) of 255 where they read (15,45,33), (14,44,34) and
+  (14,44,33) before the batch, and 2,451 pixels of the picture fell under half of their luma (none rose as far). With
+  the sun high, the bounce on the window wall ends in sharp vertical edges either side of the patch's light.
 - A wall that stands at an angle to the world's axes glows softly around a patch of sunlight on it, as it did before
   batch 2. A surface never reads less than its probes' ambient cubes hold for it, and between the axes a cube blends
   the light of the two or three axes the wall's normal lies between, some of which is the patch's own. On a test panel
@@ -429,9 +450,17 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   falls faster than it should where they cannot resolve it. Where the sphere meets the floor a row of small hard-edged
   black notches remains: floor seen through a gap of 6-15 cm under the sphere, thinner than a voxel, which no probe sees;
   the floor at the sphere's left shows soft lighter streaks. The floor in the gap between the tall box and the red wall
-  falls to 0.21 of its neighbour's light 0.1 m away (half is the goal), and that gap stays very dark: it lies in the box's
-  full shadow, but the probes in front of it take the panel's light through the cascades' merge. At Low, cells of probes beside the box and the sphere lie
-  inside them, and the walls and floor there still show steps and black patches, and the ceiling darkens along its edges.
+  falls to 0.22 of its neighbour's light 0.1 m away (half is the goal), and that gap stays very dark: it lies in the box's
+  full shadow, but the probes in front of it take the panel's light through the cascades' merge. Since batch 2 the dark
+  reaches forward along the box's left face: a soft dark patch on the floor, from the box's front corner 0.6 m back and
+  0.2 m wide, reads under half of what it read before the batch in the lit picture at 3840 x 2160 (2,555 pixels, the
+  darkest 0.26 of before, 92 to 24 of 255; 2,543 pixels with TAA; under three quarters along 1.2 m of the face), with a
+  small notch at the corner, and the floor 0.3 to 0.6 m from the sphere's contact is darker as well, smoothly (its mean
+  green 24 of 255 against 34). Both came with the finest voxels' lower window (batch 2's first item, by the review's
+  captures of the batch's steps). The cause is not established, and whether the patch is darker than the room's true
+  light there was not measured: that floor lies in the box's shadow from the panel. At Low, cells of probes beside the
+  box and the sphere lie inside them, and the walls and floor there still show steps and black patches, and the ceiling
+  darkens along its edges.
   Low bounces once: with every bounce its Cornell box would be about 1.8 times as bright as High's (its ceiling 165-235
   nits per unit of albedo against 89-142). In the sun room, the window wall keeps its dark vertical bands either side of
   the window (a glow up to 1.8 times too bright near the window's edges, falling off a metre away) and the dark band
@@ -446,7 +475,20 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
 - The thin gaps' light takes the gap for three quarters of a voxel tall, of the voxels the surface lies in. Where the
   finer voxels' window ends the voxel doubles and the assumed gap with it, so the light of a gap that crosses the
   window's edge steps there: far inside the gap by up to four times, by the formula. Blending the two levels there is
-  a change to the whole gather, whose probe visibility reads one level too, and is not made in this batch.
+  a change to the whole gather, whose probe visibility reads one level too, and is not made in this batch. Measured
+  where the window's edge runs through the slot under the yard's car (seen from 5 m at 3840 x 2160), the GI view steps
+  from 1 to 11 of 255 from one pixel row to the next and the lit picture from 20 to 25: that step is the probes' own
+  light, there before batch 2 as well, and the thin gaps' light adds at most 1 of 255 on its dark side.
+- The thin gaps' light can end in a crisp edge. In ThirdPerson's course one fold of the ground carries a lighter patch
+  about 25 pixels across in the 3840 x 2160 look-dev picture, whose lower-left edge steps by 14-16 of 255 in the GI view
+  (62 to 78) and by 3 in the lit picture (90 to 93). It came with the thin gaps' light: of the batch's captures of its
+  steps, the pictures before the batch and after its first item have no edge there, and the one after its second item
+  has it, by the same 3 levels. What in that light draws the edge is not established. By the code, the light looks for
+  the first open voxel toward the camera, and that search is not continuous where the voxels close again on the way: a
+  surface whose first sample is just open counts no depth and takes the opening's light whole, while its neighbour,
+  whose first sample is just closed, marches on to an opening far away. A search that weighs every opening on the way
+  would be continuous, but it is another design of the thin gaps' light, with its bands, its leaks and its cost to
+  measure again, and is not made in this batch.
 - Global illumination's own stage at 3840 x 2160 read about 4.4 ms in some runs and about 6.5 ms in others of the same
   build (the sun room and the yard, High): the difference lay in the pass that sums cascade 0's rays into the field (1.2
   or 3.6 ms), with the opaque pass's time unchanged. Every slow run was measured on one day before 15:00; afterwards

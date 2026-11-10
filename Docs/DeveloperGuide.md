@@ -5310,14 +5310,14 @@ probe-field levels and local lights follow.
   `ReadGlobalIlluminationFieldIrradiance` and `ReadGlobalIlluminationFieldDepth` read the probes (blocking).
   `GPU.SceneRenderer.GlobalIlluminationStitching` checks the depth moments against a probe's
   known distances and the Cornell box's gi view at High: across every probe plane on its walls, ceiling and floor the light
-  steps at most 10% beyond its slope (the old on/off gather: 25% on the red wall; 8.9% at most now), and the floor around
+  steps at most 10% beyond its slope (the old on/off gather: 25% on the red wall; 8.7% at most now), and the floor around
   the sphere's foot has no point darker than half its brightest neighbour a voxel away (0.65), and along the far corners
   (the back wall with the side walls and the ceiling, the ceiling with the side walls) no point within 0.2 m of the junction
   is darker than half of the point a voxel farther from it (0.53 at the least, on the red wall by the ceiling; 0.58 before
   the finest voxels' window moved 0.8 m down: the ceiling, 2.75 m above the camera, takes 0.2 m voxels since; without the
   push out of solids 0 at every junction). The floor the sphere overhangs (its last 0.3 m) keeps half of its brightest
   neighbour too (0.53; 0.083 while the floor, 2.75 m below the camera, lay beyond level 0's weights, 0.021 before
-  relocation and the guard visibility); around the tall box's foot it keeps at least 0.2 (0.21; 0.23 before the window
+  relocation and the guard visibility); around the tall box's foot it keeps at least 0.2 (0.22; 0.23 before the window
   moved and surfaces read harmonics, 0.10 before relocation): half is a goal not met there. "A thin gap takes field
   light beyond the finest voxels" checks the yard's car from 4 and 6 m at High and Low (above: from 6 m at High the band
   under its edge keeps 0.1 of the open ground's light and every band half of what it keeps from 4 m; no band is brighter
@@ -5393,7 +5393,10 @@ probe-field levels and local lights follow.
 - **What it cannot do** (so far): the field resolves no more than its probes, 0.5 m apart at High and 1 m at Low. In the
   Cornell box at High a row of small hard-edged black notches (the voxels' edges) remains where the sphere meets the floor,
   with soft lighter streaks at its left, and the floor in the gap between the tall box's back-left corner and the red wall
-  falls to 0.21 of its neighbour's light within a voxel (the stitching case reports it). The notches are floor the camera
+  falls to 0.22 of its neighbour's light within a voxel (the stitching case reports it); since the finest voxels' window
+  moved down, a soft dark patch also lies on the floor along that box's left face (0.6 m by 0.2 m of it under half of what
+  the lit picture read before, the darkest 0.26; the cause is not established: the release notes' Known issues), and the
+  floor 0.3 to 0.6 m from the sphere's contact is darker than it was. The notches are floor the camera
   sees through a gap of 6-15 cm under the sphere (0.3-0.5 m from its contact), thinner than a voxel: the sphere's voxels
   (every voxel a face reaches into is solid) rest on the floor's there, so no probe sees those points, and the view ray from
   them grazes the sphere's voxels for more than 0.6 m (measured: retesting each probe against where the view ray leaves the
@@ -5435,9 +5438,11 @@ probe-field levels and local lights follow.
   down, Low within 7 m and 2.8 m, faded to today's light over the next 2 m), which can show outdoors as the edge of a
   bubble. The reach stays where voxel level 2 holds every point while a scroll's slab waits to be voxelized and the camera
   moves on up to a step (`ComputeLayout`; Low's level 2 holds 4.8 m up and down), since a point no level holds takes
-  today's light at once. A surface that sees none of its eight probes gets no field light (dark, never the sky): gaps,
-  recesses and ledges under about two voxels and wall bases beside bright patches go nearly black, outdoors too, where
-  they are darker than without GI (the yard's pool box, ThirdPerson's ledges and fence rails). The sun room's window wall
+  today's light at once. A surface that sees none of its eight probes gets none of their light (dark, never the sky; at
+  most the thin gaps' light, a few percent of the light at the gap's opening), and one they see little of gets little:
+  gaps, recesses and ledges under about two voxels and wall bases beside bright patches go nearly black, outdoors too,
+  where they are darker than without GI (the yard's pool box, ThirdPerson's ledges and fence rails, and its ground
+  folds, about half as bright since the finest voxels' window moved down). The sun room's window wall
   shows why at its foot: the row of probes 0.15 m above the floor sees the sunlit patch only at grazing angles, which their
   64 directions (about 25 degrees apart) do not resolve, so at one bounce every face of those beside the window reads 0.0-0.1
   (those under it, which see the sill's light, 30), and the wall's foot, between them and probes under the floor, goes black

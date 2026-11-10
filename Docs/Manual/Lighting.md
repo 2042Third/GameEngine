@@ -343,11 +343,13 @@ fences.
   - The east wall and the ceiling of a sunlit room get about half of their first bounce.
   - At Low, light bounces only once, as it did before every bounce came: a room lit by a panel in its ceiling keeps a
     dark ceiling there. Low's coarser probes would let bounced light into a closed room's corners; High bounces on.
-  - A surface that sees none of the probes around it gets no indirect light at all, darker than without global
+  - A surface that the probes around it see little of gets little indirect light, darker than without global
     illumination: gaps, recesses and ledges thinner than about two voxels (20 cm at High, 40 cm at Low) and the bases of
-    walls beside bright patches can go nearly black. Outdoors this shows at the foot of large boxes on the ground and on
-    ThirdPerson's ledges and fence rails; indoors as a dark band where the floor meets a wall below a sunlit window, and
-    under low overhangs (the floor under a ball's rim) and in narrow gaps between an object and a wall.
+    walls beside bright patches can go nearly black (a gap that no probe sees keeps a few percent of the light at its
+    opening). Outdoors this shows at the foot of large boxes on the ground and on ThirdPerson's ledges, fence rails and
+    ground folds; indoors as a dark band where the floor meets a wall below a sunlit window, under low overhangs (the
+    floor under a ball's rim), in narrow gaps between an object and a wall and on the floor along the foot of a tall
+    box beside a wall.
   - Low is too dark.
   - Its light fades out from 7.5 m to 9.5 m around the camera and from 5.5 m to 7.5 m above and below it at High
     (Low: 7 m to 9 m, and 2.8 m to 4.8 m), and outdoors that edge can show.
