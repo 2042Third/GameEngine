@@ -786,11 +786,20 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	add_test(NAME StrataFeatureTest.Copy COMMAND "${CMAKE_COMMAND}" -E copy_directory "${STRATA_FEATURE_TEST_DIR}" "${STRATA_FEATURE_RUN_DIR}/Project")
 	set_tests_properties(StrataFeatureTest.Copy PROPERTIES FIXTURES_REQUIRED StrataFeatureTestClean FIXTURES_SETUP StrataFeatureTestProject LABELS "feature")
 
+	# The editor closes once the command script finished (--quit-after-commands: each command answers when its work is
+	# done, play.step after its fixed steps and project.export once the game is written) and fails the run if a step
+	# failed. The clock bounds the run (TIMEOUT_SECONDS), never a count of frames: --frames 300, five seconds of a headless
+	# editor's 60 frames per second, ended a slow CI machine's run while the export was still writing the game.
 	add_test(NAME StrataEditor.FeatureTest
 		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:StrataEditor>"
-			"-DARGUMENTS=--no-gpu|--no-automation|--frames|300|--project|${STRATA_FEATURE_RUN_DIR}/Project/FeatureTest.stproj|--commands|${CMAKE_CURRENT_BINARY_DIR}/FeatureCommands-$<CONFIG>.json"
-			"-DEXPECT=${STRATA_FEATURE_SCRIPTS_RAN}" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+			"-DARGUMENTS=--no-gpu|--no-automation|--quit-after-commands|--project|${STRATA_FEATURE_RUN_DIR}/Project/FeatureTest.stproj|--commands|${CMAKE_CURRENT_BINARY_DIR}/FeatureCommands-$<CONFIG>.json"
+			"-DEXPECT=${STRATA_FEATURE_SCRIPTS_RAN}" -DTIMEOUT_SECONDS=600 -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
 	set_tests_properties(StrataEditor.FeatureTest PROPERTIES FIXTURES_REQUIRED StrataFeatureTestProject FIXTURES_SETUP StrataFeatureTestGame LABELS "feature")
+	# RunAndExpect's clock bound stops a program that runs past it and fails the run (StrataEditor.FeatureTest relies on it).
+	add_test(NAME StrataEditor.RunAndExpectTimeout
+		COMMAND "${CMAKE_COMMAND}" "-DRUN_AND_EXPECT=${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpectTimeout.cmake")
+	set_tests_properties(StrataEditor.RunAndExpectTimeout PROPERTIES LABELS "feature" TIMEOUT 100)
 
 	# The game runs longer than the in-process feature scenario (200 frames), where nothing may end it: its scripts quit only
 	# when a test runner asks them to. Its save files go into the build tree (--save-directory), never into the user's data,

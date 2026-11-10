@@ -847,7 +847,10 @@ exercised by it.
     `expect` conditions on the rects, the ball, the clicks, the field's text and `script.status`), extract the sun of
     `Sky.hdr` (a 900-nit texel its generator writes, which its `.meta`'s `RemoveSun` paints out of the cooked map) into
     the Sun with `lighting.extractSun` and undo it, export it with the module and run it headless; they must exit cleanly and print what the scripts log
-    (`StrataTests/Editor/RunAndExpect.cmake`). A new editor command a game relies on gets a step there.
+    (`StrataTests/Editor/RunAndExpect.cmake`). The editor's run ends when its script is done (`--quit-after-commands`)
+    and is bounded by the clock (`TIMEOUT_SECONDS`, which stops the program and fails the run:
+    `StrataEditor.RunAndExpectTimeout`), never by a count of frames: a headless editor draws 60 frames a second however
+    long an export takes. A new editor command a game relies on gets a step there.
     `StrataRuntime.FeatureTestQuality` (labels `feature` and `gpu`) runs the exported game in a window with
     `--quality low`: its scripts must read the preset as the command line's and say so.
 - **The feature test enforces coverage.** It fails when:

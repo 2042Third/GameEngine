@@ -1,9 +1,12 @@
 # Runs a program and checks its outcome: the exit code must be 0, the output (stdout and stderr) must contain every
 # expected text, every expected path must exist afterwards, and with MIN_SECONDS the run must have taken at least that
-# many seconds (whole seconds of the clock, so leave a second of margin).
+# many seconds (whole seconds of the clock, so leave a second of margin). With TIMEOUT_SECONDS the program is stopped and
+# the run fails once it has run that many seconds of the clock: the bound of a run that waits for a condition (an editor's
+# command script with --quit-after-commands), never a count of frames, which the slowest machines CI runs on do not reach
+# in time.
 #
 # cmake -DPROGRAM=<executable> [-DARGUMENTS=<arg>|<arg>|...] [-DEXPECT=<text>|<text>|...] [-DEXPECT_PATHS=<path>|...]
-#       [-DWORKING_DIRECTORY=<dir>] [-DMIN_SECONDS=<seconds>] -P RunAndExpect.cmake
+#       [-DWORKING_DIRECTORY=<dir>] [-DMIN_SECONDS=<seconds>] [-DTIMEOUT_SECONDS=<seconds>] -P RunAndExpect.cmake
 # Arguments, expected texts and paths are separated by '|'.
 
 if(NOT DEFINED PROGRAM OR PROGRAM STREQUAL "")
@@ -16,12 +19,23 @@ if(NOT WORKING_DIRECTORY)
 	get_filename_component(WORKING_DIRECTORY "${PROGRAM}" DIRECTORY)
 endif()
 
+set(timeout "")
+if(DEFINED TIMEOUT_SECONDS)
+	if(NOT TIMEOUT_SECONDS MATCHES "^[1-9][0-9]*$")
+		message(FATAL_ERROR "RunAndExpect: TIMEOUT_SECONDS must be a positive whole number of seconds, not '${TIMEOUT_SECONDS}'")
+	endif()
+	set(timeout TIMEOUT "${TIMEOUT_SECONDS}")
+endif()
+
 string(TIMESTAMP started "%s" UTC)
-execute_process(COMMAND "${PROGRAM}" ${arguments} WORKING_DIRECTORY "${WORKING_DIRECTORY}"
+execute_process(COMMAND "${PROGRAM}" ${arguments} WORKING_DIRECTORY "${WORKING_DIRECTORY}" ${timeout}
 	OUTPUT_VARIABLE output ERROR_VARIABLE output RESULT_VARIABLE result)
 string(TIMESTAMP finished "%s" UTC)
 message("${output}")
 if(NOT result EQUAL 0)
+	if(DEFINED TIMEOUT_SECONDS AND NOT result MATCHES "^-?[0-9]+$")
+		message(FATAL_ERROR "RunAndExpect: '${PROGRAM}' did not finish within ${TIMEOUT_SECONDS} s and was stopped (${result})")
+	endif()
 	message(FATAL_ERROR "RunAndExpect: '${PROGRAM}' failed (${result})")
 endif()
 if(DEFINED MIN_SECONDS)
