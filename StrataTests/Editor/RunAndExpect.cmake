@@ -33,7 +33,9 @@ execute_process(COMMAND "${PROGRAM}" ${arguments} WORKING_DIRECTORY "${WORKING_D
 string(TIMESTAMP finished "%s" UTC)
 message("${output}")
 if(NOT result EQUAL 0)
-	if(DEFINED TIMEOUT_SECONDS AND NOT result MATCHES "^-?[0-9]+$")
+	# A stop at the bound is the one result execute_process names "Process terminated due to timeout". Its other texts are a
+	# program that could not be started or that an exception ended (a crash): failures, but no runs past the bound.
+	if(DEFINED TIMEOUT_SECONDS AND result MATCHES "timeout")
 		message(FATAL_ERROR "RunAndExpect: '${PROGRAM}' did not finish within ${TIMEOUT_SECONDS} s and was stopped (${result})")
 	endif()
 	message(FATAL_ERROR "RunAndExpect: '${PROGRAM}' failed (${result})")

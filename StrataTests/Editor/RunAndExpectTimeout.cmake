@@ -1,5 +1,6 @@
 # Checks RunAndExpect.cmake's clock bound (TIMEOUT_SECONDS): a program that runs past it is stopped and the run fails, with
-# the reason, long before the program would have ended by itself.
+# the reason, long before the program would have ended by itself. And only such a run is called one: a program that fails
+# under the bound without an exit code (it could not be started, or it crashed) fails as itself.
 #
 # cmake -DRUN_AND_EXPECT=<path of RunAndExpect.cmake> -P RunAndExpectTimeout.cmake
 
@@ -22,3 +23,19 @@ if(position EQUAL -1)
 	message(FATAL_ERROR "RunAndExpectTimeout: the failure does not name the bound:\n${output}")
 endif()
 message("RunAndExpectTimeout: stopped and failed after ${seconds} s")
+
+# A program that cannot be started ends, as a crashed one does, with a text for its result instead of an exit code: the run
+# fails with that text and does not say the program ran past its bound. CMake wraps the message's lines where it likes, so
+# the words are looked for with anything but letters between them.
+execute_process(COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=${CMAKE_CURRENT_LIST_DIR}/NoSuchProgram" -DTIMEOUT_SECONDS=60 -P "${RUN_AND_EXPECT}"
+	OUTPUT_VARIABLE output ERROR_VARIABLE output RESULT_VARIABLE result)
+if(result EQUAL 0)
+	message(FATAL_ERROR "RunAndExpectTimeout: a program that could not be started passed")
+endif()
+if(output MATCHES "did[^a-z]+not[^a-z]+finish")
+	message(FATAL_ERROR "RunAndExpectTimeout: a program that could not be started is said to have run past its bound:\n${output}")
+endif()
+if(NOT output MATCHES "failed[^a-z]+[(]")
+	message(FATAL_ERROR "RunAndExpectTimeout: the failure of a program that could not be started does not give its reason:\n${output}")
+endif()
+message("RunAndExpectTimeout: a program that could not be started failed as itself")
