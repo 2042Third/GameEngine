@@ -421,20 +421,46 @@ namespace Strata
 		}
 		// The ranked lights: those that held a shadow in their previous order (the order their sizes are fitted in), then the new
 		// ones. A light then moves up past those it matters c_LocalShadowKeepRatio more than, so the order follows importance
-		// without trading places between near equals.
-		m_LocalShadowScratch.clear();
+		// without trading places between near equals. The order is found on the lights' importances alone and each light moved
+		// once into its place: where the order turns around (a camera cut) the passes make about n * n / 2 swaps, which of
+		// whole lights (about 1.5 KB each) would move about 150 MB in a frame at Ultra's 256.
+		struct Place
+		{
+			float Importance = 0.0f;
+			uint32_t Held = c_NoLocalShadowLight; // Its index in m_LocalShadowLights, or a new light's
+			uint32_t Candidate = 0;               // The new light's in `candidates`
+		};
+		std::vector<Place> places;
+		places.reserve(m_LocalShadowLights.size() + kept);
 		for (uint32_t index = 0; index < m_LocalShadowLights.size(); index++)
 		{
-			if (fates[index] != Fate::Ranked)
-				continue;
-			m_LocalShadowScratch.push_back(std::move(m_LocalShadowLights[index]));
-			m_LocalShadowScratch.back().Ranked = true;
+			if (fates[index] == Fate::Ranked)
+				places.push_back(Place { m_LocalShadowLights[index].Importance, index, 0 });
 		}
 		for (size_t rank = 0; rank < kept; rank++)
 		{
-			const Candidate& candidate = candidates[rank];
-			if (candidate.Held != c_NoLocalShadowLight)
+			if (candidates[rank].Held == c_NoLocalShadowLight)
+				places.push_back(Place { candidates[rank].Importance, c_NoLocalShadowLight, static_cast<uint32_t>(rank) });
+		}
+		for (size_t index = 1; index < places.size(); index++)
+		{
+			for (size_t place = index; place > 0; place--)
+			{
+				if (!(places[place].Importance > places[place - 1].Importance * c_LocalShadowKeepRatio))
+					break;
+				std::swap(places[place], places[place - 1]);
+			}
+		}
+		m_LocalShadowScratch.clear();
+		for (const Place& place : places)
+		{
+			if (place.Held != c_NoLocalShadowLight)
+			{
+				m_LocalShadowScratch.push_back(std::move(m_LocalShadowLights[place.Held]));
+				m_LocalShadowScratch.back().Ranked = true;
 				continue;
+			}
+			const Candidate& candidate = candidates[place.Candidate];
 			LocalShadowLight& light = m_LocalShadowScratch.emplace_back();
 			light.Entity = lights.GetEntity(candidate.Record);
 			light.Type = lights.GetType(candidate.Record);
@@ -442,15 +468,6 @@ namespace Strata
 			light.Record = candidate.Record;
 			light.Importance = candidate.Importance;
 			light.Ranked = true;
-		}
-		for (size_t index = 1; index < m_LocalShadowScratch.size(); index++)
-		{
-			for (size_t place = index; place > 0; place--)
-			{
-				if (!(m_LocalShadowScratch[place].Importance > m_LocalShadowScratch[place - 1].Importance * c_LocalShadowKeepRatio))
-					break;
-				std::swap(m_LocalShadowScratch[place], m_LocalShadowScratch[place - 1]);
-			}
 		}
 		// Lights still in view that lost their rank fade their shadows out where lighting updates are spread (keeping their tiles
 		// meanwhile); the others give their tiles back now. A light out of view lights nothing the view shows, so its shadow goes
