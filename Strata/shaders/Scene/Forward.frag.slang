@@ -10,7 +10,9 @@
 #include "Include/Fog.slang"
 #include "Include/AerialPerspective.slang"
 #include "Include/AmbientOcclusionFit.slang"
+#ifdef ST_FORWARD_FIELD
 #include "Include/GIField.slang"
+#endif
 #define ST_REFLECTION_PROBE_SAMPLING
 #include "Include/ReflectionProbes.slang"
 #include "Include/IndirectLight.slang"
@@ -27,6 +29,11 @@
 //   ForwardGlassNoEntityIDsVelocity.frag, after Scene/MeshVelocity.vert), their motion, into the attachments after the
 //   color, as the prepass does for opaque surfaces. Their HDR alpha is 1: the TAA does not take them for blended surfaces.
 // Every variant shades a clear coat where the material has one (a branch on its flag, the same for a whole draw).
+// Each of them has a twin with ST_FORWARD_FIELD (Scene/ForwardField.frag, ForwardTransparentField.frag, ForwardGlassField.frag
+// and so on), which reads global illumination's field (Include/GIField.slang): the frames that join the field into the image
+// or show one of its views draw with the twins (SceneRenderer's PipelineKey::Field). The variants without it hold nothing of
+// the field's gather: compiled in behind a branch that a frame without global illumination never takes, it still cost that
+// frame's opaque pass 6-11% of its time at 3840 x 2160.
 
 #ifndef ST_FORWARD_TRANSPARENT
 #define ST_EARLY_FRAGMENT_TESTS [earlydepthstencil]
@@ -170,6 +177,7 @@ IndirectInputs GetIndirectInputs(SurfaceData surface, float3 f0, float2 dfg, flo
 	return inputs;
 }
 
+#ifdef ST_FORWARD_FIELD
 // The GI's views (SceneLightingView::GlobalIllumination, OpenShare): inside the field its diffuse light on a white surface (absolute
 // luminance, under the diffuse occlusion as the join will carry it) or the share of the sky it sees; beyond it, blended over the
 // field's fade, today's diffuse light on white (every form of Include/IndirectLight.slang) or 1 (today's light counts all open).
@@ -188,6 +196,7 @@ float3 ShadeGlobalIlluminationView(uint lightingView, SurfaceData surface, float
 	float3 today = ComposeIndirect(inputs, GatherIndirectDiffuse(inputs, white), float3(0.0));
 	return field.rgb * (diffuseOcclusion / ST_GI_RADIANCE_SCALE) * field.a + today * (1.0 - field.a);
 }
+#endif
 
 // The lit surface's color: the sun with its shadow, the punctual lights of the pixel's cluster (those with shadows through
 // their views, Include/LocalShadows.slang), the reflection probes' and the sky's image-based light (or the constant ambient)
@@ -299,6 +308,7 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 		diffuseOcclusionColor, diffuseWeight);
 	// The base's image-based light (or constant ambient), which the clear coat covers below.
 	float3 indirect;
+#ifdef ST_FORWARD_FIELD
 	bool globalIlluminationView = lightingView == ST_LIGHTING_VIEW_GLOBAL_ILLUMINATION || lightingView == ST_LIGHTING_VIEW_OPEN_SHARE;
 	if (u_Frame.ReflectionParams.y > 0.0 || globalIlluminationView)
 	{
@@ -318,6 +328,7 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 			GatherIndirectSpecular(indirectInputs)) + GatherIndirectField(indirectInputs, surface) * indirectInputs.FieldWeight;
 	}
 	else
+#endif
 		indirect = ComposeIndirect(indirectInputs, GatherIndirectDiffuse(indirectInputs, surface), GatherIndirectSpecular(indirectInputs));
 
 	float3 emitted = lightingView == ST_LIGHTING_VIEW_INDIRECT ? float3(0.0) : surface.Emissive;

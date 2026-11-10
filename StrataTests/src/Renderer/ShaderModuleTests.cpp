@@ -60,6 +60,49 @@ namespace
 		return text.substr(0, prefix.size()) == prefix;
 	}
 
+	// A resource an entry point uses: a variable of its interface (SPIR-V 1.4 and later list every global the entry point
+	// reaches) that carries a binding, with its descriptor set (0 without the decoration).
+	struct UsedBinding
+	{
+		uint32_t Variable = 0;
+		uint32_t Set = 0;
+		uint32_t Binding = 0;
+	};
+
+	std::vector<UsedBinding> FindUsedBindings(const ParsedShader& shader)
+	{
+		std::set<uint32_t> interfaceVariables;
+		std::map<uint32_t, uint32_t> descriptorSets;
+		std::map<uint32_t, uint32_t> bindings;
+		for (const SpirvInstruction& instruction : shader.Instructions)
+		{
+			const std::span<const uint32_t> operands = instruction.Operands;
+			if (instruction.Opcode == Spirv::c_OpEntryPoint && operands.size() >= 3)
+			{
+				size_t nameWords = 0;
+				Spirv::ReadLiteralString(operands, 2, nameWords);
+				for (size_t index = 2 + nameWords; nameWords > 0 && index < operands.size(); index++)
+					interfaceVariables.insert(operands[index]);
+			}
+			if (instruction.Opcode == Spirv::c_OpDecorate && operands.size() >= 3)
+			{
+				if (operands[1] == Spirv::c_DecorationDescriptorSet)
+					descriptorSets[operands[0]] = operands[2];
+				else if (operands[1] == Spirv::c_DecorationBinding)
+					bindings[operands[0]] = operands[2];
+			}
+		}
+		std::vector<UsedBinding> used;
+		for (const std::pair<const uint32_t, uint32_t>& binding : bindings)
+		{
+			if (!interfaceVariables.contains(binding.first))
+				continue;
+			const auto set = descriptorSets.find(binding.first);
+			used.push_back({ binding.first, set != descriptorSets.end() ? set->second : 0u, binding.second });
+		}
+		return used;
+	}
+
 	// The capabilities any embedded shader may declare: what core Vulkan 1.2 always supports and what device selection
 	// requires (Platform/Vulkan/VulkanGraphicsDevice.cpp rejects a device without them).
 	struct AllowedCapability
@@ -375,41 +418,59 @@ TEST_SUITE("Renderer.ShaderModules")
 		for (const ParsedShader& shader : ParseEmbeddedShaders())
 		{
 			INFO(shader.Name);
-			std::set<uint32_t> interfaceVariables;
-			std::map<uint32_t, uint32_t> descriptorSets;
-			std::map<uint32_t, uint32_t> bindings;
-			for (const SpirvInstruction& instruction : shader.Instructions)
-			{
-				const std::span<const uint32_t> operands = instruction.Operands;
-				if (instruction.Opcode == Spirv::c_OpEntryPoint && operands.size() >= 3)
-				{
-					size_t nameWords = 0;
-					Spirv::ReadLiteralString(operands, 2, nameWords);
-					for (size_t index = 2 + nameWords; nameWords > 0 && index < operands.size(); index++)
-						interfaceVariables.insert(operands[index]);
-				}
-				if (instruction.Opcode == Spirv::c_OpDecorate && operands.size() >= 3)
-				{
-					if (operands[1] == Spirv::c_DecorationDescriptorSet)
-						descriptorSets[operands[0]] = operands[2];
-					else if (operands[1] == Spirv::c_DecorationBinding)
-						bindings[operands[0]] = operands[2];
-				}
-			}
 			std::map<std::pair<uint32_t, uint32_t>, uint32_t> slots;
-			for (const std::pair<const uint32_t, uint32_t>& binding : bindings)
+			for (const UsedBinding& binding : FindUsedBindings(shader))
 			{
-				if (!interfaceVariables.contains(binding.first))
-					continue;
-				const auto set = descriptorSets.find(binding.first);
-				const std::pair<uint32_t, uint32_t> slot = { set != descriptorSets.end() ? set->second : 0u, binding.second };
-				const auto inserted = slots.emplace(slot, binding.first);
+				const auto inserted = slots.emplace(std::pair<uint32_t, uint32_t> { binding.Set, binding.Binding }, binding.Variable);
 				if (!inserted.second)
 				{
-					FAIL_CHECK(fmt::format("{} binds %{} and %{} to set {} binding {}", shader.Name, inserted.first->second, binding.first,
-						slot.first, slot.second));
+					FAIL_CHECK(fmt::format("{} binds %{} and %{} to set {} binding {}", shader.Name, inserted.first->second, binding.Variable,
+						binding.Set, binding.Binding));
 				}
 			}
 		}
+	}
+
+	TEST_CASE("Only the forward shaders' field variants read global illumination's field")
+	{
+		// A frame without global illumination draws with forward shaders that hold nothing of the field's gather (Scene/
+		// Forward.frag.slang's ST_FORWARD_FIELD, SceneRenderer's PipelineKey::Field): compiled into the one shader behind a
+		// branch such a frame never took, the gather still cost its opaque pass 6-11% of its time at 3840 x 2160. So the six
+		// variants without the field use none of its slots of the scene layout (Include/GIField.slang: SRV 35, 37-40, 54 and
+		// 55, CBV 3), and their six twins read it. The slots as NVRHI's Vulkan binding offsets place them
+		// (CMake/StrataShaders.cmake): register(tN) is binding N, register(bN) binding 256 + N.
+		constexpr uint32_t c_FieldConstants = 256 + 3;
+		const std::set<uint32_t> fieldBindings = { 35, 37, 38, 39, 40, 54, 55, c_FieldConstants };
+		size_t plainCount = 0;
+		size_t fieldCount = 0;
+		for (const ParsedShader& shader : ParseEmbeddedShaders())
+		{
+			if (!StartsWith(shader.Name, "Scene/Forward") || !EndsWith(shader.Name, ".frag"))
+				continue;
+			INFO(shader.Name);
+			std::set<uint32_t> used;
+			for (const UsedBinding& binding : FindUsedBindings(shader))
+			{
+				if (binding.Set == 0 && fieldBindings.contains(binding.Binding))
+					used.insert(binding.Binding);
+			}
+			if (EndsWith(shader.Name, "Field.frag"))
+			{
+				fieldCount++;
+				// What every read of the field takes: its constants, the probes' harmonics and their ambient cubes.
+				CHECK(used.contains(c_FieldConstants));
+				CHECK(used.contains(35));
+				CHECK(used.contains(55));
+			}
+			else
+			{
+				plainCount++;
+				CHECK_MESSAGE(used.empty(), shader.Name, " uses ", used.size(), " of the field's slots, the first at binding ",
+					used.empty() ? 0u : *used.begin());
+			}
+		}
+		// Opaque, alpha-blended and the glass's four (with and without entity ids and motion), each with its twin.
+		CHECK(plainCount == 6);
+		CHECK(fieldCount == 6);
 	}
 }

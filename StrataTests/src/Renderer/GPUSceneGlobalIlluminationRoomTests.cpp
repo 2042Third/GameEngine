@@ -1791,7 +1791,44 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationJoin")
 		REQUIRE(RenderGIFrame(pending, scene, camera, SceneRenderOptions {}));
 		CHECK(pending.GetStats().GlobalIllumination);
 		CHECK(pending.GetStats().GlobalIlluminationPending);
+		CHECK(!pending.GetStats().GlobalIlluminationShaded);
 		CHECK(ReadImage(pending.GetOutputTexture()).Pixels == offImage.Pixels);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Only a frame that reads the field draws with the field's forward shaders")
+	{
+		// The forward shaders come in two forms (Scene/Forward.frag.slang's ST_FORWARD_FIELD): the frames without global
+		// illumination draw with the ones that hold nothing of the field's gather, which, compiled in behind a branch they never
+		// took, still cost their opaque pass 6-11% of its time at 3840 x 2160 ("Renderer.ShaderModules" checks what the shaders
+		// hold; the statistic says which forms a frame drew with). The field's forms draw the join and the two views that sample
+		// the field, which they do also where none ran (its weight 0: today's light); the voxels view lies over the lit image
+		// and reads no field.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		BuildYard(scene, assets);
+		const SceneCamera camera = YardStrafe(0, 0.0f, static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y));
+		const auto shaded = [&](GlobalIlluminationLevel level, bool asked, SceneLightingView view)
+		{
+			SetGlobalIllumination(scene, asked);
+			SceneRenderer renderer(RoomSpecification(level));
+			renderer.SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+			SceneRenderOptions options;
+			options.LightingView = view;
+			for (uint32_t frame = 0; frame < 4; frame++)
+				REQUIRE(RenderGIFrame(renderer, scene, camera, options));
+			return renderer.GetStats().GlobalIlluminationShaded;
+		};
+		CHECK(!shaded(GlobalIlluminationLevel::High, false, SceneLightingView::None));
+		CHECK(!shaded(GlobalIlluminationLevel::Off, true, SceneLightingView::None));
+		CHECK(!shaded(GlobalIlluminationLevel::High, false, SceneLightingView::Voxels));
+		CHECK(!shaded(GlobalIlluminationLevel::High, false, SceneLightingView::Indirect));
+		CHECK(shaded(GlobalIlluminationLevel::High, true, SceneLightingView::None));
+		CHECK(shaded(GlobalIlluminationLevel::High, false, SceneLightingView::GlobalIllumination));
+		CHECK(shaded(GlobalIlluminationLevel::High, false, SceneLightingView::OpenShare));
+		CHECK(shaded(GlobalIlluminationLevel::Off, true, SceneLightingView::GlobalIllumination));
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

@@ -300,6 +300,9 @@ namespace Strata
 		m_ForwardPixelShader = shaders.Get("Scene/Forward.frag");
 		m_ForwardTransparentPixelShader = shaders.Get("Scene/ForwardTransparent.frag");
 		m_GlassPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/ForwardGlass.frag" : "Scene/ForwardGlassNoEntityIDs.frag");
+		m_ForwardFieldPixelShader = shaders.Get("Scene/ForwardField.frag");
+		m_ForwardTransparentFieldPixelShader = shaders.Get("Scene/ForwardTransparentField.frag");
+		m_GlassFieldPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/ForwardGlassField.frag" : "Scene/ForwardGlassNoEntityIDsField.frag");
 		m_FullscreenVertexShader = shaders.Get("PostProcess/Fullscreen.vert");
 		m_TonemapPixelShader = shaders.Get("PostProcess/Tonemap.frag");
 		m_SkyboxPixelShader = shaders.Get("Scene/Skybox.frag");
@@ -316,7 +319,8 @@ namespace Strata
 		ST_CORE_VERIFY(m_MeshVertexShader && m_PrepassPixelShader && m_ForwardPixelShader && m_ForwardTransparentPixelShader && m_GlassPixelShader && m_FullscreenVertexShader
 			&& m_TonemapPixelShader && m_SkyboxPixelShader && m_AtmosphereSkyboxPixelShader && m_ShadowVertexShader && m_ShadowMaskPixelShader && m_FXAAPixelShader && m_SkinnedMeshVertexShader
 			&& m_SkinnedShadowVertexShader && m_SelectionMaskPixelShader && m_LocalShadowVertexShader && m_SkinnedLocalShadowVertexShader && m_MorphologicalEdgesShader
-			&& m_MorphologicalWeightsShader && m_MorphologicalBlendShader,
+			&& m_MorphologicalWeightsShader && m_MorphologicalBlendShader && m_ForwardFieldPixelShader && m_ForwardTransparentFieldPixelShader
+			&& m_GlassFieldPixelShader,
 			"SceneRenderer shaders are missing");
 
 		// The knobs within their ranges: cascades 1 to 4, the local shadows' atlas a power of two from 512 to 8192, at most
@@ -1191,7 +1195,9 @@ namespace Strata
 			m_SkinnedMeshVelocityVertexShader = shaders.Get("Scene/MeshSkinnedVelocity.vert");
 			m_PrepassVelocityPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/DepthPrepassVelocity.frag" : "Scene/DepthPrepassNoEntityIDsVelocity.frag");
 			m_GlassVelocityPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/ForwardGlassVelocity.frag" : "Scene/ForwardGlassNoEntityIDsVelocity.frag");
-			ST_CORE_VERIFY(m_MeshVelocityVertexShader && m_SkinnedMeshVelocityVertexShader && m_PrepassVelocityPixelShader && m_GlassVelocityPixelShader,
+			m_GlassVelocityFieldPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/ForwardGlassVelocityField.frag" : "Scene/ForwardGlassNoEntityIDsVelocityField.frag");
+			ST_CORE_VERIFY(m_MeshVelocityVertexShader && m_SkinnedMeshVelocityVertexShader && m_PrepassVelocityPixelShader && m_GlassVelocityPixelShader
+				&& m_GlassVelocityFieldPixelShader,
 				"SceneRenderer: the velocity shaders are missing");
 		}
 		if (!m_VelocityTexture)
@@ -2455,9 +2461,14 @@ namespace Strata
 			case Pass::LocalShadowMasked: desc.PS = m_ShadowMaskPixelShader; break;
 			case Pass::Shadow:
 			case Pass::LocalShadow:  desc.PS = nullptr; break; // Depth only
-			case Pass::Transparent:  desc.PS = m_ForwardTransparentPixelShader; break;
-			case Pass::Glass:        desc.PS = key.Velocity ? m_GlassVelocityPixelShader : m_GlassPixelShader; break;
-			case Pass::Opaque:       desc.PS = m_ForwardPixelShader; break;
+			case Pass::Transparent:  desc.PS = key.Field ? m_ForwardTransparentFieldPixelShader : m_ForwardTransparentPixelShader; break;
+			case Pass::Glass:
+				if (key.Field)
+					desc.PS = key.Velocity ? m_GlassVelocityFieldPixelShader : m_GlassFieldPixelShader;
+				else
+					desc.PS = key.Velocity ? m_GlassVelocityPixelShader : m_GlassPixelShader;
+				break;
+			case Pass::Opaque:       desc.PS = key.Field ? m_ForwardFieldPixelShader : m_ForwardPixelShader; break;
 			case Pass::SelectionMask: desc.PS = m_SelectionMaskPixelShader; break;
 		}
 		desc.bindingLayouts = { m_SceneBindingLayout, Renderer::GetBindlessTextures().GetLayout() };
@@ -2716,10 +2727,11 @@ namespace Strata
 			nvrhi::GraphicsState glassState = state;
 			glassState.framebuffer = GetGlassFramebuffer();
 			const bool glassVelocity = m_MotionFrame;
+			const bool glassField = m_FieldFrame;
 			DrawBuckets(commandList, glassState, drawn.first(m_GlassBatchCount), firstArgument,
-				[glassVelocity](const SceneDrawBatch& batch)
+				[glassVelocity, glassField](const SceneDrawBatch& batch)
 				{
-					return PipelineKey { Pass::Glass, batch.DoubleSided, batch.Mirrored, batch.Skinned, glassVelocity, false };
+					return PipelineKey { Pass::Glass, batch.DoubleSided, batch.Mirrored, batch.Skinned, glassVelocity, false, glassField };
 				},
 				nullptr, nullptr);
 			firstArgument += m_GlassBatchCount;
@@ -2728,10 +2740,11 @@ namespace Strata
 		// Blended transparent surfaces have no EQUAL test to agree with and write no motion: the plain shaders.
 		const bool velocity = m_MotionFrame && pass != Pass::Transparent;
 		const bool surface = m_ReflectionFrame && pass == Pass::Prepass;
+		const bool field = m_FieldFrame && (pass == Pass::Opaque || pass == Pass::Transparent);
 		DrawBuckets(commandList, state, drawn, firstArgument,
-			[pass, velocity, surface](const SceneDrawBatch& batch)
+			[pass, velocity, surface, field](const SceneDrawBatch& batch)
 			{
-				return PipelineKey { pass, batch.DoubleSided, batch.Mirrored, batch.Skinned, velocity, surface };
+				return PipelineKey { pass, batch.DoubleSided, batch.Mirrored, batch.Skinned, velocity, surface, field };
 			},
 			nullptr, nullptr);
 		if (pass == Pass::Prepass)
@@ -3330,6 +3343,10 @@ namespace Strata
 			frame.ReflectionParams.z = std::isfinite(postProcess.GlobalIlluminationIntensity)
 				? std::clamp(postProcess.GlobalIlluminationIntensity, 0.0f, 4.0f) : 1.0f;
 		}
+		// Only such a frame, and one that shows a GI view (which samples the field wherever it shows), draws with the forward
+		// shaders that hold the field's gather (PipelineKey::Field).
+		m_FieldFrame = frame.ReflectionParams.y > 0.0f || forwardView == SceneLightingView::GlobalIllumination || forwardView == SceneLightingView::OpenShare;
+		m_Stats.GlobalIlluminationShaded = m_FieldFrame;
 		WriteFrameConstants(commandList, frame);
 		commandList->writeBuffer(m_GIFieldConstantBuffer, &m_GIFieldConstants, sizeof(m_GIFieldConstants));
 		UploadSceneData(commandList, drawListsRecreated);

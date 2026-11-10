@@ -3912,7 +3912,7 @@ mechanical, so a lighting bug in code nobody changed may be a conversion slip (i
    `-fvk-use-dx-layout`, `-fvk-use-scalar-layout` (other buffer offsets), `-g` (configuration-dependent outputs),
    `-O`, `-source-embed-style` (the header must follow the patch), `-depfile`, `-emit-spirv-via-glsl`. Shader bytes are
    the same in Debug, Release and Dist. Every entry depends on its own file and every include: editing an include
-   recompiles all shaders, editing `Forward.frag.slang` its six entries.
+   recompiles all shaders, editing `Forward.frag.slang` its twelve entries.
 5. **The pin** (`CMake/StrataSlang.cmake`). Slang 2026.20's release archives for Windows x64, Linux x64 and macOS (arm64
    and x64), each with its SHA-256. The first configure downloads the host's archive (25-64 MB) under a file lock into a
    per-user cache, `%LOCALAPPDATA%\Strata\Toolchains`, `~/Library/Caches/Strata/Toolchains` or
@@ -3932,7 +3932,9 @@ mechanical, so a lighting bug in code nobody changed may be a conversion slip (i
    allow-list grows only by a feature device selection requires; `StorageImageExtendedFormats` only per named entry with a
    fallback for devices without `shaderStorageImageExtendedFormats`, and a hint names the known traps: `f32tof16`'s 16-bit
    types, `Sample` in compute, storage images without a format, `SV_InstanceID`); the four `Scene/Mesh*.vert` entries
-   keep their position invariant; no module binds two used variables to one slot; each scene vertex shader reads exactly
+   keep their position invariant; no module binds two used variables to one slot; the six forward pixel shaders without
+   `ST_FORWARD_FIELD` use none of global illumination's slots and each of their six twins reads the field (Rendering,
+   "The join"); each scene vertex shader reads exactly
    the locations and types of its input layout (`Renderer/SceneVertexLayouts.h`, from which `GetScenePipeline` takes a
    pipeline's layout by its vertex shader: the validation layer only warns about an attribute no shader reads, and the
    GPU suites count errors). A new scene vertex shader gets a line there. `Renderer.ShaderTool` tests the tool.
@@ -4965,7 +4967,8 @@ probe-field levels and local lights follow.
   `Renderer.Quality.GlobalIllumination` (Off, Low, High; Off at Low and Medium, High at High and Ultra; traits line
   `GPU.RadianceCascades`, the layout's `GetMemoryBytes`). GI runs where a scene asks at a row other than Off, or a GI view
   shows (at the row's layout; at Off the views show High's). Without that, nothing is made (no memory, no stage, the dummy
-  SRVs) and the image is Strata 0.7.0's bit for bit; `ForThumbnails()` and `ForBake()` take Medium's row, so no GI there.
+  SRVs), the forward passes draw with shaders that hold nothing of the field (the join, below) and the image is Strata
+  0.7.0's bit for bit; `ForThumbnails()` and `ForBake()` take Medium's row, so no GI there.
   High's cost is measured on the reference machine only (Windows, NVIDIA): Low is the level for integrated and Apple GPUs
   until measured there, and CI's Mac runs no GPU test.
 
@@ -5231,7 +5234,8 @@ probe-field levels and local lights follow.
   written cost nothing six interleaved pairs of runs could measure (the frame's GPU time 8.76 against 8.78 ms in the sun
   room and 8.23 against 8.20 ms in the yard), and neither binary read slow; the yard's stage alone read 3.83 to 4.53 ms
   in the one and 4.08 to 4.51 in the other, the frame's time following by 0.17 ms at most. Compare builds only by
-  interleaved runs, and judge the stage by the medians of several. Without GI nothing of it runs.
+  interleaved runs, and judge the stage by the medians of several. Without GI nothing of it runs, and the forward
+  shaders hold none of it (the join).
 - **The join** (`Scene/Forward.frag.slang`'s `ShadeLitSurface`, `Include/IndirectLight.slang`'s `GatherIndirectField`):
   where the scene asked and the frame's field is used (ran, not pending), `FrameConstants::ReflectionParams.y` is 1 and `.z`
   the intensity (clamped to [0, 4], non-finite 1). Every variant (opaque, alpha-blended, glass: no screen data is read)
@@ -5242,6 +5246,16 @@ probe-field levels and local lights follow.
   holds the sky's intensity. Specular is untouched. With `ReflectionParams.y` 0 the code is the old expression, so a frame
   without GI, or pending, is 0.7.0's to the bit; with a field weight of 0 the joined form is too (`x * 1`, `+ 0`).
   `viewport.capture` and the project picture (`ProjectThumbnail`, `c_MaxGIFrames`) wait for `GlobalIlluminationSettled`.
+  The gather is not compiled into every forward shader: each of the six pixel shaders of `Forward.frag.slang` has a twin
+  with `ST_FORWARD_FIELD` (`Scene/Forward*Field.frag`), and a frame draws with the twins (`PipelineKey::Field`, from
+  `m_FieldFrame`) only when it joins the field or shows the `gi` or `open` view (`SceneRendererStats`'
+  `GlobalIlluminationShaded`); their pipelines are made when first used. Every other frame, a pending one too, draws with
+  shaders that hold nothing of the field. Compiled in behind the branch on `ReflectionParams.y`, the gather cost a frame
+  without GI 6-11% of `GPU.Opaque` at 3840 x 2160 (0.017-0.021 ms, the review's interleaved runs against the build before
+  batch 2). Without it, three interleaved pairs against that build read `GPU.Opaque` at 0.94-1.01 of its time without
+  anti-aliasing and 0.98-1.02 with TAA at High's row (eight and six shots, medians 0.99 and 0.98, differences from -0.010
+  to +0.007 ms), 0.96-1.00 and 0.96-1.01 at Medium's (-0.008 to +0.003 ms). A new forward variant gets its twin, and a
+  shader that must read the field is a twin: `Renderer.ShaderModules` fails when a plain one binds one of the field's slots.
 - **The field in the forward pass** (`Include/GIField.slang`, the `gi` and `open` views and the join): the eight cascade-0
   probes around the point moved `c_GIGatherNormalBias` spacings along its geometric normal, each by its trilinear weight (from
   its grid position), validity, whether it lies in front of the surface's plane (from where it moved) and whether it sees the
@@ -5314,6 +5328,7 @@ probe-field levels and local lights follow.
   counts them); every capture's result has
   `globalIlluminationSettled`, `editor.perf`'s `renderStats` `globalIllumination: {ran, pending, settled}`.
 - **Statistics** (`SceneRendererStats`): `GlobalIllumination`, `GlobalIlluminationPending`, `GlobalIlluminationSettled`,
+  `GlobalIlluminationShaded` (the frame drew with the forward shaders that read the field),
   `GIVoxelizedTriangles`, `GIQueuedRegions`, `GIWaitingProxies`, `GIMovingProxies`,
   `GIUnvoxelizedSubmeshes`; a frame whose voxelization could not be recorded is degraded, pending and not settled;
   `SceneRendererGPUStats`' `GITiles` and
@@ -5324,7 +5339,9 @@ probe-field levels and local lights follow.
   walks, one at 2,000 triangles a frame that moves the camera while regions are queued, against a renderer made for the
   camera alone, bit for bit; 20 km out; nothing made without GI) and `GPU.SceneRenderer.GPUDriven`'s "The
   GI's voxels" (both paths give the same voxels); `GPU.SceneRenderer.GlobalIlluminationJoin` (not asked, or the row Off:
-  nothing made and the same image; a pending frame is today's light to the bit; the owner's red floor tints the lit
+  nothing made and the same image; a pending frame is today's light to the bit; only a frame that reads the field draws
+  with the field's forward shaders, whose plain twins bind none of its slots (`Renderer.ShaderModules`); the owner's red
+  floor tints the lit
   image's walls by at least 0.7 of the one-bounce reference's change of R/G, and not at all without GI; the intensity scales
   the field; the field's share takes no multi-bounce; the row follows `SetQuality`; both paths give the same lit image;
   inside the field the diffuse light is the gi view's times the albedo within 1%; a blended quad and a glass pane take the
@@ -6195,7 +6212,8 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   `Pass::Glass`: no blending (HDR alpha 1), depth written (the blended surfaces behind it stay hidden, overlays and the
   TAA see it), entity ids when the renderer has them and the velocity in a frame with motion vectors, as further
   attachments of `m_GlassFramebuffer` and `m_GlassMotionFramebuffer` (`Scene/ForwardGlass*.frag`, the four variants of
-  `Forward.frag` with `ST_FORWARD_GLASS`). It is picked and outlined like an opaque surface. Its alpha mode's blending
+  `Forward.frag` with `ST_FORWARD_GLASS` and their four twins that read global illumination's field). It is picked and
+  outlined like an opaque surface. Its alpha mode's blending
   does not apply (Mask still cuts).
 - **The scene-color copy** (`SceneRendererGlass.cpp`, `Effects/SceneColorCopy.comp`, in `GPU.Transparent`): when the
   frame draws glass, the HDR image after the sky is box-filtered into a texture of half the viewport's size with 6

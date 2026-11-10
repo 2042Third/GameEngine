@@ -262,8 +262,14 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   reported before. In all, batch 2 costs that frame about 0.1 ms of GPU time: 0.05 ms more in the sun room and 0.09 ms
   in the yard than the build before it in three interleaved runs of each (8.96 against 8.92 ms and 8.38 against 8.29 ms;
   `GPU.RadianceCascades` 4.20 and 4.16 ms against 4.27 and 4.07, `GPU.Opaque` 1.07 and 0.84 ms against 1.00 and 0.75),
-  0.12-0.15 and 0.04 ms as the sum of its separately measured steps. Without global illumination it costs nothing (the
-  100,000 cubes' frame: 1.572 against 1.574 ms).
+  0.12-0.15 and 0.04 ms as the sum of its separately measured steps. Without global illumination it costs nothing: a
+  frame that does not read the field draws with forward shaders that hold nothing of it. (Compiled in behind a branch such
+  a frame never takes, the field's gather had cost its opaque pass 6-11% at 3840 x 2160, 0.017-0.021 ms, in the review's
+  interleaved runs.) In three interleaved pairs against the build before batch 2, the look-dev project's shots without
+  global illumination at 3840 x 2160 spend 0.94-1.02 of that build's time in `GPU.Opaque` at High (eight shots without
+  anti-aliasing, six with TAA; medians 0.99 and 0.98; -0.010 to +0.007 ms) and 0.96-1.01 at Medium (medians 0.98; -0.008
+  to +0.003 ms). Without anti-aliasing seven of the eight pictures are that build's to the bit in all three captures, the
+  eighth (polished metal) in two of three, with 3 pixels one level apart in the third; with TAA all six are, in all three.
 - A camera that stands still gets the same probes every frame, to the bit. The pass that sums the finest cascade's rays
   now rounds every product, sum and quotient as written: left free, this machine's driver (NVIDIA 621.1) ran those sums
   in two ways from one frame to the next, a unit in the last place apart (a face of one probe, the harmonics of some
@@ -394,10 +400,6 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   (1.35 ms measured per pass, less the 0.23-0.31 ms batch 2's two cuts of it took off the frame; not measured per pass
   again), lighting the voxels 0.53 ms and their downsample 0.08 ms. What is left is the marches themselves, of which no
   cheap cut was found.
-- Off, it is not quite free: at Medium with TAA at 3840 x 2160, the samples' `??.scene` shots (three interleaved pairs
-  against main without global illumination) spend 0.010-0.014 ms more in `GPU.Opaque` (3.9-5.1%; the base's own spread is
-  0.003-0.010 ms), the forward shader's gather being compiled in although it does not run. Sampling the field at one
-  place instead of two left the cost as it was. Images are unchanged.
 - In the lit image, a surface that sees none of the probes around it gets no indirect light at all, darker than without
   global illumination: gaps, recesses and ledges thinner than about two voxels (20 cm at High, 40 cm at Low) and the bases
   of walls beside bright patches can go nearly black. Outdoors this shows on ThirdPerson's ground ledges and fence rails

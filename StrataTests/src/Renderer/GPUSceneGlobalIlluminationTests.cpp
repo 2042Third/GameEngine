@@ -1361,6 +1361,7 @@ TEST_SUITE("GPU.SceneRenderer.GPUDriven")
 			for (uint32_t frame = 0; frame < 3; frame++)
 				REQUIRE(RenderGIFrame(*renderer, scene, YardCamera(glm::vec3(0.0f)), giView));
 			REQUIRE(renderer->GetStats().GlobalIllumination);
+			CHECK(renderer->GetStats().GlobalIlluminationShaded);
 			REQUIRE(Renderer::ReadTexture(renderer->GetOutputTexture(), images[path]));
 		}
 		CHECK(CountDifferences(levels[0], levels[1]) == 0);

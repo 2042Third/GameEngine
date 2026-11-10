@@ -674,6 +674,10 @@ namespace Strata
 		bool GlobalIllumination = false;
 		bool GlobalIlluminationPending = false;
 		bool GlobalIlluminationSettled = true;
+		// The frame's forward passes drew with the shaders that read global illumination's field (PipelineKey::Field): the field
+		// was joined into the image, or one of its views showed. False in every other frame, the pending ones too: those draw
+		// with shaders that hold nothing of the field.
+		bool GlobalIlluminationShaded = false;
 		uint32_t GIVoxelizedTriangles = 0;
 		uint32_t GIQueuedRegions = 0;
 		uint32_t GIWaitingProxies = 0;
@@ -1118,6 +1122,10 @@ namespace Strata
 			bool Velocity = false;
 			// The prepass of a frame with screen-space reflections (always with Velocity): it writes the surface target too.
 			bool Surface = false;
+			// The forward passes (opaque, glass, alpha-blended) of a frame whose shading reads global illumination's field, for the
+			// join or one of its views (m_FieldFrame): the pixel shaders with the field's gather (ST_FORWARD_FIELD). Every other
+			// frame's hold nothing of it, so a frame without global illumination pays nothing for it.
+			bool Field = false;
 			bool operator==(const PipelineKey&) const = default;
 		};
 
@@ -2069,6 +2077,10 @@ namespace Strata
 		nvrhi::ShaderHandle m_ForwardPixelShader;
 		nvrhi::ShaderHandle m_ForwardTransparentPixelShader;
 		nvrhi::ShaderHandle m_GlassPixelShader; // With or without entity ids, as the renderer writes them
+		// The same three with global illumination's field (PipelineKey::Field).
+		nvrhi::ShaderHandle m_ForwardFieldPixelShader;
+		nvrhi::ShaderHandle m_ForwardTransparentFieldPixelShader;
+		nvrhi::ShaderHandle m_GlassFieldPixelShader;
 		nvrhi::ShaderHandle m_FullscreenVertexShader;
 		nvrhi::ShaderHandle m_TonemapPixelShader;
 		nvrhi::ShaderHandle m_SkyboxPixelShader;
@@ -2740,6 +2752,7 @@ namespace Strata
 		nvrhi::ShaderHandle m_SkinnedMeshVelocityVertexShader;
 		nvrhi::ShaderHandle m_PrepassVelocityPixelShader;
 		nvrhi::ShaderHandle m_GlassVelocityPixelShader;
+		nvrhi::ShaderHandle m_GlassVelocityFieldPixelShader; // With global illumination's field (PipelineKey::Field)
 		nvrhi::FramebufferHandle m_GlassMotionFramebuffer; // The glass framebuffer's attachments and the velocity target
 		// Screen-space reflections (PostProcessComponent::ScreenSpaceReflections): the frame traces them (with TAA, its history
 		// holding the previous frame), their targets and the prepass framebuffer writing the surface target, the trace's
@@ -2850,6 +2863,9 @@ namespace Strata
 		// whether the frame runs it, and the voxel levels the scene binding sets name at SRV 38-40.
 		Scope<GlobalIlluminationResources> m_GI;
 		bool m_GIFrame = false;
+		// The frame's forward passes read the field: it is joined into the image (ReflectionParams.y) or a GI view shows it,
+		// which samples it also where no field ran (weight 0: today's light). They draw with PipelineKey::Field.
+		bool m_FieldFrame = false;
 		std::array<nvrhi::ITexture*, 7> m_BoundGITextures = {};
 	};
 

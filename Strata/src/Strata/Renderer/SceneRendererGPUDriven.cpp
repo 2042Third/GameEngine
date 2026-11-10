@@ -1244,7 +1244,7 @@ namespace Strata
 			if (slots == 0 && !count)
 				continue;
 			const PipelineKey key { pass, parts.DoubleSided, parts.Mirrored, parts.Geometry == RenderData::c_CullGeometrySkinned, m_MotionFrame,
-				m_ReflectionFrame && pass == Pass::Prepass };
+				m_ReflectionFrame && pass == Pass::Prepass, m_FieldFrame && pass == Pass::Opaque };
 			const GeometryArena arena = parts.Geometry == RenderData::c_CullGeometryStatic ? GeometryArena::Static : GeometryArena::Skinned;
 			state.pipeline = GetScenePipeline(key);
 			state.vertexBuffers = {
