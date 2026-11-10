@@ -58,7 +58,7 @@ what each one costs:
   the reflections it asks for show at full resolution from High on, and not at all at Low.
 - **Global illumination** (experimental) applies only to scenes whose Post Process turns it on (it is off by default, and
   in the template and the samples). The Low and Medium presets draw none; set to Low, it traces a coarser, shorter field for
-  about 18 MiB of GPU memory per view, High a finer one for about 111 MiB and several milliseconds of GPU time at 3840 x
+  about 23 MiB of GPU memory per view, High a finer one for about 153 MiB and several milliseconds of GPU time at 3840 x
   2160 (the `GPU.RadianceCascades` stage). High's cost was measured on one Windows machine with an NVIDIA GPU only: on
   integrated and Apple GPUs choose Low until measured there.
 - **Motion blur samples** apply only to scenes whose Post Process turns motion blur on (it is off by default, and in the

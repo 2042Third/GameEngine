@@ -785,7 +785,7 @@ namespace Strata
 				{ "128", "256" }, std::to_string(high.ReflectionProbeResolution)));
 			section.Fields.push_back(EnumField("GlobalIllumination", "Global illumination", "Experimental. Bounce light and sky occlusion "
 				"traced in the world around the camera, for scenes that turn it on: sunlit floors light the walls and colored surfaces tint "
-				"their neighbors. Low traces a coarser, shorter field for about 18 MiB of GPU memory per view, High a finer one for about 111 "
+				"their neighbors. Low traces a coarser, shorter field for about 23 MiB of GPU memory per view, High a finer one for about 153 "
 				"MiB and several milliseconds of GPU time at 3840x2160; Off draws none.", EnumOptions(c_GlobalIlluminationNames),
 				GlobalIlluminationLevelToString(high.GlobalIllumination)));
 			// The players' rows: read under every preset.

@@ -164,7 +164,7 @@ namespace Strata
 		// 1024x512 from 256-texel faces, so 256 needs no new bake.
 		uint32_t ReflectionProbeResolution = 128;
 		// The world-space global illumination's layout for scenes whose Post Process asks for it (experimental; Off at Low and
-		// Medium: none runs). 18 MiB at Low and 111 MiB at High per view that runs it, at any resolution
+		// Medium: none runs). 23 MiB at Low and 153 MiB at High per view that runs it, at any resolution
 		// (GlobalIlluminationLayout::GetMemoryBytes; DG "Global illumination").
 		GlobalIlluminationLevel GlobalIllumination = GlobalIlluminationLevel::Off;
 		// The players' rows, the same under every preset (comfort and preference, not cost): the anti-aliasing method (the
