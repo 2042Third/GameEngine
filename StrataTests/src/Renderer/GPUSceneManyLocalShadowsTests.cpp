@@ -788,47 +788,47 @@ TEST_SUITE("GPU.SceneRenderer.ManyLocalShadows")
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		constexpr uint32_t c_ImageSize = 1024;
-		// The lamp at the origin, seen from afar (small tiles), then from within its range (large ones). Two small lamps nearer
-		// the camera, whose light reaches no surface, move every frame and fill the budget with their twelve views.
+		constexpr uint32_t c_PointViews = 6;
+		// The lamp at the origin, seen from afar (small tiles), then from within its range (large ones). One view is drawn a frame,
+		// so its six views are drawn into the new tiles over six frames, the first in the frame the tiles change size: in the five
+		// frames between, the views not drawn yet show their old tiles, with the matrices they were drawn with. Their faces are
+		// drawn in order, so the one below the lamp, which casts the shadow measured, waits three frames. (With the default
+		// budget of twelve all six would be drawn in the frame the tiles change size, and nothing would sample the old ones.)
 		LampField field({ glm::vec3(0.0f, 3.0f, 0.0f) }, 4.5f, glm::vec3(-20.0f, -1.0f, -20.0f), glm::vec3(20.0f, 0.0f, 20.0f));
-		std::array<Entity, 2> movers = {};
-		const std::array<glm::vec3, 2> moverPositions = { glm::vec3(-1.5f, 2.5f, 2.0f), glm::vec3(3.5f, 2.5f, 2.0f) };
-		for (size_t index = 0; index < movers.size(); index++)
-		{
-			movers[index] = AddPointLight(field.SceneData, moverPositions[index], glm::vec3(1.0f), 30.0f, 1.2f);
-			movers[index].GetComponent<PointLightComponent>().CastShadows = true;
-		}
 		const SceneCamera farCamera = LookAt(glm::vec3(1.0f, 30.0f, 40.0f), field.ShadowCenters[0]);
 		const SceneCamera nearCamera = LookAt(glm::vec3(1.0f, 4.0f, 4.0f), field.ShadowCenters[0]);
 		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
 		{
 			CAPTURE(static_cast<int>(mode));
-			SceneRenderer renderer(ManySpecification(mode, true));
+			SceneRendererSpecification specification = ManySpecification(mode, true);
+			specification.Quality.LocalShadowViewsPerFrame = 1;
+			SceneRenderer renderer(specification);
 			renderer.SetViewportSize(c_ImageSize, c_ImageSize);
 			SceneRenderer unshadowed(ManySpecification(mode, false));
 			unshadowed.SetViewportSize(c_ImageSize, c_ImageSize);
-			const auto moveOthers = [&](uint32_t frame)
-			{
-				const float offset = 0.02f * static_cast<float>(frame % 5);
-				for (size_t index = 0; index < movers.size(); index++)
-					Move(movers[index], moverPositions[index] + glm::vec3(offset, 0.0f, 0.0f));
-			};
-			for (uint32_t frame = 0; frame < 20; frame++)
+			for (uint32_t frame = 0; frame < c_PointViews + 2 * SceneRenderer::c_LocalShadowFadeFrames; frame++)
 				RenderHDR(renderer, field.SceneData, farCamera);
 			REQUIRE(renderer.GetStats().LocalShadowViewsPending == 0);
+			REQUIRE(renderer.GetStats().LocalShadowFadingIn == 0);
 			const uint16_t farSize = renderer.GetStats().LocalShadowTileSizes[0];
 			const glm::uvec2 pixel = ProjectToPixel(nearCamera, field.ShadowCenters[0], c_ImageSize);
 			const float lit = ReadRed(field.RenderUnshadowed(unshadowed, nearCamera), pixel);
-			uint16_t nearSize = farSize;
-			for (uint32_t frame = 0; frame < 12; frame++)
+			// The frames in which the lamp has its new tiles while some of its views wait to be drawn into them.
+			uint32_t waitingFrames = 0;
+			for (uint32_t frame = 0; frame < 2 * c_PointViews; frame++)
 			{
 				CAPTURE(frame);
-				moveOthers(frame);
 				const ReadbackImage image = RenderHDR(renderer, field.SceneData, nearCamera);
+				const SceneRendererStats& stats = renderer.GetStats();
+				REQUIRE(stats.LocalShadowLights == 1);
+				CHECK(stats.LocalShadowTileSizes[0] > farSize);
+				CHECK(stats.LocalShadowViewsDrawn == (frame < c_PointViews ? 1u : 0u));
+				waitingFrames += stats.LocalShadowViewsPending > 0 ? 1u : 0u;
 				CHECK(ReadRed(image, pixel) < lit * 0.5f);
-				nearSize = std::max(nearSize, *std::max_element(renderer.GetStats().LocalShadowTileSizes.begin(), renderer.GetStats().LocalShadowTileSizes.end()));
 			}
-			CHECK(nearSize > farSize);
+			MESSAGE("tiles of ", farSize, " texels, then ", renderer.GetStats().LocalShadowTileSizes[0], "; frames with views waiting for the new tiles: ", waitingFrames);
+			CHECK(waitingFrames == c_PointViews - 1);
+			CHECK(renderer.GetStats().LocalShadowViewsPending == 0);
 			gpu.GetDevice().WaitForIdle();
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
