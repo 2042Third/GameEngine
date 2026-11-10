@@ -4421,7 +4421,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
   same frames, neither would ever hold more than a frame or two of it. So a capture renders only while the project's
   picture does not (`ProjectThumbnail::IsRendering`: from the save that asks for it until its frame is read back, which
   its own limits bound): a `viewport.capture` right after a `scene.save` waits those frames, and one a save interrupts
-  goes on after the picture (`GPU.Editor.Viewport`).
+  starts over after the picture, which settled the pre-exposure for its own view and released the targets: its first
+  frame starts the pre-exposure again, and its waits have their whole budgets (`GPU.Editor.Viewport`).
 - Tests (`GPU.SceneRenderer.TAA`): culling, levels of detail and the cached cascades match a renderer without the jitter;
   a still edge between colors of equal luminance is the mean of its eight jittered frames at eight frames (0.5%) and stays
   within 15% of their spread; a moving box leaves no trail beyond two pixels once it stops; every reset outputs the

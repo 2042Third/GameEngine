@@ -1531,6 +1531,75 @@ TEST_SUITE("GPU.Editor.Viewport")
 		REQUIRE(context.GetProjectThumbnail().IsRendering());
 		finishBoth(interrupted);
 		CHECK(FileSystem::Exists(ProjectThumbnail::GetFile(directory)));
+
+		// A capture the picture interrupts starts over after it. The picture rendered its own view, settled the pre-exposure for
+		// it and released the targets; without temporal anti-aliasing nothing else would hold the capture back, so going on
+		// with its old progress it would be read back at once, with the picture's pre-exposure reported as its own and its
+		// waits counted from before the picture. Both views are the scene camera's, over a floor in 100,000 lux of sun: the
+		// picture's pre-exposure (far from 1) fits the capture's too, and only a capture that starts over meters it again.
+		Entity postProcessAgain = scene.FindEntityByName("Post Process");
+		REQUIRE(postProcessAgain);
+		REQUIRE(postProcessAgain.GetComponent<PostProcessComponent>().AutoExposure);
+		postProcessAgain.GetComponent<PostProcessComponent>().AntiAliasing = false;
+		Entity floor = scene.CreateEntity("Floor");
+		floor.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, -0.5f, 0.0f);
+		floor.GetComponent<TransformComponent>().Scale = glm::vec3(60.0f, 1.0f, 60.0f);
+		floor.MarkModified<TransformComponent>();
+		floor.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		floor.MarkModified<MeshRendererComponent>();
+		Entity sun = scene.CreateEntity("Sun");
+		sun.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::normalize(glm::vec3(0.3f, -1.0f, 0.2f)));
+		sun.MarkModified<TransformComponent>();
+		sun.AddComponent<DirectionalLightComponent>().Intensity = 100000.0f;
+		sun.MarkModified<DirectionalLightComponent>();
+		const glm::vec3 eye(0.0f, 6.0f, 8.0f);
+		Entity sceneCamera = scene.CreateEntity("Camera");
+		sceneCamera.GetComponent<TransformComponent>().Translation = eye;
+		sceneCamera.GetComponent<TransformComponent>().Rotation = Math::LookRotation(glm::normalize(-eye));
+		sceneCamera.MarkModified<TransformComponent>();
+		sceneCamera.AddComponent<CameraComponent>().Primary = true;
+		auto restarted = std::make_shared<std::optional<EditorCommandResult>>();
+		harness.Runner.Run(context, harness.Commands, "viewport.capture", { { "width", 64 }, { "height", 64 }, { "camera", "scene" }, { "overlays", false } },
+			[restarted](const EditorCommandResult& result) { *restarted = result; });
+		runFrame();
+		REQUIRE_FALSE(*restarted);
+		ViewportRenderer* captureRenderer = context.GetViewport().GetCaptureRenderer();
+		REQUIRE(captureRenderer);
+		REQUIRE_FALSE(captureRenderer->GetStats().PreExposureSettled); // Its metering comes back frames later
+		harness.Run("entity.create", { { "name", "Second Marker" } });
+		harness.Run("scene.save");
+		REQUIRE(context.GetProjectThumbnail().IsRendering());
+		bool pictureEnded = false;
+		uint64_t pictureRenders = 0; // The capture renderer's frames once the picture's last one was rendered
+		for (int frame = 0; frame < 3000 && !pictureEnded; frame++)
+		{
+			runFrame([&]()
+			{
+				if (context.GetProjectThumbnail().IsRendering())
+					return;
+				pictureEnded = true;
+				pictureRenders = captureRenderer->GetSceneRenderer().GetRenderCount();
+			});
+		}
+		REQUIRE(pictureEnded);
+		REQUIRE_FALSE(*restarted);
+		// The capture's first frame after the picture started the pre-exposure again.
+		CHECK(captureRenderer->GetSceneRenderer().GetRenderCount() == pictureRenders + 1);
+		CHECK_FALSE(captureRenderer->GetStats().PreExposureSettled);
+		CHECK(captureRenderer->GetStats().PreExposure == 1.0f);
+		for (int frame = 0; frame < 20000 && !*restarted; frame++)
+			runFrame();
+		REQUIRE(*restarted);
+		INFO((*restarted)->Error);
+		REQUIRE((*restarted)->Success);
+		CHECK((*restarted)->Value["preExposureSettled"] == true);
+		// It waited for its own metering, and reports only the frames it waited after the picture.
+		const uint64_t rendersAfterPicture = captureRenderer->GetSceneRenderer().GetRenderCount() - pictureRenders;
+		CHECK(rendersAfterPicture >= 2);
+		CHECK((*restarted)->Value["waitedFrames"].get<uint64_t>() < rendersAfterPicture);
+		for (int frame = 0; frame < 3000 && context.GetProjectThumbnail().IsPending(); frame++)
+			runFrame();
+		REQUIRE_FALSE(context.GetProjectThumbnail().IsPending());
 		gpu.GetDevice().WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
