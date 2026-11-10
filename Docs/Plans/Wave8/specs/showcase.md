@@ -756,7 +756,8 @@ Written against `StrataScriptCore` only (skills `strata-scripting`, `strata-make
   D14), `TourSpeed` 1, `LoopTour` true, `FadeSeconds` 0.75, `WalkSpeed` 1.5, `RunSpeed` 3.2,
   `FlySpeed` 6, `FastFactor` 4, `LookSpeed` 0.12 (degrees per pixel), `StickTurnSpeed` 120, `UseController` false (true
   after `physics-timing`'s adoption), `WalkRadius` 140, `ProbeHoldSeconds` 1, `NightAfterDusk` false, `PhotoHourMax` 19.0,
-  `SunIlluminance` 120000.
+  `SunIlluminance` 120000. *As built:* `UseController` and `NightAfterDusk` are not fields of the script: each comes
+  with its adoption (section 11), and the night was not adopted with R2.
 - State: `Mode` (0 tour, 1 walk, 2 fly), `Shot` (0-6), `Station` (0-2), `CapturesFound`, `CapturesResident`, `PhotoOpen`,
   `PhotoHour`, `SunElevation`, `SunAzimuth`, `Bookmark` (last one taken, 0 none), `DistanceWalked`, `Grounded`,
   `HeightAboveGround` (the eye's height above the ground under it), `ToursCompleted`.
@@ -1319,6 +1320,43 @@ This stream changes no engine file, shader or ABI, so it never conflicts with st
 | `showcase-engine` E2 | Ground at the feet | Separate meshes per material (apron, mud, ground) with hard edges hidden by props | The generator writes the two masks (G wetness, B puddles; +2.0 MB), the apron and ground take the blended material, the mud meshes go |
 | `showcase-engine` E1 | Stills | Native 4K stills | Screenshots and the owner's sheet with `supersample: 2` |
 | `editor-ux`, `animation-graph`, subsurface | Nothing | No people | A later update if a realistic body is found (wave 9) |
+
+*As built (the reflections' adoption), R2's row:*
+
+- Highlights: `SourceRadius` 0.25 m on `Fire` and 0.04 m on `LanternA.Light` and `LanternB.Light`, as proposed (the
+  stations' steps write them; `StrataEditor.Showcase` holds the fire's to 0.2-0.3 m and both lanterns' to 0.03-0.06 m).
+- `checkshots`, on stills at 1920 x 1080 with TAA and on four live frames per shot in the three AA modes, all captured
+  after the last bake: shot 2's highlight lies 14.3 px from its computed place (at most 40), shot 3's streak 12.0 px (at
+  most 30), the shell beside it differs by 11.3 codes with and without the yard's probe (at least 8), and shot 6's fuel
+  tank is 5.7 codes brighter with the fire (at least 2). Live, the twelve crops (shots 2, 3, 4 and 6 with TAA, FXAA and
+  no anti-aliasing) differ between frames by at most 0.08% in the mean and 0.73% at p99 (limits 1.0 and 3.0): no
+  highlight shimmers.
+- Water has IOR 1.33 and a lighter base, not a darker one (D8's note).
+- The night after dusk is not adopted. `PhotoHourMax` stays 19.0, and `NightAfterDusk`, which landing 1 listed and did
+  not build, stays unbuilt. R2 took the bands out of the night sky, which the row waited for, but the day's course
+  (`SampleDay`) has no values below the horizon, and dusk's probes hold dusk's sky: a night needs a station with probes
+  of its own and a look to judge (the release notes' known issues, the roadmap's "Later").
+- The station switch with the probes' cubes at 256 against 128 texels: the exported Release game's tour at 2560 x 1440,
+  High with the one row set by the players' options (`Preset` Custom), three runs of each in turns and one of High
+  alone, under `PerfLock.py` on a machine other agents worked on. Device memory differs by 49-51 MB from the start (2198
+  against 2147-2149 MB), so the row took effect; at each switch it grows by about 70 MB at either size. The main
+  thread's worst frame at the switch to Golden took 5.37, 6.16 and 6.91 ms at 256 and 6.23, 5.65 and 5.41 ms at 128
+  (High alone 4.72): five or six frames of `Assets.Finalize`, 1.2-4.6 ms each, with loads queued at the cut to shot 2.
+  To Dusk it took 5.53, 9.02 and 4.46 ms at 256 and 5.45, 4.50 and 5.36 ms at 128 (High alone 11.16): `Render.Submit`
+  of the switch's own frame (3.8-10.6 ms), in which the two lights' twelve shadow views are drawn, then two frames of
+  finalizing. A frame's median is 0.65-1.05 ms. The GPU's longest busy time in the 1.5 s after the switch: Golden
+  6.2-7.2 ms at 256 and 6.4-7.8 ms at 128 (the second before: 5.4-6.0), Dusk 7.6-11.1 and 7.8-10.3 ms (before:
+  6.9-8.0). The runs differ more than the sizes do (away from the switches every run has frames of 5.1-9.5 ms of
+  work), and neither long frame changes with the row: it costs memory and no hitch at the switch that this measurement
+  can show. `GPU.Reflections`, the conversions' stage, steps to the new station's level at the switch (0.27 to 0.37 ms
+  at Golden, 0.26 to 0.59 ms at Dusk). Of the sixteen frames after it a few stand above that level, at most by 0.2-1.9
+  ms in the runs at 256 and by 0.3-1.2 ms in those at 128, and frames up to 0.7 ms above the level stand before the
+  switches too: the conversions do not stand out from the stage's scatter.
+- E_yard, measured again: the yard's surface EV100 is 14.03 at 960 x 540, the render test's size (13.98 at 1920 x 1080),
+  so `ShowcaseRenderCommands.json` keeps 14.0 +-0.5; the hut's dark corner reads 8.74, 5.29 EV below (at least 1.58).
+- Dusk's sun stands at azimuth 16, not 32 (D3's rule 7, D4's note), and a bake takes eight passes, not two (D10's
+  note). What the sun does not reach at dusk is darker than in landing 1's pictures: the release notes' known issues
+  give the numbers.
 
 ## 12. Risks
 

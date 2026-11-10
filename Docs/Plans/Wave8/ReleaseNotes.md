@@ -177,6 +177,12 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   hut's came out 18% above where further passes settle it), while after eight passes bakes begun from different
   captures agree to 0.01% in every 64 x 64 block's mean. `StrataTools.ShowcaseTerrain` holds the script to the probes'
   table.
+- Measured, the tour's station switches with the probes' cubes at 256 texels against 128 (the exported Release game at
+  2560 x 1440 and High, three runs of each in turns, on a machine other agents worked on): the larger cubes hold 49-51
+  MB more device memory and make no frame at a switch longer that the runs can show. The main thread's worst frame at
+  the switch to golden hour took 5.4-6.9 ms at 256 and 5.4-6.2 ms at 128, to dusk 4.5-9.0 and 4.5-5.5 ms, and every
+  run has frames of 5.1-9.5 ms away from the switches; the GPU's longest busy time after a switch was 6.2-11.1 against
+  6.4-10.3 ms. The showcase's plan gives each run (`specs/showcase.md`, section 11).
 
 **Global illumination (stage 1: the voxels).**
 
@@ -472,4 +478,25 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   at 30 degrees, 1.24 against 8.35 (p90 1.48 against 9.93; no shadow edge shows in it); the look-dev sun room seen from
   behind, 0.88 against 1.61; the Third-Person and Physics Playground editor views from high above, 0.31 and 0.57
   against 0.96, still under a pixel.
+
+**Showcase (the reflections' adoption)**
+
+- At dusk, what the sun does not reach is darker than in landing 1's pictures. Their probes held the sun's disk and lit
+  such surfaces with it; this wave's hold the sky alone, and the light sunlit ground throws back is global
+  illumination's work, which stays off in the showcase. Shot 6 at 960 x 540, mean code before the adoption against now:
+  the lean-to 17.6 against 11.7 (16% of its pixels under 8 codes, now 44%), the wall at lantern A 94.5 against 85.0, the
+  wet apron 12.4 against 11.8 (31% under 8 codes, now 44%); of the whole picture 15.2% of the pixels were under 8 codes
+  and 22.6% are (its mean 38.0 against 39.0).
+- In shot 5, at golden hour, the hut's roof underside is darker for the same reason (mean code 65.8 against 56.5); its
+  back wall (23.9 against 24.0) and the dark corner the hut's measurement view reads (surface EV100 8.77 against 8.74 at
+  960 x 540) are as they were.
+- Dusk's sun stands at azimuth 16 instead of 32, so that the bus's shadow leaves the hut's front, the fire and the fuel
+  tank (the tank's shadowed half: 27.3 before the adoption, 13.5 with the new probes and the sun behind the bus, 40.8
+  now; the hut's front 85.5, 61.8 and 77.7; the ground at the fire 70.2, 61.8 and 78.8). The shadow now lies on the
+  slope's foot at shot 6's left (46.7 against 9.4, 46% of it under 8 codes), and the slope beyond it is lit (14.0
+  against 53.3). The photo mode's sweep from golden hour to dusk turns the sun 29 degrees instead of 13.
+- The photo mode's day still ends at dusk (19.0 h). The night after it, which the showcase's plan tied to R2's fix of
+  the night sky's bands (the slider to 19.5 h, the sun below the horizon and its light faded to nothing), is not
+  adopted: the day's course has no values below the horizon yet, and dusk's probes hold dusk's sky, which a darker sky
+  would no longer match, so a night needs a station with probes of its own and a look to be judged. Not tried.
 
