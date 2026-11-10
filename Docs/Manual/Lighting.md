@@ -92,7 +92,8 @@ worked out exactly for each pixel (the diffuse light) or from a fitted model of 
 linearly transformed cosines), the same in every frame.
 
 - **Where it shines**: one-sided lights (the default) light nothing behind their face, and nothing at all behind their
-  plane. Two-sided ones shine from both faces with the same luminance, twice the power.
+  plane. Two-sided ones shine from both faces: in nits each face has the light's luminance (twice the power), in lumens
+  the faces share the power (each half as bright).
 - **Range** fades the light smoothly to zero at that distance from the face. It does not change how the light falls off
   before that: a panel's own falloff is physical. Make it reach what the light should light; a smaller range costs less.
 - **Shadows**: rect lights cast no shadow yet. They light through objects: a box under a panel is lit on its top and the
@@ -110,10 +111,11 @@ linearly transformed cosines), the same in every frame.
   scene (or removing the last) switches them, and the first frame with one prepares them (about 6 ms for each kind of
   surface drawn, more on a machine that has not run them yet).
 - **Its limits**: a light's highlight on surfaces of middling roughness seen at grazing angles is the fitted model's, which
-  can be brighter than the real one near the reflection of the face, and under a light that fills the whole sky a white
-  metal of roughness 0.3 to 0.6 reflects 0.91 to 0.92 of it seen 78 degrees from its normal (0.94 to 0.98 at 60 degrees)
-  where the real one would reflect all of it. Smooth and fully rough surfaces, and every surface seen from closer to its
-  normal, keep their light.
+  can be brighter than the real one near the reflection of the face (seen 87 degrees from the normal, 1.1 to 1.4 times as
+  bright at roughness 0.25 and 1.6 to 2.4 times at 0.5), and under a light that fills the whole sky a white metal of
+  roughness 0.3 to 0.6 reflects 0.91 to 0.92 of it seen 78 degrees from its normal (0.94 to 0.98 at 60 degrees) where the
+  real one would reflect all of it. Smooth and fully rough surfaces keep all their light, and surfaces seen within 54
+  degrees of their normal stay within 3% of the real highlight (the median over the model's fit).
 
 ## The sky
 

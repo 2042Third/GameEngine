@@ -568,7 +568,7 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
 **area-lights**
 
 - A rect light's highlight is the published fit's (the shading equals the CPU reference `Renderer/AreaLights.h` within
-  1.2e-3), which is less exact than GGX at grazing views of surfaces of middling roughness. Fitted lobe times magnitude
+  1.22e-3 relative), which is less exact than GGX at grazing views of surfaces of middling roughness. Fitted lobe times magnitude
   against GGX's quadrature, median and 95th percentile of the relative error: roughness 0.25: 0.026 and 0.70; 0.5: 0.086
   and 0.96; 0.75: 0.063 and 0.86; views within 53.6 degrees of the normal stay under 3% median. Seen 87 degrees from the
   normal, faces centered on the mirror direction get 1.1 to 1.4 times GGX's light at roughness 0.25 and 1.6 to 2.4 times

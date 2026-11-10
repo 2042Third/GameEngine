@@ -951,7 +951,8 @@ TEST_SUITE("GPU.SceneRenderer.AreaLights")
 			back, front, worstSides, worstTwin));
 		CHECK(back > 0);
 		CHECK(front > 0);
-		// Half floats round each side alone: 2^-10 of a value at most between two values equal before the rounding.
+		// The two pixels' surface points (where the rasterizer places them) and the order of their operations differ slightly,
+		// so their values may round to neighboring half floats: one step, 2^-10 (9.8e-4) of a value at most.
 		CHECK(worstSides <= 1.0e-3);
 		CHECK(worstTwin <= 1.0e-3);
 		CHECK(gpu.GetNewErrorCount() == 0);

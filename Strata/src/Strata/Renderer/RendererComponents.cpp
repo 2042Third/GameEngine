@@ -371,7 +371,8 @@ namespace Strata
 				WithTooltip(Range(RectLightComponent::c_MinSize, RectLightComponent::c_MaxSize, 0.01f), "Meters along the entity's X axis, times its scale"))
 			.Property("Height", &RectLightComponent::Height,
 				WithTooltip(Range(RectLightComponent::c_MinSize, RectLightComponent::c_MaxSize, 0.01f), "Meters along the entity's Y axis, times its scale"))
-			.Property("TwoSided", &RectLightComponent::TwoSided, WithTooltip({}, "Emits from both faces with the same luminance (twice the power)"))
+			.Property("TwoSided", &RectLightComponent::TwoSided, WithTooltip({}, "Emits from both faces. Nits: each face has the Intensity's luminance (twice the "
+				"power); Lumens: the faces share the power (each half as bright)"))
 			.Property("Range", &RectLightComponent::Range, WithTooltip(Range(0.01f, c_Unbounded, 0.1f), "Light fades to zero at this distance from the rectangle"))
 			.Property("CastShadows", &RectLightComponent::CastShadows,
 				WithTooltip({}, "Kept for the light's shadows: rect lights cast no shadow yet, so they light through objects"))

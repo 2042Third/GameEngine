@@ -5034,8 +5034,11 @@ lights, Post Process and the sky), and never a resolution below the output's.
   0.94 at 60 degrees, and all of it at roughness 0.05 and 1 and seen along the normal. The polished floor's mirror image
   has its half-peak edges within 0.17 pixels of the face's mirror image at 1920 x 1080.
 - **Cost**: setup and the one-sided test, the diffuse integral (four edges), the specular transform and integral (four
-  more) and two table lookups (eight loads) per light and pixel, a coat's evaluation more on coated materials; probe
-  captures skip the lobes. Memory: the table, and 48 bytes per light in view.
+  more) and three table lookups (twelve loads: the diffuse horizon term, the lobe's transform and its horizon term) per
+  light and pixel; a coat's lobe adds an integral and two lookups (eight loads) on coated materials; probe captures skip
+  the lobes. Not measured per light yet (the stream's perf cases come with its stage 3). Memory: the table; every light
+  record grew by 32 bytes (`AxisX`, `AxisY`: 128 bytes), and the faces' buffer holds 48 bytes per light uploaded on the
+  CPU path and per light record on the GPU-driven one, for every light, rect or not.
 
 ### Ambient occlusion
 
