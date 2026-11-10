@@ -853,7 +853,7 @@ TEST_SUITE("GPU.SceneRenderer.LocalShadows")
 			grain.GetComponent<TransformComponent>().Scale = glm::vec3(0.01f);
 			grain.GetComponent<MeshRendererComponent>().CastShadows = false;
 		}
-		Entity far = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(200.0f, 0.5f, 0.0f), "Far");
+		Entity distant = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(200.0f, 0.5f, 0.0f), "Distant");
 		const SceneCamera camera = LookAt(glm::vec3(0.0f, 8.0f, 8.0f), glm::vec3(0.0f));
 		SceneRenderer renderer(AtOnceSpecification(GPUDrivenMode::Off));
 		renderer.SetViewportSize(c_Size, c_Size);
@@ -880,7 +880,7 @@ TEST_SUITE("GPU.SceneRenderer.LocalShadows")
 		}
 		// A proxy far from the lamp moves: the renderer that could not follow every proxy within the lamp's range cannot tell
 		// that it reached no view and draws them all again; the one that follows them draws none.
-		Move(far, glm::vec3(201.0f, 0.5f, 0.0f));
+		Move(distant, glm::vec3(201.0f, 0.5f, 0.0f));
 		REQUIRE(renderer.Render(scene, camera));
 		CHECK(renderer.GetStats().LocalShadowViewsDrawn == 6);
 		REQUIRE(following.Render(scene, camera));
