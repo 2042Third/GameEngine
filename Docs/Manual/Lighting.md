@@ -108,8 +108,9 @@ linearly transformed cosines), the same in every frame.
   not and wherever it is, draws all its surfaces with the shaders that can shade one, which cost more everywhere: an unlit
   rect light added to the showcase costs its opaque pass 2.7% at Medium and changes a few pixels slightly. Scenes without
   rect lights pay none of this. Turning a light off and on keeps those shaders; adding the first rect light to a running
-  scene (or removing the last) switches them, and the first frame with one prepares them (about 6 ms for each kind of
-  surface drawn, more on a machine that has not run them yet).
+  scene (or removing the last) switches them, and the first frame with one prepares them (6 to 7 ms for the one kind of
+  surface of a small test scene, the first time in a program; a scene drawing more kinds prepares shaders for each, and
+  neither that nor a first run on a new machine was measured).
 - **Its limits**: a light's highlight on surfaces of middling roughness seen at grazing angles is the fitted model's, which
   can be brighter than the real one near the reflection of the face (seen 87 degrees from the normal, 1.1 to 1.4 times as
   bright at roughness 0.25 and 1.6 to 2.4 times at 0.5), and under a light that fills the whole sky a white metal of

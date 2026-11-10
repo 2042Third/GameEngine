@@ -584,10 +584,10 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   and 27 in shot 3, about what those shots' own repeats differ by). Turning a light off and on keeps the shaders; adding
   the first rect light to a running scene or removing the last (a spawned prefab, a streamed world cell) switches them,
   and the frame that adds the first compiles the forms of the forward pipelines it draws on the main thread: 6.3-7.1 ms
-  for the one pipeline of a small test scene, first in its process, so tens of milliseconds for a scene drawing many kinds
-  of surfaces (skinned, mirrored, double-sided, transparent, glass). Compiling them ahead, or on a worker thread while the
-  old forms draw, is left for later: every pipeline the renderer has is made on first use, and making them ahead is a
-  change to all of them.
+  for the one opaque pipeline of a small test scene, first in its process (0.6-0.8 ms for the next renderer's). A scene
+  drawing more kinds of surfaces (skinned, mirrored, double-sided, transparent, glass) compiles a form for each, and what
+  that costs was not measured. Compiling them ahead, or on a worker thread while the old forms draw, is left for later:
+  every pipeline the renderer has is made on first use, and making them ahead is a change to all of them.
 
 **Showcase (the reflections' adoption)**
 

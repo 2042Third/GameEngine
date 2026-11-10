@@ -32,9 +32,9 @@
 //   color, as the prepass does for opaque surfaces. Their HDR alpha is 1: the TAA does not take them for blended surfaces.
 // Every variant shades a clear coat where the material has one (a branch on its flag, the same for a whole draw). Each has a
 // form with ST_AREA_LIGHTS (Scene/ForwardAreaLights.frag, ForwardTransparentAreaLights.frag, ...): the one that shades rect
-// lights (Include/AreaLights.slang), drawn in frames whose scene has a drawn rect light. The forms without it are the shaders
-// of before rect lights, instruction for instruction: a frame without rect lights pays nothing for their code (its registers
-// would cost every pixel) and shows the same bits.
+// lights (Include/AreaLights.slang), drawn in frames whose scene has a rect light, drawn or not (RenderLights::GetTypeCount).
+// The forms without it are the shaders of before rect lights, instruction for instruction: a scene without rect lights pays
+// nothing for their code (its registers would cost every pixel) and shows the same bits.
 
 #ifndef ST_FORWARD_TRANSPARENT
 #define ST_EARLY_FRAGMENT_TESTS [earlydepthstencil]
