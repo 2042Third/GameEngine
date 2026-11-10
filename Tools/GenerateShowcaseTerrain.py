@@ -141,6 +141,10 @@ APRON_SKIRT_BELOW = 0.05
 PAD_MARGIN = 1.5
 PAD_BLEND = 6.0
 APRON_PAD_GROWTH = 1.0  # The apron's footprint is its outline grown by 1 m
+# The puddles' water: the base color and roughness of the sample's Water material, which the props generator makes from
+# these two, and of Water.glb's stand-in for it (the material's IOR, 1.33, is its own: the model's factors hold none).
+WATER_COLOR = (0.035, 0.037, 0.040)
+WATER_ROUGHNESS = 0.03
 
 # The layout's anchors (the showcase spec's D3; the props generator and the layout use the same numbers).
 BUS = {"center": (11.8, 0.1), "half": (1.22, 5.4), "yaw": 0}
@@ -1131,7 +1135,7 @@ def terrain_models(world):
     models["Apron.glb"] = glb.bytes(generator)
 
     glb = Glb("Puddles")
-    water = glb.material("Water", (0.018, 0.020, 0.022), 0.03)
+    water = glb.material("Water", WATER_COLOR, WATER_ROUGHNESS)
     for index, hole in enumerate(world.apron.holes):
         glb.node("Puddle_%d" % index, [glb.primitive(world.apron.water_mesh(hole), water)])
     models["Water.glb"] = glb.bytes(generator)

@@ -607,6 +607,11 @@ decides if S1 finds metal in it, and is 0 if S1 finds the B channel zero. Scan m
 
 `UVTiling` is a two-component property (`Material.h`, `MaterialProperties::UVTiling`): the `materials` script writes `[t, t]`.
 
+*As built (the reflections' adoption):* Water has IOR 1.33 and the base (0.035, 0.037, 0.040), the wet asphalt under it: the
+row's base was darkened for an F0 of 0.04, and at 0.02 the water mirrors half as much, so the adoption made it lighter, not
+darker as proposed below. `Water.glb`'s stand-in carries the same base and roughness: both generators take them from
+`WATER_COLOR` and `WATER_ROUGHNESS` of `GenerateShowcaseTerrain.py` (the stand-in had kept the row's base).
+
 Proposed values to tune in S6 (each with the reason): the bus paint's roughness factor (no highlight at 1, glints at 0.45,
 `p08`/`p11`); the apron's damp roughness 0.45-0.6 and darker base (audit: "uniformly damp through factors"); water 0.02-0.06
 (audit section 5), darker base after R2's F0 of 0.02. The scans' own materials (rocks, drums, car, lantern, tyre, ladder, fire
