@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Strata/Core/FileSystem.h"
 #include "Strata/Renderer/AreaLights.h"
 
 #include <glm/glm.hpp>
@@ -10,7 +11,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
+#include <optional>
 #include <random>
 #include <span>
 #include <string>
@@ -865,6 +868,21 @@ namespace
 			record.BoundsRadius == 0.0f;
 	}
 
+	// The value a shader source gives the float constant `name`, which it declares once.
+	std::optional<double> FindShaderConstant(const std::string& source, const std::string& name)
+	{
+		const std::string declaration = "static const float " + name + " = ";
+		const size_t start = source.find(declaration);
+		if (start == std::string::npos || source.find(declaration, start + 1) != std::string::npos)
+			return std::nullopt;
+		const char* digits = source.c_str() + start + declaration.size();
+		char* end = nullptr;
+		const double value = std::strtod(digits, &end);
+		if (end == digits)
+			return std::nullopt;
+		return value;
+	}
+
 }
 
 TEST_SUITE("Renderer.AreaLights")
@@ -1102,6 +1120,21 @@ TEST_SUITE("Renderer.AreaLights")
 		checkColor(AreaLights::Shade(surface, coat, coatDFG, dfg, 1.0f, light, 1.0f),
 			radiance * ((diffuse + specular) * (1.0 - coatReflectance) + coatFraction * coatReflectance) * window);
 		checkColor(AreaLights::Shade(surface, coat, coatDFG, dfg, 1.0f, light, 0.0f), radiance * diffuse * (1.0 - coatReflectance) * window);
+		// The specular weight scales the coat's lobe as it scales the surface's.
+		checkColor(AreaLights::Shade(surface, coat, coatDFG, dfg, 0.5f, light, 0.75f),
+			radiance * ((diffuse * 0.5 + specular * 0.75) * (1.0 - coatReflectance) + coatFraction * coatReflectance * 0.75) * window);
+
+		// The diffuse term is FormFactor's, the one with the table's horizon term, also where the exact clip gives another
+		// value: of a strip standing across the horizon, 1 m away, the exact clip keeps almost four times what the table does.
+		AreaLights::AreaLight strip = MakeStandingLight(frame, -0.1, 0.1, -2.0, 2.0, 1.0);
+		strip.Radiance = light.Radiance;
+		strip.InverseRangeSquared = light.InverseRangeSquared;
+		const double stripFactor = AreaLights::FormFactor(surface.Position, surface.Normal, strip);
+		CHECK(stripFactor > 0.005);
+		CHECK(AreaLights::FormFactorClipped(surface.Position, surface.Normal, strip) > 3.0 * stripFactor);
+		const double stripWindow = std::pow(1.0 - std::pow(1.0 / 25.0, 2.0), 2.0);
+		checkColor(AreaLights::Shade(surface, noCoat, coatDFG, dfg, 1.0f, strip, 0.0f),
+			radiance * glm::dvec3(0.8, 0.6, 0.4) * (0.75 * stripFactor) * (1.0 - reflectance) * stripWindow);
 
 		// Nothing out of the light's reach, behind it or on its plane.
 		AreaLights::AreaLight shortLight = light;
@@ -1129,6 +1162,71 @@ TEST_SUITE("Renderer.AreaLights")
 		CHECK(fromFront.x > 0.01f);
 		checkColor(AreaLights::Shade(behind, noCoat, coatDFG, dfg, 1.0f, both, 1.0f), glm::dvec3(fromFront));
 		CHECK(AreaLights::Shade(image, noCoat, coatDFG, dfg, 1.0f, both, 1.0f) == fromFront);
+	}
+
+	TEST_CASE("A roughness under the shaders' least one is shaded as the least one")
+	{
+		// The shaders evaluate no lobe under c_MinRoughness, and a material's roughness may be 0, as a coat's is unless it
+		// is set: the tables' first column, read as it is, is a mirror's lobe. A strip 4 mm wide, 2 m along the mirror
+		// direction, is narrower than the least lobe and wider than the mirror's, so it tells the two apart.
+		const Frame frame = MakeFrame();
+		const glm::dvec3 viewDirection(std::sqrt(1.0 - 0.7 * 0.7), 0.0, 0.7);
+		const glm::dvec3 mirror(-viewDirection.x, 0.0, viewDirection.z);
+		AreaLights::AreaLight strip = MakeLight(frame, mirror * 2.0, -mirror, glm::dvec3(0.0, 1.0, 0.0), 0.5, 0.002);
+		strip.InverseRangeSquared = 1.0f / 25.0f;
+		const glm::vec3 position = frame.GetPoint(glm::dvec3(0.0));
+		const glm::vec3 normal = frame.GetDirection(glm::dvec3(0.0, 0.0, 1.0));
+		const glm::vec3 view = frame.GetDirection(viewDirection);
+
+		const float least = AreaLights::SpecularFraction(position, normal, view, AreaLights::c_MinRoughness, strip);
+		const glm::vec2 mirrorCoordinates(0.0f, std::sqrt(1.0f - glm::dot(normal, view)));
+		const float unclamped = AreaLights::GetLobeCoverage(AreaLights::SampleTable(AreaLights::c_TransformLayer, mirrorCoordinates), position, normal, view, strip);
+		MESSAGE("least roughness: the strip holds " << least << " of the least lobe and " << unclamped << " of the lobe of the tables' first column");
+		CHECK(least > 0.05f);
+		CHECK(least < 0.75f);
+		CHECK(unclamped > least + 0.2f);
+		for (const float roughness : { 0.0f, 0.02f, -1.0f })
+			CHECK(AreaLights::SpecularFraction(position, normal, view, roughness, strip) == least);
+		CHECK(AreaLights::SpecularFraction(position, normal, view, 0.06f, strip) < least);
+
+		// Shading clamps the surface's roughness and the coat's the same way.
+		AreaLights::Surface surface;
+		surface.Position = position;
+		surface.Normal = normal;
+		surface.View = view;
+		surface.Roughness = AreaLights::c_MinRoughness;
+		const glm::vec2 dfg(0.7f, 0.2f);
+		const glm::vec2 coatDFG(0.9f, 0.05f);
+		AreaLights::Coat coat;
+		coat.Normal = normal;
+		coat.Strength = 0.8f;
+		coat.Roughness = AreaLights::c_MinRoughness;
+		const glm::vec3 shaded = AreaLights::Shade(surface, coat, coatDFG, dfg, 1.0f, strip, 1.0f);
+		CHECK(shaded.x > 0.01f);
+		AreaLights::Surface smooth = surface;
+		smooth.Roughness = 0.0f;
+		CHECK(AreaLights::Shade(smooth, coat, coatDFG, dfg, 1.0f, strip, 1.0f) == shaded);
+		// A coat's roughness is 0 until it is set.
+		AreaLights::Coat unset;
+		unset.Normal = normal;
+		unset.Strength = 0.8f;
+		CHECK(unset.Roughness == 0.0f);
+		CHECK(AreaLights::Shade(surface, unset, coatDFG, dfg, 1.0f, strip, 1.0f) == shaded);
+		// The coat's lobe is in the sum: without it the same call gives less.
+		CHECK(AreaLights::Shade(surface, unset, coatDFG, dfg, 1.0f, strip, 0.0f).x < shaded.x * 0.5f);
+	}
+
+	TEST_CASE("The least roughness and the coat's F0 are the shaders'")
+	{
+		// AreaLights.h repeats two constants of Include/PBR.slang, which no C++ code can include.
+		const std::optional<std::string> source = FileSystem::ReadText(FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "Strata" / "shaders" / "Include" / "PBR.slang");
+		REQUIRE(source.has_value());
+		const std::optional<double> minRoughness = FindShaderConstant(*source, "c_MinRoughness");
+		const std::optional<double> clearcoatF0 = FindShaderConstant(*source, "c_ClearcoatF0");
+		REQUIRE(minRoughness.has_value());
+		REQUIRE(clearcoatF0.has_value());
+		CHECK(static_cast<float>(*minRoughness) == AreaLights::c_MinRoughness);
+		CHECK(static_cast<float>(*clearcoatF0) == AreaLights::c_ClearcoatF0);
 	}
 
 	TEST_CASE("A light that fills the sky returns its radiance from a white surface")
@@ -1759,6 +1857,50 @@ TEST_SUITE("Renderer.AreaLights")
 			if (roughness >= 0.25f && roughness < 1.0f)
 				CHECK(GetPercentile(errors, 0.5) > 0.3);
 		}
+	}
+
+	TEST_CASE("A view next to the normal turns the lobe's frame with it: half a sharp lobe against GGX")
+	{
+		// The tables' frame follows the view's direction along the surface, and only a view within 1e-4 rad of the normal,
+		// which has none, gets a fixed one. A face with an edge through the mirror direction holds half of a sharp lobe, and
+		// gains or loses much of it when the lobe leans another way than the view does. Each receiver is turned three ways
+		// about its normal, so that the view cannot be along the fixed tangent every time.
+		double worst = 0.0;
+		for (const double angle : { 0.003, 0.05 })
+		{
+			const double viewCosine = std::cos(angle);
+			const glm::dvec3 viewDirection(std::sin(angle), 0.0, viewCosine);
+			const glm::dvec3 mirror(-viewDirection.x, 0.0, viewDirection.z);
+			// The face's edge through the mirror direction lies across the view's plane, then in it.
+			for (const glm::dvec3& toFace : { glm::dvec3(0.0, 1.0, 0.0), glm::dvec3(viewCosine, 0.0, std::sin(angle)) })
+			{
+				const Rectangle rectangle = MakeRectangle(mirror * 2.0 + toFace * 0.3, -mirror, toFace, 0.3, 0.5);
+				for (const float roughness : { 0.05f, 0.1f })
+				{
+					const double reference = Integrate(Integrand::Specular, roughness, viewCosine, rectangle);
+					const float magnitude = AreaLights::SampleTable(AreaLights::c_TermsLayer, glm::vec2(roughness, std::sqrt(1.0f - static_cast<float>(viewCosine)))).x;
+					for (const double turn : { 0.4, 2.5, 4.6 })
+					{
+						CAPTURE(angle);
+						CAPTURE(toFace.y);
+						CAPTURE(roughness);
+						CAPTURE(turn);
+						Frame frame = MakeFrame();
+						frame.Rotation = frame.Rotation * glm::dmat3(glm::rotate(glm::dmat4(1.0), turn, glm::dvec3(0.0, 0.0, 1.0)));
+						const AreaLights::AreaLight light = MakeLight(frame, rectangle);
+						const double share = AreaLights::SpecularFraction(frame.GetPoint(glm::dvec3(0.0)), frame.GetDirection(glm::dvec3(0.0, 0.0, 1.0)),
+							frame.GetDirection(viewDirection), roughness, light) * magnitude;
+						worst = std::max(worst, std::abs(share - reference));
+						CHECK(reference > 0.4);
+						CHECK(reference < 0.6);
+						// 1.5 times the measured 0.0048, which is the tables' magnitude over GGX's sum: a lobe that leans the
+						// fixed tangent's way is off by 0.01 to 0.35 at these views.
+						CHECK(std::abs(share - reference) <= 0.0073);
+					}
+				}
+			}
+		}
+		MESSAGE("near the normal: worst difference of a share from GGX's " << worst);
 	}
 
 	TEST_CASE("The tables' magnitude and Fresnel term beside GGX's sums under a sky")
