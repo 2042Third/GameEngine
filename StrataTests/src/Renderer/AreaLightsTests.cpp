@@ -489,8 +489,11 @@ TEST_SUITE("Renderer.AreaLights")
 		MESSAGE("clipped against Howell: worst relative error of all 60 " << worst);
 	}
 
-	TEST_CASE("The horizon term against the exact clip over 2000 lights")
+	TEST_CASE("The horizon term against the exact clip over 80,000 lights")
 	{
+		// The bounds below are measured, and a draw of 2000 lights held them by its seed: 40 other seeds of 2000 put the
+		// worst face above the horizon past the bound of 0.02 of the length 16 times. 80,000 lights (the first 2000 are the
+		// same) measure what the draw reaches: 50 other draws of 40,000 and one of 4 million stay within 1.5 times it.
 		const Frame frame = MakeFrame();
 		const glm::vec3 position = frame.GetPoint(glm::dvec3(0.0));
 		const glm::vec3 normal = frame.GetDirection(glm::dvec3(0.0, 0.0, 1.0));
@@ -505,7 +508,8 @@ TEST_SUITE("Renderer.AreaLights")
 		double worstIdentity = 0.0;    // clipped(N) - clipped(-N) against the vector form factor along N
 		double worstExact = 0.0;       // The table where the cap is above the horizon, absolute
 		// The table where the face is above the horizon but its cap is not: absolute, over the vector form factor's length
-		// (the light's largest form factor) and over the exact value.
+		// (the light's largest form factor) and over the exact value. Over the length only where the length is at least
+		// c_MaterialLength: for lights that give less, the floats' rounding alone (1e-7) is a material part of it.
 		double worstAbove = 0.0;
 		double worstAboveLength = 0.0;
 		double worstAboveRelative = 0.0;
@@ -516,7 +520,8 @@ TEST_SUITE("Renderer.AreaLights")
 		double worstCutRelative = 0.0;
 		double worstOverLength = -1.0; // The reference minus the vector form factor's length (negative: under it)
 		double worstUnderSum = -1.0;   // The signed sum minus the table's value (negative: the table is over it)
-		for (int index = 0; index < 2000; index++)
+		constexpr double c_MaterialLength = 1e-3;
+		for (int index = 0; index < 80000; index++)
 		{
 			AreaLights::AreaLight light;
 			if (index % 4 == 0)
@@ -586,14 +591,16 @@ TEST_SUITE("Renderer.AreaLights")
 			{
 				aboveCount++;
 				worstAbove = std::max(worstAbove, std::abs(clipless - reference));
-				worstAboveLength = std::max(worstAboveLength, std::abs(clipless - reference) / length);
+				if (length >= c_MaterialLength)
+					worstAboveLength = std::max(worstAboveLength, std::abs(clipless - reference) / length);
 				worstAboveRelative = std::max(worstAboveRelative, std::abs(clipless - reference) / reference);
 			}
 			else
 			{
 				cutCount++;
 				worstCut = std::max(worstCut, std::abs(clipless - reference));
-				worstCutLength = std::max(worstCutLength, std::abs(clipless - reference) / length);
+				if (length >= c_MaterialLength)
+					worstCutLength = std::max(worstCutLength, std::abs(clipless - reference) / length);
 				if (reference >= 0.01 * length)
 					worstCutRelative = std::max(worstCutRelative, std::abs(clipless - reference) / reference);
 			}
@@ -603,22 +610,44 @@ TEST_SUITE("Renderer.AreaLights")
 		MESSAGE("horizon: face cut " << cutCount << " worst " << worstCut << ", over length " << worstCutLength << ", relative " << worstCutRelative);
 		MESSAGE("horizon: clipped worst absolute " << worstClipped << ", identity " << worstIdentity << ", reference minus length " << worstOverLength
 			<< ", signed sum minus table " << worstUnderSum);
-		CHECK(exactCount >= 200);
-		CHECK(aboveCount >= 200);
-		CHECK(cutCount >= 200);
+		CHECK(exactCount >= 8000);
+		CHECK(aboveCount >= 8000);
+		CHECK(cutCount >= 8000);
 		CHECK(worstClipped <= 1e-5);
 		CHECK(worstIdentity <= 1e-5);
 		// The table stands for a sphere of the same vector form factor, which the horizon cuts otherwise than it cuts the
-		// face. With the whole face above the horizon the difference stays within 2% of the light's largest form factor
-		// (measured 0.0174 of it and 0.0042 in absolute terms; relative to the exact value it reaches 18% for low panels
-		// that give little).
-		CHECK(worstAboveLength <= 0.02);
-		CHECK(worstAbove <= 0.0064);
-		// A face the horizon cuts is further from its sphere, most where it is seen as a strip standing across the horizon:
-		// the strip's upper half gives up to a quarter of its length, the sphere's upper half next to nothing. The bounds
-		// are 1.5 times the measured 0.179 of the length and 0.0366.
-		CHECK(worstCutLength <= 0.27);
-		CHECK(worstCut <= 0.055);
+		// face. With the whole face above the horizon the draw measures 0.0238 of the light's largest form factor (the
+		// plan's 2% does not hold: a wide wall panel whose lower edge is a centimeter over the floor) and 0.0059 in absolute
+		// terms; relative to the exact value it reaches 18% for low panels that give little. The bounds are 1.5 times that.
+		CHECK(worstAboveLength <= 0.0357);
+		CHECK(worstAbove <= 0.0088);
+		// A face the horizon cuts is further from its sphere, most where it is seen as a strip standing across the horizon
+		// (the next test): the strip's upper half gives up to 1 / pi of its length, the sphere's upper half next to nothing.
+		// The bounds are 1.5 times the measured 0.208 of the length and 0.0559.
+		CHECK(worstCutLength <= 0.312);
+		CHECK(worstCut <= 0.0839);
+	}
+
+	TEST_CASE("A thin strip standing across the horizon gets 1 / pi of its vector form factor's length, which the table misses")
+	{
+		// A strip of the width w at the distance d, standing across the receiver's horizon, endlessly tall: its vector form
+		// factor lies along the horizon and is w / (2 d) long, and its upper half gives the receiver w / (2 pi d), 1 / pi of
+		// that length. The table's term stands for a sphere of the same vector form factor, a small cap centered on the
+		// horizon, which gives next to nothing above it: the horizon term's largest miss the tests know of.
+		const Frame frame = MakeFrame();
+		const glm::vec3 position = frame.GetPoint(glm::dvec3(0.0));
+		const glm::vec3 normal = frame.GetDirection(glm::dvec3(0.0, 0.0, 1.0));
+		const AreaLights::AreaLight strip = MakeStandingLight(frame, -0.005, 0.005, -1000.0, 1000.0, 1.0);
+		const double length = glm::length(GetReferenceVectorFormFactor(position, strip));
+		const double upper = 0.01 / (2.0 * c_Pi);
+		CHECK(GetRelativeError(length, 0.005) <= 1e-4);
+		CHECK(GetRelativeError(GetReferenceFormFactor(position, glm::dvec3(normal), strip), upper) <= 1e-4);
+		// The float clip, in absolute terms as over the random lights: its corners 1 km away are rounded to 6e-5 m.
+		CHECK(std::abs(AreaLights::FormFactorClipped(position, normal, strip) - upper) <= 1e-5);
+		const double table = AreaLights::FormFactor(position, normal, strip);
+		MESSAGE("horizon: a strip 1 cm wide across the horizon, 1 m away: exact " << upper / length << " of the length, the table " << table / length);
+		// 1.5 times the measured 0.0142.
+		CHECK(table <= 0.0213 * length);
 	}
 
 	TEST_CASE("The panel just above a floor gets the horizon term's measured error, not more")
@@ -639,6 +668,19 @@ TEST_SUITE("Renderer.AreaLights")
 		CHECK(error > 0.0);
 		// 1.5 times the measured 1.81%.
 		CHECK(error <= 0.027);
+
+		// The panel above the horizon for which a search over standing panels (widths of 1 m to 10 km, lower edges from
+		// 1 micrometer, heights of 2 cm to 20 m, seen from 1 m) found the table furthest off: 10 km wide, 0.24 m tall, its
+		// lower edge 1 micrometer above the floor.
+		const AreaLights::AreaLight widest = MakeStandingLight(frame, -2000.0, 8000.0, 1e-6, 0.24, 1.0);
+		const double widestExact = GetReferenceFormFactor(position, glm::dvec3(normal), widest);
+		const double widestLength = glm::length(GetReferenceVectorFormFactor(position, widest));
+		CHECK(std::abs(AreaLights::FormFactorClipped(position, normal, widest) - widestExact) <= 1e-5);
+		const double widestError = (AreaLights::FormFactor(position, normal, widest) - widestExact) / widestLength;
+		MESSAGE("horizon: a panel 10 km wide on the floor, table over exact " << widestError << " of the vector form factor's length " << widestLength);
+		CHECK(widestError > 0.0);
+		// 1.5 times the measured 2.9%.
+		CHECK(widestError <= 0.044);
 	}
 }
 

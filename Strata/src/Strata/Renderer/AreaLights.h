@@ -118,9 +118,12 @@ namespace Strata::AreaLights
 
 	// The form factor of the light seen from a surface point as the shading computes it: the vector form factor with the
 	// table's horizon term, which stands for a sphere of the same vector form factor. It is exact while that sphere's cap
-	// is above the horizon, within 2% of the vector form factor's length (the most the face gives any receiver) while the
-	// horizon cuts the cap but not the face, and an estimate where it cuts the face: off by 0.037 at most in the tests, by
-	// up to 18% of that length for a face seen as a strip standing across the horizon. 0 behind a one-sided light and for
+	// is above the horizon. While the horizon cuts the cap but not the face it is off by up to about 3% of the vector form
+	// factor's length (the most the face gives any receiver), most for a panel much wider than its distance whose lower
+	// edge is just over the receiver's plane, and by 0.0076 at most in absolute terms (the tests' 80,000 lights: 2.4% and
+	// 0.0059). Where the horizon cuts the face it is an estimate: a thin strip standing across the horizon gets 1 / pi
+	// (0.32) of that length from its upper half, and the table next to nothing; a tall strip 1.8 m wide 1 m away gets
+	// 0.079 more than the table gives (the tests' lights: 0.21 of the length and 0.056). 0 behind a one-sided light and for
 	// a position on the light's plane; within [0, 1].
 	float FormFactor(const glm::vec3& position, const glm::vec3& normal, const AreaLight& light);
 	// The same form factor with the face clipped by the horizon exactly, without the table.
