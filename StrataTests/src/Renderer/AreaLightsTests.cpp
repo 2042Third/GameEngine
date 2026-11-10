@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Math/Math.h"
 #include "Strata/Renderer/AreaLights.h"
 
 #include <glm/glm.hpp>
@@ -1154,6 +1155,19 @@ TEST_SUITE("Renderer.AreaLights")
 		// The least size is a size, twice the half size, and a face of exactly that size is drawn.
 		CHECK(AreaLights::MakeRecord(world, true, white, 100.0f, glm::vec2(AreaLights::c_MinSize * 0.5f, 0.25f), 5.0f, false).Drawn);
 		CHECK(AreaLights::MakeRecord(world, true, white, 100.0f, glm::vec2(0.25f, AreaLights::c_MinSize * 0.5f), 5.0f, false).Drawn);
+		// Also turned, as an entity's transform turns it (a ceiling light: -90 degrees about X), although the axes of a
+		// rotation's matrix are a float step or so off unit length; a face clearly under the least size still is not drawn.
+		for (const glm::vec3& degrees : { glm::vec3(-90.0f, 0.0f, 0.0f), glm::vec3(90.0f, 0.0f, 0.0f), glm::vec3(0.0f, 90.0f, 0.0f), glm::vec3(0.0f, 0.0f, 90.0f),
+				 glm::vec3(180.0f, 0.0f, 0.0f), glm::vec3(37.0f, -61.0f, 113.0f), glm::vec3(-45.0f, 135.0f, 10.0f) })
+		{
+			CAPTURE(degrees);
+			const glm::mat4 turned = Math::ComposeTransform(glm::vec3(1.0f, 2.0f, 3.0f), Math::EulerDegreesToQuat(degrees), glm::vec3(1.0f));
+			CHECK(AreaLights::MakeRecord(turned, true, white, 100.0f, glm::vec2(AreaLights::c_MinSize * 0.5f, 0.25f), 5.0f, false).Drawn);
+			CHECK(AreaLights::MakeRecord(turned, true, white, 100.0f, glm::vec2(0.25f, AreaLights::c_MinSize * 0.5f), 5.0f, false).Drawn);
+			CHECK(AreaLights::MakeRecord(turned, true, white, 100.0f, glm::vec2(AreaLights::c_MinSize * 0.5f), 5.0f, false).Drawn);
+			CHECK(IsNotDrawn(AreaLights::MakeRecord(turned, true, white, 100.0f, glm::vec2(AreaLights::c_MinSize * 0.499f, 0.25f), 5.0f, false)));
+			CHECK(IsNotDrawn(AreaLights::MakeRecord(turned, true, white, 100.0f, glm::vec2(0.25f, AreaLights::c_MinSize * 0.499f), 5.0f, false)));
+		}
 		// A face whose bounds radius is not finite in float (a half diagonal whose square a float cannot hold, from 1.8e19 m
 		// on) is not drawn, whether its own size or the transform's scale makes it that large; one of 1e18 m is. (A scale
 		// of 1e19 along both axes would leave the face's normal without a finite length: another refusal.)

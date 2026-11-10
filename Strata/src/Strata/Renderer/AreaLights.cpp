@@ -37,6 +37,11 @@ namespace Strata::AreaLights
 		// view is within 1e-4 radians of the normal, where the lobe is isotropic anyway).
 		constexpr float c_MinTangentLengthSquared = 1.0e-8f;
 
+		// The least size is compared with this much less: the axes of a turned transform (glm::mat4_cast of its rotation) are
+		// a few float steps longer or shorter than its scale, and a face of exactly c_MinSize stays drawn however it is
+		// turned (a turn of 90 degrees about X leaves a Y axis of 0.99999994).
+		constexpr float c_MinSizeTolerance = 1.0e-5f;
+
 		bool IsFinite(const glm::vec2& value)
 		{
 			return std::isfinite(value.x) && std::isfinite(value.y);
@@ -215,7 +220,8 @@ namespace Strata::AreaLights
 		const glm::vec2 worldHalfExtents = GetWorldHalfExtents(world, halfExtents);
 		const float boundsRadius = range + glm::length(worldHalfExtents);
 		const glm::vec3 radiance = color * luminance;
-		if (!(worldHalfExtents.x * 2.0f >= c_MinSize) || !(worldHalfExtents.y * 2.0f >= c_MinSize) || !std::isfinite(boundsRadius) || !IsFinite(radiance))
+		const float minSize = c_MinSize * (1.0f - c_MinSizeTolerance);
+		if (!(worldHalfExtents.x * 2.0f >= minSize) || !(worldHalfExtents.y * 2.0f >= minSize) || !std::isfinite(boundsRadius) || !IsFinite(radiance))
 			return record;
 
 		record.Center = center;
