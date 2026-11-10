@@ -4420,12 +4420,12 @@ lights, Post Process and the sky), and never a resolution below the output's.
   starts it again while its own bounded wait lasts, so a view that stays incomplete still settles once that wait ended),
   bounded by `c_MaxCaptureTemporalFrames` and `ProjectThumbnail::c_MaxTemporalFrames` (16); the thumbnails' renderer sets
   `SceneRendererSpecification::TemporalAntiAliasing` off and draws TAA scenes with FXAA.
-- Tests (`GPU.SceneRenderer.TAA`): culling, levels of detail and the cached cascades match a renderer without the jitter;
-  a still edge between colors of equal luminance is the mean of its eight jittered frames at eight frames (0.5%) and stays
-  within 15% of their spread; a moving box leaves no trail beyond two pixels once it stops; every reset outputs the
-  frame's own image; slow frames keep the history; both paths resolve the same image over sixteen moving frames; the
-  noise turns and the converged penumbra is smoother. Overlays, the outline, captures and thumbnails have theirs
-  (`GPU.SceneRenderer.Overlays`, `GPU.GameUI`, `GPU.Editor.Viewport`, `GPU.Editor.Thumbnails`).
+- Tests (`GPU.SceneRenderer.TAA`): culling, levels of detail and the cached cascades match a renderer without the
+  jitter; a still edge between colors of equal luminance is the mean of its eight jittered frames at eight frames (0.5%)
+  and stays within 15% of their spread; a moving box leaves no trail beyond two pixels once it stops; every reset
+  outputs the frame's own image; slow frames keep the history; both paths resolve the same image over sixteen moving
+  frames; the local lights' shadow noise holds still and the history adds no grain. Overlays, the outline, captures and
+  thumbnails have theirs (`GPU.SceneRenderer.Overlays`, `GPU.GameUI`, `GPU.Editor.Viewport`, `GPU.Editor.Thumbnails`).
 - **The TAA's look** (`PostProcessComponent::TAAPreset`): `Sharp` (0), `Original` (1) or `Custom` (2), and ten tunables
   read only under Custom (`TAAHistoryFrames`, `TAAMotionResponse`, `TAAMaxMotionWeight`, `TAAResampleWeight`,
   `TAAHistoryClamp` {`MinMax` "Range", `Variance` "Tight (variance)"}, `TAAClipWidth`, `TAATransparentWeight`,

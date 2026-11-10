@@ -22,7 +22,8 @@ namespace
 
 	// The local lights' shadow filter keeps its noise still with TAA, as the sun's does (Include/LocalShadows.slang: a fixed
 	// rotation per pixel; a pattern that turned every frame looked right only under TAA): two frames of one jitter phase match,
-	// and the converged penumbra's roughness stays below `bound` times one frame's under `preset`, so the history adds no grain;
+	// and the converged penumbra's roughness stays below `bound` times one frame's under `preset`, so the history adds no grain
+	// and still averages what the jitter moves (a resolve that kept no history would leave about as much as one frame);
 	// `custom` (when set) is the look, under Custom. The penumbra is a shadowed spot light's. The ambient occlusion holds still
 	// too: it resolves its pattern within the frame, the same in every frame of a still view.
 	void CheckNoiseHeld(TemporalAntiAliasingPreset preset, const TemporalAntiAliasingSettings* custom, double bound)
@@ -165,6 +166,7 @@ namespace
 		const double singleEnergy = roughness(first);
 		const double convergedEnergy = roughness(converged);
 		INFO("changed " << changed << " of " << groundPixels << ", penumbra " << penumbraPixels << ", roughness " << singleEnergy << " -> " << convergedEnergy);
+		MESSAGE("converged penumbra's roughness: ", convergedEnergy / singleEnergy, " of one frame's (bound ", bound, ")");
 		CHECK(convergedEnergy < bound * singleEnergy);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
@@ -523,7 +525,7 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 
 	TEST_CASE("With TAA the local lights' shadows' noise holds still and the history adds no grain; the ambient occlusion holds still")
 	{
-		CheckNoiseHeld(TemporalAntiAliasingPreset::Original, nullptr, 1.0);
+		CheckNoiseHeld(TemporalAntiAliasingPreset::Original, nullptr, 0.8); // Measured 0.71
 	}
 
 	TEST_CASE("Variance clipping adds no grain to the local lights' still shadow noise")
@@ -531,12 +533,12 @@ TEST_SUITE("GPU.SceneRenderer.TAA")
 		TemporalAntiAliasingSettings settings = c_TAAOriginalSettings;
 		settings.HistoryClamp = TemporalHistoryClamp::Variance;
 		settings.ClipWidth = 1.25f;
-		CheckNoiseHeld(TemporalAntiAliasingPreset::Custom, &settings, 1.0);
+		CheckNoiseHeld(TemporalAntiAliasingPreset::Custom, &settings, 0.65); // Measured 0.55
 	}
 
 	TEST_CASE("Sharp adds no grain to the local lights' still shadow noise")
 	{
-		CheckNoiseHeld(TemporalAntiAliasingPreset::Sharp, nullptr, 1.0);
+		CheckNoiseHeld(TemporalAntiAliasingPreset::Sharp, nullptr, 0.65); // Measured 0.55
 	}
 
 	TEST_CASE("Both paths resolve the same image over sixteen frames of a moving scene")
