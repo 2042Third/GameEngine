@@ -2843,12 +2843,15 @@ namespace
 		}
 	};
 
-	CornellView RenderCornellView(GlobalIlluminationLevel level)
+	// gapLight false is the gather without the thin gaps' light (GlobalIlluminationSettings::GapLight).
+	CornellView RenderCornellView(GlobalIlluminationLevel level, bool gapLight = true)
 	{
 		SceneTestAssets assets;
 		Scene scene;
 		BuildCornellBox(scene, assets);
-		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification(level, 1.0f));
+		SceneRendererSpecification specification = RoomSpecification(level, 1.0f);
+		specification.GlobalIllumination.GapLight = gapLight;
+		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(specification);
 		renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
 		CornellView view;
 		view.Camera = CornellCamera(static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y));
@@ -2949,6 +2952,48 @@ namespace
 		for (int corner = 0; corner < 4; corner++)
 			variance += weights[corner] * (texels[corner].y + (texels[corner].x - mean) * (texels[corner].x - mean));
 		return glm::vec2(mean, variance);
+	}
+
+	// The gi view of a scene with every bounce, settled, and the world position each of its pixels shows: what the thin gaps'
+	// tests read. gapLight false is the gather without the gaps' light (GlobalIlluminationSettings::GapLight).
+	struct GapView
+	{
+		ReadbackImage Image;
+		std::vector<std::optional<glm::vec3>> Positions;
+
+		float GetLuminance(uint32_t x, uint32_t y) const
+		{
+			return Luminance(glm::vec3(ReadHalfTexel(Image, x, y))) / c_RoomPreExposure;
+		}
+	};
+
+	GapView RenderGapView(Scene& scene, const SceneCamera& camera, GlobalIlluminationLevel level, bool gapLight = true)
+	{
+		SceneRendererSpecification specification = RoomSpecification(level, 1.0f);
+		specification.GlobalIllumination.GapLight = gapLight;
+		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(specification);
+		renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+		RenderUntilSettled(*renderer, scene, camera, GIViewOptions(), RenderData::c_GIMaxSettleFrames + 4);
+		REQUIRE_FALSE(renderer->GetStats().GlobalIlluminationPending);
+		GapView view;
+		REQUIRE(Renderer::ReadTexture(renderer->GetHDRTexture(), view.Image));
+		REQUIRE(view.Image.Format == nvrhi::Format::RGBA16_FLOAT);
+		view.Positions = ReadRelativePositions(*renderer, camera);
+		for (std::optional<glm::vec3>& position : view.Positions)
+		{
+			if (position)
+				*position += camera.Position;
+		}
+		renderer.reset();
+		CollectReleases();
+		return view;
+	}
+
+	// The camera of the thin gaps' tests: it looks at the ground under the near edge of the yard's covered car from `distance`
+	// in front of it.
+	SceneCamera YardCarCamera(float distance)
+	{
+		return MakeCamera(glm::vec3(-3.0f, 0.5f, -4.0f - distance), glm::vec3(-3.0f, 0.05f, -4.0f), 30.0f, c_RoomSize);
 	}
 }
 
@@ -3347,80 +3392,274 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
 
 	TEST_CASE("A thin gap takes field light beyond the finest voxels")
 	{
-		// The yard's covered car stands 0.15 m off the ground. Seen from 4 m, voxel level 0 (0.1 m) holds its gap and probes
-		// relocate into it; from 6 m (beyond level 0's relocation, 5.35 m, within the field's full reach, 7.5 m) only level 1's
-		// 0.2 m voxels do, which close the gap: no probe lives there and none sees the ground under the car. The gi view of the
-		// ground the camera sees under the car's near edge, in bands of depth under it (0-0.2, 0.2-0.5 and 0.5-1 m), each band's
-		// median against the open ground's in front of the car: from 6 m the first band keeps at least c_MinEdge of the open
-		// ground's light, and every band at least c_MinShare of what it keeps from 4 m (from 6 m all three were black; from 4 m
-		// they are 0.41, 0.059 and 0.0047, near what an opening 0.15 m tall sends the ground under it: half of one minus d over
-		// the root of d^2 + 0.15^2, about 0.22, 0.04 and 0.01 at the bands' middles, and a little more by bounces in the gap).
+		// The yard's covered car stands 0.15 m off the ground. Seen from 4 m at High, voxel level 0 (0.1 m) holds its gap and
+		// probes relocate into it; from 6 m (beyond level 0's relocation, 5.35 m, within the field's full reach, 7.5 m) only
+		// level 1's 0.2 m voxels do, which close the gap: no probe lives there and none sees the ground more than 0.25 m under
+		// the car. The gi view of the ground the camera sees under the car's near edge, in bands of depth under it (0.02-0.2,
+		// 0.2-0.5 and 0.5-1 m), each band's median against the open ground's in front of the car.
+		// From below: from 6 m the first band keeps at least c_MinEdge of the open ground's light, and every band at least
+		// c_MinShare of what it keeps from 4 m (without the gaps' light the two inner bands are black from 6 m).
+		// From above: no band is brighter than the open ground (c_MaxEdge), and the inner bands keep at most c_MaxOpening times
+		// what the ground under a gap this tall sees of its opening (0.04 and 0.01 of the open ground's light by the view
+		// factor), from either distance. The gap's light not darkened by the way in reads 0.91 in both inner bands from 6 m and
+		// fails; the bounds leave the measured light a factor of 1.8 and 2.0.
+		// Measured at High: 0.41, 0.060 and 0.0047 from 4 m; 0.91, 0.067 and 0.015 from 6 m (0.057 and 0.012 while the way out
+		// was counted in whole steps).
+		// At Low (0.2 m voxels, probes 1 m apart) the probes beside the car light the first 0.5 m under its edge as they light
+		// the open ground, with the gaps' light or without (0.97-0.99 from both distances); the band 0.5-1 m in, black without
+		// the gaps' light, keeps 0.016 from 4 m and 0.048 from 6 m, where the voxels are 0.4 m and the gap they stand for twice
+		// as tall: between c_LowMinimum and c_LowMaximum (undarkened: 0.95 and 0.96).
 		// Every bounce, settled.
 		constexpr float c_MinEdge = 0.1f;
 		constexpr float c_MinShare = 0.5f;
+		constexpr float c_MaxEdge = 1.05f;
+		constexpr float c_MaxOpening = 3.0f;
+		constexpr float c_LowMinimum = 0.005f;
+		constexpr float c_LowMaximum = 0.1f;
 		constexpr uint32_t c_Bands = 3;
 		const float bandDepths[c_Bands + 1] = { 0.02f, 0.2f, 0.5f, 1.0f };
+		// The inner bands' share of the open ground's light by the view factor of the gap's opening.
+		const float openingShares[c_Bands] = { 0.22f, 0.04f, 0.01f };
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
 		Scene scene;
 		BuildYard(scene, assets);
-		float shares[2][c_Bands] = {};
-		for (uint32_t view = 0; view < 2; view++)
+		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
 		{
-			const float distance = view == 0 ? 4.0f : 6.0f;
-			CAPTURE(distance);
-			Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification(GlobalIlluminationLevel::High, 1.0f));
-			renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
-			const SceneCamera camera = MakeCamera(glm::vec3(-3.0f, 0.5f, -4.0f - distance), glm::vec3(-3.0f, 0.05f, -4.0f), 30.0f, c_RoomSize);
-			RenderUntilSettled(*renderer, scene, camera, GIViewOptions(), RenderData::c_GIMaxSettleFrames + 4);
-			REQUIRE_FALSE(renderer->GetStats().GlobalIlluminationPending);
-			ReadbackImage image;
-			REQUIRE(Renderer::ReadTexture(renderer->GetHDRTexture(), image));
-			REQUIRE(image.Format == nvrhi::Format::RGBA16_FLOAT);
-			const std::vector<std::optional<glm::vec3>> positions = ReadRelativePositions(*renderer, camera);
-			std::vector<float> bands[c_Bands];
-			std::vector<float> open;
-			for (uint32_t y = 0; y < image.Height; y++)
+			const bool high = level == GlobalIlluminationLevel::High;
+			const std::string levelName = high ? "High" : "Low";
+			CAPTURE(levelName);
+			float shares[2][c_Bands] = {};
+			for (uint32_t view = 0; view < 2; view++)
 			{
-				for (uint32_t x = 0; x < image.Width; x++)
+				const float distance = view == 0 ? 4.0f : 6.0f;
+				CAPTURE(distance);
+				const GapView gap = RenderGapView(scene, YardCarCamera(distance), level);
+				std::vector<float> bands[c_Bands];
+				std::vector<float> open;
+				for (uint32_t y = 0; y < gap.Image.Height; y++)
 				{
-					const std::optional<glm::vec3>& relative = positions[static_cast<size_t>(y) * image.Width + x];
-					if (!relative)
-						continue;
-					const glm::vec3 point = *relative + camera.Position;
-					if (point.y > 0.02f || point.x < -4.6f || point.x > -1.4f)
-						continue;
-					const float value = Luminance(glm::vec3(ReadHalfTexel(image, x, y))) / c_RoomPreExposure;
-					if (point.z > -4.7f && point.z < -4.3f)
-						open.push_back(value);
-					const float depth = point.z + 4.0f;
-					for (uint32_t band = 0; band < c_Bands; band++)
+					for (uint32_t x = 0; x < gap.Image.Width; x++)
 					{
-						if (depth >= bandDepths[band] && depth < bandDepths[band + 1])
-							bands[band].push_back(value);
+						const std::optional<glm::vec3>& point = gap.Positions[static_cast<size_t>(y) * gap.Image.Width + x];
+						if (!point || point->y > 0.02f || point->x < -4.6f || point->x > -1.4f)
+							continue;
+						const float value = gap.GetLuminance(x, y);
+						if (point->z > -4.7f && point->z < -4.3f)
+							open.push_back(value);
+						const float depth = point->z + 4.0f;
+						for (uint32_t band = 0; band < c_Bands; band++)
+						{
+							if (depth >= bandDepths[band] && depth < bandDepths[band + 1])
+								bands[band].push_back(value);
+						}
+					}
+				}
+				REQUIRE(open.size() > 50);
+				const float openMedian = Median(open);
+				REQUIRE(openMedian > 0.0f);
+				for (uint32_t band = 0; band < c_Bands; band++)
+				{
+					INFO("band " << band);
+					REQUIRE(bands[band].size() > 20);
+					shares[view][band] = Median(bands[band]) / openMedian;
+					MESSAGE(levelName << " from " << distance << " m, " << bandDepths[band] << "-" << bandDepths[band + 1] << " m under the car: "
+						<< bands[band].size() << " points, their median " << shares[view][band] << " of the open ground's " << openMedian);
+					CHECK(shares[view][band] <= c_MaxEdge);
+					if (high && band > 0)
+						CHECK(shares[view][band] <= c_MaxOpening * openingShares[band]);
+				}
+				if (!high)
+				{
+					CHECK(shares[view][c_Bands - 1] >= c_LowMinimum);
+					CHECK(shares[view][c_Bands - 1] <= c_LowMaximum);
+				}
+			}
+			if (high)
+			{
+				CHECK(shares[1][0] >= c_MinEdge);
+				for (uint32_t band = 0; band < c_Bands; band++)
+				{
+					INFO("band " << band);
+					CHECK(shares[1][band] >= c_MinShare * shares[0][band]);
+				}
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The light of a thin gap falls off without bands")
+	{
+		// The gap's light falls with the way from the point to the gap's opening, and the way ends where the voxels' occupancy
+		// crosses the threshold between two samples half a voxel apart. Counted in whole steps the light fell in bands, with a
+		// step of up to 1.5 times between two neighboring pixels at each. The yard's car from 6.5 m through a 4 degree lens (a
+		// pixel 0.9 mm wide and 13 mm deep on the ground), at High: among the pixels of the ground 0.02-0.9 m under its edge that
+		// take their light from the gap (the probes alone give at most c_ProbesShare of it) and at least c_Darkest of the open
+		// ground's, no two neighbors differ by more than c_MaxStep (1.12; the light falls by 1.04 a pixel on average there).
+		// The probes' own light ends 0.25 m under the edge in a hard line, with the gaps' light or without (the release notes'
+		// known issues): its pixels do not count here.
+		constexpr float c_MaxStep = 1.25f;
+		constexpr float c_Darkest = 0.003f;
+		constexpr float c_ProbesShare = 0.1f;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		YardOptions options;
+		options.Fence = false;
+		BuildYard(scene, assets, options);
+		const SceneCamera camera = MakeCamera(glm::vec3(-3.0f, 0.5f, -10.5f), glm::vec3(-3.0f, 0.0f, -3.55f), 4.0f, c_RoomSize);
+		const GapView gap = RenderGapView(scene, camera, GlobalIlluminationLevel::High);
+		const GapView plain = RenderGapView(scene, camera, GlobalIlluminationLevel::High, false);
+		REQUIRE(plain.Image.Width == gap.Image.Width);
+		REQUIRE(plain.Image.Height == gap.Image.Height);
+		const uint32_t width = gap.Image.Width;
+		const uint32_t height = gap.Image.Height;
+		// The gap's light on the ground under the car, 0 where a pixel shows something else or the probes' light.
+		std::vector<float> under(static_cast<size_t>(width) * height, 0.0f);
+		std::vector<float> open;
+		for (uint32_t y = 0; y < height; y++)
+		{
+			for (uint32_t x = 0; x < width; x++)
+			{
+				const size_t index = static_cast<size_t>(y) * width + x;
+				const std::optional<glm::vec3>& point = gap.Positions[index];
+				if (!point || point->y > 0.02f || point->x < -4.6f || point->x > -1.4f)
+					continue;
+				const float value = gap.GetLuminance(x, y);
+				if (point->z > -4.7f && point->z < -4.3f)
+					open.push_back(value);
+				if (point->z >= -3.98f && point->z <= -3.1f && plain.GetLuminance(x, y) <= c_ProbesShare * value)
+					under[index] = value;
+			}
+		}
+		REQUIRE(open.size() > 50);
+		const float openMedian = Median(open);
+		REQUIRE(openMedian > 0.0f);
+		const float darkest = c_Darkest * openMedian;
+		uint32_t pairs = 0;
+		float largest = 1.0f;
+		glm::uvec2 largestAt(0);
+		for (uint32_t y = 0; y < height; y++)
+		{
+			for (uint32_t x = 0; x < width; x++)
+			{
+				const float value = under[static_cast<size_t>(y) * width + x];
+				if (value < darkest)
+					continue;
+				// The pixel to the right and the one below.
+				for (uint32_t neighbor = 0; neighbor < 2; neighbor++)
+				{
+					const uint32_t otherX = x + (neighbor == 0 ? 1u : 0u);
+					const uint32_t otherY = y + (neighbor == 0 ? 0u : 1u);
+					if (otherX >= width || otherY >= height)
+						continue;
+					const float other = under[static_cast<size_t>(otherY) * width + otherX];
+					if (other < darkest)
+						continue;
+					pairs++;
+					const float step = std::max(value, other) / std::min(value, other);
+					if (step > largest)
+					{
+						largest = step;
+						largestAt = glm::uvec2(x, y);
 					}
 				}
 			}
-			REQUIRE(open.size() > 50);
-			const float openMedian = Median(open);
-			REQUIRE(openMedian > 0.0f);
-			for (uint32_t band = 0; band < c_Bands; band++)
-			{
-				INFO("band " << band);
-				REQUIRE(bands[band].size() > 20);
-				shares[view][band] = Median(bands[band]) / openMedian;
-				MESSAGE("From " << distance << " m, " << bandDepths[band] << "-" << bandDepths[band + 1] << " m under the car: " << bands[band].size()
-					<< " points, their median " << shares[view][band] << " of the open ground's " << openMedian);
-			}
-			renderer.reset();
-			CollectReleases();
 		}
-		CHECK(shares[1][0] >= c_MinEdge);
-		for (uint32_t band = 0; band < c_Bands; band++)
+		const std::optional<glm::vec3>& where = gap.Positions[static_cast<size_t>(largestAt.y) * width + largestAt.x];
+		MESSAGE(pairs << " pairs of neighboring pixels in the gap's light under the car, the largest step " << largest << " at " << largestAt.x << ", "
+			<< largestAt.y << " (z " << (where ? where->z : 0.0f) << "), the open ground " << openMedian);
+		REQUIRE(pairs > 50000);
+		CHECK(largest <= c_MaxStep);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The light of a thin gap darkens no point")
+	{
+		// A point takes the gap's light for the share of it its probes do not see; their own light, faded already by what they
+		// see, stays whole. Blended toward the gap's light it was faded twice, and a point its probes see in part was darker
+		// with the gaps' light than without it (a fold of the ground, a contact). The gi view with the gaps' light against the
+		// one without (GlobalIlluminationSettings::GapLight; the field is the same, only drawn points take the gaps' light): no
+		// pixel with at least c_Darkest of the picture's median falls below c_Tolerance of itself, in the yard's car from 4 and
+		// 6 m and in the Cornell box (blended: 42 pixels from 6 m, the darkest at 0.18 of itself, and one in the box at 0.78).
+		// From 6 m, where the voxels close the gap, more than c_MinLighter pixels are lighter by c_Lighter (3,140; none from 4 m
+		// and in the box, where no gap is closed).
+		constexpr float c_Tolerance = 0.98f;
+		constexpr float c_Lighter = 1.05f;
+		constexpr float c_Darkest = 0.01f;
+		constexpr uint32_t c_MinLighter = 1000;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const auto read = [](const ReadbackImage& image, uint32_t x, uint32_t y)
 		{
-			INFO("band " << band);
-			CHECK(shares[1][band] >= c_MinShare * shares[0][band]);
+			return Luminance(glm::vec3(ReadHalfTexel(image, x, y))) / c_RoomPreExposure;
+		};
+		// Checks that no pixel is darker with the gaps' light; returns how many are lighter.
+		const auto compare = [&](const std::string& name, const ReadbackImage& with, const ReadbackImage& without)
+		{
+			INFO(name);
+			REQUIRE(with.Width == without.Width);
+			REQUIRE(with.Height == without.Height);
+			std::vector<float> lit;
+			for (uint32_t y = 0; y < without.Height; y++)
+			{
+				for (uint32_t x = 0; x < without.Width; x++)
+				{
+					const float value = read(without, x, y);
+					if (value > 0.0f)
+						lit.push_back(value);
+				}
+			}
+			REQUIRE(!lit.empty());
+			const float darkest = c_Darkest * Median(lit);
+			uint32_t darker = 0;
+			uint32_t lighter = 0;
+			float smallest = 1.0f;
+			glm::uvec2 smallestAt(0);
+			for (uint32_t y = 0; y < without.Height; y++)
+			{
+				for (uint32_t x = 0; x < without.Width; x++)
+				{
+					const float off = read(without, x, y);
+					const float on = read(with, x, y);
+					if (on > c_Lighter * std::max(off, darkest))
+						lighter++;
+					if (off < darkest)
+						continue;
+					if (on < c_Tolerance * off)
+						darker++;
+					if (on / off < smallest)
+					{
+						smallest = on / off;
+						smallestAt = glm::uvec2(x, y);
+					}
+				}
+			}
+			MESSAGE(name << ": " << darker << " pixels darker with the gaps' light, the smallest share " << smallest << " at " << smallestAt.x << ", "
+				<< smallestAt.y << "; " << lighter << " lighter");
+			CHECK(darker == 0);
+			return lighter;
+		};
+		{
+			SceneTestAssets assets;
+			Scene scene;
+			BuildYard(scene, assets);
+			for (float distance : { 4.0f, 6.0f })
+			{
+				const SceneCamera camera = YardCarCamera(distance);
+				const GapView with = RenderGapView(scene, camera, GlobalIlluminationLevel::High, true);
+				const GapView without = RenderGapView(scene, camera, GlobalIlluminationLevel::High, false);
+				const uint32_t lighter = compare("the yard's car from " + std::to_string(static_cast<int>(distance)) + " m", with.Image, without.Image);
+				if (distance > 5.0f)
+					CHECK(lighter > c_MinLighter);
+			}
+		}
+		{
+			const CornellView with = RenderCornellView(GlobalIlluminationLevel::High, true);
+			const CornellView without = RenderCornellView(GlobalIlluminationLevel::High, false);
+			compare("the Cornell box", with.Image, without.Image);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

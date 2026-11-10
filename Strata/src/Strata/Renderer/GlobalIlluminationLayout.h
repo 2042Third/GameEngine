@@ -30,6 +30,9 @@ namespace Strata
 		// c_GIMaxBounceAlbedo), within [0, 1]. 1 by default; 0 is one bounce, as the tests' one-bounce references compute. Only
 		// layouts that bounce (GlobalIlluminationLayout::Bounces) read it.
 		float BounceGain = 1.0f;
+		// Whether a drawn point in a gap its voxels close takes the light of the gap's opening (Include/GIField.slang's
+		// SampleIrradianceField). Off is the gather without it: what the tests compare the gap's light with.
+		bool GapLight = true;
 	};
 
 	// A level of the voxel clipmap: every level has the same dimensions, each twice the voxel size of the one before.

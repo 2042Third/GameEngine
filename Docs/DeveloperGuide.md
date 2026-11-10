@@ -5277,16 +5277,26 @@ probe-field levels and local lights follow.
   quarter) of the weight they would give, the light fades with what they see instead of renormalizing a vanishing weight
   (which stepped at the cells' borders); dead probes take no part (a probe dead inside an object over a contact says nothing
   about the floor beside it); none visible: no field light, never the sky, but a drawn point whose probes see less than
-  `c_GIGatherMinVisible` of it (a gap its finest voxels close, thinner than about one and a half voxels) is blended, as they
-  see less, toward the light where the way to the camera leaves the closed voxels into open space (up to
-  `c_GIGatherExitSteps` (24) steps of half a voxel toward the viewer, to a sample below `c_GIGatherExitOccupancy` (0.2)
-  with the sample a voxel along the normal too: the gap's opening as the camera sees it, the probes around it gathered for
-  the point's own normal and plane), times `1 - d / sqrt(d^2 + g^2)` for the distance d travelled and a gap g of
-  `c_GIGatherGapVoxels` (0.75) voxels: what the ground under a gap that tall sees of its opening from that far in. The camera
-  sees the point, so the way is open in the scene: a sealed room's points never take light from beyond its walls (the
-  sealed cases hold). Under the yard's car (0.15 m off the ground) seen from 6 m, beyond level 0's reach, the ground 0-0.2,
-  0.2-0.5 and 0.5-1 m under its edge keeps 0.91, 0.057 and 0.012 of the open ground's light (black before; 0.41, 0.059 and
-  0.0047 from 4 m, where level 0's probes relocate into the gap; about 0.22, 0.04 and 0.01 by the opening's view factor).
+  `c_GIGatherMinVisible` of it (a gap its finest voxels close, thinner than about one and a half voxels) takes, for the
+  share of it they do not see, the light where the way to the camera leaves the closed voxels into open space (up to
+  `c_GIGatherExitSteps` (24) steps of half a voxel toward the viewer, to where the occupancy at the sample and at the
+  sample a voxel along the normal falls below `c_GIGatherExitOccupancy` (0.2): the gap's opening as the camera sees it,
+  the probes around it gathered for the point's own normal and plane), times `1 - d / sqrt(d^2 + g^2)` for the distance d
+  travelled and a gap g of `c_GIGatherGapVoxels` (0.75) voxels: what the ground under a gap that tall sees of its opening
+  from that far in. **The gap's light is added, and d is interpolated:** the probes' own light is already faded by what
+  they see and stays whole (blended toward the gap's light it was faded twice, and a point its probes see in part, a
+  fold of the ground or a contact, was darker with the gap's light than without it), and d ends where the occupancy
+  crosses the threshold between two samples (counted in whole steps the light fell in bands, 1.5 times from one pixel to
+  the next; 1.12 now, its own slope). The camera sees the point, so the way is open in the scene: a sealed room's points
+  never take light from beyond its walls (the sealed cases hold). Under the yard's car (0.15 m off the ground) seen from
+  6 m, beyond level 0's reach, the ground 0-0.2, 0.2-0.5 and 0.5-1 m under its edge keeps 0.91, 0.067 and 0.015 of the
+  open ground's light (without the gap's light 0.91, 0 and 0; 0.41, 0.060 and 0.0047 from 4 m, where level 0's probes
+  relocate into the gap and the gap's light adds nothing; about 0.22, 0.04 and 0.01 by the opening's view factor). At Low
+  the probes beside the car light the first 0.5 m as they light the open ground (0.97-0.99, with the gap's light or
+  without), and the ground 0.5-1 m in keeps 0.016 from 4 m and 0.048 from 6 m (black without). What it leaves (the
+  release notes' known issues): the probes' own light ends in a hard line 0.25 m under the car's edge, and where a
+  point's voxel level ends the voxel doubles, and with it the steps and the gap g, so a gap that crosses a level's edge
+  shows it. `GlobalIlluminationSettings::GapLight` (true) turns the gap's light off: the tests compare with it.
   Only drawn surfaces: re-injection's points inside walls would take a wall's far side. A point no level holds, beyond a
   valid box a scroll left short, takes today's light; within 2 m of the field's edge it fades to today's light.
   `SceneLightingView::GlobalIllumination` (`gi`) shades white and returns the diffuse indirect light (the field inside,
@@ -5306,8 +5316,14 @@ probe-field levels and local lights follow.
   neighbour too (0.53; 0.083 while the floor, 2.75 m below the camera, lay beyond level 0's weights, 0.021 before
   relocation and the guard visibility); around the tall box's foot it keeps at least 0.2 (0.21; 0.23 before the window
   moved and surfaces read harmonics, 0.10 before relocation): half is a goal not met there. "A thin gap takes field
-  light beyond the finest voxels" checks the yard's car from 4 and 6 m (above: from 6 m the band under its edge keeps 0.1 of
-  the open ground's light, and every band half of what it keeps from 4 m). `Renderer`'s "Dead probes" checks relocation: in
+  light beyond the finest voxels" checks the yard's car from 4 and 6 m at High and Low (above: from 6 m at High the band
+  under its edge keeps 0.1 of the open ground's light and every band half of what it keeps from 4 m; no band is brighter
+  than the open ground, High's two inner bands keep at most three times the view factor's share, 0.12 and 0.03, and
+  Low's innermost 0.005-0.1: the gap's light not darkened by the way in reads 0.91 and fails). "The light of a thin gap
+  falls off without bands" checks that through a 4 degree lens no two neighboring pixels of the gap's light differ by
+  more than 1.25 times (1.12; 1.50 in whole steps), and "The light of a thin gap darkens no point" that no pixel of the
+  car from 4 and 6 m or of the Cornell box is darker with the gap's light than without it (blended: 42 pixels from 6 m,
+  the darkest at 0.18 of itself, and one in the box). `Renderer`'s "Dead probes" checks relocation: in
   a 2 m block the probes 0.05 m inside a face move out, live, those deeper stay dead and are the ones counted.
 
 - **Sampling** (`Include/GlobalIllumination.slang`): a point reads the finest level whose valid box holds it with

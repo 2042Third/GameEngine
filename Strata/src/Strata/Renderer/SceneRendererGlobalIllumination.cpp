@@ -574,7 +574,7 @@ namespace Strata
 			field.VoxelValidMinimum[level] = data.ValidMinimum;
 			field.VoxelValidMaximum[level] = data.ValidMaximum;
 		}
-		field.VoxelDimensions = glm::vec4(glm::vec3(dimensions), 0.0f);
+		field.VoxelDimensions = glm::vec4(glm::vec3(dimensions), m_Specification.GlobalIllumination.GapLight ? 1.0f : 0.0f);
 
 		// Re-injection (multi-bounce): VoxelInject reads the field the frame before left, when that frame of this renderer recorded its
 		// light whole and used its field (not pending) and this frame cuts nothing (a rebuild or a jump starts again from one bounce).

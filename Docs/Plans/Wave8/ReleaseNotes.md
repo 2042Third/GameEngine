@@ -242,9 +242,14 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   0.89 before). No memory; 0.12-0.15 ms more GPU time for a 3840 x 2160 frame in the sun room, 0.02 ms in the yard.
 - Thin gaps that the voxels close no longer go black: where the probes around a surface cannot see it, it takes the
   light of the gap's opening as the camera sees it, darkened by how far in it lies. Under the yard's covered car (0.15 m
-  off the ground) seen from 6 m, the ground 0.2-0.5 m under its edge keeps 6% of the open ground's light and 0.5-1 m in
-  1% (it was black; seen from 4 m, where the finest voxels hold the gap, 6% and 0.5%). Closed rooms stay dark. 0.06-0.08
-  ms of GPU time in the sun room, at most 0.03 ms in the yard.
+  off the ground) seen from 6 m, the ground 0.2-0.5 m under its edge keeps 7% of the open ground's light and 0.5-1 m in
+  1.5% (it was black; seen from 4 m, where the finest voxels hold the gap, 6% and 0.5%; at Low the ground 0.5-1 m in
+  keeps 1.6% from 4 m and 5% from 6 m). The gap's light is added to what the probes give and darkens no point: as first
+  written it was blended in, which faded the probes' light twice where they see a surface in part (42 pixels of a 960 x
+  540 view of the car from 6 m were darker with the gap's light than without it, the darkest at 0.18 of itself). It
+  falls off smoothly under the object: as first written its depth was counted in steps of half a voxel and the light
+  fell in bands, up to 1.5 times from one pixel to the next through a long lens (1.12 now). Closed rooms stay dark.
+  0.06-0.08 ms of GPU time in the sun room, at most 0.03 ms in the yard.
 - Round objects take their light more evenly: surfaces read each probe's light as spherical harmonics, which turn
   smoothly with the surface, where an ambient cube blended the light of the axes. A white sphere under a uniform sky now
   reads 3.5% dark at its rim (7% before) and 2% at its center. The bounces keep the cubes, so the light still settles to
@@ -431,7 +436,14 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   not resolve).
 - The ground right at the edge of a thin gap beyond about 5.4 m from the camera at High (the first 0.2 m under the
   yard's covered car) reads about twice as bright as from nearer: there the probes beside the object light it without
-  its overhang, since the 0.2 m voxels close the gap.
+  its overhang, since the 0.2 m voxels close the gap. That light ends in a hard line 0.25 m under the object's edge:
+  seen from 6.5 m, the ground falls from 0.94 to 0.076 of the open ground's light from one pixel to the next (to black
+  without the thin gaps' light, which falls off smoothly from there). At Low the probes beside the car light the first
+  0.5 m under it as they light the open ground (0.97-0.99 of its light).
+- The thin gaps' light takes the gap for three quarters of a voxel tall, of the voxels the surface lies in. Where the
+  finer voxels' window ends the voxel doubles and the assumed gap with it, so the light of a gap that crosses the
+  window's edge steps there: far inside the gap by up to four times, by the formula. Blending the two levels there is
+  a change to the whole gather, whose probe visibility reads one level too, and is not made in this batch.
 - Global illumination's own stage at 3840 x 2160 read about 4.4 ms in some runs and about 6.5 ms in others of the same
   build (the sun room and the yard, High): the difference lay in the pass that sums cascade 0's rays into the field (1.2
   or 3.6 ms), with the opaque pass's time unchanged. Every slow run was measured on one day before 15:00; afterwards

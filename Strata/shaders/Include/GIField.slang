@@ -20,7 +20,7 @@ struct GIFieldConstants
 	int4 VoxelTexel[3];          // xyz: the minimum corner's texel
 	int4 VoxelValidMinimum[3];   // xyz: the valid box's first voxel, relative to the window's minimum corner
 	int4 VoxelValidMaximum[3];   // xyz: one past its last voxel
-	float4 VoxelDimensions;      // xyz: voxels per axis
+	float4 VoxelDimensions;      // xyz: voxels per axis; w: 1 when drawn points in gaps the voxels close take the gap's light
 };
 ConstantBuffer<GIFieldConstants> u_GIField : register(b3);
 
@@ -281,33 +281,42 @@ float4 SampleIrradianceField(SamplerState repeat, float3 position, float3 geomet
 	// probes there are dead or see only the gap's walls (the yard's car, 0.15 m off the ground, beyond level 0's reach, where level
 	// 1's 0.2 m voxels hold no probe under it). The camera sees it, so the way from it toward the camera is open: it takes the light
 	// where that way leaves the closed voxels into open space (the gap's opening as the camera sees it), darkened by how far in it
-	// lies as the ground under a gap of c_GIGatherGapVoxels sees its opening (1 - d / sqrt(d^2 + g^2)), blended in as the probes see
-	// less of it. Only drawn surfaces: re-injection's points inside walls must not take a wall's far side. Continuous in the point
-	// and the camera; nothing found within ST_GI_GATHER_EXIT_STEPS: what the probes give.
-	if (pushOut && (total < minimum || total <= 0.0))
+	// lies as the ground under a gap of c_GIGatherGapVoxels sees its opening (1 - d / sqrt(d^2 + g^2)), for the share of it the
+	// probes do not see. Their own light is already faded by what they see and stays whole: blended toward the gap's it was faded
+	// twice, and a partly seen point darker with the gap's light than without it. Only drawn surfaces: re-injection's points
+	// inside walls must not take a wall's far side. The way leaves the closed voxels where their occupancy crosses
+	// ST_GI_GATHER_EXIT_OCCUPANCY between two samples half a voxel apart (interpolated: by whole steps the light fell in bands), so
+	// within a voxel level the light is continuous in the point and the camera. Where the point's level ends the voxel doubles,
+	// and with it the steps, the gap and the guard's samples: a gap that crosses a level's edge shows it. Nothing found within
+	// ST_GI_GATHER_EXIT_STEPS: what the probes give.
+	if (pushOut && u_GIField.VoxelDimensions.w > 0.0 && (total < minimum || total <= 0.0))
 	{
 		float h = u_GIField.VoxelOrigin[level].w;
-		float3 marched = position + geometricNormal * (0.5 * h);
+		float3 start = position + geometricNormal * (0.5 * h);
+		// Closed: something in the voxels at the sample or a voxel along the normal from it (the gap's own soft layer is not the open).
+		float closed = max(SampleFieldOccupancy(level, repeat, start), SampleFieldOccupancy(level, repeat, start + geometricNormal * h));
 		float travelled = 0.0;
-		bool found = false;
+		bool found = closed < ST_GI_GATHER_EXIT_OCCUPANCY;
 		[loop]
-		for (uint step = 0u; step < ST_GI_GATHER_EXIT_STEPS; step++)
+		for (uint step = 1u; step < ST_GI_GATHER_EXIT_STEPS && !found; step++)
 		{
-			if (SampleFieldOccupancy(level, repeat, marched) < ST_GI_GATHER_EXIT_OCCUPANCY
-				&& SampleFieldOccupancy(level, repeat, marched + geometricNormal * h) < ST_GI_GATHER_EXIT_OCCUPANCY)
-			{
-				found = true;
-				break;
-			}
-			marched += viewDirection * (0.5 * h);
-			travelled += 0.5 * h;
+			float3 marched = start + viewDirection * (0.5 * h * float(step));
 			if (!IsInFieldLevel(level, marched))
 				break;
+			float next = max(SampleFieldOccupancy(level, repeat, marched), SampleFieldOccupancy(level, repeat, marched + geometricNormal * h));
+			if (next < ST_GI_GATHER_EXIT_OCCUPANCY)
+			{
+				// The sample before was closed (at or above the threshold) and this one is open: the crossing lies between them.
+				travelled = 0.5 * h * (float(step) - (ST_GI_GATHER_EXIT_OCCUPANCY - next) / max(closed - next, 1e-6));
+				found = true;
+			}
+			closed = next;
 		}
 		if (found)
 		{
-			float3 fallbackBiased = marched + geometricNormal * (ST_GI_GATHER_NORMAL_BIAS * spacing);
-			float3 fallbackSeen = PushOutOfSolid(repeat, marched + viewDirection * (ST_GI_GATHER_VIEW_BIAS * spacing));
+			float3 exitPoint = start + viewDirection * travelled;
+			float3 fallbackBiased = exitPoint + geometricNormal * (ST_GI_GATHER_NORMAL_BIAS * spacing);
+			float3 fallbackSeen = PushOutOfSolid(repeat, exitPoint + viewDirection * (ST_GI_GATHER_VIEW_BIAS * spacing));
 			float fallbackTotal;
 			float fallbackReachable;
 			float4 exitLight = GatherFieldProbes(repeat, fallbackBiased, position, geometricNormal, shadingNormal, fallbackSeen, fallbackTotal,
@@ -318,7 +327,7 @@ float4 SampleIrradianceField(SamplerState repeat, float3 position, float3 geomet
 				float opening = 1.0 - travelled * rsqrt(travelled * travelled + gap * gap);
 				float3 gapLight = exitLight.rgb / max(fallbackTotal, ST_GI_GATHER_MIN_VISIBLE * fallbackReachable) * opening;
 				float seenShare = total / max(minimum, 1e-8);
-				irradiance = lerp(gapLight, irradiance, seenShare);
+				irradiance += gapLight * (1.0 - seenShare);
 				openShare = lerp(exitLight.a / fallbackTotal * opening, openShare, seenShare);
 			}
 		}

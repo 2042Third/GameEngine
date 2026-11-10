@@ -752,7 +752,8 @@ namespace Strata
 		// 0's reach) takes the light where the view ray leaves the closed voxels: at most this many steps of half a voxel toward
 		// the viewer, to the first sample below this occupancy with the sample a voxel along the normal too (open space, not the
 		// gap's own soft layer), darkened as the ground under a gap of this many voxels sees its opening from as far in
-		// (1 - d / sqrt(d^2 + g^2)): the voxels close gaps up to about one and a half voxels.
+		// (1 - d / sqrt(d^2 + g^2)): the voxels close gaps up to about one and a half voxels. The distance d is where the
+		// occupancy crosses the threshold between two samples, interpolated: in whole steps the light fell in bands.
 		constexpr uint32_t c_GIGatherExitSteps = 24;
 		constexpr float c_GIGatherExitOccupancy = 0.2f;
 		constexpr float c_GIGatherGapVoxels = 0.75f;
@@ -887,7 +888,7 @@ namespace Strata
 			glm::ivec4 VoxelTexel[3];     // xyz: the minimum corner's texel
 			glm::ivec4 VoxelValidMinimum[3]; // xyz: the valid box's first voxel, relative to the window's minimum corner
 			glm::ivec4 VoxelValidMaximum[3]; // xyz: one past its last voxel
-			glm::vec4 VoxelDimensions;    // xyz: voxels per axis
+			glm::vec4 VoxelDimensions;    // xyz: voxels per axis; w: 1 when drawn points in gaps the voxels close take the gap's light (GlobalIlluminationSettings::GapLight)
 		};
 		static_assert(sizeof(GIFieldConstants) == 256);
 
