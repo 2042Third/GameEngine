@@ -50,6 +50,8 @@ groupshared float3 s_Directions[ST_GI_FIELD_DIRECTIONS];
 groupshared float4 s_Rays[ST_GI_FIELD_DIRECTIONS];
 groupshared float s_SolidAngles[ST_GI_FIELD_DIRECTIONS];
 groupshared float s_Basis[ST_GI_FIELD_DIRECTIONS][9];
+// The depth tile's interior texels as written (PackHalf2x16), for its border to repeat.
+groupshared uint s_Depths[(ST_GI_FIELD_DEPTH_TEXELS - 2) * (ST_GI_FIELD_DEPTH_TEXELS - 2)];
 
 // A tile texel's solid angle (GlobalIllumination::GetSolidAngle): the octahedron's Jacobian 1 / |p|^3 at its center times the
 // tile's normalization.
@@ -62,6 +64,19 @@ float GetTileSolidAngle(uint2 texel, uint a, float normalization)
 	p.y += p.y >= 0.0 ? -t : t;
 	float length3 = dot(p, p) * sqrt(dot(p, p));
 	return normalization / length3;
+}
+
+// A texel of the depth tile's one-texel border by its index: the top row, the bottom row, then the left and the right column
+// between them (4 * ST_GI_FIELD_DEPTH_TEXELS - 4 texels).
+uint2 GetDepthTileBorderTexel(uint index)
+{
+	uint size = ST_GI_FIELD_DEPTH_TEXELS;
+	if (index < size)
+		return uint2(index, 0u);
+	if (index < 2u * size)
+		return uint2(index - size, size - 1u);
+	uint side = index - 2u * size;
+	return side < size - 2u ? uint2(0u, side + 1u) : uint2(size - 1u, side - (size - 2u) + 1u);
 }
 
 // Cascade 1's merged light along cascade 0's texel: the parents' rays of the texel's directions (one, or the mean of the 2 x 2 a
@@ -187,20 +202,21 @@ void main(uint3 groupID : SV_GroupID, uint index : SV_GroupIndex)
 		float lobe = coefficient == 0u ? 1.0 : coefficient < 4u ? 2.0 / 3.0 : 0.25;
 		o_Irradiance[uint3(probe.x * 3u + coefficient % 3u, probe.y * 3u + coefficient / 3u, probe.z)] = sum * lobe;
 	}
-	uint depthTexels = ST_GI_FIELD_DEPTH_TEXELS * ST_GI_FIELD_DEPTH_TEXELS;
-	if (!all(probe < u_Pass.Grid.xyz))
-		return;
+	// The depth tile. Its interior is the rays' a x a (the layout's 8 x 8: a thread a texel); its border repeats interior texels
+	// across the octahedron's edges, so those are copied from what the group computed: filtering the border's 36 texels like the
+	// interior's 64 ran the loop over every ray a second time in 36 of the group's threads, the others waiting.
+	bool inside = all(probe < u_Pass.Grid.xyz);
+	uint interior = ST_GI_FIELD_DEPTH_TEXELS - 2u;
 	[loop]
-	for (uint texelIndex = index; texelIndex < depthTexels; texelIndex += ST_GI_REDUCE_GROUP)
+	for (uint texelIndex = index; texelIndex < interior * interior; texelIndex += ST_GI_REDUCE_GROUP)
 	{
-		uint2 texel = uint2(texelIndex % ST_GI_FIELD_DEPTH_TEXELS, texelIndex / ST_GI_FIELD_DEPTH_TEXELS);
+		uint2 source = uint2(texelIndex % interior, texelIndex / interior);
 		float2 depth = float2(0.0, 0.0);
 		if (live)
 		{
-			// The ray of the interior texel (the border repeats one across the edge; the tile's interior is the rays' a x a), its
-			// moments filtered with its neighbours' by the cosine between them to ST_GI_FIELD_DEPTH_SHARPNESS (about half for
-			// the next ray, a thirtieth for the one after): a ray that grazes a surface's voxel staircase alone sets no edge.
-			uint2 source = GetDepthTileSource(texel) - 1u;
+			// The texel's ray, its moments filtered with its neighbours' by the cosine between them to
+			// ST_GI_FIELD_DEPTH_SHARPNESS (about half for the next ray, a thirtieth for the one after): a ray that grazes a
+			// surface's voxel staircase alone sets no edge.
 			float3 axis = GetTileDirection(source, a);
 			float3 sum = float3(0.0, 0.0, 0.0);
 			uint directions = min(a * a, ST_GI_FIELD_DIRECTIONS);
@@ -216,6 +232,19 @@ void main(uint3 groupID : SV_GroupID, uint index : SV_GroupIndex)
 			float2 moments = sum.xy / max(sum.z, 1e-6);
 			depth = float2(moments.x, max(moments.y - moments.x * moments.x, 0.0));
 		}
-		o_Depth[uint3(probe.xy * ST_GI_FIELD_DEPTH_TEXELS + texel, probe.z)] = PackHalf2x16(depth);
+		uint halves = PackHalf2x16(depth);
+		s_Depths[texelIndex] = halves;
+		if (inside)
+			o_Depth[uint3(probe.xy * ST_GI_FIELD_DEPTH_TEXELS + source + 1u, probe.z)] = halves;
+	}
+	GroupMemoryBarrierWithGroupSync();
+	if (!inside)
+		return;
+	[loop]
+	for (uint border = index; border < 4u * interior + 4u; border += ST_GI_REDUCE_GROUP)
+	{
+		uint2 texel = GetDepthTileBorderTexel(border);
+		uint2 source = GetDepthTileSource(texel) - 1u;
+		o_Depth[uint3(probe.xy * ST_GI_FIELD_DEPTH_TEXELS + texel, probe.z)] = s_Depths[source.y * interior + source.x];
 	}
 }

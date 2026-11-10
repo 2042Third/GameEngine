@@ -2690,6 +2690,22 @@ namespace
 		return values[values.size() / 2];
 	}
 
+	// The interior texel a texel of a probe's depth tile repeats (Include/GlobalIllumination.slang's GetDepthTileSource): itself
+	// inside, and on the one-texel border the interior texel across the octahedron's edge.
+	glm::ivec2 GetDepthTileSource(const glm::ivec2& texel)
+	{
+		constexpr int c_Last = static_cast<int>(RenderData::c_GIFieldDepthTexels) - 1;
+		const bool column = texel.x == 0 || texel.x == c_Last;
+		const bool row = texel.y == 0 || texel.y == c_Last;
+		if (column && row)
+			return glm::ivec2(texel.x == 0 ? c_Last - 1 : 1, texel.y == 0 ? c_Last - 1 : 1);
+		if (column)
+			return glm::ivec2(texel.x == 0 ? 1 : c_Last - 1, c_Last - texel.y);
+		if (row)
+			return glm::ivec2(c_Last - texel.x, texel.y == 0 ? 1 : c_Last - 1);
+		return texel;
+	}
+
 	// A cascade-0 probe's depth moments toward a direction, bilinear between the four texels of its tile around the direction's
 	// octahedral point (the texels Include/GIField.slang's LiesBeforeProbeHits reads), as their mixture: the mean distance to the
 	// first hit and its variance.
@@ -3024,6 +3040,9 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
 		// In the Cornell box, a probe a known height over the open floor finds the floor straight down within a voxel and a half
 		// (the voxels' soft surface and the filter over neighbouring rays), its spread within two voxels, and nothing up to the
 		// march's end straight up (the ceiling lies farther): the distances are the march's, in meters.
+		// Every tile's border holds the bits of the interior texels across the octahedron's edges (the reduce copies them instead
+		// of filtering the rays again), which is what makes the gather's bilinear read seamless there: every border texel of
+		// every probe is compared with its source, and the tiles are not all empty or flat.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
@@ -3057,6 +3076,59 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
 			CHECK(std::abs(down.x - center.y) <= 1.5f * voxel);
 			CHECK(std::sqrt(down.y) <= 2.0f * voxel);
 			CHECK(up.x >= 0.95f * missDistance);
+			const glm::ivec3 grid(renderer->GetGlobalIlluminationLayout()->Cascades.front().Grid);
+			constexpr int c_Texels = static_cast<int>(RenderData::c_GIFieldDepthTexels);
+			const size_t width = static_cast<size_t>(grid.x * c_Texels);
+			const size_t height = static_cast<size_t>(grid.y * c_Texels);
+			REQUIRE(depth.size() == width * height * static_cast<size_t>(grid.z) * 4);
+			const auto readTexel = [&](const glm::ivec3& tile, const glm::ivec2& texel)
+			{
+				const size_t x = static_cast<size_t>(tile.x * c_Texels + texel.x);
+				const size_t y = static_cast<size_t>(tile.y * c_Texels + texel.y);
+				const size_t index = x + width * (y + height * static_cast<size_t>(tile.z));
+				uint32_t value = 0;
+				std::memcpy(&value, depth.data() + index * 4, sizeof(value));
+				return value;
+			};
+			size_t borderTexels = 0;
+			size_t differentFromSource = 0;
+			size_t differentFromNeighbour = 0;
+			for (int z = 0; z < grid.z; z++)
+			{
+				for (int y = 0; y < grid.y; y++)
+				{
+					for (int x = 0; x < grid.x; x++)
+					{
+						const glm::ivec3 tile(x, y, z);
+						for (int index = 0; index < c_Texels * c_Texels; index++)
+						{
+							const glm::ivec2 texel(index % c_Texels, index / c_Texels);
+							const glm::ivec2 source = GetDepthTileSource(texel);
+							if (source == texel)
+								continue;
+							borderTexels++;
+							const uint32_t value = readTexel(tile, texel);
+							if (value != readTexel(tile, source))
+								differentFromSource++;
+							// The next border texel along the row or column repeats another interior texel: where the two differ, a
+							// border copied from the wrong place would show.
+							const bool onRow = texel.y == 0 || texel.y == c_Texels - 1;
+							const glm::ivec2 next = onRow && texel.x + 1 < c_Texels ? texel + glm::ivec2(1, 0)
+								: texel.y + 1 < c_Texels ? texel + glm::ivec2(0, 1) : texel;
+							if (value != readTexel(tile, next))
+								differentFromNeighbour++;
+						}
+					}
+				}
+			}
+			MESSAGE(levelName << ": " << borderTexels << " border texels, " << differentFromSource << " differ from their source, "
+				<< differentFromNeighbour << " from the next border texel");
+			const size_t probes = static_cast<size_t>(grid.x) * static_cast<size_t>(grid.y) * static_cast<size_t>(grid.z);
+			CHECK(borderTexels == probes * static_cast<size_t>(4 * c_Texels - 4));
+			CHECK(differentFromSource == 0);
+			// Most probes lie in the open or are dead and hold flat tiles: with this room 13.7% of the border texels differ from the
+			// next one at High and 17.6% at Low, and a twentieth shows the comparison above had something to compare.
+			CHECK(differentFromNeighbour * 20 >= borderTexels);
 			renderer.reset();
 			CollectReleases();
 		}
