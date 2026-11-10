@@ -269,16 +269,17 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - Round objects take their light more evenly: surfaces read each probe's light as spherical harmonics, which turn
   smoothly with the surface, where an ambient cube blended the light of the axes. A white sphere under a uniform sky now
   reads 3.5% dark at its rim (7% before) and 2% at its center. The bounces keep the cubes, so the light still settles to
-  the same frame and still pictures repeat exactly. 6.3 MiB more memory per view at High (0.8 MiB at Low) and, as first
-  written, 0.23-0.25 ms of GPU time, which the next item's two cuts make up for. The harmonics' first term is stored
-  as the mean of the probe's light, not as the coefficient, which is 3.5 times the mean and left the texture's range in
-  a bright closed room (a box glowing at 65,000 nits with every bounce: the test machine's driver wrote the format's
-  largest value there, a first term 22% low, and a driver may write infinity). A surface never reads less than its
-  probes' cubes hold for it: the harmonics weigh light from behind a surface's plane a little below zero, and alone they
-  put dark to black blotches on a wall at and around a patch of sunlight on it (the sun room's north wall under a low
-  sun read 0.48 to 0.74 of the cubes there, now 1.00 to 1.09; the back wall of the showcase's hut went black around the
-  door's and the window's patches). Walls that stand at an angle to the world's axes glow softly around such a patch,
-  as they did before this batch (Known issues).
+  the same frame and a still camera's consecutive frames stay identical to the bit, with every bounce too (tested in the
+  sun room and the Cornell box; two captures of one shot are another matter: Known issues). 6.3 MiB more memory per view
+  at High (0.8 MiB at Low) and, as first written, 0.23-0.25 ms of GPU time, which the next item's two cuts make up for.
+  The harmonics' first term is stored as the mean of the probe's light, not as the coefficient, which is 3.5 times the
+  mean and left the texture's range in a bright closed room (a box glowing at 65,000 nits with every bounce: the test
+  machine's driver wrote the format's largest value there, a first term 22% low, and a driver may write infinity). A
+  surface never reads less than its probes' cubes hold for it: the harmonics weigh light from behind a surface's plane a
+  little below zero, and alone they put dark to black blotches on a wall at and around a patch of sunlight on it (the
+  sun room's north wall under a low sun read 0.48 to 0.74 of the cubes there, now 1.00 to 1.09; the back wall of the
+  showcase's hut went black around the door's and the window's patches). Walls that stand at an angle to the world's
+  axes glow softly around such a patch, as they did before this batch (Known issues).
 - Summing the finest cascade's rays into the probes costs less: each ray's thread evaluates its harmonics once, where
   the nine threads that sum the coefficients evaluated them again for every ray, and the border of a probe's depth tile
   is copied from the tile's interior instead of being filtered a second time. 0.29-0.31 ms less GPU time for a 3840 x
@@ -300,12 +301,14 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   180), which now and then failed the test that compares a strafe's field with a fresh renderer's when the machine was
   busy. That test, which now compares the harmonics too, and a new one over twelve frames of a still camera failed in 6
   of 24 runs of their suite without the rounding (the new one in all six, the strafe's in four) and in none of 24 with
-  it, the two builds taking turns. Why the driver has two ways is not known. Pictures change by one level in at most 245
-  pixels of a 3840 x 2160 frame without anti-aliasing or with FXAA. With TAA more pixels move: 4% of the yard's, all but
-  1,719 of them by one level, up or down, all over the picture (its automatic exposure ends 0.00001 EV apart), the rest
-  by up to 41 on the fence and other thin edges; the pictures look the same, and two captures of the new build are
-  equal. No GPU time that six interleaved pairs of runs could measure: that frame's busy time read 8.76 against 8.78 ms
-  in the sun room and 8.23 against 8.20 ms in the yard.
+  it, the two builds taking turns. Why the driver has two ways is not known. Look-dev's 15 global illumination pictures
+  (the Cornell box and its GI view, the sun room, the yard and ThirdPerson's course, each without anti-aliasing, with
+  FXAA and with TAA) change by one level in at most 245 pixels of a 3840 x 2160 frame without anti-aliasing or with
+  FXAA. With TAA more pixels move: 4% of the yard's, all but 1,719 of them by one level, up or down, all over the
+  picture (its automatic exposure ends 0.00001 EV apart), the rest by up to 41 on the fence and other thin edges; the
+  pictures look the same, and a second capture of the new build equals the first in all 15 (captures of one shot do not
+  always repeat: Known issues). No GPU time that six interleaved pairs of runs could measure: that frame's busy time
+  read 8.76 against 8.78 ms in the sun room and 8.23 against 8.20 ms in the yard.
 
 **Occlusion culling (cull fix)**
 
@@ -503,6 +506,24 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   The stage's reading moves by itself, too: in those runs the yard's read 3.83 to 4.53 ms in one build and 4.08 to 4.51
   in the other, the frame's busy time following by 0.17 ms at most. Until the slow mode is explained, a single reading
   of the stage can be 2 ms high: compare builds only by interleaved runs, and by the frame's busy time first.
+- Two captures of one still shot are not always equal, with or without global illumination, in this build and in the one
+  before batch 2. Consecutive frames of a still camera are identical, and tested to be, with every bounce too; this is
+  about pictures the editor's `viewport.capture` takes one after another. Look-dev captures each shot several times in a
+  session and reports it (`repeats differ from the first by ... pixels`). At 3840 x 2160 with five captures a shot, this
+  build's six global illumination pictures (the Cornell box, the sun room and the yard, without anti-aliasing and with
+  TAA) repeated in each of three sessions and were equal across them; in the build before the batch the yard's TAA
+  picture differed in 10 pixels in two of five captures of one session of three. Without global illumination both builds
+  behave alike: the polished metal's shot without anti-aliasing differs from its first capture in 3,077 pixels in each
+  of the four that follow, in five of six sessions at High (3,080 in the sixth) and in 2,378 pixels in six of six at
+  Medium, and the steel sheet's shot with TAA at Medium in 400,058 or 439,206 pixels (5% of the frame) in every one of
+  six sessions. The sun room's GI view with every bounce, captured eight times in a row without anti-aliasing, ended in
+  one of two states in every build tried: in this build 2,874 pixels one level apart at the same exposure (the first
+  capture against the other seven in one session, the first two against the other six in another); in the review's
+  sessions 3,041 pixels in the batch's build before the review's fixes and 2,769 in the build before the batch. With TAA
+  this build's eight were equal in both sessions, as the build before's were in the review's, where the batch's build
+  differed in its last two captures, in 254,345 pixels (3% of the frame, all but three by one level, their automatic
+  exposure 0.00002 EV from the others'). The cause is not established. A picture's change between two builds counts only
+  beyond what its own repeats differ by.
 - With every bounce, rooms take frames to fill after a cut, by their brightest surface: the sun room's gi view changes
   by less than 0.25% a frame from frame 11 (it is reported settled at 13), the Cornell box's from 15 (18), a closed
   white box's from 27 (39). Until then a game's cut shows the light rising.
