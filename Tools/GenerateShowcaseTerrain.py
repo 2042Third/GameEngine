@@ -73,8 +73,10 @@ controls  writes the command script of the director's controls: the project's in
 dress     writes the command script of the dressing, run once on the laid-out scene: drums and tyres along the bus's sill
           on shot 4's side (they break the straight edge its puddles reflect), stones on the apron's edge and rocks on
           the rim framing shot 1.
-bake     writes the command script that bakes the six probes: per station (Dawn, Dusk, Golden last, the saved one) its
-          edit-mode steps with only its two probes on, then lighting.bakeProbes of them twice (the second adds a bounce).
+bake      writes the command script that bakes the six probes: per station (Dawn, Dusk, Golden last, the saved one) its
+          edit-mode steps with only its two probes on, then lighting.bakeProbes of them eight times: a bake draws the
+          probes' present captures, so each pass adds a bounce, and after eight the captures no longer depend on those
+          the project held (one run reproduces the committed ones).
 pictures  writes the command script that retakes the sample's pictures after a change to its look: Screenshots/Shot1.png
           to Shot6.png (960 x 540 at High, each shot's key camera at its station, no overlays), Assets/Icon.png (256 x 256
           of shot 2) and, by a scene.save at Golden (the scene's camera stands at shot 2's key), the project's thumbnail
@@ -1540,8 +1542,8 @@ def hut_point(local):
 # lean-to, the ground around the hut, the roof's top) takes the dark interior's light instead of the yard's. Its capture is taken in the back corner
 # away from the door's and the window's sun beams (hut-local (1.9, 0.7, -1.3)): taken in the middle, it faces the low
 # sun's patch on the back wall, and the dark corner D15 measures came out only 0.3 EV below the yard. So the bake puts the
-# probe there, with a box about it that still holds the interior (the second pass sees the interior lit by the first),
-# then back. A probe whose capture was taken off its box's center projects no box: the capture is looked up as a distant
+# probe there, with a box about it that still holds the interior (every pass after the first sees the interior lit by
+# the capture of the pass before: BAKE_PASSES), then back. A probe whose capture was taken off its box's center projects no box: the capture is looked up as a distant
 # environment, which the rough plaster and planks inside cannot tell apart.
 HUT_PROBE_BOX = ((0.0, 1.15, 0.0), (2.6, 1.3, 2.2))
 HUT_PROBE_CAPTURE = (1.9, 0.7, -1.3)
@@ -2052,13 +2054,26 @@ def controls_script():
     return s.steps
 
 
+# The stations in the order the bake takes them: the saved one last, so the scene it saves is that station's.
+BAKE_ORDER = ("Dawn", "Dusk", "Golden")
+# How often the bake runs lighting.bakeProbes at a station. A bake draws the probes' present captures, the baked probe's
+# own included, so every pass adds the light the last one found (a bounce), and what a few passes leave depends on the
+# captures the project held before: two passes from the sample's earlier captures left the dusk hut's 18% above the one
+# further passes settle at. Measured in the hut, where the capture's own light counts most, a pass leaves about 0.16 of
+# the difference to the settled capture. After eight nothing of the start is left: bakes begun from two different sets of
+# captures agree in the mean of every 64 x 64 block to 0.01%, so one run of the script reproduces the committed captures
+# whatever the project held (a pass of a station's two probes takes the editor about a third of a second).
+BAKE_PASSES = 8
+
+
 def bake_script():
     """The probes' bake (D10): each station's edit-mode steps with only its own probes on, then lighting.bakeProbes of its
-    two twice (the second pass adds the bounce the first gives), Golden last so the saved scene is Golden's. A probe baked
-    elsewhere (the hut's) is moved to its bake position and box first and back to its own after; its box and blend are set
-    with them, so the script also brings a scene laid out with other values to the table's."""
+    two BAKE_PASSES times (until the captures no longer depend on those the project held), the saved station last so the
+    saved scene is its. A probe baked elsewhere (the hut's) is moved to its bake position and box first and back to its
+    own after; its box and blend are set with them, so the script also brings a scene laid out with other values to the
+    table's."""
     steps = [{"command": "scene.open", "parameters": {"scene": SCENE}}]
-    for name in ("Dawn", "Dusk", "Golden"):
+    for name in BAKE_ORDER:
         steps += station_steps(name, True)
         probes = [{"$ref": "station_Probe.%s.%s" % (name, part[0])} for part in PROBES]
         moved = [part for part in PROBES if part[7] is not None]
@@ -2068,7 +2083,7 @@ def bake_script():
                                                                      "values": {"Translation": rounded(bake[0])}}})
             steps.append({"command": "component.set", "parameters": {"entity": entity, "component": "ReflectionProbe",
                                                                      "values": {"Extents": rounded(bake[1])}}})
-        for _ in range(2):
+        for _ in range(BAKE_PASSES):
             steps.append({"command": "lighting.bakeProbes", "parameters": {"entities": probes}})
         for part, position, yaw_degrees, extents, blend, priority, box_projection, bake in moved:
             entity = {"$ref": "station_Probe.%s.%s" % (name, part)}
@@ -2244,6 +2259,150 @@ def picture_mutations(world):
     mutate("no save", lambda steps: steps.pop(len(steps) - 2))
     mutate("a wait too short for the thumbnail", set_parameter(len(base) - 1, "frames", THUMBNAIL_RENDER_FRAMES))
     mutate("no wait", lambda steps: steps.pop())
+    return mutations
+
+
+def probe_reference(station_name, part):
+    """How a station's steps name one of its probes (station_steps' binding of the entity it found)."""
+    return {"$ref": "station_" + bind_name("Probe.%s.%s" % (station_name, part))}
+
+
+def check_bake(steps=None):
+    """The bake's script (steps; bake_script's when None) against the probes' table: it opens the scene; every station is
+    baked once, the saved one last; a station's bakes follow its steps with nothing between but component.set steps of its
+    probes, and are BAKE_PASSES bakes of exactly its probes, each standing where the table bakes it, with the box it is
+    baked with; when another station's steps or the save follow, a probe that was moved is back at the table's place, box,
+    blend and projection; and the script ends with its one scene.save. Returns the failures."""
+    failures = []
+    if steps is None:
+        steps = bake_script()
+    blocks = {row[0]: station_steps(row[0], True) for row in STATIONS}
+    opened = bool(steps) and steps[0] == {"command": "scene.open", "parameters": {"scene": SCENE}}
+    if not opened:
+        failures.append("the bake script does not start by opening %s" % SCENE)
+
+    def same(first, second):
+        return json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+
+    def close(name, placed, passes):
+        """A station's bakes are over (another station's steps or the save follow): how many there were, and where its
+        moved probes were left."""
+        if passes != BAKE_PASSES:
+            failures.append("%s's probes are baked %d times, not %d" % (name, passes, BAKE_PASSES))
+        for part, position, yaw_degrees, extents, blend, priority, box_projection, bake in PROBES:
+            if bake is None:
+                continue
+            wanted = {"Translation": rounded(position), "Extents": rounded(extents), "BlendDistance": blend, "BoxProjection": box_projection}
+            left = {field: placed.get((part, field)) for field in wanted}
+            if not same(left, wanted):
+                failures.append("Probe.%s.%s is left with %s after its bakes, not the table's %s"
+                                % (name, part, json.dumps(left, sort_keys=True), json.dumps(wanted, sort_keys=True)))
+
+    station = None  # The station whose steps came last
+    placed = {}     # What the script set on that station's probes since: (part, field) -> value
+    passes = 0      # That station's bakes so far
+    order = []
+    saves = 0
+    foreign = []
+    index = 1 if opened else 0
+    while index < len(steps):
+        name = station_block_at(steps, index, blocks)
+        if name is not None:
+            if station is not None:
+                close(station, placed, passes)
+            station, placed, passes = name, {}, 0
+            order.append(name)
+            index += len(blocks[name])
+            continue
+        step = steps[index]
+        index += 1
+        command, parameters = step.get("command"), step.get("parameters", {})
+        if command == "scene.save":
+            saves += 1
+            if station is not None:
+                close(station, placed, passes)
+            station, placed, passes = None, {}, 0
+            continue
+        parts = [] if station is None else [part[0] for part in PROBES if same(parameters.get("entity"), probe_reference(station, part[0]))]
+        if (command == "component.set" and parts and sorted(parameters) == ["component", "entity", "values"]
+                and parameters["component"] in ("Transform", "ReflectionProbe") and isinstance(parameters["values"], dict)):
+            for field, value in parameters["values"].items():
+                placed[(parts[0], field)] = value
+            continue
+        if command == "lighting.bakeProbes" and station is not None:
+            passes += 1
+            wanted = {"entities": [probe_reference(station, part[0]) for part in PROBES]}
+            if not same(parameters, wanted):
+                failures.append("a bake at %s has the parameters %s, not %s" % (station, json.dumps(parameters, sort_keys=True), json.dumps(wanted, sort_keys=True)))
+            for part, position, yaw_degrees, extents, blend, priority, box_projection, bake in PROBES:
+                stands = {field: placed.get((part, field)) for field in ("Translation", "Extents")}
+                wanted = {"Translation": None, "Extents": None} if bake is None else {"Translation": rounded(bake[0]), "Extents": rounded(bake[1])}
+                if not same(stands, wanted):
+                    failures.append("Probe.%s.%s is baked with %s set, not %s (null: as the scene has it)"
+                                    % (station, part, json.dumps(stands, sort_keys=True), json.dumps(wanted, sort_keys=True)))
+            continue
+        foreign.append("step %d (%s)" % (index, command))
+    if station is not None:
+        close(station, placed, passes)
+    if foreign:
+        failures.append("the bake script holds what is no part of a station's bake: %s%s" % (", ".join(foreign[:3]), " and more" if len(foreign) > 3 else ""))
+    if sorted(order) != sorted(blocks):
+        failures.append("the bake script bakes the stations %s, not each of %s once" % (order, sorted(blocks)))
+    elif order[-1] != SAVED_STATION:
+        failures.append("the bake script bakes %s last, not %s, the station the scene is saved at" % (order[-1], SAVED_STATION))
+    if saves != 1 or not steps or steps[-1].get("command") != "scene.save":
+        failures.append("the bake script does not end with its one scene.save")
+    return failures
+
+
+def bake_mutations():
+    """The bake's script with one thing wrong at a time, each of which check_bake must report: (what, steps)."""
+    base = bake_script()
+    blocks = {row[0]: station_steps(row[0], True) for row in STATIONS}
+    starts = [index for index in range(len(base)) if station_block_at(base, index, blocks) is not None]
+    first_end = starts[0] + len(blocks[station_block_at(base, starts[0], blocks)])
+    bakes = [index for index in range(first_end, starts[1]) if base[index]["command"] == "lighting.bakeProbes"]
+    # The first station's steps for the probes it moves: to the bake's place and box before the bakes, back after them.
+    before = [index for index in range(first_end, bakes[0]) if base[index]["command"] == "component.set"]
+    after = [index for index in range(bakes[-1] + 1, starts[1]) if base[index]["command"] == "component.set"]
+    unmoved = [part[0] for part in PROBES if part[7] is None]
+    first_name = station_block_at(base, starts[0], blocks)
+    mutations = []
+
+    def mutate(what, change):
+        steps = copy.deepcopy(base)
+        change(steps)
+        mutations.append((what, steps))
+
+    def set_value(index, key, value):
+        return lambda steps: steps[index]["parameters"]["values"].__setitem__(key, value)
+
+    mutate("a pass fewer", lambda steps: steps.pop(bakes[0]))
+    mutate("a pass more", lambda steps: steps.insert(bakes[0], copy.deepcopy(steps[bakes[0]])))
+    mutate("a bake of one probe only", lambda steps: steps[bakes[1]]["parameters"]["entities"].pop())
+    mutate("a bake of another station's probes",
+           lambda steps: steps[bakes[0]]["parameters"].__setitem__("entities", copy.deepcopy(steps[len(steps) - 2 - len(after)]["parameters"]["entities"])))
+    mutate("a bake with a parameter of its own", lambda steps: steps[bakes[-1]]["parameters"].__setitem__("resolution", 256))
+    mutate("a probe baked where it stands, not where the table bakes it", lambda steps: steps.pop(before[0]))
+    mutate("a probe baked with its own box, not the bake's", lambda steps: steps.pop(before[1]))
+    mutate("a probe put back before its last bake", lambda steps: steps.insert(bakes[-1], steps.pop(after[0])))
+    mutate("a probe left where it was baked", lambda steps: steps.pop(after[0]))
+    mutate("a probe left with the bake's box", lambda steps: steps.pop(after[-1]))
+    mutate("a probe left with another blend distance", set_value(after[-1], "BlendDistance", base[after[-1]]["parameters"]["values"]["BlendDistance"] + 0.1))
+    mutate("a probe left with its box projection turned", set_value(after[-1], "BoxProjection", not base[after[-1]]["parameters"]["values"]["BoxProjection"]))
+    if unmoved:
+        mutate("a probe moved that the table bakes where it stands",
+               lambda steps: steps.insert(bakes[0], {"command": "component.set", "parameters": {
+                   "entity": probe_reference(first_name, unmoved[0]), "component": "Transform", "values": {"Translation": [0.0, 1.0, 0.0]}}}))
+    mutate("a station left out", lambda steps: steps.__delitem__(slice(starts[1], starts[2])))
+    mutate("a station baked twice", lambda steps: steps.__setitem__(slice(starts[1], starts[1]), copy.deepcopy(steps[starts[0]:starts[1]])))
+    mutate("the saved station baked first",
+           lambda steps: steps.__setitem__(slice(starts[0], len(steps) - 1), steps[starts[-1]:len(steps) - 1] + steps[starts[0]:starts[-1]]))
+    mutate("a station's step changed by hand", lambda steps: steps[first_end - 1]["parameters"].__setitem__("active", not steps[first_end - 1]["parameters"]["active"]))
+    mutate("a step between a station's steps and its bakes", lambda steps: steps.insert(first_end, {"command": "editor.wait", "parameters": {"frames": 1}}))
+    mutate("a scene that is not opened", lambda steps: steps.pop(0))
+    mutate("a save before the end", lambda steps: steps.insert(starts[1], {"command": "scene.save"}))
+    mutate("no save", lambda steps: steps.pop())
     return mutations
 
 
@@ -2672,6 +2831,15 @@ def command_selftest(arguments):
     print("Stations.h: %s" % ("; ".join(station_failures) if station_failures else "its c_Stations rows equal the generator's"))
     failures += station_failures
     shots_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "LookDev", "Shots.json")
+    bake_failures = check_bake()
+    mutations = bake_mutations()
+    for what, steps in mutations:
+        if not check_bake(steps):
+            bake_failures.append("the check of the bake script passes %s" % what)
+    print("bake script: %s" % ("; ".join(bake_failures) if bake_failures else
+                               "each station's probes baked %d times where the table bakes them, %s last; %d wrong scripts caught"
+                               % (BAKE_PASSES, SAVED_STATION, len(mutations))))
+    failures += bake_failures
     picture_failures = check_pictures(world, shots_file)
     mutations = picture_mutations(world)
     for what, steps in mutations:

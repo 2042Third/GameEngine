@@ -167,6 +167,12 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   frame had moved (itself or a parent) was baked from the place it had left, because the bake read the world matrix the
   frame's update had not yet brought up to date: a script that moves a probe and bakes it at once, as the showcase's bake
   does with its hut probes, took the first capture from the old place.
+- The showcase's `bake` script bakes each station's probes eight times, not twice, so one run reproduces the committed
+  captures whatever captures the project held. A bake draws the probes' present captures, the baked probe's own too:
+  two passes left the hut's captures depending on the ones before (begun from the sample's earlier captures, the dusk
+  hut's came out 18% above where further passes settle it), while after eight passes bakes begun from different
+  captures agree to 0.01% in every 64 x 64 block's mean. `StrataTools.ShowcaseTerrain` holds the script to the probes'
+  table.
 
 **Global illumination (stage 1: the voxels).**
 

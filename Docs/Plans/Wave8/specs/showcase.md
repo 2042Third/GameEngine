@@ -678,6 +678,15 @@ order Dawn, Dusk, Golden (Golden last, so the saved scene is Golden):
 3. `lighting.bakeProbes {"entities": [the two]}`, twice (the second pass adds the bounce the first capture of the other probe
    gives: "baking twice adds a second bounce", `:872-873`; it trashes the first pass's files).
 
+   *As built (the reflections' adoption):* eight times (`BAKE_PASSES`), not twice. A pass draws the probes' present
+   captures, the baked probe's own too, so two passes left the hut's captures depending on the ones the project held
+   (begun from the sample's earlier captures, the dusk hut's came out 18% above where it settles, and 17% above the one
+   two passes gave from the adoption's first captures). A pass leaves about 0.16 of the difference; after eight, bakes
+   begun from different captures agree to 0.01% in every 64 x 64 block's mean, so one run reproduces what is committed.
+   `selftest` holds the script to the probes' table (`check_bake`). The same work found that the first pass after the
+   hut probe's move had been taken from the place it had left (`lighting.bakeProbes` read the world matrix the frame had
+   not yet updated; fixed in the command).
+
 Then `scene.save`. Six `.hdr` files in `Assets/Lighting/Outpost/`.
 
 **Switching in play** (`Outpost::SetStation`):
