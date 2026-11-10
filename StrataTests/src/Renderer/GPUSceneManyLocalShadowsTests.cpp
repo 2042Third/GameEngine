@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <functional>
 #include <optional>
@@ -122,6 +123,22 @@ namespace
 		return positions;
 	}
 
+	// A street: two rows of twelve lamps 5 m apart along X, 6 m across it.
+	std::vector<glm::vec3> StreetPositions()
+	{
+		std::vector<glm::vec3> positions;
+		for (uint32_t lamp = 0; lamp < 24; lamp++)
+			positions.emplace_back(static_cast<float>(lamp / 2) * 5.0f, 3.0f, lamp % 2 == 0 ? 3.0f : -3.0f);
+		return positions;
+	}
+
+	// The camera walking down the street between the rows, 0.3 m a frame.
+	SceneCamera StreetWalk(uint32_t frame)
+	{
+		const glm::vec3 position(-6.0f + static_cast<float>(frame) * 0.3f, 2.5f, 0.0f);
+		return LookAt(position, position + glm::vec3(10.0f, -2.5f, 0.0f));
+	}
+
 	// The pixel of a world point in an image of `size`, if the point lies in front of the camera and inside the image.
 	std::optional<glm::uvec2> FindPixel(const SceneCamera& camera, const glm::vec3& point, uint32_t size)
 	{
@@ -132,6 +149,104 @@ namespace
 		if (std::abs(ndc.x) > 0.98f || std::abs(ndc.y) > 0.98f)
 			return std::nullopt;
 		return ProjectToPixel(camera, point, size);
+	}
+
+	// One frame of a walk (SceneRendererStats): the shadowed lights in view, those given a shadow, those fading out the one they
+	// lost, and how many of those given one have tiles of each size (entry i: 128 << i texels).
+	struct WalkFrame
+	{
+		uint32_t Requested = 0;
+		uint32_t Shadowed = 0;
+		uint32_t Fading = 0;
+		std::array<uint32_t, SceneRendererStats::c_LocalShadowSizeClasses> SizeCounts = {};
+	};
+
+	// What a walk past lamps saw of their shadows.
+	struct WalkResult
+	{
+		uint32_t Gained = 0;      // Times a lamp in view went from no shadow to a full one
+		uint32_t Lost = 0;        // And from a full shadow to none
+		float LargestStep = 0.0f; // The largest change of a lamp's shadow from one frame to the next
+		float WeakestKept = 1.0f; // The weakest a lamp's shadow got after it was full, while the lamp stayed in view
+		std::vector<WalkFrame> Frames;
+		std::vector<std::optional<float>> Last; // Each lamp's shadow in the last frame, where it could be measured
+	};
+
+	// Walks the camera along a path with a renderer of `quality` that spreads its lighting updates, measuring each lamp's shadow
+	// every frame (1 full, 0 none) at its center against the lit and the fully shadowed floor. A shadow may change by a step of
+	// the fade per frame (SceneRenderer::c_LocalShadowFadeFrames), and the measurement by a little more (the filter's edge moves
+	// under the pixel as the camera does). Before the walk, the renderer draws the path's first view `settleFrames` times.
+	WalkResult WalkPastLamps(GPUContext& gpu, LampField& field, GPUDrivenMode mode, const RendererQualitySettings& quality, uint32_t imageSize, uint32_t settleFrames,
+		uint32_t frames, const std::function<SceneCamera(uint32_t)>& path)
+	{
+		const float bound = 1.0f / static_cast<float>(SceneRenderer::c_LocalShadowFadeFrames) + 0.08f;
+		SceneRendererSpecification walkSpecification = ManySpecification(mode, true);
+		walkSpecification.Quality = quality;
+		SceneRenderer walker(walkSpecification);
+		walker.SetViewportSize(imageSize, imageSize);
+		SceneRendererSpecification fullSpecification = ManySpecification(mode, false);
+		fullSpecification.Quality.MaxShadowedLocalLights = static_cast<uint32_t>(field.Lamps.size());
+		SceneRenderer full(fullSpecification);
+		full.SetViewportSize(imageSize, imageSize);
+		SceneRenderer unshadowed(ManySpecification(mode, false));
+		unshadowed.SetViewportSize(imageSize, imageSize);
+		for (uint32_t frame = 0; frame < settleFrames; frame++)
+			REQUIRE(walker.Render(field.SceneData, path(0)));
+
+		WalkResult result;
+		result.Last.resize(field.Lamps.size());
+		std::vector<std::vector<float>> strengths(field.Lamps.size());
+		std::vector<uint8_t> wasFull(field.Lamps.size(), 0);
+		for (uint32_t frame = 0; frame < frames; frame++)
+		{
+			const SceneCamera camera = path(frame);
+			const ReadbackImage walked = RenderHDR(walker, field.SceneData, camera);
+			const SceneRendererStats& stats = walker.GetStats();
+			result.Frames.push_back(WalkFrame { stats.LocalShadowRequested, stats.LocalShadowLights, stats.LocalShadowFading, stats.LocalShadowSizeCounts });
+			const ReadbackImage dark = RenderHDR(full, field.SceneData, camera);
+			const ReadbackImage lit = field.RenderUnshadowed(unshadowed, camera);
+			for (size_t lamp = 0; lamp < field.Lamps.size(); lamp++)
+			{
+				std::vector<float>& history = strengths[lamp];
+				result.Last[lamp].reset();
+				const std::optional<glm::uvec2> pixel = FindPixel(camera, field.ShadowCenters[lamp], imageSize);
+				const float contrast = pixel ? ReadRed(lit, *pixel) - ReadRed(dark, *pixel) : 0.0f;
+				if (!pixel || !(contrast > ReadRed(lit, *pixel) * 0.5f))
+				{
+					history.clear(); // Out of view, or too small to measure: a new run of frames starts
+					wasFull[lamp] = 0;
+					continue;
+				}
+				const float strength = (ReadRed(lit, *pixel) - ReadRed(walked, *pixel)) / contrast;
+				result.Last[lamp] = strength;
+				if (strength > 0.9f)
+					wasFull[lamp] = 1;
+				if (wasFull[lamp] != 0)
+					result.WeakestKept = std::min(result.WeakestKept, strength);
+				if (!history.empty())
+				{
+					CAPTURE(frame);
+					CAPTURE(lamp);
+					CAPTURE(history.back());
+					CAPTURE(strength);
+					const float step = std::abs(strength - history.back());
+					result.LargestStep = std::max(result.LargestStep, step);
+					CHECK(step <= bound);
+					const float lowest = *std::min_element(history.begin(), history.end());
+					const float highest = *std::max_element(history.begin(), history.end());
+					const bool gained = strength > 0.9f && lowest < 0.1f;
+					const bool lost = strength < 0.1f && highest > 0.9f;
+					result.Gained += gained ? 1u : 0u;
+					result.Lost += lost ? 1u : 0u;
+					if (gained || lost)
+						history.clear();
+				}
+				history.push_back(strength);
+			}
+		}
+		MESSAGE("largest change of a shadow in a frame: ", result.LargestStep, "; shadows gained in view: ", result.Gained, ", lost: ", result.Lost);
+		gpu.GetDevice().WaitForIdle();
+		return result;
 	}
 
 }
@@ -237,71 +352,6 @@ TEST_SUITE("GPU.SceneRenderer.ManyLocalShadows")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
-		// A shadow may change by a step of the fade per frame (SceneRenderer::c_LocalShadowFadeFrames), and the measurement by a
-		// little more (the filter's edge moves under the pixel as the camera does).
-		const float bound = 1.0f / static_cast<float>(SceneRenderer::c_LocalShadowFadeFrames) + 0.08f;
-		// Walks the camera along a path, measuring each lamp's shadow every frame (1 full, 0 none) at its center against the lit
-		// and the fully shadowed floor; returns how often a lamp in view went from no shadow to a full one or back.
-		const auto walk = [&](LampField& field, uint32_t shadowed, uint32_t imageSize, uint32_t frames, const std::function<SceneCamera(uint32_t)>& path)
-		{
-			uint32_t crossings = 0;
-			for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
-			{
-				CAPTURE(static_cast<int>(mode));
-				SceneRendererSpecification walkSpecification = ManySpecification(mode, true);
-				walkSpecification.Quality.MaxShadowedLocalLights = shadowed;
-				SceneRenderer walker(walkSpecification);
-				walker.SetViewportSize(imageSize, imageSize);
-				SceneRendererSpecification fullSpecification = ManySpecification(mode, false);
-				fullSpecification.Quality.MaxShadowedLocalLights = static_cast<uint32_t>(field.Lamps.size());
-				SceneRenderer full(fullSpecification);
-				full.SetViewportSize(imageSize, imageSize);
-				SceneRenderer unshadowed(ManySpecification(mode, false));
-				unshadowed.SetViewportSize(imageSize, imageSize);
-				std::vector<std::vector<float>> strengths(field.Lamps.size());
-				float largestStep = 0.0f;
-				for (uint32_t frame = 0; frame < frames; frame++)
-				{
-					const SceneCamera camera = path(frame);
-					const ReadbackImage walked = RenderHDR(walker, field.SceneData, camera);
-					const ReadbackImage dark = RenderHDR(full, field.SceneData, camera);
-					const ReadbackImage lit = field.RenderUnshadowed(unshadowed, camera);
-					for (size_t lamp = 0; lamp < field.Lamps.size(); lamp++)
-					{
-						std::vector<float>& history = strengths[lamp];
-						const std::optional<glm::uvec2> pixel = FindPixel(camera, field.ShadowCenters[lamp], imageSize);
-						const float contrast = pixel ? ReadRed(lit, *pixel) - ReadRed(dark, *pixel) : 0.0f;
-						if (!pixel || !(contrast > ReadRed(lit, *pixel) * 0.5f))
-						{
-							history.clear(); // Out of view, or too small to measure: a new run of frames starts
-							continue;
-						}
-						const float strength = (ReadRed(lit, *pixel) - ReadRed(walked, *pixel)) / contrast;
-						if (!history.empty())
-						{
-							CAPTURE(frame);
-							CAPTURE(lamp);
-							CAPTURE(history.back());
-							CAPTURE(strength);
-							const float step = std::abs(strength - history.back());
-							largestStep = std::max(largestStep, step);
-							CHECK(step <= bound);
-							const float lowest = *std::min_element(history.begin(), history.end());
-							const float highest = *std::max_element(history.begin(), history.end());
-							if ((strength > 0.9f && lowest < 0.1f) || (strength < 0.1f && highest > 0.9f))
-							{
-								crossings++;
-								history.clear();
-							}
-						}
-						history.push_back(strength);
-					}
-				}
-				MESSAGE("largest change of a shadow in a frame: ", largestStep);
-				gpu.GetDevice().WaitForIdle();
-			}
-			return crossings;
-		};
 
 		SUBCASE("Seen from the side, two shadows go from lamp to lamp")
 		{
@@ -310,11 +360,19 @@ TEST_SUITE("GPU.SceneRenderer.ManyLocalShadows")
 			for (uint32_t lamp = 0; lamp < 16; lamp++)
 				positions.emplace_back(static_cast<float>(lamp) * 3.2f, 2.0f, 0.0f);
 			LampField field(positions, 2.8f, glm::vec3(-20.0f, -1.0f, -12.0f), glm::vec3(80.0f, 0.0f, 12.0f));
-			const uint32_t crossings = walk(field, 2, 512, 120, [](uint32_t frame)
+			RendererQualitySettings quality;
+			quality.MaxShadowedLocalLights = 2;
+			uint32_t crossings = 0;
+			for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
 			{
-				const glm::vec3 position(4.0f + static_cast<float>(frame) * 0.2f, 5.0f, 8.0f);
-				return LookAt(position, position + glm::vec3(0.0f, -5.0f, -8.0f));
-			});
+				CAPTURE(static_cast<int>(mode));
+				const WalkResult result = WalkPastLamps(gpu, field, mode, quality, 512, 0, 120, [](uint32_t frame)
+				{
+					const glm::vec3 position(4.0f + static_cast<float>(frame) * 0.2f, 5.0f, 8.0f);
+					return LookAt(position, position + glm::vec3(0.0f, -5.0f, -8.0f));
+				});
+				crossings += result.Gained + result.Lost;
+			}
 			MESSAGE("crossings of the cut in view: ", crossings);
 			CHECK(crossings >= 2);
 		}
@@ -322,15 +380,147 @@ TEST_SUITE("GPU.SceneRenderer.ManyLocalShadows")
 		SUBCASE("Walking down a street, six shadows change size as their lamps come near and pass")
 		{
 			// Two rows of lamps 5 m apart along the street, 6 m across it; the camera walks between them.
-			std::vector<glm::vec3> positions;
-			for (uint32_t lamp = 0; lamp < 24; lamp++)
-				positions.emplace_back(static_cast<float>(lamp / 2) * 5.0f, 3.0f, lamp % 2 == 0 ? 3.0f : -3.0f);
-			LampField field(positions, 4.5f, glm::vec3(-20.0f, -1.0f, -12.0f), glm::vec3(80.0f, 0.0f, 12.0f));
-			walk(field, 6, 1024, 100, [](uint32_t frame)
+			LampField field(StreetPositions(), 4.5f, glm::vec3(-20.0f, -1.0f, -12.0f), glm::vec3(80.0f, 0.0f, 12.0f));
+			RendererQualitySettings quality;
+			quality.MaxShadowedLocalLights = 6;
+			for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
 			{
-				const glm::vec3 position(-6.0f + static_cast<float>(frame) * 0.3f, 2.5f, 0.0f);
-				return LookAt(position, position + glm::vec3(10.0f, -2.5f, 0.0f));
-			});
+				CAPTURE(static_cast<int>(mode));
+				WalkPastLamps(gpu, field, mode, quality, 1024, 0, 100, StreetWalk);
+			}
+		}
+
+		SUBCASE("An atlas that holds two lamps' tiles gives its shadows to the lamps that matter most")
+		{
+			// The street seen from the side again, every lamp allowed a shadow: the atlas is the limit. A 512 atlas holds 14 tiles
+			// of 128 texels in the share its tiles are fitted into, two point lights' six each. The camera walks, then stands.
+			constexpr float c_Range = 2.8f;
+			constexpr uint32_t c_WalkFrames = 120;
+			constexpr uint32_t c_Frames = c_WalkFrames + 5 * SceneRenderer::c_LocalShadowFadeFrames;
+			std::vector<glm::vec3> positions;
+			for (uint32_t lamp = 0; lamp < 16; lamp++)
+				positions.emplace_back(static_cast<float>(lamp) * 3.2f, 2.0f, 0.0f);
+			LampField field(positions, c_Range, glm::vec3(-20.0f, -1.0f, -12.0f), glm::vec3(80.0f, 0.0f, 12.0f));
+			RendererQualitySettings quality;
+			quality.LocalShadowAtlasSize = 512;
+			quality.MaxShadowedLocalLights = 16;
+			const auto path = [&](uint32_t frame)
+			{
+				const uint32_t walked = frame < c_WalkFrames ? frame : c_WalkFrames;
+				const glm::vec3 position(4.0f + static_cast<float>(walked) * 0.2f, 5.0f, 8.0f);
+				return LookAt(position, position + glm::vec3(0.0f, -5.0f, -8.0f));
+			};
+			for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+			{
+				CAPTURE(static_cast<int>(mode));
+				const WalkResult result = WalkPastLamps(gpu, field, mode, quality, 512, 0, c_Frames, path);
+				// More lamps in view ask for a shadow than the atlas holds, and never more are given one.
+				uint32_t mostRequested = 0;
+				uint32_t mostShadowed = 0;
+				for (const WalkFrame& frame : result.Frames)
+				{
+					mostRequested = std::max(mostRequested, frame.Requested);
+					mostShadowed = std::max(mostShadowed, frame.Shadowed);
+				}
+				CHECK(mostRequested > 2);
+				CHECK(mostShadowed == 2);
+				// Lamps in view lost their shadows to lamps that came to matter more, fading (the step's bound, checked by the walk).
+				CHECK(result.Lost >= 1);
+				CHECK(result.Gained >= 1);
+				// Where the camera stands at the end, two lamps cast full shadows and the others none; a lamp keeps its shadow until
+				// another matters a quarter more (how large its range looks: r / (d - r), SceneRenderer::GetLocalShadowImportance).
+				const glm::vec3 eye = path(c_Frames - 1).Position;
+				const auto matters = [&](size_t lamp) { return c_Range / (glm::length(positions[lamp] - eye) - c_Range); };
+				std::vector<size_t> shadowed;
+				std::vector<size_t> bare;
+				for (size_t lamp = 0; lamp < result.Last.size(); lamp++)
+				{
+					if (!result.Last[lamp])
+						continue;
+					CAPTURE(lamp);
+					CAPTURE(*result.Last[lamp]);
+					const bool casts = *result.Last[lamp] > 0.9f;
+					CHECK((casts || *result.Last[lamp] < 0.1f));
+					(casts ? shadowed : bare).push_back(lamp);
+				}
+				CHECK(shadowed.size() == 2);
+				CHECK(bare.size() >= 2);
+				for (const size_t kept : shadowed)
+				{
+					for (const size_t other : bare)
+					{
+						CAPTURE(kept);
+						CAPTURE(other);
+						CHECK(matters(other) <= matters(kept) * 1.25f * 1.001f);
+					}
+				}
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Walking down a street whose lamps want larger tiles than the atlas holds, no lamp loses the shadow it shows")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		constexpr uint32_t c_ImageSize = 1024;
+		constexpr uint64_t c_AtlasSize = 2048;
+		constexpr uint32_t c_ViewsPerFrame = 4;
+		// The street of 24 lamps. A 2048 atlas holds every lamp's six tiles at 128 texels and a few lamps' at 256 in the share its
+		// tiles are fitted into, while the lamps near the camera want 512: every lamp in view has a shadow, the tiles fill their
+		// share, and their sizes are fitted again as lamps come near and pass. Fewer views are drawn a frame than a lamp has, so
+		// a lamp whose tiles change size waits frames for its new ones.
+		LampField field(StreetPositions(), 4.5f, glm::vec3(-20.0f, -1.0f, -12.0f), glm::vec3(80.0f, 0.0f, 12.0f));
+		const uint32_t lamps = static_cast<uint32_t>(field.Lamps.size());
+		RendererQualitySettings quality;
+		quality.LocalShadowAtlasSize = static_cast<uint32_t>(c_AtlasSize);
+		quality.LocalShadowMaxTile = 512;
+		quality.MaxShadowedLocalLights = lamps;
+		quality.LocalShadowViewsPerFrame = c_ViewsPerFrame;
+		// Standing at the start until every view is drawn and every shadow has faded in.
+		const uint32_t settleFrames = lamps * 6 / c_ViewsPerFrame + 2 * SceneRenderer::c_LocalShadowFadeFrames;
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			CAPTURE(static_cast<int>(mode));
+			const WalkResult result = WalkPastLamps(gpu, field, mode, quality, c_ImageSize, settleFrames, 100, StreetWalk);
+			uint64_t mostTexels = 0;
+			uint32_t grown = 0;
+			uint32_t shrunk = 0;
+			uint32_t largeBefore = 0;
+			uint32_t shadowedBefore = 0;
+			for (size_t frame = 0; frame < result.Frames.size(); frame++)
+			{
+				CAPTURE(frame);
+				const WalkFrame& stats = result.Frames[frame];
+				// Every lamp in view keeps its rank: none fades.
+				CHECK(stats.Shadowed == stats.Requested);
+				CHECK(stats.Fading == 0);
+				uint64_t texels = 0;
+				uint32_t large = 0;
+				for (size_t sizeClass = 0; sizeClass < stats.SizeCounts.size(); sizeClass++)
+				{
+					const uint64_t size = 128ull << sizeClass;
+					texels += stats.SizeCounts[sizeClass] * 6 * size * size;
+					large += sizeClass > 0 ? stats.SizeCounts[sizeClass] : 0u;
+				}
+				mostTexels = std::max(mostTexels, texels);
+				// No lamp enters the view on this walk, so more lamps with tiles above the smallest are lamps whose tiles grew, and
+				// fewer among as many lamps are lamps whose tiles shrank.
+				if (frame > 0)
+				{
+					grown += large > largeBefore ? 1u : 0u;
+					shrunk += large < largeBefore && stats.Shadowed == shadowedBefore ? 1u : 0u;
+				}
+				largeBefore = large;
+				shadowedBefore = stats.Shadowed;
+			}
+			MESSAGE("most texels in tiles: ", mostTexels, " of ", c_AtlasSize * c_AtlasSize, "; frames in which tiles grew: ", grown, ", shrank: ", shrunk,
+				"; weakest shadow kept: ", result.WeakestKept);
+			// The tiles filled what an atlas of tiles of two sizes can of its seven eighths: within a lamp's step from 128 to 256.
+			CHECK(mostTexels + 6 * (256 * 256 - 128 * 128) > c_AtlasSize * c_AtlasSize / 8 * 7);
+			CHECK(grown >= 2);
+			CHECK(result.Lost == 0);
+			CHECK(result.WeakestKept > 0.9f);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
@@ -340,15 +530,8 @@ TEST_SUITE("GPU.SceneRenderer.ManyLocalShadows")
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		constexpr uint32_t c_ImageSize = 1024;
-		std::vector<glm::vec3> positions;
-		for (uint32_t lamp = 0; lamp < 24; lamp++)
-			positions.emplace_back(static_cast<float>(lamp / 2) * 5.0f, 3.0f, lamp % 2 == 0 ? 3.0f : -3.0f);
+		const std::vector<glm::vec3> positions = StreetPositions();
 		LampField field(positions, 4.5f, glm::vec3(-20.0f, -1.0f, -12.0f), glm::vec3(80.0f, 0.0f, 12.0f));
-		const auto cameraAt = [](uint32_t frame)
-		{
-			const glm::vec3 position(-6.0f + static_cast<float>(frame) * 0.3f, 2.5f, 0.0f);
-			return LookAt(position, position + glm::vec3(10.0f, -2.5f, 0.0f));
-		};
 		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
 		{
 			CAPTURE(static_cast<int>(mode));
@@ -366,9 +549,9 @@ TEST_SUITE("GPU.SceneRenderer.ManyLocalShadows")
 					const float sway = 0.1f * std::sin(static_cast<float>(frame + lamp) * 0.7f);
 					Move(field.Casters[lamp], positions[lamp] + glm::vec3(0.5f, -1.5f, sway));
 				}
-				RenderHDR(renderer, field.SceneData, cameraAt(frame));
+				RenderHDR(renderer, field.SceneData, StreetWalk(frame));
 			}
-			const SceneCamera camera = cameraAt(60);
+			const SceneCamera camera = StreetWalk(60);
 			const auto settle = [&]()
 			{
 				ReadbackImage image;
@@ -465,8 +648,8 @@ TEST_SUITE("GPU.SceneRenderer.ManyLocalShadows")
 			movers[index] = AddPointLight(field.SceneData, moverPositions[index], glm::vec3(1.0f), 30.0f, 1.2f);
 			movers[index].GetComponent<PointLightComponent>().CastShadows = true;
 		}
-		const SceneCamera far = LookAt(glm::vec3(1.0f, 30.0f, 40.0f), field.ShadowCenters[0]);
-		const SceneCamera near = LookAt(glm::vec3(1.0f, 4.0f, 4.0f), field.ShadowCenters[0]);
+		const SceneCamera farCamera = LookAt(glm::vec3(1.0f, 30.0f, 40.0f), field.ShadowCenters[0]);
+		const SceneCamera nearCamera = LookAt(glm::vec3(1.0f, 4.0f, 4.0f), field.ShadowCenters[0]);
 		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
 		{
 			CAPTURE(static_cast<int>(mode));
@@ -481,17 +664,17 @@ TEST_SUITE("GPU.SceneRenderer.ManyLocalShadows")
 					Move(movers[index], moverPositions[index] + glm::vec3(offset, 0.0f, 0.0f));
 			};
 			for (uint32_t frame = 0; frame < 20; frame++)
-				RenderHDR(renderer, field.SceneData, far);
+				RenderHDR(renderer, field.SceneData, farCamera);
 			REQUIRE(renderer.GetStats().LocalShadowViewsPending == 0);
 			const uint16_t farSize = renderer.GetStats().LocalShadowTileSizes[0];
-			const glm::uvec2 pixel = ProjectToPixel(near, field.ShadowCenters[0], c_ImageSize);
-			const float lit = ReadRed(field.RenderUnshadowed(unshadowed, near), pixel);
+			const glm::uvec2 pixel = ProjectToPixel(nearCamera, field.ShadowCenters[0], c_ImageSize);
+			const float lit = ReadRed(field.RenderUnshadowed(unshadowed, nearCamera), pixel);
 			uint16_t nearSize = farSize;
 			for (uint32_t frame = 0; frame < 12; frame++)
 			{
 				CAPTURE(frame);
 				moveOthers(frame);
-				const ReadbackImage image = RenderHDR(renderer, field.SceneData, near);
+				const ReadbackImage image = RenderHDR(renderer, field.SceneData, nearCamera);
 				CHECK(ReadRed(image, pixel) < lit * 0.5f);
 				nearSize = std::max(nearSize, *std::max_element(renderer.GetStats().LocalShadowTileSizes.begin(), renderer.GetStats().LocalShadowTileSizes.end()));
 			}
