@@ -1363,8 +1363,14 @@ TEST_SUITE("Renderer.AreaLights")
 		unset.Strength = 0.8f;
 		CHECK(unset.Roughness == 0.0f);
 		CHECK(AreaLights::Shade(surface, unset, coatDFG, dfg, 1.0f, strip, 1.0f) == shaded);
-		// The coat's lobe is in the sum: without it the same call gives less.
-		CHECK(AreaLights::Shade(surface, unset, coatDFG, dfg, 1.0f, strip, 0.0f).x < shaded.x * 0.5f);
+		// The coat's lobe is in the sum as the least lobe: the surface's terms lose what the coat reflects, and the coat adds
+		// that reflectance times the least lobe's share. The receiver is on the face's axis, 2 m from its center.
+		const double window = std::pow(1.0 - std::pow(4.0 / 25.0, 2.0), 2.0);
+		const double reflectance = 0.04 * 0.7 + 0.2;
+		const double coatReflectance = 0.8 * (0.04 * 0.9 + 0.05);
+		const double formFactor = AreaLights::FormFactor(position, normal, strip);
+		const double expected = ((formFactor * (1.0 - reflectance) + reflectance * least) * (1.0 - coatReflectance) + least * coatReflectance) * window;
+		CHECK(glm::length(glm::dvec3(shaded) - glm::dvec3(expected)) <= 1e-5 * glm::length(glm::dvec3(expected)));
 	}
 
 	TEST_CASE("The least roughness and the coat's F0 are the shaders'")
