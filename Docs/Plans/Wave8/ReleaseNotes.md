@@ -570,11 +570,13 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
 - A rect light's highlight is the published fit's (the shading equals the CPU reference `Renderer/AreaLights.h` within
   1.22e-3 relative), which is less exact than GGX at grazing views of surfaces of middling roughness. Fitted lobe times magnitude
   against GGX's quadrature, median and 95th percentile of the relative error: roughness 0.25: 0.026 and 0.70; 0.5: 0.086
-  and 0.96; 0.75: 0.063 and 0.86; views within 53.6 degrees of the normal stay under 3% median. Seen 87 degrees from the
-  normal, faces centered on the mirror direction get 1.1 to 1.4 times GGX's light at roughness 0.25 and 1.6 to 2.4 times
-  at 0.5; a metal floor of roughness 0.3 holds 0.934 of GGX's light in its highlight; under a light filling the sky a white
-  metal of roughness 0.3 to 0.6 seen 78 degrees from its normal reflects 0.912 to 0.918 of it (0.94 to 0.98 at 60 degrees)
-  where it should reflect all of it.
+  and 0.96; 0.75: 0.063 and 0.86. Views within 53.6 degrees of the normal: 0.0089 and 0.157, 0.023 and 0.356, 0.028 and
+  0.661 (on the faces that hold a twentieth of the lobe or more: 0.0049 and 0.053, 0.016 and 0.126, 0.026 and 0.106: most
+  of the tail lies on faces that catch only the lobe's edge). Seen 87 degrees from the normal, faces centered on the
+  mirror direction get 1.1 to 1.4 times GGX's light at roughness 0.25 and 1.6 to 2.4 times at 0.5; a metal floor of
+  roughness 0.3 holds 0.934 of GGX's light in its highlight; under a light filling the sky a white metal of roughness 0.3
+  to 0.6 seen 78 degrees from its normal reflects 0.912 to 0.918 of it (0.94 to 0.98 at 60 degrees) where it should
+  reflect all of it.
 - Rect lights cast no shadows yet: Cast Shadows and its biases are kept, and nothing is shadowed.
 - A scene with a rect light, even an unlit one out of sight, draws every surface with the forward shaders that shade rect
   lights: an unlit one added to the showcase costs its opaque pass 2.7% at Medium (shots 2 and 3, interleaved A/B) and

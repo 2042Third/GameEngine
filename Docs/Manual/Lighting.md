@@ -114,8 +114,10 @@ linearly transformed cosines), the same in every frame.
   can be brighter than the real one near the reflection of the face (seen 87 degrees from the normal, 1.1 to 1.4 times as
   bright at roughness 0.25 and 1.6 to 2.4 times at 0.5), and under a light that fills the whole sky a white metal of
   roughness 0.3 to 0.6 reflects 0.91 to 0.92 of it seen 78 degrees from its normal (0.94 to 0.98 at 60 degrees) where the
-  real one would reflect all of it. Smooth and fully rough surfaces keep all their light, and surfaces seen within 54
-  degrees of their normal stay within 3% of the real highlight (the median over the model's fit).
+  real one would reflect all of it. Smooth and fully rough surfaces keep all their light. Seen within 54 degrees of their
+  normal, the highlight's median error over the measured lights and views is under 3%, but one in twenty is off by more
+  than 16% at roughness 0.25, 36% at 0.5 and 66% at 0.75, mostly from lights that catch only the edge of the highlight
+  (less than a twentieth of its lobe): from lights that catch more, one in twenty is off by more than 5%, 13% and 11%.
 
 ## The sky
 

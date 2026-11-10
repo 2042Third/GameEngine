@@ -1953,6 +1953,9 @@ namespace
 		// These two guard against too small a one, with bounds under 1.
 		double Under = 0.0;           // How far under GGX's the 5th percentile of the errors with their sign reaches
 		double HoldingPercentile = 0.0; // The 95th percentile on the faces that hold c_HoldingShare of the lobe or more
+		// The same over the steep views. Most of their tail (SteepPercentile) lies on the faces that hold less: at roughness
+		// 0.75 the 95th percentile is 0.66 over all their faces and 0.11 over these.
+		double SteepHoldingPercentile = 0.0;
 	};
 
 	// The aim is a median within 3% and a 95th percentile within 10% (15% under roughness 0.25). The published fit meets it
@@ -1964,18 +1967,18 @@ namespace
 	// which puts half the lobe at stake, and for the rougher lobes they are on the wall panels at the plane. Each row's
 	// measurement is the comment above it, in the order of the fields.
 	constexpr SpecularBounds c_SpecularBounds[] = {
-		// 0.00047, 0.023, 0.00051, 0.021, 5.2e-05, 0.32, -0.00164, 0.0018
-		{ 0.00071, 0.0346, 0.00077, 0.0316, 0.000078, 0.48, 0.00246, 0.00264 },
-		// 0.0022, 0.087, 0.0015, 0.064, 0.00044, 0.0144, -0.018, 0.0121
-		{ 0.00323, 0.13, 0.0022, 0.096, 0.00067, 0.0217, 0.027, 0.0182 },
-		// 0.026, 0.70, 0.0089, 0.157, 0.0058, 0.233, -0.486, 0.287
-		{ 0.03, 1.05, 0.0135, 0.236, 0.0087, 0.35, 0.729, 0.431 },
-		// 0.086, 0.96, 0.023, 0.356, 0.0554, 0.194, -0.518, 0.418
-		{ 0.129, 1.45, 0.03, 0.535, 0.0832, 0.291, 0.776, 0.627 },
-		// 0.063, 0.86, 0.028, 0.661, 0.0544, 0.0486, -0.411, 0.190
-		{ 0.0942, 1.29, 0.03, 0.992, 0.0817, 0.0729, 0.616, 0.285 },
-		// 0.035, 0.25, 0.029, 0.093, 0.0375, 0.0086, -0.247, 0.0758
-		{ 0.0526, 0.371, 0.03, 0.10, 0.0563, 0.013, 0.370, 0.114 },
+		// 0.00047, 0.023, 0.00051, 0.021, 5.2e-05, 0.32, -0.00164, 0.0018, 0.00116
+		{ 0.00071, 0.0346, 0.00077, 0.0316, 0.000078, 0.48, 0.00246, 0.00264, 0.00174 },
+		// 0.0022, 0.087, 0.0015, 0.064, 0.00044, 0.0144, -0.018, 0.0121, 0.0039
+		{ 0.00323, 0.13, 0.0022, 0.096, 0.00067, 0.0217, 0.027, 0.0182, 0.00583 },
+		// 0.026, 0.70, 0.0089, 0.157, 0.0058, 0.233, -0.486, 0.287, 0.053
+		{ 0.03, 1.05, 0.0135, 0.236, 0.0087, 0.35, 0.729, 0.431, 0.0791 },
+		// 0.086, 0.96, 0.023, 0.356, 0.0554, 0.194, -0.518, 0.418, 0.126
+		{ 0.129, 1.45, 0.03, 0.535, 0.0832, 0.291, 0.776, 0.627, 0.189 },
+		// 0.063, 0.86, 0.028, 0.661, 0.0544, 0.0486, -0.411, 0.190, 0.106
+		{ 0.0942, 1.29, 0.03, 0.992, 0.0817, 0.0729, 0.616, 0.285, 0.159 },
+		// 0.035, 0.25, 0.029, 0.093, 0.0375, 0.0086, -0.247, 0.0758, 0.046
+		{ 0.0526, 0.371, 0.03, 0.10, 0.0563, 0.013, 0.370, 0.114, 0.0696 },
 	};
 }
 
@@ -2053,6 +2056,8 @@ TEST_SUITE("Renderer.AreaLights")
 			const std::vector<double> mirror = GetMirrorErrors(errors);
 			const std::vector<double> signedErrors = GetSignedSpecularErrors(entries, shares);
 			const std::vector<double> holding = GetHoldingErrors(entries, errors);
+			// The steep views' tail on the faces that hold a light worth seeing (the Manual quotes both).
+			const std::vector<double> steepHolding = GetHoldingErrors(entries.subspan(static_cast<size_t>(c_SteepViewStep) * c_SpecularFaces), steep);
 			double worstShare = 0.0;
 			size_t worstCase = 0;
 			for (size_t entry = 0; entry < entries.size(); entry++)
@@ -2068,7 +2073,8 @@ TEST_SUITE("Renderer.AreaLights")
 				<< ", worst " << GetPercentile(steep, 1.0) << "; around the mirror direction: median " << GetPercentile(mirror, 0.5) << "; worst share difference "
 				<< worstShare << " (face " << entries[worstCase].Face << " at view " << entries[worstCase].ViewCosine << ", GGX " << entries[worstCase].Reference << ")"
 				<< "; with their sign: 5th " << GetPercentile(signedErrors, 0.05) << "; on the " << holding.size() << " faces that hold " << c_HoldingShare
-				<< " of the lobe or more: 95th " << GetPercentile(holding, 0.95));
+				<< " of the lobe or more: 95th " << GetPercentile(holding, 0.95) << "; on the " << steepHolding.size() << " of them in the steep views: median "
+				<< GetPercentile(steepHolding, 0.5) << ", 95th " << GetPercentile(steepHolding, 0.95) << ", worst " << GetPercentile(steepHolding, 1.0));
 			// Reported: what the faces centered on the mirror direction get, against GGX, at the three lowest views (the
 			// fitted lobe gives them more than GGX does at middling roughness; SpecularFraction's comment quotes it).
 			constexpr int c_LowViews = 3;
@@ -2100,6 +2106,8 @@ TEST_SUITE("Renderer.AreaLights")
 			CHECK(GetPercentile(signedErrors, 0.05) >= -bounds.Under);
 			CHECK(holding.size() >= 40);
 			CHECK(GetPercentile(holding, 0.95) <= bounds.HoldingPercentile);
+			CHECK(steepHolding.size() >= 20);
+			CHECK(GetPercentile(steepHolding, 0.95) <= bounds.SteepHoldingPercentile);
 			CHECK(bounds.Under < 1.0);
 			CHECK(bounds.HoldingPercentile < 1.0);
 		}
