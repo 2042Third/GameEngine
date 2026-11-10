@@ -601,7 +601,10 @@ TEST_SUITE("GPU.SceneRenderer.ManyLocalShadows")
 		REQUIRE(gpu.IsValid());
 		constexpr uint32_t c_ImageSize = 256;
 		// Three near lamps that move every frame ask for 18 views a frame, more than the 12 of the budget; a far lamp's caster
-		// moves once.
+		// moves once. At most the views a frame leaves waiting (18 - 12) waited longer than the far lamp's when its caster
+		// moved, and the views that waited longest take a quarter of the budget a frame (3): they draw those, then the far
+		// one, within (6 + 2) / 3 + 1 frames. The nearer lamps matter two to four times as much, so by waiting times
+		// importance alone it would wait longer.
 		LampField field({ glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(6.0f, 3.0f, 0.0f), glm::vec3(12.0f, 3.0f, 0.0f), glm::vec3(30.0f, 3.0f, 0.0f) }, 4.5f,
 			glm::vec3(-10.0f, -1.0f, -10.0f), glm::vec3(40.0f, 0.0f, 10.0f));
 		const SceneCamera camera = LookAt(glm::vec3(-6.0f, 8.0f, 10.0f), glm::vec3(18.0f, 0.0f, 0.0f));
@@ -638,8 +641,12 @@ TEST_SUITE("GPU.SceneRenderer.ManyLocalShadows")
 				if (ReadRed(image, ProjectToPixel(camera, after, c_ImageSize)) < (dark + lit) * 0.5f)
 					break;
 			}
-			MESSAGE("frames until the far view was drawn: ", frames + 1);
-			CHECK(frames < 8);
+			const uint32_t budget = RendererQualitySettings().LocalShadowViewsPerFrame;
+			const uint32_t aged = std::max(budget / SceneRenderer::c_LocalShadowAgedShare, 1u);
+			const uint32_t ahead = 3 * 6 - budget;
+			const uint32_t bound = (ahead + aged - 1) / aged + 1;
+			MESSAGE("frames until the far view was drawn: ", frames + 1, " (bound ", bound, ")");
+			CHECK(frames + 1 <= bound);
 			gpu.GetDevice().WaitForIdle();
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);

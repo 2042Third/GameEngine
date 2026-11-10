@@ -4795,10 +4795,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
 - `SpreadLightingUpdates` (on by default) draws at most `Quality.LocalShadowViewsPerFrame` views per frame (12, 12, 24,
   48 by preset): views without content first (a light casts nothing until all its views hold content; in the lights'
   order, a light's views together), a quarter of the budget to the views with content that waited longest
-  (`c_LocalShadowAgedShare`), so none starves while nearer lights change every frame (at a budget of one view a frame,
-  that view takes the place only when it waited longer than the view without content the budget would take otherwise),
-  and the rest by frames waited times importance. A light that gains a shadow fades it in once all its views hold
-  content, one that loses it fades it out as fast, by the time since the renderer's previous frame
+  (`SceneRenderer::c_LocalShadowAgedShare`), so none starves while nearer lights change every frame (at a budget of one
+  view a frame, that view takes the place only when it waited longer than the view without content the budget would take
+  otherwise), and the rest by frames waited times importance. A light that gains a shadow fades it in once all its views
+  hold content, one that loses it fades it out as fast, by the time since the renderer's previous frame
   (`SceneRenderOptions::AdaptationSeconds`, which tests set): over `SceneRenderer::c_LocalShadowFadeSeconds` (0.2 s) and
   at least `c_LocalShadowFadeFrames` (8) frames, so a fade lasts as long at 240 Hz as at 60 and a shadow changes by at
   most an eighth a frame where frames are slow (`SceneRendererStats::LocalShadowFadingIn` counts the lights still fading

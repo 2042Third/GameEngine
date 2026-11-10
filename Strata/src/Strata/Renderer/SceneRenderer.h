@@ -972,6 +972,9 @@ namespace Strata
 		static constexpr uint32_t c_LocalShadowFadeFrames = 8;
 		// The share of a shadow's fade a frame `seconds` after the renderer's previous one takes.
 		static float GetLocalShadowFadeStep(float seconds);
+		// Where lighting updates are spread, the share of the shadow views drawn per frame (1 / this of
+		// Quality.LocalShadowViewsPerFrame, at least one) given to the views with content that waited longest.
+		static constexpr uint32_t c_LocalShadowAgedShare = 4;
 		// The reflection probes' cube array (RGBA16_FLOAT, RendererQualitySettings::ReflectionProbeResolution texels across, one level per
 		// roughness step, a cube per slot of SceneRendererSpecification::MaxReflectionProbes): null until a frame has a probe in
 		// view, and again once the render targets are released or a frame's scene has no probe. The array frames shade with:

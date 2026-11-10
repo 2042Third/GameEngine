@@ -58,8 +58,6 @@ namespace Strata
 		// At most this many lights sample old tiles while their new ones are drawn (SpreadLightingUpdates; without it every light
 		// takes its size at once).
 		constexpr uint32_t c_MaxLocalShadowTransitions = 2;
-		// The share of the views drawn per frame (1 / this, at least one) given to the views that waited longest.
-		constexpr uint32_t c_LocalShadowAgedShare = 4;
 		// The change tracking's grid: a light or a proxy's bounds spanning more cells than this is tested without it.
 		constexpr uint64_t c_LocalShadowGridMaxCells = 64;
 		// A change reaches a view when its box, grown by this fraction of the view's range, reaches the view's range and
