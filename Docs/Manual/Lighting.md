@@ -199,8 +199,10 @@ it.
 **Bake**, in the probe's section of the Inspector (or **Bake Reflection Probes** in the Sky section, with nothing
 selected, for all of them; agents use `lighting.bakeProbes`), takes the picture: the editor renders what the probe sees, saves it as
 `Assets/Lighting/<scene>/<probe>.hdr` and sets **Capture** to it, in one step you can undo. Bake again after you change
-the lighting or move things: the new picture replaces the probe's earlier one (which goes to the project's trash). Probes
-see each other's pictures, so a second bake adds light that bounced twice. Pictures are not taken while the game runs:
+the lighting or move things: the new picture replaces the probe's earlier one (which goes to the project's trash). A bake
+draws every probe's present picture, the baked probe's own included, so each bake adds a bounce of light, and part of the
+light of the pictures before stays in the new ones: after a large change of the lighting, bake again until the pictures
+no longer change (the showcase's script bakes eight times). Pictures are not taken while the game runs:
 a probe shows the scene as it was baked (a day-night cycle or a moving door is not reflected).
 
 - **Box Projection** (on by default) makes reflections land where the walls are, as in a room whose walls are the box's
