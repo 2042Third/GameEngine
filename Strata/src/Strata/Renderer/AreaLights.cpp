@@ -271,17 +271,22 @@ namespace Strata::AreaLights
 		if (side == 0.0f)
 			return 0.0f;
 
-		// The polygon's edges above the horizon, cut where they cross it, and the edge along the horizon that closes what
-		// is left: from where the outline goes under to where it comes back. The crossings are scaled by positive numbers
-		// (the edge integral takes directions), which keeps them free of a division.
+		// The polygon's edges above the horizon, cut where they cross it, and an edge along the horizon that closes each
+		// stretch of the outline under it: from where the outline goes under to where it next comes back. The crossings are
+		// scaled by positive numbers (the edge integral takes directions), which keeps them free of a division.
+		//
+		// A plane cuts a rectangle's outline twice at most, but the heights are computed: for a receiver in the light's own
+		// plane all four are rounding, and their signs can alternate around the outline, which then goes under twice. So
+		// every exit is closed onto the entry that follows it, never onto another stretch's.
 		const Polygon polygon = MakePolygon(light.Center - position, light.AxisX, light.AxisY);
 		float heights[4];
 		for (uint32_t index = 0; index < 4; index++)
 			heights[index] = glm::dot(polygon.Corners[index], normal);
 
 		float sum = 0.0f;
-		glm::vec3 exit(0.0f);
-		glm::vec3 entry(0.0f);
+		glm::vec3 exit(0.0f);       // Where the outline last went under, while no entry has closed it
+		glm::vec3 firstEntry(0.0f); // An entry met before any exit: it follows the last exit, around the outline's start
+		bool exitOpen = false;
 		for (uint32_t index = 0; index < 4; index++)
 		{
 			const uint32_t next = (index + 1) % 4;
@@ -297,16 +302,28 @@ namespace Strata::AreaLights
 			else if (startHeight > 0.0f)
 			{
 				exit = end * startHeight - start * endHeight;
+				exitOpen = true;
 				sum += glm::dot(IntegrateEdge(start, exit, crossProduct * startHeight), normal);
 			}
 			else if (endHeight > 0.0f)
 			{
-				entry = start * endHeight - end * startHeight;
+				const glm::vec3 entry = start * endHeight - end * startHeight;
 				sum += glm::dot(IntegrateEdge(entry, end, crossProduct * endHeight), normal);
+				if (exitOpen)
+				{
+					sum += glm::dot(IntegrateEdge(exit, entry, glm::cross(exit, entry)), normal);
+					exitOpen = false;
+				}
+				else
+				{
+					firstEntry = entry;
+				}
 			}
 		}
-		// Without a crossing both are zero and so is the term.
-		sum += glm::dot(IntegrateEdge(exit, entry, glm::cross(exit, entry)), normal);
+		// Exits and entries alternate around the outline, so an exit still open after the last edge is closed by the entry
+		// that came before every exit.
+		if (exitOpen)
+			sum += glm::dot(IntegrateEdge(exit, firstEntry, glm::cross(exit, firstEntry)), normal);
 		return std::clamp(sum * side, 0.0f, 1.0f);
 	}
 

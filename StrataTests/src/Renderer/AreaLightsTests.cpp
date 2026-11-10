@@ -689,9 +689,81 @@ TEST_SUITE("Renderer.AreaLights")
 			}
 		}
 		MESSAGE("flush edge: worst vector error " << worstVector << ", worst flush form factor " << worstFlush);
-		CHECK(worstVector <= 1e-4);
+		CHECK(worstVector <= 1e-5);
 		// 1.5 times the measured 0.0074, the sphere's share at the grid's steepest look down onto the face.
 		CHECK(worstFlush <= 0.0111f);
+	}
+
+	TEST_CASE("A surface in the plane of a turned light gets nothing from it, however rounding places the corners")
+	{
+		// The flush surface again, next to a light that is not along the world's axes: the heights of the face's corners
+		// over the surface are rounding, each on either side of zero, so the outline can cross the horizon four times where
+		// a plane cuts a real rectangle twice at most. Each stretch under the horizon has to be closed by its own edge
+		// along the horizon: an edge from one stretch's exit to another's entry adds the angle between two unrelated
+		// crossings, a form factor of 0.05 to 0.4 where the face gives nothing.
+		const Frame frame = MakeFrame();
+		Sequence sequence(7);
+		int fourCrossings = 0;
+		double worstReference = 0.0;
+		double worstError = 0.0;
+		double worstShare = 0.0;
+		for (const bool twoSided : { false, true })
+		{
+			// In the frame's plane z = 0, from x 0.9 to 2.1 and y 0 to 0.6.
+			const glm::dvec3 lightCenter(1.5, 0.3, 0.0);
+			const glm::dvec2 lightHalfSize(0.6, 0.3);
+			const AreaLights::AreaLight light = MakeLight(frame, lightCenter, glm::dvec3(0.0, 0.0, 1.0), glm::dvec3(1.0, 0.0, 0.0), lightHalfSize.x, lightHalfSize.y,
+				twoSided);
+			const glm::dvec3 exactNormal = glm::dvec3(light.Normal);
+			for (int index = 0; index < 12000; index++)
+			{
+				// Beside one of the four edges, 0.1 mm to 0.5 m out (as many in every decade), anywhere along it and up to a
+				// fifth of its length past its ends; on the plane and a tenth of a micrometer to either side of it, which the
+				// positions' own rounding exceeds.
+				const int edge = index % 4;
+				const double out = 0.0001 * std::pow(5000.0, sequence.Next());
+				const double along = sequence.Next(-1.2, 1.2);
+				const double lift = (index / 4) % 3 == 0 ? 0.0 : ((index / 4) % 3 == 1 ? 1e-7 : -1e-7);
+				const double outward = edge < 2 ? 1.0 : -1.0;
+				const glm::dvec2 inPlane = edge % 2 == 0 ? glm::dvec2((lightHalfSize.x + out) * outward, lightHalfSize.y * along)
+					: glm::dvec2(lightHalfSize.x * along, (lightHalfSize.y + out) * outward);
+				const glm::vec3 position = frame.GetPoint(lightCenter + glm::dvec3(inPlane, lift));
+				CAPTURE(twoSided);
+				CAPTURE(index);
+
+				// How often the case is met: the corners' heights as the code computes them, in its order.
+				const glm::vec3 center = light.Center - position;
+				const glm::vec3 corners[4] = { center - light.AxisX - light.AxisY, center + light.AxisX - light.AxisY, center + light.AxisX + light.AxisY,
+					center - light.AxisX + light.AxisY };
+				int crossings = 0;
+				for (int corner = 0; corner < 4; corner++)
+					crossings += (glm::dot(corners[corner], light.Normal) > 0.0f) != (glm::dot(corners[(corner + 1) % 4], light.Normal) > 0.0f) ? 1 : 0;
+				fourCrossings += crossings == 4 ? 1 : 0;
+
+				// The face gives the surface nothing, or the sliver the positions' rounding lifts over its horizon: the
+				// reference clips the face the code is given, in double. The code's own corners are differences of floats,
+				// each off by up to half a unit in the last place (1.2e-7 m here), so a corner's direction is known to
+				// 1.2e-7 radians over its distance, and an angle over 2 pi is what an edge adds: 1.9e-8 over the distance for
+				// each of the two edges that meet there, more than the 1e-5 the form factor keeps elsewhere once a corner is
+				// within 4 mm.
+				const glm::dvec2 fromCorner = glm::abs(inPlane) - lightHalfSize;
+				const double cornerDistance = glm::length(fromCorner);
+				const double tolerance = 1e-5 + 4e-8 / cornerDistance;
+				const float clipped = AreaLights::FormFactorClipped(position, light.Normal, light);
+				const double reference = GetReferenceFormFactor(position, exactNormal, light);
+				const double error = std::abs(clipped - reference);
+				worstReference = std::max(worstReference, reference);
+				worstError = std::max(worstError, error);
+				worstShare = std::max(worstShare, error / tolerance);
+				CHECK(error <= tolerance);
+			}
+		}
+		MESSAGE("flush with a turned light: the sliver gives at most " << worstReference << ", worst error " << worstError << ", at most " << worstShare
+			<< " of what the corners' rounding allows; outlines crossing four times " << fourCrossings);
+		// The sliver: a face h over a horizon and d away fills (h / d)^2 / 4 of it at most, with h under 0.6 micrometers
+		// (the lift and the rounding of the receiver's and the light's positions) and d from 0.1 mm.
+		CHECK(worstReference <= 1e-5);
+		CHECK(fourCrossings >= 20);
 	}
 
 	TEST_CASE("A one-sided light lights its front only, a two-sided light both sides alike, and neither its own plane")
