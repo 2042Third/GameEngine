@@ -236,18 +236,29 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - At High the finest voxels reach further down than up: their window lies 0.8 m below the camera, so floors and what
   rests on them keep 10 cm voxels down to about 3 m below the eye (ceilings more than about 1.5 m above it take 20 cm
   ones). In the owner's Cornell box seen from half its height, the floor under the sphere's overhang no longer falls to
-  black against its neighbour: the darkest point there keeps 0.53 of its neighbour's light 0.1 m away (0.083 before). The
-  price is paid at that room's ceiling, 2.75 m above the camera and in 20 cm voxels now: where the side walls meet it the
-  darkest point keeps 0.53 and 0.64 of the light 0.1 m below (0.58 and 0.73 before; the back wall there 0.92, 0.89
-  before). No cost, no memory.
-- Thin gaps that the voxels close no longer go black: where the probes around a surface cannot see it, it takes the light
-  of the gap's opening as the camera sees it, darkened by how far in it lies. Under the yard's covered car (0.15 m off the
-  ground) seen from 6 m, the ground 0.2-0.5 m under its edge keeps 6% of the open ground's light and 0.5-1 m in 1% (it
-  was black; seen from 4 m, where the finest voxels hold the gap, 6% and 0.5%). Closed rooms stay dark.
+  black against its neighbour: the darkest point there keeps 0.53 of its neighbour's light 0.1 m away (0.083 before).
+  The price is paid at that room's ceiling, 2.75 m above the camera and in 20 cm voxels now: where the side walls meet
+  it the darkest point keeps 0.53 and 0.64 of the light 0.1 m below (0.58 and 0.73 before; the back wall there 0.92,
+  0.89 before). No memory; 0.12-0.15 ms more GPU time for a 3840 x 2160 frame in the sun room, 0.02 ms in the yard.
+- Thin gaps that the voxels close no longer go black: where the probes around a surface cannot see it, it takes the
+  light of the gap's opening as the camera sees it, darkened by how far in it lies. Under the yard's covered car (0.15 m
+  off the ground) seen from 6 m, the ground 0.2-0.5 m under its edge keeps 6% of the open ground's light and 0.5-1 m in
+  1% (it was black; seen from 4 m, where the finest voxels hold the gap, 6% and 0.5%). Closed rooms stay dark. 0.06-0.08
+  ms of GPU time in the sun room, at most 0.03 ms in the yard.
 - Round objects take their light more evenly: surfaces read each probe's light as spherical harmonics, smooth at every
-  angle, where an ambient cube blended the light of the axes. A white sphere under a uniform sky now reads 3.5% dark at its
-  rim (7% before) and 2% at its center. The bounces keep the cubes, so the light still settles to the same frame and still
-  pictures repeat exactly. 6.3 MiB more memory per view at High (0.8 MiB at Low).
+  angle, where an ambient cube blended the light of the axes. A white sphere under a uniform sky now reads 3.5% dark at
+  its rim (7% before) and 2% at its center. The bounces keep the cubes, so the light still settles to the same frame and
+  still pictures repeat exactly. 6.3 MiB more memory per view at High (0.8 MiB at Low) and, as first written, 0.23-0.25
+  ms of GPU time, which the next item's two cuts make up for.
+- Summing the finest cascade's rays into the probes costs less: each ray's thread evaluates its harmonics once, where
+  the nine threads that sum the coefficients evaluated them again for every ray, and the border of a probe's depth tile
+  is copied from the tile's interior instead of being filtered a second time. 0.29-0.31 ms less GPU time for a 3840 x
+  2160 frame in the sun room and 0.23-0.24 ms in the yard, every global illumination test reporting the numbers it
+  reported before. In all, batch 2 costs that frame about 0.1 ms of GPU time: 0.05 ms more in the sun room and 0.09 ms
+  in the yard than the build before it in three interleaved runs of each (8.96 against 8.92 ms and 8.38 against 8.29 ms;
+  `GPU.RadianceCascades` 4.20 and 4.16 ms against 4.27 and 4.07, `GPU.Opaque` 1.07 and 0.84 ms against 1.00 and 0.75),
+  0.12-0.15 and 0.04 ms as the sum of its separately measured steps. Without global illumination it costs nothing (the
+  100,000 cubes' frame: 1.572 against 1.574 ms).
 
 **Occlusion culling (cull fix)**
 
@@ -359,11 +370,13 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
 - Open ground under the sky reads 3.2% off at 6 m, and a white sphere under a uniform sky 2% dark at its center and 3.5% at
   its rim, or up to 10% where a probe lies within a voxel of it (3% is the goal: what is left lies in the probes' light
   beside the sphere, whose skimming rays the voxels absorb, not in how the probes store it).
-- It costs about 4.4 ms of GPU time at 3840 x 2160 at High (`GPU.RadianceCascades`; 1-2 ms aimed at; the perf cases
-  `PerfGPU.Renderer.GlobalIllumination4K*`: medians of 4.43 ms in the sun room and 4.46 ms in the yard), and the forward
-  pass's gather adds 0.3-0.8 ms to `GPU.Opaque` (look-dev: the sun room, the yard and ThirdPerson's course). Of the stage,
-  the march of the three coarser cascades takes 2.6 ms, summing the finest one's rays into the field 1.35 ms, lighting
-  the voxels 0.53 ms and their downsample 0.08 ms; no cheap cut of the first two was found.
+- It costs about 4.2 ms of GPU time at 3840 x 2160 at High (`GPU.RadianceCascades`; 1-2 ms aimed at; the perf cases
+  `PerfGPU.Renderer.GlobalIllumination4K*`: medians of 4.20 ms in the sun room and 4.16 ms in the yard), and the forward
+  pass's gather adds 0.3-0.8 ms to `GPU.Opaque` (look-dev: the sun room, the yard and ThirdPerson's course). Of the
+  stage, the march of the three coarser cascades takes 2.6 ms, summing the finest one's rays into the field about 1.1 ms
+  (1.35 ms measured per pass, less the 0.23-0.31 ms batch 2's two cuts of it took off the frame; not measured per pass
+  again), lighting the voxels 0.53 ms and their downsample 0.08 ms. What is left is the marches themselves, of which no
+  cheap cut was found.
 - Off, it is not quite free: at Medium with TAA at 3840 x 2160, the samples' `??.scene` shots (three interleaved pairs
   against main without global illumination) spend 0.010-0.014 ms more in `GPU.Opaque` (3.9-5.1%; the base's own spread is
   0.003-0.010 ms), the forward shader's gather being compiled in although it does not run. Sampling the field at one
@@ -394,9 +407,12 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
 - Global illumination's own stage at 3840 x 2160 read about 4.4 ms in some runs and about 6.5 ms in others of the same
   build (the sun room and the yard, High): the difference lay in the pass that sums cascade 0's rays into the field (1.2
   or 3.6 ms), with the opaque pass's time unchanged. Every slow run was measured on one day before 15:00; afterwards
-  neither this build (54 blocks of 60 frames in three processes) nor the one before it (16 runs) read slow once, with the
-  same work in every frame. The cause is not established: another program's work on the GPU falling into the frame's
-  longest stage fits the readings but was not reproduced. Until it is, a single reading of the stage can be 2 ms high.
+  neither that build (54 blocks of 60 frames in three processes) nor the one before it (16 runs) read slow once, with
+  the same work in every frame, nor did any of the 61 later runs of five sessions (4.73 ms at most). The cause is not
+  established: another program's work on the GPU falling into the frame's longest stage fits the readings but was not
+  reproduced. This machine's readings do have states of their own: without global illumination, the 100,000 cubes' frame
+  read 1.57, 1.77 or 2.31 ms by session, in every build measured, the one before batch 2 included. Until the slow mode
+  is explained, a single reading of the stage can be 2 ms high: compare builds only by interleaved runs.
 - With every bounce, rooms take frames to fill after a cut, by their brightest surface: the sun room's gi view changes
   by less than 0.25% a frame from frame 11 (it is reported settled at 13), the Cornell box's from 15 (18), a closed
   white box's from 27 (39). Until then a game's cut shows the light rising.
