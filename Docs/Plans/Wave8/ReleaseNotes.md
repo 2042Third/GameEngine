@@ -254,7 +254,10 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   smoothly with the surface, where an ambient cube blended the light of the axes. A white sphere under a uniform sky now
   reads 3.5% dark at its rim (7% before) and 2% at its center. The bounces keep the cubes, so the light still settles to
   the same frame and still pictures repeat exactly. 6.3 MiB more memory per view at High (0.8 MiB at Low) and, as first
-  written, 0.23-0.25 ms of GPU time, which the next item's two cuts make up for. A surface never reads less than its
+  written, 0.23-0.25 ms of GPU time, which the next item's two cuts make up for. The harmonics' first term is stored
+  as the mean of the probe's light, not as the coefficient, which is 3.5 times the mean and left the texture's range in
+  a bright closed room (a box glowing at 65,000 nits with every bounce: the test machine's driver wrote the format's
+  largest value there, a first term 22% low, and a driver may write infinity). A surface never reads less than its
   probes' cubes hold for it: the harmonics weigh light from behind a surface's plane a little below zero, and alone they
   put dark to black blotches on a wall at and around a patch of sunlight on it (the sun room's north wall under a low
   sun read 0.48 to 0.74 of the cubes there, now 1.00 to 1.09; the back wall of the showcase's hut went black around the

@@ -75,6 +75,9 @@ float4 ReadProbeIrradiance(int3 probe, float3 normal)
 #else
 	float basis[9];
 	ProbeSHBasis(normal, basis);
+	// Band 0's texel holds its coefficient times the basis already (FieldReduce.comp: the mean radiance, which fits the format
+	// where the coefficient does not).
+	basis[0] = 1.0;
 	float4 sum = float4(0.0, 0.0, 0.0, 0.0);
 	[unroll]
 	for (uint coefficient = 0u; coefficient < 9u; coefficient++)

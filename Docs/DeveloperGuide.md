@@ -5128,7 +5128,10 @@ probe-field levels and local lights follow.
   six RGBA16F faces per cascade-0 probe, irradiance over pi and the sky share, normalized by the directions' cosine sum, which
   re-injection reads; and the same rays projected on the real spherical harmonics of bands 0-2, each band times the cosine
   lobe's factor over pi (1, 2/3, 1/4), less what a uniform radiance leaves in a coefficient through the 64 directions'
-  quadrature, nine RGBA16F texels a probe (`FieldIrradiance`), which drawn surfaces read; cascade 0 has no atlas). Drawn
+  quadrature, nine RGBA16F texels a probe (`FieldIrradiance`; band 0's holds the coefficient times its basis function, the
+  mean of the rays' light, which stays under the voxels' clamp: the coefficient, 3.545 times the mean, left the format's
+  range in a bright closed room; the other bands' are clamped to the range), which drawn surfaces read; cascade 0 has no
+  atlas). Drawn
   surfaces read the harmonics (`ReadProbeIrradiance`, never below zero), which turn smoothly with the normal: the faces
   blend the axes' hemispheres for a normal between them, which take directions behind its plane, and beside a white sphere
   under a uniform sky the probes a few centimeters off it read its rim 7% dark (the harmonics 3.5%). The harmonics' weight
@@ -5375,7 +5378,10 @@ probe-field levels and local lights follow.
   `GPU.SceneRenderer.GlobalIlluminationBounce` (the owner's Cornell box, `Tests::BuildCornellBox`, which look-dev's
   `Cornell` scene and `lookdev.cornell` mirror: what the bounces add to the ceiling is at least half of the floor's light
   integrated from the panel, the floor and the sphere take the colored walls' tints; a glowing closed box converges to
-  Le / (1 - rho) within 3% of the series its one-bounce field's own error predicts (that error is 4-9% low at High); the sun
+  Le / (1 - rho) within 3% of the series its one-bounce field's own error predicts (that error is 4-9% low at High); the
+  same box at 65,000 nits and an albedo of 0.95 keeps every texel of its harmonics finite and its largest band 0 within
+  0.9-1.25 times the light of the wall ahead (1.16; stored as the coefficient it read 65,504, the format's largest value,
+  2.8 times that light as the texel is read now and 22% under it as the coefficient); the sun
   room's points take at least their one-bounce light, the ceiling over the patch 10% more, and what the bounces add stays
   within the series' bound; settling after a cut, also at the albedo clamp, at least `c_GISettleMarginFrames` after the
   image; a 2 m move in one frame, whose next frame matches a renderer settled there; still frames; a panel in the dark

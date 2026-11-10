@@ -22,10 +22,12 @@
 // The probe's irradiance as drawn (the scene passes read it; re-injection keeps the faces): the same rays projected on the real
 // spherical harmonics of bands 0-2 (Include/SphericalHarmonics.slang's order), each band times the cosine lobe's factor over pi
 // (1, 2/3, 1/4), a coefficient at (3x + c % 3, 3y + c / 3, z) (rgb irradiance over pi, a the sky share): at a normal the sum
-// of the coefficients times the basis is the radiance of a white Lambertian surface facing it. The 64 directions' quadrature is
-// not exact beyond band 1: what a uniform radiance (the rays' mean) would leave in a coefficient is taken out, so a uniform
-// radiance gives every normal exactly that radiance. The faces blend axis lobes for a normal between the axes, which take
-// directions behind its plane: beside a white sphere under a uniform sky, probes a few centimeters off it read its rim 7% dark
+// of the coefficients times the basis is the radiance of a white Lambertian surface facing it. Band 0's texel holds the
+// coefficient times its basis function already, the rays' mean (the read gives it the weight one): the coefficient is 3.545
+// times the mean and left the format's range where the mean does not. The 64 directions' quadrature is not exact beyond band
+// 1: what a uniform radiance (the rays' mean) would leave in a coefficient is taken out, so a uniform radiance gives every
+// normal exactly that radiance. The faces blend axis lobes for a normal between the axes, which take directions behind its
+// plane: beside a white sphere under a uniform sky, probes a few centimeters off it read its rim 7% dark
 // (Include/GIField.slang).
 // What follows the march is `precise` (every product, sum and quotient rounded as written): the same rays must give the same
 // bits in every dispatch, because a camera's field is compared with a fresh renderer's to the byte. Left free, one driver
@@ -210,8 +212,15 @@ void main(uint3 groupID : SV_GroupID, uint index : SV_GroupIndex)
 		// own sum over the directions (its response to a radiance of one, zero in the continuum) times the rays' mean.
 		if (coefficient > 0u)
 			sum -= uniformResponse / max(total, 1e-6) * integral;
-		float lobe = coefficient == 0u ? 1.0 : coefficient < 4u ? 2.0 / 3.0 : 0.25;
-		precise float4 irradiance = sum * lobe;
+		// Band 0 is stored times its basis function (0.282095: the texel then holds the rays' mean over the sphere, and the read
+		// takes it with weight one). The coefficient itself is 3.545 times that mean, and where the voxels hold radiance near
+		// their clamp (ST_GI_MAX_RADIANCE: a bright closed room after its bounces) it left RGBA16F's range: the write stored the
+		// format's largest value or an infinity, as the driver chose, for every pixel around the probe to read. The other bands
+		// stay inside for any radiance up to the clamp (band 1 at most 1.02 times it, band 2 0.38, in the continuum); the clamp
+		// below holds what the 64 directions' quadrature may add to that: a coefficient at the format's largest value is a
+		// little wrong and finite.
+		float lobe = coefficient == 0u ? 0.282095 : coefficient < 4u ? 2.0 / 3.0 : 0.25;
+		precise float4 irradiance = clamp(sum * lobe, -65504.0, 65504.0);
 		o_Irradiance[uint3(probe.x * 3u + coefficient % 3u, probe.y * 3u + coefficient / 3u, probe.z)] = irradiance;
 	}
 	// The depth tile. Its interior is the rays' a x a (the layout's 8 x 8: a thread a texel); its border repeats interior texels

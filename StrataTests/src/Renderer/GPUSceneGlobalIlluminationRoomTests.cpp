@@ -2465,6 +2465,82 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A bright closed box keeps its harmonics in range")
+	{
+		// The box of the case above at 65,000 nits and an albedo of 0.95 (its bounces take 0.9, c_GIMaxBounceAlbedo): with every
+		// bounce its radiance is about six times Le, 24,000 as the field holds it (times c_GIRadianceScale), under the voxels'
+		// clamp (c_GIMaxRadiance). Band 0 of a probe's harmonics is 3.545 times its rays' mean: stored as the coefficient it
+		// left RGBA16F's range (65,504) here. A driver may write that as the format's largest value or as infinity: this
+		// machine's wrote 65,504, a band 0 22% under the light of the wall ahead (surfaces then read the probes' cubes, which
+		// never held it wrong), and an infinity would be every pixel around the probe. Stored times its basis function it
+		// is the mean itself: every texel is finite, the largest band 0 lies above what the coefficient's form could hold
+		// (so this room is one that overflowed), under the clamp and at the room's light as the wall ahead shows it, and the
+		// wall reads the bounces' series, not the image's limit.
+		constexpr float c_Luminance = 65000.0f;
+		constexpr float c_Albedo = 0.95f;
+		constexpr uint32_t c_Frames = 24;
+		// The largest mean a probe could hold while its band 0 was stored as the coefficient: RGBA16F's largest value times Y00.
+		constexpr float c_CoefficientLimit = 65504.0f * 0.282095f;
+		// The room's radiance is uniform but for the cascades' error (the case above: 4-9% at High); the largest band 0 of
+		// all probes lies this near the wall's own light (measured: 1.16 times it).
+		constexpr float c_MaxOverWall = 1.25f;
+		constexpr float c_MinOverWall = 0.9f;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		BuildGlowingBox(scene, assets, glm::vec3(-2.0f, 0.0f, -2.0f), glm::vec3(2.0f, 3.0f, 2.0f), c_Albedo, c_Luminance);
+		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification(GlobalIlluminationLevel::High, 1.0f));
+		renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+		const SceneCamera camera = MakeCamera(glm::vec3(0.0f, 1.5f, 1.6f), glm::vec3(0.0f, 1.5f, -2.0f), 75.0f, c_RoomSize);
+		const SceneRenderOptions options = GIViewOptions();
+		// Settled, then on until the bounces have brought the room near its series.
+		const uint32_t settled = RenderUntilSettled(*renderer, scene, camera, options, 40);
+		for (uint32_t frame = settled; frame < c_Frames; frame++)
+			REQUIRE(RenderGIFrame(*renderer, scene, camera, options));
+		std::vector<uint8_t> harmonics;
+		REQUIRE(renderer->ReadGlobalIlluminationFieldIrradiance(harmonics));
+		const glm::uvec3 grid(glm::vec3(renderer->GetGlobalIlluminationFieldConstants().FieldSize));
+		const size_t rowTexels = static_cast<size_t>(grid.x) * 3;
+		const size_t texels = rowTexels * grid.y * 3 * grid.z;
+		REQUIRE(texels > 0);
+		REQUIRE(harmonics.size() == texels * 8);
+		size_t unbounded = 0; // Halves that are infinite or not a number
+		float largestMean = 0.0f;
+		for (size_t texel = 0; texel < texels; texel++)
+		{
+			uint16_t halves[4];
+			std::memcpy(halves, harmonics.data() + texel * 8, sizeof(halves));
+			for (const uint16_t half : halves)
+				unbounded += (half & 0x7C00u) == 0x7C00u ? 1 : 0;
+			// Band 0 is the first texel of a probe's three by three.
+			if (texel % rowTexels % 3 == 0 && texel / rowTexels % 3 == 0)
+			{
+				for (uint32_t channel = 0; channel < 3; channel++)
+					largestMean = std::max(largestMean, glm::unpackHalf1x16(halves[channel]));
+			}
+		}
+		ReadbackImage image;
+		REQUIRE(Renderer::ReadTexture(renderer->GetHDRTexture(), image));
+		const glm::uvec2 pixel = ProjectToPixel(camera, glm::vec3(0.0f, 1.5f, -1.99f), image.Width, image.Height);
+		REQUIRE(pixel.x < image.Width);
+		REQUIRE(pixel.y < image.Height);
+		const float wall = Luminance(glm::vec3(ReadHalfTexel(image, pixel.x, pixel.y))) / c_RoomPreExposure;
+		const float wallStored = wall * RenderData::c_GIRadianceScale;
+		MESSAGE("The largest band 0 " << largestMean << " (as a coefficient " << largestMean / 0.282095f << "), " << unbounded
+			<< " values out of range, the wall ahead " << wall / c_Luminance << " times Le (" << wallStored << " as the field holds it)");
+		CHECK(unbounded == 0);
+		CHECK(largestMean > c_CoefficientLimit);
+		CHECK(largestMean <= RenderData::c_GIMaxRadiance);
+		CHECK(largestMean <= c_MaxOverWall * wallStored);
+		CHECK(largestMean >= c_MinOverWall * wallStored);
+		CHECK(wall >= 4.0f * c_Luminance);
+		CHECK(wall <= 10.0f * c_Luminance);
+		renderer.reset();
+		CollectReleases();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Bounces fill the sun room")
 	{
 		// 6.4: with every bounce each point takes at least its one-bounce light and the ceiling over the patch at least 10% more.
