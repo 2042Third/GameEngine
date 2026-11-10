@@ -862,6 +862,19 @@ TEST_SUITE("Renderer.AreaLights")
 namespace
 {
 
+	// The frame AreaLight states: unit axes at right angles, AxisY along cross(AxisX, Normal).
+	void CheckFrame(const AreaLights::Record& record)
+	{
+		CHECK(glm::length(record.Normal) == doctest::Approx(1.0).epsilon(1e-5));
+		CHECK(glm::length(record.AxisX) == doctest::Approx(1.0).epsilon(1e-5));
+		CHECK(glm::length(record.AxisY) == doctest::Approx(1.0).epsilon(1e-5));
+		CHECK(std::abs(glm::dot(record.Normal, record.AxisX)) <= 1e-5f);
+		CHECK(std::abs(glm::dot(record.Normal, record.AxisY)) <= 1e-5f);
+		CHECK(std::abs(glm::dot(record.AxisX, record.AxisY)) <= 1e-5f);
+		// The corners' order the edge sums count on.
+		CHECK(glm::length(record.AxisY - glm::cross(record.AxisX, record.Normal)) <= 1e-5f);
+	}
+
 	bool IsNotDrawn(const AreaLights::Record& record)
 	{
 		return !record.Drawn && record.Radiance == glm::vec3(0.0f) && record.HalfExtents == glm::vec2(0.0f) && record.Range == 0.0f &&
@@ -918,21 +931,10 @@ TEST_SUITE("Renderer.AreaLights")
 		const glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), 0.7f, glm::normalize(glm::vec3(0.2f, 1.0f, -0.4f)));
 		const glm::mat4 local = glm::translate(glm::mat4(1.0f), translation) * rotation * glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 3.0f, 5.0f));
 		const glm::vec3 color(1.0f, 0.5f, 0.25f);
-		const auto checkUnit = [](const AreaLights::Record& record)
-		{
-			CHECK(glm::length(record.Normal) == doctest::Approx(1.0).epsilon(1e-5));
-			CHECK(glm::length(record.AxisX) == doctest::Approx(1.0).epsilon(1e-5));
-			CHECK(glm::length(record.AxisY) == doctest::Approx(1.0).epsilon(1e-5));
-			CHECK(std::abs(glm::dot(record.Normal, record.AxisX)) <= 1e-5f);
-			CHECK(std::abs(glm::dot(record.Normal, record.AxisY)) <= 1e-5f);
-			CHECK(std::abs(glm::dot(record.AxisX, record.AxisY)) <= 1e-5f);
-			// The corners' order the edge sums count on.
-			CHECK(glm::length(record.AxisY - glm::cross(record.AxisX, record.Normal)) <= 1e-5f);
-		};
 
 		const AreaLights::Record record = AreaLights::MakeRecord(local, true, color, 200.0f, glm::vec2(0.5f, 0.25f), 8.0f, true);
 		REQUIRE(record.Drawn);
-		checkUnit(record);
+		CheckFrame(record);
 		CHECK(glm::length(record.Center - translation) <= 1e-6f);
 		CHECK(glm::length(record.Normal + glm::vec3(rotation[2])) <= 1e-5f);
 		CHECK(glm::length(record.AxisX - glm::vec3(rotation[0])) <= 1e-5f);
@@ -957,7 +959,7 @@ TEST_SUITE("Renderer.AreaLights")
 		const glm::mat4 mirrored = glm::scale(glm::mat4(1.0f), glm::vec3(-1.0f, 1.0f, 1.0f)) * local;
 		const AreaLights::Record mirroredRecord = AreaLights::MakeRecord(mirrored, true, color, 200.0f, glm::vec2(0.5f, 0.25f), 8.0f, false);
 		REQUIRE(mirroredRecord.Drawn);
-		checkUnit(mirroredRecord);
+		CheckFrame(mirroredRecord);
 		const glm::vec3 shineDirection = -glm::normalize(glm::vec3(mirrored[2]));
 		CHECK(glm::length(mirroredRecord.Normal - shineDirection) <= 1e-5f);
 		CHECK(glm::length(mirroredRecord.AxisX - glm::normalize(glm::vec3(mirrored[0]))) <= 1e-5f);
@@ -989,6 +991,58 @@ TEST_SUITE("Renderer.AreaLights")
 		CHECK(AreaLights::SpecularFraction(back, shineDirection, shineDirection, 0.3f, mirroredLight) == 0.0f);
 	}
 
+	TEST_CASE("A sheared face becomes the rectangle with its sides' lengths, in the face's plane")
+	{
+		// A light turned under a parent with an uneven scale has axes that are not at right angles any more. Its record
+		// keeps the face's plane, the X axis and both sides' lengths, and turns Y in the plane until it is perpendicular to X.
+		const glm::vec3 color(1.0f, 0.5f, 0.25f);
+		const glm::vec2 half(0.5f, 0.25f);
+		const glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), 0.7f, glm::normalize(glm::vec3(0.2f, 1.0f, -0.4f)));
+		const float turn = glm::radians(30.0f);
+		// Sheared in the face's plane and out of it, in the plane only (Z stays the face's normal, X and Y lean toward each
+		// other), and out of it only (X and Y stay at right angles, Z leans away from the normal).
+		const glm::mat4 sheared[] = {
+			glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 1.0f, 3.0f)) * rotation,
+			glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 1.0f, 1.0f)) * glm::rotate(glm::mat4(1.0f), turn, glm::vec3(0.0f, 0.0f, 1.0f)),
+			glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, 1.0f, 3.0f)) * glm::rotate(glm::mat4(1.0f), turn, glm::vec3(1.0f, 0.0f, 0.0f)),
+		};
+		for (size_t index = 0; index < std::size(sheared); index++)
+		{
+			CAPTURE(index);
+			const glm::vec3 x = glm::vec3(sheared[index][0]);
+			const glm::vec3 y = glm::vec3(sheared[index][1]);
+			const glm::vec3 z = glm::vec3(sheared[index][2]);
+			const AreaLights::Record record = AreaLights::MakeRecord(sheared[index], true, color, 200.0f, half, 8.0f, false);
+			REQUIRE(record.Drawn);
+			CheckFrame(record);
+			// The face's plane is the transformed one, and the light shines to its transformed -Z's side.
+			CHECK(std::abs(glm::dot(record.Normal, glm::normalize(x))) <= 1e-5f);
+			CHECK(std::abs(glm::dot(record.Normal, glm::normalize(y))) <= 1e-5f);
+			CHECK(glm::dot(record.Normal, z) < 0.0f);
+			CHECK(glm::length(record.AxisX - glm::normalize(x)) <= 1e-5f);
+			CHECK(glm::dot(record.AxisY, y) > 0.0f);
+			CHECK(glm::length(record.HalfExtents - half * glm::vec2(glm::length(x), glm::length(y))) <= 1e-5f);
+			CHECK(record.BoundsRadius == doctest::Approx(8.0 + glm::length(record.HalfExtents)).epsilon(1e-6));
+		}
+
+		// The rectangle is larger than the parallelogram the transform makes of the face, by 1 / sin(a) for sides that meet
+		// at the angle a: here sqrt(3.25 * 1.75) / 2 = 1.1924 times its 1 m^2, and a light in nits emits that much more.
+		const glm::mat4& inPlane = sheared[1];
+		const AreaLights::Record record = AreaLights::MakeRecord(inPlane, true, color, 200.0f, half, 8.0f, false);
+		REQUIRE(record.Drawn);
+		const float parallelogram = 4.0f * half.x * half.y * glm::length(glm::cross(glm::vec3(inPlane[0]), glm::vec3(inPlane[1])));
+		CHECK(parallelogram == doctest::Approx(1.0).epsilon(1e-5));
+		CHECK(4.0f * record.HalfExtents.x * record.HalfExtents.y == doctest::Approx(1.19242).epsilon(1e-5));
+		CHECK(glm::length(record.Radiance - glm::vec3(200.0f, 100.0f, 50.0f)) <= 1e-4f);
+		// What it lights is that rectangle's share: Howell's factor for its half sizes, sqrt(3.25) / 2 and sqrt(1.75) / 4,
+		// seen from 1 m in front of its center.
+		const AreaLights::AreaLight light = AreaLights::LoadAreaLight(record);
+		const double halfX = std::sqrt(3.25) * 0.5;
+		const double halfY = std::sqrt(1.75) * 0.25;
+		const float lit = AreaLights::FormFactor(record.Center + record.Normal, -record.Normal, light);
+		CHECK(GetRelativeError(lit, GetParallelFactor(-halfX, halfX, -halfY, halfY, 1.0)) <= 1e-4);
+	}
+
 	TEST_CASE("A light without a face, light or a finite transform is not drawn")
 	{
 		const glm::mat4 world = glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f));
@@ -1007,10 +1061,24 @@ TEST_SUITE("Renderer.AreaLights")
 		for (const glm::vec2& size : { glm::vec2(0.0f, 0.25f), glm::vec2(0.5f, 0.0f), glm::vec2(0.0004f, 0.25f), glm::vec2(0.5f, 0.0004f), glm::vec2(-0.5f, 0.25f),
 				 glm::vec2(nan, 0.25f), glm::vec2(0.5f, infinity) })
 			CHECK(IsNotDrawn(AreaLights::MakeRecord(world, true, white, 100.0f, size, 5.0f, false)));
-		// A face of 1.2 mm is drawn, and a scale takes one under the least size.
+		// A face of 1.2 mm along either axis is drawn, and a scale takes one under the least size.
 		CHECK(AreaLights::MakeRecord(world, true, white, 100.0f, glm::vec2(0.0006f, 0.25f), 5.0f, false).Drawn);
+		CHECK(AreaLights::MakeRecord(world, true, white, 100.0f, glm::vec2(0.25f, 0.0006f), 5.0f, false).Drawn);
 		CHECK(IsNotDrawn(AreaLights::MakeRecord(world * glm::scale(glm::mat4(1.0f), glm::vec3(0.5f, 1.0f, 1.0f)), true, white, 100.0f,
 			glm::vec2(0.0006f, 0.25f), 5.0f, false)));
+		CHECK(IsNotDrawn(AreaLights::MakeRecord(world * glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, 0.5f, 1.0f)), true, white, 100.0f,
+			glm::vec2(0.25f, 0.0006f), 5.0f, false)));
+		// The least size is a size, twice the half size, and a face of exactly that size is drawn.
+		CHECK(AreaLights::MakeRecord(world, true, white, 100.0f, glm::vec2(AreaLights::c_MinSize * 0.5f, 0.25f), 5.0f, false).Drawn);
+		CHECK(AreaLights::MakeRecord(world, true, white, 100.0f, glm::vec2(0.25f, AreaLights::c_MinSize * 0.5f), 5.0f, false).Drawn);
+		// A face whose bounds radius is not finite in float (a half diagonal whose square a float cannot hold, from 1.8e19 m
+		// on) is not drawn, whether its own size or the transform's scale makes it that large; one of 1e18 m is. (A scale
+		// of 1e19 along both axes would leave the face's normal without a finite length: another refusal.)
+		CHECK(IsNotDrawn(AreaLights::MakeRecord(world, true, white, 100.0f, glm::vec2(2.0e38f), 5.0f, false)));
+		CHECK(IsNotDrawn(AreaLights::MakeRecord(world * glm::scale(glm::mat4(1.0f), glm::vec3(1.0e19f, 1.0f, 1.0f)), true, white, 100.0f,
+			glm::vec2(1.0e19f, 0.25f), 5.0f, false)));
+		CHECK(AreaLights::MakeRecord(world * glm::scale(glm::mat4(1.0f), glm::vec3(1.0e9f, 1.0f, 1.0f)), true, white, 100.0f,
+			glm::vec2(1.0e9f, 0.25f), 5.0f, false).Drawn);
 		for (const glm::vec3& color : { glm::vec3(nan, 1.0f, 1.0f), glm::vec3(1.0f, infinity, 1.0f), glm::vec3(3.0e38f, 1.0f, 1.0f) })
 			CHECK(IsNotDrawn(AreaLights::MakeRecord(world, true, color, 100.0f, half, 5.0f, false)));
 

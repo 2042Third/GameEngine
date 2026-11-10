@@ -96,8 +96,11 @@ namespace Strata::AreaLights
 	// The record of a light with the world transform `world` whose face spans +-`halfExtents` along its local X and Y and
 	// shines along its local -Z. The transform's X axis is kept, the normal is perpendicular to its X and Y axes on its -Z
 	// axis's side, and AxisY follows from the two, so a mirroring or shearing transform still gives the frame AreaLight
-	// states. Not drawn (the default record) when it is inactive, a value is not finite, `luminance` or `range` is not above
-	// 0, the transform is degenerate or the face is smaller than c_MinSize.
+	// states. A sheared face (a turned light under an unevenly scaled parent: its X and Y axes meet at an angle a that is
+	// not a right one) becomes the rectangle with its sides' lengths, X kept and Y turned in the face's plane until it is
+	// perpendicular to X: 1 / sin(a) the parallelogram's area, and a light in nits emits that much more. Not drawn (the
+	// default record) when it is inactive, a value is not finite (the radiance and the bounds radius it comes to included),
+	// `luminance` or `range` is not above 0, the transform is degenerate or the face is smaller than c_MinSize.
 	Record MakeRecord(const glm::mat4& world, bool active, const glm::vec3& color, float luminance, const glm::vec2& halfExtents, float range,
 		bool twoSided);
 	// The record as the shading takes it: the half sizes go into the axes. Shade it only when it is drawn.
