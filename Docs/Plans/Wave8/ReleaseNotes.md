@@ -259,6 +259,18 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   `GPU.RadianceCascades` 4.20 and 4.16 ms against 4.27 and 4.07, `GPU.Opaque` 1.07 and 0.84 ms against 1.00 and 0.75),
   0.12-0.15 and 0.04 ms as the sum of its separately measured steps. Without global illumination it costs nothing (the
   100,000 cubes' frame: 1.572 against 1.574 ms).
+- A camera that stands still gets the same probes every frame, to the bit. The pass that sums the finest cascade's rays
+  now rounds every product, sum and quotient as written: left free, this machine's driver (NVIDIA 621.1) ran those sums
+  in two ways from one frame to the next, a unit in the last place apart (a face of one probe, the harmonics of some
+  180), which now and then failed the test that compares a strafe's field with a fresh renderer's when the machine was
+  busy. That test, which now compares the harmonics too, and a new one over twelve frames of a still camera failed in 6
+  of 24 runs of their suite without the rounding (the new one in all six, the strafe's in four) and in none of 24 with
+  it, the two builds taking turns. Why the driver has two ways is not known. Pictures change by one level in at most 245
+  pixels of a 3840 x 2160 frame without anti-aliasing or with FXAA. With TAA more pixels move: 4% of the yard's, all but
+  1,719 of them by one level, up or down, all over the picture (its automatic exposure ends 0.00001 EV apart), the rest
+  by up to 41 on the fence and other thin edges; the pictures look the same, and two captures of the new build are
+  equal. No GPU time that six interleaved pairs of runs could measure: that frame's busy time read 8.76 against 8.78 ms
+  in the sun room and 8.23 against 8.20 ms in the yard.
 
 **Occlusion culling (cull fix)**
 
@@ -411,8 +423,13 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   the same work in every frame, nor did any of the 61 later runs of five sessions (4.73 ms at most). The cause is not
   established: another program's work on the GPU falling into the frame's longest stage fits the readings but was not
   reproduced. This machine's readings do have states of their own: without global illumination, the 100,000 cubes' frame
-  read 1.57, 1.77 or 2.31 ms by session, in every build measured, the one before batch 2 included. Until the slow mode
-  is explained, a single reading of the stage can be 2 ms high: compare builds only by interleaved runs.
+  read 1.57, 1.77 or 2.31 ms by session, in every build measured, the one before batch 2 included. A lead, not a cause:
+  on this driver that same pass's sums ran in two ways from frame to frame, a unit in the last place apart (batch 2's
+  last item above), and two compiled forms of the pass would fit both findings; nothing ties them together yet, and
+  neither the build with the sums rounded as written nor the one before it read slow in six runs each (4.53 ms at most).
+  The stage's reading moves by itself, too: in those runs the yard's read 3.83 to 4.53 ms in one build and 4.08 to 4.51
+  in the other, the frame's busy time following by 0.17 ms at most. Until the slow mode is explained, a single reading
+  of the stage can be 2 ms high: compare builds only by interleaved runs, and by the frame's busy time first.
 - With every bounce, rooms take frames to fill after a cut, by their brightest surface: the sun room's gi view changes
   by less than 0.25% a frame from frame 11 (it is reported settled at 13), the Cornell box's from 15 (18), a closed
   white box's from 27 (39). Until then a game's cut shows the light rising.

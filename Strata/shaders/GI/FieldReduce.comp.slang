@@ -27,6 +27,12 @@
 // radiance gives every normal exactly that radiance. The faces blend axis lobes for a normal between the axes, which take
 // directions behind its plane: beside a white sphere under a uniform sky, probes a few centimeters off it read its rim 7% dark
 // (Include/GIField.slang).
+// What follows the march is `precise` (every product, sum and quotient rounded as written): the same rays must give the same
+// bits in every dispatch, because a camera's field is compared with a fresh renderer's to the byte. Left free, one driver
+// (NVIDIA 621.1) ran these sums in two ways from dispatch to dispatch, a unit in the last place apart: a face of one probe and
+// the harmonics of some 180. `precise` does not reach into a called function, a dot or a square root: what feeds the sums
+// declares it where it is computed (GetTileSolidAngle, MergeParents, ProbeSHBasisPrecise). The march and the octahedral mapping,
+// shared with GI/CascadeMarch.comp, are as they were: what they give never differed.
 
 Texture3D<float4> u_Validity : register(t57);
 Texture3D<float4> u_WeightsA : register(t58);
@@ -62,8 +68,10 @@ float GetTileSolidAngle(uint2 texel, uint a, float normalization)
 	float t = max(-p.z, 0.0);
 	p.x += p.x >= 0.0 ? -t : t;
 	p.y += p.y >= 0.0 ? -t : t;
-	float length3 = dot(p, p) * sqrt(dot(p, p));
-	return normalization / length3;
+	precise float squared = (p.x * p.x + p.y * p.y) + p.z * p.z;
+	precise float length3 = squared * sqrt(squared);
+	precise float solidAngle = normalization / length3;
+	return solidAngle;
 }
 
 // A texel of the depth tile's one-texel border by its index: the top row, the bottom row, then the left and the right column
@@ -88,8 +96,8 @@ float4 MergeParents(uint3 probe, uint2 texel, uint a)
 	int3 base = int3(floor((float3(probe) - 0.5) * 0.5));
 	uint parentDirections = u_Pass.ParentGrid.w;
 	uint children = max(parentDirections / a, 1u);
-	float4 sum = float4(0.0, 0.0, 0.0, 0.0);
-	float total = 0.0;
+	precise float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+	precise float total = 0.0;
 	[loop]
 	for (uint corner = 0u; corner < 8u; corner++)
 	{
@@ -98,20 +106,21 @@ float4 MergeParents(uint3 probe, uint2 texel, uint a)
 			continue;
 		int3 parent = base + int3(int(corner & 1u), int((corner >> 1) & 1u), int((corner >> 2) & 1u));
 		int2 first = parent.xy * int(parentDirections) + int2(texel * children);
-		float4 rays = float4(0.0, 0.0, 0.0, 0.0);
+		precise float4 rays = float4(0.0, 0.0, 0.0, 0.0);
 		for (uint child = 0u; child < children * children; child++)
 			rays += u_ParentAtlas.Load(int4(first + int2(int(child % children), int(child / children)), parent.z, 0));
 		sum += weight * rays / float(children * children);
 		total += weight;
 	}
-	return total < 1e-4 ? float4(0.0, 0.0, 0.0, 0.0) : sum / total;
+	precise float4 merged = total < 1e-4 ? float4(0.0, 0.0, 0.0, 0.0) : sum / total;
+	return merged;
 }
 
 [numthreads(ST_GI_REDUCE_GROUP, 1, 1)]
 void main(uint3 groupID : SV_GroupID, uint index : SV_GroupIndex)
 {
 	uint3 probe = groupID;
-	float4 faces[6];
+	precise float4 faces[6];
 	[unroll]
 	for (uint face = 0u; face < 6u; face++)
 		faces[face] = float4(0.0, 0.0, 0.0, 0.0);
@@ -148,13 +157,13 @@ void main(uint3 groupID : SV_GroupID, uint index : SV_GroupIndex)
 			}
 			float4 rest = ray.a > 0.0 && hasParents ? MergeParents(probe, texel, a) : float4(0.0, 0.0, 0.0, 0.0);
 			float solidAngle = GetTileSolidAngle(texel, a, u_GI.SolidAngleNorms.x);
-			float4 value = float4(ray.rgb + ray.a * rest.rgb, ray.a * rest.a) * solidAngle;
+			precise float4 value = float4(ray.rgb + ray.a * rest.rgb, ray.a * rest.a) * solidAngle;
 			if (direction < ST_GI_FIELD_DIRECTIONS)
 			{
 				s_Rays[direction] = value;
 				s_SolidAngles[direction] = solidAngle;
 				float basis[9];
-				ProbeSHBasis(d, basis);
+				ProbeSHBasisPrecise(d, basis);
 				[unroll]
 				for (uint coefficient = 0u; coefficient < 9u; coefficient++)
 					s_Basis[direction][coefficient] = basis[coefficient];
@@ -173,10 +182,11 @@ void main(uint3 groupID : SV_GroupID, uint index : SV_GroupIndex)
 	GroupMemoryBarrierWithGroupSync();
 	if (index < 6u && all(probe < u_Pass.Grid.xyz))
 	{
-		float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+		precise float4 sum = float4(0.0, 0.0, 0.0, 0.0);
 		for (uint thread = 0u; thread < ST_GI_REDUCE_GROUP; thread++)
 			sum += s_Faces[thread][index];
-		o_Field[uint3(probe.x * 3u + index % 3u, probe.y * 2u + index / 3u, probe.z)] = sum * u_GI.FaceWeights[index >> 2][index & 3u];
+		precise float4 face = sum * u_GI.FaceWeights[index >> 2][index & 3u];
+		o_Field[uint3(probe.x * 3u + index % 3u, probe.y * 2u + index / 3u, probe.z)] = face;
 	}
 	// The irradiance's coefficients: a thread each, over every direction (none of a dead probe, whose threads wrote no
 	// direction: it writes zero).
@@ -184,10 +194,10 @@ void main(uint3 groupID : SV_GroupID, uint index : SV_GroupIndex)
 	{
 		uint coefficient = index - 6u;
 		uint directions = live ? min(a * a, ST_GI_FIELD_DIRECTIONS) : 0u;
-		float4 sum = float4(0.0, 0.0, 0.0, 0.0);
-		float4 mean = float4(0.0, 0.0, 0.0, 0.0);
-		float uniform = 0.0;
-		float total = 0.0;
+		precise float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+		precise float4 mean = float4(0.0, 0.0, 0.0, 0.0);
+		precise float uniform = 0.0;
+		precise float total = 0.0;
 		for (uint direction = 0u; direction < directions; direction++)
 		{
 			float basis = s_Basis[direction][coefficient];
@@ -200,7 +210,8 @@ void main(uint3 groupID : SV_GroupID, uint index : SV_GroupIndex)
 		if (coefficient > 0u)
 			sum -= uniform / max(total, 1e-6) * mean;
 		float lobe = coefficient == 0u ? 1.0 : coefficient < 4u ? 2.0 / 3.0 : 0.25;
-		o_Irradiance[uint3(probe.x * 3u + coefficient % 3u, probe.y * 3u + coefficient / 3u, probe.z)] = sum * lobe;
+		precise float4 irradiance = sum * lobe;
+		o_Irradiance[uint3(probe.x * 3u + coefficient % 3u, probe.y * 3u + coefficient / 3u, probe.z)] = irradiance;
 	}
 	// The depth tile. Its interior is the rays' a x a (the layout's 8 x 8: a thread a texel); its border repeats interior texels
 	// across the octahedron's edges, so those are copied from what the group computed: filtering the border's 36 texels like the

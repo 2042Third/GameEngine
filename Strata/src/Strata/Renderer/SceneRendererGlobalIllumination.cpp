@@ -1172,6 +1172,12 @@ namespace Strata
 		return m_GI && ReadTexture3D(m_Device, m_GI->Field, outTexels);
 	}
 
+	bool SceneRenderer::ReadGlobalIlluminationFieldIrradiance(std::vector<uint8_t>& outTexels) const
+	{
+		outTexels.clear();
+		return m_GI && ReadTexture3D(m_Device, m_GI->FieldIrradiance, outTexels);
+	}
+
 	bool SceneRenderer::ReadGlobalIlluminationFieldDepth(std::vector<uint8_t>& outTexels) const
 	{
 		outTexels.clear();

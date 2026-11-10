@@ -1055,11 +1055,14 @@ namespace Strata
 		// The probes' textures as the GPU holds them (tests and tools only, waiting for the GPU), texels in rows of x, then y, then z:
 		// a cascade's validity (RGBA8, r the validity, gba the probe's move off a surface: GI/ProbeValidity.comp), the field
 		// (RGBA16F, (3 x, 2 y, z) per cascade-0 probe: faces +X, -X, +Y in the first row, -Y, +Z, -Z in the second; rgb
-		// irradiance over pi times c_GIRadianceScale, a the face's sky share), the field's depth moments (two halves, a tile of
-		// c_GIFieldDepthTexels a side at (probe.xy * texels + texel, probe.z): the mean distance to the first hit around the
-		// texel's octahedral direction and its variance, meters).
+		// irradiance over pi times c_GIRadianceScale, a the face's sky share), the field's irradiance as drawn surfaces read it
+		// (RGBA16F, (3 x, 3 y, z) per cascade-0 probe: coefficient c of the spherical harmonics at (c % 3, c / 3), scaled as the
+		// faces are), the field's depth moments (two halves, a tile of c_GIFieldDepthTexels a side at
+		// (probe.xy * texels + texel, probe.z): the mean distance to the first hit around the texel's octahedral direction and
+		// its variance, meters).
 		bool ReadGlobalIlluminationValidity(uint32_t cascade, std::vector<uint8_t>& outTexels) const;
 		bool ReadGlobalIlluminationField(std::vector<uint8_t>& outTexels) const;
+		bool ReadGlobalIlluminationFieldIrradiance(std::vector<uint8_t>& outTexels) const;
 		bool ReadGlobalIlluminationFieldDepth(std::vector<uint8_t>& outTexels) const;
 		// The forward pass's GI constants of the latest frame (zero without GI).
 		const RenderData::GIFieldConstants& GetGlobalIlluminationFieldConstants() const { return m_GIFieldConstants; }

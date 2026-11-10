@@ -3881,7 +3881,10 @@ mechanical, so a lighting bug in code nobody changed may be a conversion slip (i
    - Vertex and instance ids are `SV_VulkanVertexID` and `SV_VulkanInstanceID`: the draw list is indexed by the instance
      index including the base instance, which `SV_InstanceID` excludes.
    - `precise` where fused or reordered math would break an agreement (`Include/LODSelection.slang`: the CPU and GPU choose
-     the same level of detail).
+     the same level of detail; `GI/FieldReduce.comp`: a dispatch repeats the one before to the bit). It covers the
+     expressions assigned to the variable that carries it, not the body of a function it calls, a `dot` or a `sqrt`: declare
+     it where each value is computed, write a `dot` out, and check the SPIR-V for `NoContraction` on every product, sum and
+     quotient that must hold (`slangc -target spirv-asm`).
    - `static const` for constants. No generics, modules, interfaces or extensions; `__target_switch` and `spirv_asm`
      only in `Include/Common.slang`, each with an HLSL form.
    - New shaders take their stage inputs as entry-point parameters (`SV_Position`, `SV_DispatchThreadID`...). The
@@ -5135,6 +5138,16 @@ probe-field levels and local lights follow.
   a hit), its mean and mean square filtered over the neighbouring rays by the cosine to `c_GIFieldDepthSharpness` (8), stored
   as the mean and the variance in a 10 x 10 octahedral tile per probe, two halves an R32_UINT texel (RG16F is an extended
   storage format) (a texel per ray inside a one-texel border that repeats the interior across the octahedron's edges), SRV 54.
+  **What follows the march is `precise`** (the solid angles, the merge of the parents, the basis: `ProbeSHBasisPrecise`, the
+  faces' and the harmonics' sums): at one bounce a still camera's field must repeat to the bit, and left free, one driver
+  (NVIDIA 621.1, RTX 5090) ran these sums in two ways from dispatch to dispatch on one pipeline, a unit in the last place
+  apart: one byte of the faces (one probe's face) and 182 of the harmonics (176 probes, mostly bands 1 and 2, where what a
+  uniform radiance leaves is rounding alone). It showed only in a process that had drawn the room suite's earlier cases while
+  the machine was busy: 8 of 16 runs of the suite beside a build and a CTest run, in 3 to 7 of 11 readings each, against 0 of
+  16 with the sums `precise`, the two taking turns (the suite's two cases that hold it, as committed: 6 of 24 runs failed,
+  against 0 of 24); a process that drew the case alone never showed it (166 runs each). Why the driver has two ways is not
+  known. The march and the octahedral mapping, shared with `CascadeMarch`, stay free: the atlases and the depth moments
+  never differed.
 - **Multi-bounce** (re-injection; `GlobalIlluminationSettings::BounceGain`, 1, within [0, 1]; the tests' one-bounce
   cases set 0; High only, `GlobalIlluminationLayout::Bounces`: Low bounces once, because its field brightens the series to
   about 1.8 times High's, What it cannot do below): `VoxelInject`
@@ -5195,8 +5208,12 @@ probe-field levels and local lights follow.
   machine that day) but was neither reproduced nor ruled out. The machine's readings do have states of their own:
   without GI, `PerfGPU.Renderer`'s 100,000 cubes' frame read 1.57, 1.77 or 2.31 ms by session, in every build measured,
   the one before batch 2 included (at 2.31 ms its prepass and opaque pass 0.26 ms longer each, dropping back within the
-  session). Compare builds only by interleaved runs, and judge the stage by the medians of several. Without GI nothing
-  of it runs.
+  session). A lead, not a cause: this driver ran the reduce's sums in two ways from dispatch to dispatch (above), and two
+  compiled forms of the pass would fit the two times as well; nothing ties them together yet. Rounding the sums as
+  written cost nothing six interleaved pairs of runs could measure (the frame's GPU time 8.76 against 8.78 ms in the sun
+  room and 8.23 against 8.20 ms in the yard), and neither binary read slow; the yard's stage alone read 3.83 to 4.53 ms
+  in the one and 4.08 to 4.51 in the other, the frame's time following by 0.17 ms at most. Compare builds only by
+  interleaved runs, and judge the stage by the medians of several. Without GI nothing of it runs.
 - **The join** (`Scene/Forward.frag.slang`'s `ShadeLitSurface`, `Include/IndirectLight.slang`'s `GatherIndirectField`):
   where the scene asked and the frame's field is used (ran, not pending), `FrameConstants::ReflectionParams.y` is 1 and `.z`
   the intensity (clamped to [0, 4], non-finite 1). Every variant (opaque, alpha-blended, glass: no screen data is read)
@@ -5244,8 +5261,9 @@ probe-field levels and local lights follow.
   today's beyond, under the diffuse occlusion), `OpenShare` (`open`) the share of the sky a surface sees, as gray;
   `Probes` (`probes`, `GI/ProbeView.frag` in `GPU.Overlays`) draws cascade 0's probes over the image, live ones lit by
   their ambient cube, dead ones dark red. `SceneRendererGPUStats` adds `GIDeadProbes`, `GILiveProbes`,
-  `GISurfaceVoxels`; `ReadGlobalIlluminationValidity`, `ReadGlobalIlluminationField` and `ReadGlobalIlluminationFieldDepth`
-  read the probes (blocking). `GPU.SceneRenderer.GlobalIlluminationStitching` checks the depth moments against a probe's
+  `GISurfaceVoxels`; `ReadGlobalIlluminationValidity`, `ReadGlobalIlluminationField`,
+  `ReadGlobalIlluminationFieldIrradiance` and `ReadGlobalIlluminationFieldDepth` read the probes (blocking).
+  `GPU.SceneRenderer.GlobalIlluminationStitching` checks the depth moments against a probe's
   known distances and the Cornell box's gi view at High: across every probe plane on its walls, ceiling and floor the light
   steps at most 10% beyond its slope (the old on/off gather: 25% on the red wall; 8.9% at most now), and the floor around
   the sphere's foot has no point darker than half its brightest neighbour a voxel away (0.65), and along the far corners
@@ -5301,7 +5319,8 @@ probe-field levels and local lights follow.
   `PerfGPU.Renderer`'s "Global illumination's cost at 3840x2160" (sun room and yard, provisional);
   `GPU.SceneRenderer.GlobalIllumination`'s "The fence and grass strafes on the gi view" (Gate W's flicker bounds: fence
   blocks 0.10%, their 99th percentile 0.88%, grass 0.19%, without and with TAA) and `GlobalIlluminationRoom`'s "A strafe's gi
-  view is a fresh renderer's at its camera";
+  view is a fresh renderer's at its camera" and "A still camera's field repeats frame after frame" (the faces, the harmonics
+  and the depth moments of twelve frames, to the byte);
   `GPU.SceneRenderer.GlobalIlluminationBounce` (the owner's Cornell box, `Tests::BuildCornellBox`, which look-dev's
   `Cornell` scene and `lookdev.cornell` mirror: what the bounces add to the ceiling is at least half of the floor's light
   integrated from the panel, the floor and the sphere take the colored walls' tints; a glowing closed box converges to

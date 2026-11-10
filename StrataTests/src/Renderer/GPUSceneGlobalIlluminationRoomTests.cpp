@@ -980,8 +980,9 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 	{
 		// The field is a function of world data and of where the camera stands, never of where it stood: after a strafe along the
 		// yard's fence (13 frames, 0.02 m each, one bounce: every bounce takes the frame before's field by design), the gi view, the
-		// field, cascade 0's validity and its depth moments equal a fresh renderer's at the last camera, bit for bit. What made the
-		// fence crawl was a camera input of the gather itself (DeveloperGuide, "Global illumination"), not a history.
+		// field, the harmonics drawn surfaces read, cascade 0's validity and its depth moments equal a fresh renderer's at the last
+		// camera, bit for bit. What made the fence crawl was a camera input of the gather itself (DeveloperGuide, "Global
+		// illumination"), not a history.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		const float aspect = static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y);
@@ -992,6 +993,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		{
 			ReadbackImage Image;
 			std::vector<uint8_t> Field;
+			std::vector<uint8_t> Harmonics;
 			std::vector<uint8_t> Validity;
 			std::vector<uint8_t> Depth;
 		};
@@ -1000,6 +1002,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 			Reading reading;
 			REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), reading.Image));
 			REQUIRE(renderer.ReadGlobalIlluminationField(reading.Field));
+			REQUIRE(renderer.ReadGlobalIlluminationFieldIrradiance(reading.Harmonics));
 			REQUIRE(renderer.ReadGlobalIlluminationValidity(0, reading.Validity));
 			REQUIRE(renderer.ReadGlobalIlluminationFieldDepth(reading.Depth));
 			return reading;
@@ -1020,8 +1023,64 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		CollectReleases();
 		CHECK(moved.Image.Pixels == still.Image.Pixels);
 		CHECK(moved.Field == still.Field);
+		CHECK(moved.Harmonics == still.Harmonics);
 		CHECK(moved.Validity == still.Validity);
 		CHECK(moved.Depth == still.Depth);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A still camera's field repeats frame after frame")
+	{
+		// At one bounce nothing of a frame reaches the next, so a camera that stands still gets the same field every frame, bit for
+		// bit: the faces, the harmonics drawn surfaces read and the depth moments. One driver (NVIDIA 621.1) ran the reduce's sums
+		// in two ways from dispatch to dispatch, a unit in the last place apart (a face of one probe, the harmonics of some 180),
+		// in a process that had drawn this suite's cases before on a busy machine: GI/FieldReduce.comp's sums are `precise` since.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const float aspect = static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y);
+		SceneTestAssets assets;
+		Scene scene;
+		BuildYard(scene, assets);
+		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification());
+		renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+		constexpr uint32_t c_Frames = 12;
+		std::vector<uint8_t> firstField;
+		std::vector<uint8_t> firstHarmonics;
+		std::vector<uint8_t> firstDepth;
+		uint32_t fieldChanges = 0;
+		uint32_t harmonicsChanges = 0;
+		uint32_t depthChanges = 0;
+		for (uint32_t frame = 0; frame < c_Frames; frame++)
+		{
+			REQUIRE(RenderGIFrame(*renderer, scene, YardStrafe(13, 1.0f, aspect), GIViewOptions()));
+			REQUIRE_FALSE(renderer->GetStats().GlobalIlluminationPending);
+			std::vector<uint8_t> field;
+			std::vector<uint8_t> harmonics;
+			std::vector<uint8_t> depth;
+			REQUIRE(renderer->ReadGlobalIlluminationField(field));
+			REQUIRE(renderer->ReadGlobalIlluminationFieldIrradiance(harmonics));
+			REQUIRE(renderer->ReadGlobalIlluminationFieldDepth(depth));
+			if (frame == 0)
+			{
+				firstField = std::move(field);
+				firstHarmonics = std::move(harmonics);
+				firstDepth = std::move(depth);
+				continue;
+			}
+			fieldChanges += field != firstField ? 1 : 0;
+			harmonicsChanges += harmonics != firstHarmonics ? 1 : 0;
+			depthChanges += depth != firstDepth ? 1 : 0;
+		}
+		renderer.reset();
+		CollectReleases();
+		REQUIRE_FALSE(firstField.empty());
+		REQUIRE_FALSE(firstHarmonics.empty());
+		REQUIRE_FALSE(firstDepth.empty());
+		MESSAGE("of " << c_Frames - 1 << " frames after the first, the faces changed in " << fieldChanges << ", the harmonics in " << harmonicsChanges
+			<< ", the depth moments in " << depthChanges);
+		CHECK(fieldChanges == 0);
+		CHECK(harmonicsChanges == 0);
+		CHECK(depthChanges == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
