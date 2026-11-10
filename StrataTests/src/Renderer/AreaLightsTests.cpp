@@ -370,6 +370,8 @@ TEST_SUITE("Renderer.AreaLights")
 			const double exact = (step == 4000 ? 1.0 : angle / std::sin(angle)) / (2.0 * c_Pi);
 			worst = std::max(worst, GetRelativeError(AreaLights::GetEdgeFit(static_cast<float>(cosine)), exact));
 		}
+		MESSAGE("edge fit: worst relative error " << worst);
+		// A fixed tolerance against the closed form (measured 1.5e-06).
 		CHECK(worst <= 3e-6);
 	}
 }
