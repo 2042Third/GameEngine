@@ -659,6 +659,30 @@ namespace
 		return light;
 	}
 
+	// The share of the fitted lobe for `roughness` and `viewCosine` that lies above the surface's horizon, from the
+	// lobe's transform alone: what a light filling the sky covers. The lobe's share of a set of directions is the clamped
+	// cosine's share of their images under the texel's inverse transform M^-1 (rows (x, 0, z), (0, 1, 0), (y, 0, w)). The
+	// images of the directions above the surface are the directions M takes above it: the hemisphere around M's third row,
+	// (-y, 0, x) / (x w - y z). A clamped cosine fills (1 + cos a) / 2 of a hemisphere whose pole is a away from its own (a
+	// plane tilted by a sees that share of the sky), and the tables' determinants are positive (the first test checks
+	// them), so the share is (1 + x / sqrt(x^2 + y^2)) / 2.
+	double GetSkyShare(float roughness, double viewCosine)
+	{
+		const glm::vec2 uv(roughness, std::sqrt(std::max(1.0f - static_cast<float>(viewCosine), 0.0f)));
+		const glm::dvec4 transform(AreaLights::SampleTable(AreaLights::c_TransformLayer, uv));
+		return 0.5 * (1.0 + transform.x / std::sqrt(transform.x * transform.x + transform.y * transform.y));
+	}
+
+	// A light of 2000 x 2000 m 1 m over a receiver: it leaves out the directions within 1e-3 rad of the horizon, a millionth
+	// of the cosine. So the lobe's share of it is GetSkyShare's within the 1e-3 the tests hold it to (the white furnace's
+	// views, down to a view cosine of 0.05, measure 6.3e-5 at most).
+	AreaLights::AreaLight MakeSkyLight(const Frame& frame)
+	{
+		return MakeParallelLight(frame, -1000.0, 1000.0, -1000.0, 1000.0, 1.0);
+	}
+
+	constexpr double c_SkyShareTolerance = 1e-3;
+
 }
 
 TEST_SUITE("Renderer.AreaLights")
@@ -831,19 +855,19 @@ TEST_SUITE("Renderer.AreaLights")
 
 		// A light that fills the hemisphere fills the lobes that lie within it: the diffuse term and the fully rough lobe
 		// both receive all of it, and so does a sharp lobe around a direction well above the horizon.
-		const AreaLights::AreaLight sky = MakeParallelLight(frame, -1000.0, 1000.0, -1000.0, 1000.0, 1.0);
+		const AreaLights::AreaLight sky = MakeSkyLight(frame);
 		CHECK(std::abs(AreaLights::FormFactor(position, normal, sky) - 1.0f) <= 2e-3f);
 		CHECK(std::abs(AreaLights::FormFactorClipped(position, normal, sky) - 1.0f) <= 2e-3f);
 		const float roughSky = AreaLights::SpecularFraction(position, normal, view, 1.0f, sky);
 		const float sharpSky = AreaLights::SpecularFraction(position, normal, view, 0.1f, sky);
 		// Between the two the fitted lobe is a tilted cosine that reaches under the surface, and the horizon takes that
-		// part: 2.2% of the lobe at roughness 0.5 for this view, 38 degrees off the normal (the bound is 1.5 times that).
+		// part: 2.2% of the lobe at roughness 0.5 for this view, 38 degrees off the normal.
 		const float middleSky = AreaLights::SpecularFraction(position, normal, view, 0.5f, sky);
 		MESSAGE("sky: the lobe's share at roughness 1 " << roughSky << ", 0.5 " << middleSky << ", 0.1 " << sharpSky);
 		CHECK(std::abs(roughSky - 1.0f) <= 1e-3f);
 		CHECK(std::abs(sharpSky - 1.0f) <= 1e-3f);
 		CHECK(middleSky <= 1.0f);
-		CHECK(middleSky >= 1.0f - 0.033f);
+		CHECK(std::abs(middleSky - GetSkyShare(0.5f, glm::dot(normal, view))) <= c_SkyShareTolerance);
 
 		// A small light at the zenith seen along the normal: the fitted lobe at roughness 1 is the cosine widened by its
 		// last term w, whose density at the zenith is 1 / (pi w^2), against the cosine's 1 / pi. GGX itself gives
@@ -1301,18 +1325,26 @@ TEST_SUITE("Renderer.AreaLights")
 	{
 		// The white furnace: under a uniform sky a surface that absorbs nothing sends back what it receives. A metal of
 		// F0 1 reflects Es = dfg.x + dfg.y in one bounce and its energy term 1 / Es restores the rest; a dielectric of
-		// F0 0 reflects dfg.y and its white diffuse layer the rest.
+		// F0 0 reflects dfg.y and its white diffuse layer the rest. What the fitted lobe keeps under the surface's horizon
+		// is lost to both: the metal returns the lobe's share above it, GetSkyShare's, and the dielectric that share of its
+		// specular part.
 		const Frame frame = MakeFrame();
-		AreaLights::AreaLight sky = MakeParallelLight(frame, -1000.0, 1000.0, -1000.0, 1000.0, 1.0);
+		AreaLights::AreaLight sky = MakeSkyLight(frame);
 		sky.Radiance = glm::vec3(2.0f, 1.0f, 0.5f);
+		const glm::dvec3 radiance(sky.Radiance);
+		const double skyFactor = GetParallelFactor(-1000.0, 1000.0, -1000.0, 1000.0, 1.0);
 		const glm::vec2 dfg(0.6f, 0.3f);
 		const AreaLights::Coat noCoat;
-		double worstWithin = 0.0; // Roughness 0.1 and 1
-		double worstMiddle = 0.0; // Roughness 0.5
-		for (const float roughness : { 0.1f, 0.5f, 1.0f })
+		double worstWithin = 0.0;   // Roughness 0.1 and 1, view cosines from 0.5
+		double worstMiddle = 0.0;   // Roughness 0.5, view cosines from 0.5
+		double worstExpected = 0.0; // Against the lobe's share above the horizon, everywhere
+		for (const float roughness : { 0.1f, 0.25f, 0.5f, 0.75f, 1.0f })
 		{
-			for (const double cosine : { 1.0, 0.8, 0.5 })
+			constexpr double c_ViewCosines[] = { 1.0, 0.8, 0.5, 0.2, 0.05 };
+			double metalReturns[std::size(c_ViewCosines)] = {};
+			for (size_t view = 0; view < std::size(c_ViewCosines); view++)
 			{
+				const double cosine = c_ViewCosines[view];
 				CAPTURE(roughness);
 				CAPTURE(cosine);
 				AreaLights::Surface surface;
@@ -1330,23 +1362,41 @@ TEST_SUITE("Renderer.AreaLights")
 				surface.F0 = glm::vec3(0.0f);
 				surface.SpecularEnergy = glm::vec3(1.0f);
 				const glm::vec3 dielectric = AreaLights::Shade(surface, noCoat, glm::vec2(0.0f), dfg, 1.0f, sky, 1.0f);
-				for (const glm::vec3& value : { metal, dielectric })
+				metalReturns[view] = metal.x / sky.Radiance.x;
+
+				const double share = GetSkyShare(roughness, glm::dot(surface.Normal, surface.View));
+				const glm::dvec3 expected[] = { radiance * share, radiance * ((1.0 - dfg.y) * skyFactor + dfg.y * share) };
+				const glm::vec3 values[] = { metal, dielectric };
+				for (size_t index = 0; index < std::size(values); index++)
 				{
-					const double difference = glm::length(value - sky.Radiance) / glm::length(sky.Radiance);
-					double& worst = roughness > 0.1f && roughness < 1.0f ? worstMiddle : worstWithin;
-					worst = std::max(worst, difference);
+					const glm::vec3& value = values[index];
+					const double expectedDifference = glm::length(glm::dvec3(value) - expected[index]) / glm::length(radiance);
+					worstExpected = std::max(worstExpected, expectedDifference);
+					CHECK(expectedDifference <= c_SkyShareTolerance);
+					// The bounds measured before the share had its closed form, on the views and roughnesses they were measured on.
+					if (cosine >= 0.5 && roughness != 0.25f && roughness != 0.75f)
+					{
+						double& worst = roughness == 0.5f ? worstMiddle : worstWithin;
+						worst = std::max(worst, static_cast<double>(glm::length(value - sky.Radiance) / glm::length(sky.Radiance)));
+					}
 					// Never more than it receives.
 					CHECK(value.x <= sky.Radiance.x * (1.0f + 1e-5f));
 					CHECK(value.y <= sky.Radiance.y * (1.0f + 1e-5f));
 					CHECK(value.z <= sky.Radiance.z * (1.0f + 1e-5f));
 				}
 			}
+			MESSAGE("white furnace: at roughness " << roughness << " the metal returns " << metalReturns[0] << ", " << metalReturns[1] << ", " << metalReturns[2]
+				<< ", " << metalReturns[3] << " and " << metalReturns[4] << " of the sky at view cosines of 1, 0.8, 0.5, 0.2 and 0.05");
 		}
-		MESSAGE("white furnace: worst relative difference at roughness 0.1 and 1 " << worstWithin << ", at roughness 0.5 " << worstMiddle);
-		// The sharp and the fully rough lobe lie within the hemisphere and return all of it (measured within 3.1e-4).
+		MESSAGE("white furnace: worst relative difference at roughness 0.1 and 1 " << worstWithin << ", at roughness 0.5 " << worstMiddle
+			<< " (view cosines from 0.5); from the lobe's share above the horizon " << worstExpected);
+		// The sharp and the fully rough lobe lie within the hemisphere and return all of it from views of 60 degrees off the
+		// normal or less (measured within 3.1e-4).
 		CHECK(worstWithin <= 5e-4);
 		// At roughness 0.5 the fitted lobe keeps part of its mass under the surface's horizon, more the lower the view:
-		// the metal returns 0.979 at a view cosine of 0.8 and 0.940 at 0.5. The bound is 1.5 times the measured 6.05%.
+		// the metal returns 0.979 at a view cosine of 0.8 and 0.940 at 0.5. The bound is 1.5 times the measured 6.05%. The
+		// lower views and the other roughnesses are held to the share above the horizon alone: the metal returns 0.893 at
+		// roughness 0.5 seen at a view cosine of 0.2, and 0.845 at roughness 0.25 seen at 0.05 (see SpecularFraction).
 		CHECK(worstMiddle <= 0.091);
 	}
 }
@@ -1727,8 +1777,9 @@ namespace
 	}
 
 	constexpr size_t c_SpecularFaces = 24;
-	// The first faces of every view are the ones around its mirror direction.
+	// The first faces of every view are the ones around its mirror direction, and the first of those are centered on it.
 	constexpr size_t c_MirrorFaces = 8;
+	constexpr size_t c_CenteredMirrorFaces = 6;
 	constexpr size_t c_CasesPerRoughness = c_SpecularViewSteps * c_SpecularFaces;
 	// The first of the steep views, the upper half of the eight: a cosine of 0.59 and more.
 	constexpr int c_SteepViewStep = 4;
@@ -1894,6 +1945,27 @@ TEST_SUITE("Renderer.AreaLights")
 				<< "; views from " << GetSpecularViewCosine(c_SteepViewStep) << ": median " << GetPercentile(steep, 0.5) << ", 95th " << GetPercentile(steep, 0.95)
 				<< ", worst " << GetPercentile(steep, 1.0) << "; around the mirror direction: median " << GetPercentile(mirror, 0.5) << "; worst share difference "
 				<< worstShare << " (face " << entries[worstCase].Face << " at view " << entries[worstCase].ViewCosine << ", GGX " << entries[worstCase].Reference << ")");
+			// Reported: what the faces centered on the mirror direction get, against GGX, at the three lowest views (the
+			// fitted lobe gives them more than GGX does at middling roughness; SpecularFraction's comment quotes it).
+			constexpr int c_LowViews = 3;
+			double lowest[c_LowViews];
+			double highest[c_LowViews];
+			for (int step = 0; step < c_LowViews; step++)
+			{
+				lowest[step] = std::numeric_limits<double>::max();
+				highest[step] = 0.0;
+				for (size_t face = 0; face < c_CenteredMirrorFaces; face++)
+				{
+					const size_t entry = static_cast<size_t>(step) * c_SpecularFaces + face;
+					REQUIRE(entries[entry].Reference > 0.0);
+					lowest[step] = std::min(lowest[step], shares[entry] / entries[entry].Reference);
+					highest[step] = std::max(highest[step], shares[entry] / entries[entry].Reference);
+				}
+			}
+			MESSAGE("roughness " << roughness << ": on the faces centered on the mirror direction the share is " << lowest[0] << " to " << highest[0]
+				<< " times GGX's at view " << GetSpecularViewCosine(0) << ", " << lowest[1] << " to " << highest[1] << " at " << GetSpecularViewCosine(1) << ", "
+				<< lowest[2] << " to " << highest[2] << " at " << GetSpecularViewCosine(2));
+
 			const SpecularBounds& bounds = c_SpecularBounds[index];
 			CHECK(GetPercentile(errors, 0.5) <= bounds.Median);
 			CHECK(GetPercentile(errors, 0.95) <= bounds.Percentile);

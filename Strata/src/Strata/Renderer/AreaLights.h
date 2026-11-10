@@ -25,8 +25,9 @@ namespace Strata::AreaLights
 	// in an order of operations a shader repeats exactly (the tables are read with four loads and bilinear weights computed
 	// here, never through a filtering sampler), so tests can compute what the GPU must show.
 	//
-	// A GGX lobe is a clamped cosine under a linear transform of directions, so the lobe's integral over a polygon is the
-	// cosine's integral over the transformed polygon, and that one has a closed form: a sum over the polygon's edges.
+	// A GGX lobe is fitted by a clamped cosine under a linear transform of directions, so the fitted lobe's integral over a
+	// polygon is the cosine's integral over the transformed polygon, and that one has a closed form: a sum over the
+	// polygon's edges. How far the fit is from GGX: SpecularFraction.
 
 	// The tables (LTCTable.inl, which Tools/ConvertLTCTable.py writes from the authors' fit): c_TableLayers layers of
 	// c_TableSize x c_TableSize texels of four floats. Texel (a, t) is for the perceptual roughness a / 63 (GGX's alpha is
@@ -131,9 +132,15 @@ namespace Strata::AreaLights
 	float GetLobeCoverage(const glm::vec4& transform, const glm::vec3& position, const glm::vec3& normal, const glm::vec3& view, const AreaLight& light);
 	// The share of the specular lobe the light covers, within [0, 1]: GetLobeCoverage with the table's transform for the
 	// perceptual `roughness` (at least Include/PBR.slang's c_MinRoughness) and the view's angle. Times the lobe's
-	// reflectance it is the light's specular radiance over its luminance. The fitted lobe keeps a part under the surface's
-	// horizon, which no light above it covers: a light filling the sky gives less than 1 at middling roughness (0.94 at
-	// roughness 0.5 seen 60 degrees off the normal) and 1 for sharp and for fully rough lobes.
+	// reflectance it is the light's specular radiance over its luminance. Toward grazing views the fitted lobe departs from
+	// GGX's, most at middling roughness, both ways:
+	//   It keeps a part under the surface's horizon, which no light above it covers. A light filling the sky gives
+	//   (1 + x / sqrt(x^2 + y^2)) / 2 of the transform's texel (x, y, z, w): 1 seen along the normal and for fully rough
+	//   lobes; seen at a view cosine of 0.5, 0.2 and 0.05: 0.9997, 0.998 and 0.971 at roughness 0.1, 0.989, 0.939 and
+	//   0.845 at 0.25, 0.940, 0.893 and 0.872 at 0.5, 0.967, 0.962 and 0.957 at 0.75.
+	//   Faces centered on the mirror direction get more than GGX gives them: seen at a view cosine of 0.05, 1.1 to 1.4
+	//   times as much at roughness 0.25, 1.6 to 2.4 times at 0.5 and 1.2 to 1.6 times at 0.75; at 0.19, 1.1 to 1.35 times
+	//   at roughness 0.5; at 0.32, 1.06 to 1.16 times. At roughness 1 they get less: 0.36 to 0.7 times at 0.05.
 	float SpecularFraction(const glm::vec3& position, const glm::vec3& normal, const glm::vec3& view, float roughness, const AreaLight& light);
 
 	// The point of the light's face nearest to `position`.
