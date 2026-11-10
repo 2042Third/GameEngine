@@ -112,7 +112,10 @@ TEST_SUITE("GPU.FeatureTest")
 		CHECK(stats.ScreenSpaceReflections); // The TAA Post Process's, traced from the history's second frame on
 		CHECK(stats.SceneColorCopies == 1);  // For the Glass Pane (FeatureGlass.stmat's transmission)
 		CHECK(GetLightCounts(renderer).Lights >= 2); // The sun, plus the point and spot lights in view (the GPU's count on its path)
-		CHECK(stats.AreaLightShading); // The Feature Rect Light's, in view or not
+		// The Feature Rect Light: drawn and in view (the GPU's count on its path). AreaLightShading alone holds for any rect light
+		// in the scene, lit or not, drawn or not.
+		CHECK(GetLightCounts(renderer).AreaLights >= 1);
+		CHECK(stats.AreaLightShading);
 		CHECK(GetDrawnCounts(renderer).Instances >= 8);
 		CHECK(stats.Texts == 2); // The HUD (with the project's font) and the world-space sign
 		CHECK(stats.TextGlyphs > 0);
