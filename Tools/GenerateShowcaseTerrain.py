@@ -159,10 +159,12 @@ WALK_RADIUS = 140.0
 
 # The three times of day (the showcase spec's D4): name, photo hour, sun elevation, elevation the light is drawn at,
 # azimuth, light scale, fog density, exposure compensation (EV), shadow distance (m), local lights on.
+# Dusk's azimuth is where the last sun passes beside the bus (the checks' rule 7): at 32 the bus's shadow lay over the
+# hut, the fire and the fuel tank's near end, which then had only the sky's light (the probes hold no sun).
 STATIONS = (
     ("Dawn", 6.5, 5.0, 5.0, 140.0, 1.0, 0.006, 0.0, 600.0, False),
     ("Golden", 17.75, 6.0, 6.0, 45.0, 1.0, 0.0006, -0.7, 200.0, False),
-    ("Dusk", 19.0, 1.0, 2.0, 32.0, 0.002, 0.0015, -2.5, 150.0, True),
+    ("Dusk", 19.0, 1.0, 2.0, 16.0, 0.002, 0.0015, -2.5, 150.0, True),
 )
 SUN_LUX = 120000.0
 
@@ -1168,7 +1170,7 @@ def shot1_camera(ground):
 
 
 def run_checks(world, verbose=True):
-    """Evaluates the six rules; returns a list of failures (rule 5 only reports)."""
+    """Evaluates the seven rules; returns a list of failures (rule 5 only reports)."""
     ground = world.ground
     layout = world.layout
     apron = world.apron
@@ -1271,7 +1273,49 @@ def run_checks(world, verbose=True):
            % (above, below))
     if above < 0.02 or below < 0.03:
         failures.append("rule 6")
+
+    # 7. The dusk sun reaches shot 6's subjects. A reflection probe holds no sun (a bake draws neither its disk nor the
+    # highlights it makes), so what the sun does not reach at dusk has the sky's light and the fire's alone: with the bus's
+    # shadow over them, the hut's front, the fire's ground and the fuel tank's near end came out near black. Seen from each
+    # subject, the sun stands beside the bus's footprint and above the terrain, where the light is drawn.
+    dusk = station("Dusk")
+    beside, over = dusk_sun_reach(world, dusk[4])
+    report("rule 7: the dusk sun (azimuth %g, drawn at %g degrees) stands %.2f degrees beside the bus from %s (at least %g) and %.2f degrees "
+           "above the terrain from %s (at least %g)" % (dusk[4], dusk[3], beside[0], beside[1], DUSK_SUN_BESIDE, over[0], over[1], DUSK_SUN_OVER))
+    if beside[0] < DUSK_SUN_BESIDE or over[0] < DUSK_SUN_OVER:
+        failures.append("rule 7")
     return failures
+
+
+# Rule 7's margins (degrees): how far beside the bus's footprint and how far above the terrain the dusk sun stands from
+# each of shot 6's subjects. Beside the bus they lie between two pictures: at azimuth 17 (0.25 from the fire, none from
+# lantern A) the shadow's soft edge crossed the fire pit, at 16 (1.25 and 1.0) it lies clear of both. Above the terrain
+# the limit holds the light's one direction clear of a horizon sampled every metre; it is less than the disk's radius,
+# which the shadow map does not draw.
+DUSK_SUN_BESIDE = 0.75
+DUSK_SUN_OVER = 0.15
+# Where the dusk sun stood before rule 7: the bus covers it from the fire, lantern A and the hut's door wall.
+DUSK_AZIMUTH_BEHIND_BUS = 32.0
+
+
+def dusk_sun_reach(world, azimuth):
+    """How the dusk sun at an azimuth reaches shot 6's subjects and the hut's door wall: (degrees beside the bus's
+    footprint, subject) and (degrees above the terrain, subject) of the subject with the least of each. Beside the bus
+    is 0 where its footprint covers the sun's azimuth (at the drawn elevation its body does then)."""
+    drawn = station("Dusk")[3]
+    subjects = {name: point for name, point in [shot for shot in shots(world) if shot["shot"] == 6][0]["subjects"].items() if name != "dusk sun"}
+    subjects["the hut's door wall"] = hut_point((0.0, 1.2, HUT["half"][1]))
+    corners = [local_to_world(BUS["center"], BUS["yaw"], sx * BUS["half"][0], sz * BUS["half"][1]) for sx in (-1, 1) for sz in (-1, 1)]
+    beside = (360.0, None)
+    over = (90.0, None)
+    for name, point in subjects.items():
+        # The corners' azimuths from the subject, from the sun's: the footprint covers the sun when they lie on both sides
+        # of it (seen from outside, a convex outline spans less than half a turn).
+        offsets = [(math.degrees(math.atan2(z - point[2], x - point[0])) - azimuth + 180.0) % 360.0 - 180.0 for x, z in corners]
+        covered = min(offsets) < 0.0 < max(offsets) and max(offsets) - min(offsets) < 180.0
+        beside = min(beside, (0.0 if covered else min(abs(offset) for offset in offsets), name))
+        over = min(over, (drawn - horizon(world.ground, point, azimuth), name))
+    return beside, over
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -2827,6 +2871,10 @@ def command_selftest(arguments):
               % (shot["shot"], off, angle, "on the surface" if inside else "OFF the surface"))
         if off > 0.01 or angle > 0.1 or not inside:
             failures.append("shot %d's mirror relation" % shot["shot"])
+    behind = dusk_sun_reach(world, DUSK_AZIMUTH_BEHIND_BUS)[0]
+    print("rule 7 at azimuth %g: the dusk sun stands %.2f degrees beside the bus from %s" % (DUSK_AZIMUTH_BEHIND_BUS, behind[0], behind[1]))
+    if behind[0] >= DUSK_SUN_BESIDE:
+        failures.append("rule 7 passes the dusk sun behind the bus")
     station_failures = check_station_rows(arguments.stations)
     print("Stations.h: %s" % ("; ".join(station_failures) if station_failures else "its c_Stations rows equal the generator's"))
     failures += station_failures

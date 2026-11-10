@@ -149,10 +149,14 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - Samples: a showcase may hold six screenshots in 8 MB (the others three in 3 MB).
 - Manual, Lighting: "Times of day with baked probes".
 - The showcase adopts this wave's reflections: its six probes are baked again without the sun's disk and highlights (the
-  golden-hour yard's capture peaked at 5.5e8, now 4.6e4), so their light no longer reaches what lies in the sun's
-  shadow (at dusk the fuel tank's half in the bus's shadow is dark now, not lit green); the fire and the lanterns have
-  the size of their flames for their highlights (Source Radius 0.25 and 0.04 m); the puddles are water (IOR 1.33).
-  `GenerateShowcaseTerrain.py pictures` retakes the screenshots, the icon and the launcher's picture after a change to
+  golden-hour yard's capture peaked at 5.5e8, now 4.6e4), so what stands in the sun's shadow has the sky's light and
+  the local lights' alone. Dusk's sun therefore stands at azimuth 16, beside the bus: at 32 it stood behind it, and the
+  bus's shadow lay over the hut's front, the fire and the fuel tank's near end, which came out near black. The
+  generator's checks hold it there (rule 7: seen from the fire, the lantern, the fuel tank and the hut's door, the sun
+  at least 0.75 degrees beside the bus and 0.15 above the hills), and `selftest` fails if the rule would pass the sun
+  behind the bus. The fire and the lanterns have the size of their flames for their highlights (Source Radius 0.25 and
+  0.04 m); the puddles are water (IOR 1.33).
+- `GenerateShowcaseTerrain.py pictures` retakes the showcase's screenshots, icon and launcher picture after a change to
   its look: its script stops at a capture that does not report a complete, settled picture, and
   `GenerateShowcaseTerrain.py picture` copies the thumbnail to `Picture.png` only when it is the one that run left
   (480 x 270, not older than the screenshots, showing what `Screenshots/Shot2.png` shows). `StrataTools.ShowcaseTerrain`

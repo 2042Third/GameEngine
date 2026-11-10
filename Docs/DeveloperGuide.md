@@ -6500,7 +6500,8 @@ streaks instead of one even glare). Both seed their noise,
 use no transcendental functions where a vertex depends on them and quantize every attribute, so every platform writes
 the same bytes; `selftest` (CTests `StrataTools.ShowcaseTerrain` and `.ShowcaseProps`, label `tools`) writes twice, compares
 with the committed files (the maps by their pixels), checks the design's rules (the golden sun clears the hills from the
-apron, the pads are flat, the letterboard is vertical, the shots' mirror points lie on their surfaces) and that the
+apron, the pads are flat, the letterboard is vertical, the shots' mirror points lie on their surfaces, the dusk sun
+stands beside the bus and above the hills from the fire, the lantern, the fuel tank and the hut's door) and that the
 scripts' `Scripts/Stations.h` rows equal the generator's table. The terrain's `selftest` also holds the copies of the
 stations' steps to what `setup` writes (`StrataTests/Editor/ShowcaseRenderCommands.json` in the script form,
 `Tools/LookDev/Shots.json`'s `showcase.shot<N>` shots in the look-dev form: after a change to the table, write them
@@ -6515,6 +6516,11 @@ The materials' values live in `GenerateShowcaseProps.py`'s table: change them th
 sets them on the existing materials.
 
 The three times of day are stations: the sun's direction and the values that go with it (`Stations.h`, `setup --station`).
+A station's sun must reach what its shots show lit: the probes hold no sun (a bake draws neither its disk nor the
+highlights it makes), so what stands in a shadow has the sky's light and the local lights' alone. Dusk's azimuth, 16, is
+where the last sun passes beside the bus (the checks' rule 7); at 32 the bus's shadow lay over the hut's front, the fire
+and the fuel tank's near end, which came out near black. A change to a station's sun or to what stands in the yard runs
+`check` before anything is baked.
 Each has two reflection probe entities, `Probe.<Dawn, Golden or Dusk>.<Yard or Hut>`, never two probes baked three times
 (a bake trashes the capture an earlier bake made for that entity). `bake` sets each station with only its own probes
 active and bakes them eight times (`BAKE_PASSES`), Golden last, the saved station. A bake draws the probes' present

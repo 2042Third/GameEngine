@@ -31,7 +31,7 @@
 	{"command": "script.get", "parameters": {"entity": {"$ref": "outpost"}, "class": "Outpost"}, "expect": {"/scripts/0/fields/Shot": {"equals": 2}, "/scripts/0/fields/Station": {"equals": 1}}, "until": {"steps": 600}},
 	{"command": "entity.get", "parameters": {"entity": {"$ref": "dawnYard"}}, "expect": {"/active": {"equals": false}}, "until": {"steps": 120}},
 	{"command": "entity.get", "parameters": {"entity": {"$ref": "goldenYard"}}, "expect": {"/active": {"equals": true}}},
-	{"command": "script.get", "parameters": {"entity": {"$ref": "outpost"}, "class": "Outpost"}, "expect": {"/scripts/0/fields/Shot": {"equals": 6}, "/scripts/0/fields/Station": {"equals": 2}, "/scripts/0/fields/SunAzimuth": {"min": 31.9, "max": 32.1}}, "until": {"steps": 1500}},
+	{"command": "script.get", "parameters": {"entity": {"$ref": "outpost"}, "class": "Outpost"}, "expect": {"/scripts/0/fields/Shot": {"equals": 6}, "/scripts/0/fields/Station": {"equals": 2}, "/scripts/0/fields/SunAzimuth": {"min": 15.9, "max": 16.1}}, "until": {"steps": 1500}},
 	{"command": "entity.get", "parameters": {"entity": {"$ref": "duskYard"}}, "expect": {"/active": {"equals": true}}},
 	{"command": "component.get", "parameters": {"entity": {"$ref": "fire"}, "component": "PointLight"}, "expect": {"/values/Intensity": {"min": 150}, "/values/CastShadows": {"equals": true}, "/values/SourceRadius": {"min": 0.2, "max": 0.3}}, "until": {"steps": 60}},
 	{"command": "input.key", "parameters": {"key": "W", "steps": 10}},

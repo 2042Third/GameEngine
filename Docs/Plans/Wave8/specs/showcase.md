@@ -349,6 +349,16 @@ sun (azimuth 45), `v = (z - x) / sqrt(2)` across it (+v is azimuth 135, the dawn
 6. The apron's top stays at least 2 cm above the terrain at every vertex of its outline and of its skirt's top edge, and its
    skirt reaches at least 3 cm below the terrain there (so the terrain never covers the asphalt's edge and no gap shows under
    it). The first draft's formula, `0.04 + 0.004 * (x - 6)`, is -4 cm at the -X edge and fails this rule.
+7. *As built (the reflections' adoption):* the dusk sun reaches shot 6's subjects. Seen from the fire, lantern A, the fuel
+   tank and the hut's door wall, the sun's azimuth stands at least 0.75 degrees beside the bus's footprint, and the light's
+   drawn elevation at least 0.15 degrees above the terrain's horizon (`dusk_sun_reach`). A probe holds no sun since the
+   adoption (a bake draws neither its disk nor the highlights it makes), so what the dusk sun does not reach has the sky's
+   light and the fire's alone: at D4's azimuth 32 the bus stood before the sun (from the fire its footprint spans azimuths
+   17.3 to 37.3) and its shadow lay over the hut's front, the fire's ground and the fuel tank's near end, which came out
+   near black. On the sun's course (its azimuth falls through the day: 140, 92, 45) the rule passes at 16 alone among
+   whole degrees: 1.00 degree beside the bus from lantern A, 0.21 above the terrain from the fire; at 17 the bus is 0.004
+   degrees beside the sun from lantern A, at 15 the sun 0.11 degrees above the terrain from the fire. It passes again
+   from 52 to 61, on the bus's other side, where the sun would turn back after Golden's 45.
 
 The layout's heights (`layout`, `stations`) come from the surface a point stands on: the apron's top inside its outline (the
 bus, the oil tank's pad, the drums and tyres on the apron, Lantern B's drum), else the terrain. D5's numbers below are
@@ -366,6 +376,10 @@ A station is the sun's direction and the values that go with it. The scene is sa
 
 - **Toward the sun:** `TowardSun(e, a) = (cos e cos a, sin e, cos e sin a)`, `R/SkyPresets.cpp:93-98`; Dawn
   (-0.763, 0.087, 0.640), Golden (0.703, 0.105, 0.703), Dusk drawn (0.848, 0.035, 0.530).
+  *As built (the reflections' adoption):* Dusk's azimuth is 16, not 32, its drawn direction (0.961, 0.035, 0.275): D3's
+  rule 7 keeps the last sun beside the bus, whose shadow now lies over the asphalt before the camera and the slope's foot
+  left of the hut, clear of the fire, the lantern, the hut's front and the fuel tank. The photo mode's day turns the sun
+  through 29 degrees between Golden and Dusk (13 before).
 - **The light below 2 degrees** follows `DayNight.h:43-60`: it is drawn at `max(e, 2)` (shadows stay drawable) and its
   intensity is `120000 * clamp(sin(e) / 0.035, 0, 1)`; at Dusk, `sin(1) / 0.035 = 0.4986`, the light scale 0.5.
 - **The sun's rotation** in scripts: `glm::quatLookAt(-TowardSun(drawnElevation, a), glm::vec3(0, 1, 0))` (lights shine along
@@ -476,8 +490,9 @@ the rim camera in shadow at dawn: 7.8 degrees at 130 m). The constants are the S
 - `Mud.glb`: 8 patches `Mud_<n>` (r 2-5 m, noisy outlines) along the apron's outline and under the bus's front, draped 1.5
   cm above whatever surface is under them (the terrain, or the apron's top) along its normal.
 
-**`check`** evaluates D3's six rules on a sampled grid (1 m inner, 10 m ring, bilinear between), prints each rule's worst
-value and where, and exits 1 if one fails. `terrain` runs it first and writes nothing on a failure.
+**`check`** evaluates D3's rules (seven with the adoption's rule 7) on a sampled grid (1 m inner, 10 m ring, bilinear
+between), prints each rule's worst value and where, and exits 1 if one fails. `terrain` runs it first and writes nothing on
+a failure.
 
 **`stations`** prints the D4 table and, per shot, the key, From, To, look, FOV and the image positions of D5's subjects
 (pinhole, 16:9), as text or JSON.
@@ -514,7 +529,8 @@ over blocks and k, in percent of full scale, per shot and AA mode: PASS at a mea
 to the committed one in `--committed`; the station rows parsed from `Stations.h`'s `c_Stations` (one line per station,
 `{ <hour>, <elevation>, <drawn>, <azimuth>, <scale>, <fog>, <exposure>, <shadow distance>, <local lights> }`) equal to its
 own table; D5's mirror relations of shots 2-4 hold for the layout within 1 cm and 0.1 degree. Under 60 s (the horizon march
-uses the sampled grid, not the noise).
+uses the sampled grid, not the noise). *As built (the reflections' adoption):* it also asks rule 7 about the azimuth the
+dusk sun had (32) and fails if the rule would pass it: the sun behind the bus is what the rule is there to refuse.
 
 ### D7 `Tools/GenerateShowcaseProps.py`
 
@@ -850,7 +866,7 @@ after play (two `edit.undo`).
 	{"command": "script.get", "parameters": {"entity": {"$ref": "outpost"}, "class": "Outpost"}, "expect": {"/scripts/0/fields/Shot": {"equals": 2}, "/scripts/0/fields/Station": {"equals": 1}}, "until": {"steps": 600}},
 	{"command": "entity.get", "parameters": {"entity": {"$ref": "dawnYard"}}, "expect": {"/active": {"equals": false}}, "until": {"steps": 120}},
 	{"command": "entity.get", "parameters": {"entity": {"$ref": "goldenYard"}}, "expect": {"/active": {"equals": true}}},
-	{"command": "script.get", "parameters": {"entity": {"$ref": "outpost"}, "class": "Outpost"}, "expect": {"/scripts/0/fields/Shot": {"equals": 6}, "/scripts/0/fields/Station": {"equals": 2}, "/scripts/0/fields/SunAzimuth": {"min": 31.9, "max": 32.1}}, "until": {"steps": 1500}},
+	{"command": "script.get", "parameters": {"entity": {"$ref": "outpost"}, "class": "Outpost"}, "expect": {"/scripts/0/fields/Shot": {"equals": 6}, "/scripts/0/fields/Station": {"equals": 2}, "/scripts/0/fields/SunAzimuth": {"min": 15.9, "max": 16.1}}, "until": {"steps": 1500}},
 	{"command": "entity.get", "parameters": {"entity": {"$ref": "duskYard"}}, "expect": {"/active": {"equals": true}}},
 	{"command": "component.get", "parameters": {"entity": {"$ref": "fire"}, "component": "PointLight"}, "expect": {"/values/Intensity": {"min": 150}, "/values/CastShadows": {"equals": true}}, "until": {"steps": 60}},
 	{"command": "input.key", "parameters": {"key": "W", "steps": 10}},

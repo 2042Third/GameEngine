@@ -86,7 +86,7 @@
 	{"command": "entity.find", "parameters": {"name": "Probe.Golden.Hut"}, "bind": {"station_Probe.Golden.Hut": "/entities/0"}},
 	{"command": "entity.find", "parameters": {"name": "Probe.Dusk.Yard"}, "bind": {"station_Probe.Dusk.Yard": "/entities/0"}},
 	{"command": "entity.find", "parameters": {"name": "Probe.Dusk.Hut"}, "bind": {"station_Probe.Dusk.Hut": "/entities/0"}},
-	{"command": "lighting.applySkyPreset", "parameters": {"preset": "GoldenHour", "sunElevation": 2.0, "sunAzimuth": 32.0, "light": {"$ref": "station_Sun"}}},
+	{"command": "lighting.applySkyPreset", "parameters": {"preset": "GoldenHour", "sunElevation": 2.0, "sunAzimuth": 16.0, "light": {"$ref": "station_Sun"}}},
 	{"command": "component.set", "parameters": {"component": "DirectionalLight", "values": {"Intensity": 240.0, "ShadowDistance": 150.0}, "entity": {"$ref": "station_Sun"}}},
 	{"command": "component.set", "parameters": {"component": "HeightFog", "values": {"Density": 0.0015}, "entity": {"$ref": "station_Fog"}}},
 	{"command": "component.set", "parameters": {"component": "PostProcess", "values": {"Exposure": -2.5}, "entity": {"$ref": "station_Post_Process"}}},
