@@ -117,6 +117,72 @@ namespace Strata::AreaLights
 			return sum;
 		}
 
+		// The corners' heights over the receiver's horizon (the plane through the origin across `normal`).
+		void GetHeights(const Polygon& polygon, const glm::vec3& normal, float (&heights)[4])
+		{
+			for (uint32_t index = 0; index < 4; index++)
+				heights[index] = glm::dot(polygon.Corners[index], normal);
+		}
+
+		// The vector form factor of the polygon's part above the receiver's horizon, whose corners lie `heights` over it: the
+		// polygon's edges above the horizon, cut where they cross it, and an edge along the horizon that closes each stretch
+		// of the outline under it, from where the outline goes under to where it next comes back. The crossings are scaled by
+		// positive numbers (the edge integral takes directions), which keeps them free of a division. With every corner above
+		// the horizon it is IntegratePolygon's sum, operation for operation; with none, 0.
+		//
+		// The heights may be the corners' before a linear transform took them where they are: a crossing is the same weighted
+		// sum of its edge's ends in either space, and the cross product of two transformed vectors is the transform's cofactor
+		// times theirs, so the result is the transformed image's sum of the part above the untransformed horizon.
+		//
+		// A plane cuts a rectangle's outline twice at most, but the heights are computed: for a receiver in the light's own
+		// plane all four are rounding, and their signs can alternate around the outline, which then goes under twice. So
+		// every exit is closed onto the entry that follows it, never onto another stretch's.
+		glm::vec3 IntegratePolygonAbove(const Polygon& polygon, const float (&heights)[4])
+		{
+			glm::vec3 sum(0.0f);
+			glm::vec3 exit(0.0f);       // Where the outline last went under, while no entry has closed it
+			glm::vec3 firstEntry(0.0f); // An entry met before any exit: it follows the last exit, around the outline's start
+			bool exitOpen = false;
+			for (uint32_t index = 0; index < 4; index++)
+			{
+				const uint32_t next = (index + 1) % 4;
+				const glm::vec3& start = polygon.Corners[index];
+				const glm::vec3& end = polygon.Corners[next];
+				const float startHeight = heights[index];
+				const float endHeight = heights[next];
+				const glm::vec3 crossProduct = glm::cross(start, polygon.Edges[index]);
+				if (startHeight > 0.0f && endHeight > 0.0f)
+				{
+					sum += IntegrateEdge(start, end, crossProduct);
+				}
+				else if (startHeight > 0.0f)
+				{
+					exit = end * startHeight - start * endHeight;
+					exitOpen = true;
+					sum += IntegrateEdge(start, exit, crossProduct * startHeight);
+				}
+				else if (endHeight > 0.0f)
+				{
+					const glm::vec3 entry = start * endHeight - end * startHeight;
+					sum += IntegrateEdge(entry, end, crossProduct * endHeight);
+					if (exitOpen)
+					{
+						sum += IntegrateEdge(exit, entry, glm::cross(exit, entry));
+						exitOpen = false;
+					}
+					else
+					{
+						firstEntry = entry;
+					}
+				}
+			}
+			// Exits and entries alternate around the outline, so an exit still open after the last edge is closed by the entry
+			// that came before every exit.
+			if (exitOpen)
+				sum += IntegrateEdge(exit, firstEntry, glm::cross(exit, firstEntry));
+			return sum;
+		}
+
 		// 1 in front of the light, -1 behind a two-sided one (where the corners' order is reversed and with it the sign of
 		// every edge sum) and 0 where it lights nothing: behind a one-sided light and on its plane.
 		float GetSide(const glm::vec3& position, const AreaLight& light)
@@ -125,18 +191,6 @@ namespace Strata::AreaLights
 			if (distance > 0.0f)
 				return 1.0f;
 			return light.TwoSided && distance < 0.0f ? -1.0f : 0.0f;
-		}
-
-		// The form factor a vector form factor comes to once the horizon has cut it: the table's term for a sphere cap of
-		// the same vector form factor. `alongNormal` is the vector's part along the receiver's normal.
-		float ClipToHorizon(const glm::vec3& vectorFormFactor, float alongNormal)
-		{
-			const float length = glm::length(vectorFormFactor);
-			if (!(length > 0.0f))
-				return 0.0f;
-			const float cosine = alongNormal / length;
-			const float share = SampleTable(c_TermsLayer, glm::vec2(cosine * 0.5f + 0.5f, length)).w;
-			return std::min(length * share, 1.0f);
 		}
 
 		// A tangent of the normal that does not depend on the view (Include/IBL.slang's TangentBasis).
@@ -262,13 +316,14 @@ namespace Strata::AreaLights
 		return IntegratePolygon(MakePolygon(light.Center - position, light.AxisX, light.AxisY));
 	}
 
-	float FormFactor(const glm::vec3& position, const glm::vec3& normal, const AreaLight& light)
+	float ClipToHorizon(const glm::vec3& vectorFormFactor, float alongNormal)
 	{
-		const float side = GetSide(position, light);
-		if (side == 0.0f)
+		const float length = glm::length(vectorFormFactor);
+		if (!(length > 0.0f))
 			return 0.0f;
-		const glm::vec3 vectorFormFactor = GetVectorFormFactor(position, light) * side;
-		return ClipToHorizon(vectorFormFactor, glm::dot(vectorFormFactor, normal));
+		const float cosine = alongNormal / length;
+		const float share = SampleTable(c_TermsLayer, glm::vec2(cosine * 0.5f + 0.5f, length)).w;
+		return std::min(length * share, 1.0f);
 	}
 
 	float FormFactorClipped(const glm::vec3& position, const glm::vec3& normal, const AreaLight& light)
@@ -276,61 +331,10 @@ namespace Strata::AreaLights
 		const float side = GetSide(position, light);
 		if (side == 0.0f)
 			return 0.0f;
-
-		// The polygon's edges above the horizon, cut where they cross it, and an edge along the horizon that closes each
-		// stretch of the outline under it: from where the outline goes under to where it next comes back. The crossings are
-		// scaled by positive numbers (the edge integral takes directions), which keeps them free of a division.
-		//
-		// A plane cuts a rectangle's outline twice at most, but the heights are computed: for a receiver in the light's own
-		// plane all four are rounding, and their signs can alternate around the outline, which then goes under twice. So
-		// every exit is closed onto the entry that follows it, never onto another stretch's.
 		const Polygon polygon = MakePolygon(light.Center - position, light.AxisX, light.AxisY);
 		float heights[4];
-		for (uint32_t index = 0; index < 4; index++)
-			heights[index] = glm::dot(polygon.Corners[index], normal);
-
-		float sum = 0.0f;
-		glm::vec3 exit(0.0f);       // Where the outline last went under, while no entry has closed it
-		glm::vec3 firstEntry(0.0f); // An entry met before any exit: it follows the last exit, around the outline's start
-		bool exitOpen = false;
-		for (uint32_t index = 0; index < 4; index++)
-		{
-			const uint32_t next = (index + 1) % 4;
-			const glm::vec3& start = polygon.Corners[index];
-			const glm::vec3& end = polygon.Corners[next];
-			const float startHeight = heights[index];
-			const float endHeight = heights[next];
-			const glm::vec3 crossProduct = glm::cross(start, polygon.Edges[index]);
-			if (startHeight > 0.0f && endHeight > 0.0f)
-			{
-				sum += glm::dot(IntegrateEdge(start, end, crossProduct), normal);
-			}
-			else if (startHeight > 0.0f)
-			{
-				exit = end * startHeight - start * endHeight;
-				exitOpen = true;
-				sum += glm::dot(IntegrateEdge(start, exit, crossProduct * startHeight), normal);
-			}
-			else if (endHeight > 0.0f)
-			{
-				const glm::vec3 entry = start * endHeight - end * startHeight;
-				sum += glm::dot(IntegrateEdge(entry, end, crossProduct * endHeight), normal);
-				if (exitOpen)
-				{
-					sum += glm::dot(IntegrateEdge(exit, entry, glm::cross(exit, entry)), normal);
-					exitOpen = false;
-				}
-				else
-				{
-					firstEntry = entry;
-				}
-			}
-		}
-		// Exits and entries alternate around the outline, so an exit still open after the last edge is closed by the entry
-		// that came before every exit.
-		if (exitOpen)
-			sum += glm::dot(IntegrateEdge(exit, firstEntry, glm::cross(exit, firstEntry)), normal);
-		return std::clamp(sum * side, 0.0f, 1.0f);
+		GetHeights(polygon, normal, heights);
+		return std::clamp(glm::dot(IntegratePolygonAbove(polygon, heights), normal) * side, 0.0f, 1.0f);
 	}
 
 	float GetLobeCoverage(const glm::vec4& transform, const glm::vec3& position, const glm::vec3& normal, const glm::vec3& view, const AreaLight& light)
@@ -355,8 +359,15 @@ namespace Strata::AreaLights
 			const glm::vec3 local(glm::dot(tangent, vector), glm::dot(bitangent, vector), glm::dot(normal, vector));
 			return glm::vec3(transform.x * local.x + transform.z * local.z, local.y, transform.y * local.x + transform.w * local.z);
 		};
-		const Polygon polygon = MakePolygon(transformVector(light.Center - position), transformVector(light.AxisX), transformVector(light.AxisY));
-		const glm::vec3 vectorFormFactor = IntegratePolygon(polygon) * side;
+		// GGX reflects nothing from under the receiver's horizon, but the fitted lobe keeps a part of itself there on the
+		// viewer's side (its transform lifts those directions above the transformed horizon): the face is cut at the
+		// receiver's horizon before the transformed horizon's term, so a face under the horizon gives nothing and one sinking
+		// under it fades out.
+		const glm::vec3 center = light.Center - position;
+		float heights[4];
+		GetHeights(MakePolygon(center, light.AxisX, light.AxisY), normal, heights);
+		const Polygon polygon = MakePolygon(transformVector(center), transformVector(light.AxisX), transformVector(light.AxisY));
+		const glm::vec3 vectorFormFactor = IntegratePolygonAbove(polygon, heights) * side;
 		return ClipToHorizon(vectorFormFactor, vectorFormFactor.z);
 	}
 
@@ -394,7 +405,7 @@ namespace Strata::AreaLights
 			return glm::vec3(0.0f);
 
 		const glm::vec3 reflectance = surface.F0 * dfg.x + dfg.y;
-		const float formFactor = FormFactor(surface.Position, surface.Normal, light);
+		const float formFactor = FormFactorClipped(surface.Position, surface.Normal, light);
 		glm::vec3 result = surface.Albedo * ((1.0f - surface.Metallic) * formFactor * diffuseWeight) * (glm::vec3(1.0f) - reflectance);
 		if (specularWeight > 0.0f)
 		{

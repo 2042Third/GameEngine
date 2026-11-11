@@ -116,22 +116,29 @@ namespace Strata::AreaLights
 	// is above the receiver's horizon. From the front it points toward the face, from behind away from it.
 	glm::vec3 GetVectorFormFactor(const glm::vec3& position, const AreaLight& light);
 
-	// The form factor of the light seen from a surface point as the shading computes it: the vector form factor with the
-	// table's horizon term, which stands for a sphere of the same vector form factor. It is exact while that sphere's cap
-	// is above the horizon. While the horizon cuts the cap but not the face it is off by up to about 3% of the vector form
-	// factor's length (the most the face gives any receiver), most for a panel much wider than its distance whose lower
-	// edge is just over the receiver's plane, and by 0.0076 at most in absolute terms (the tests' 80,000 lights: 2.4% and
-	// 0.0059). Where the horizon cuts the face it is an estimate: a thin strip standing across the horizon gets 1 / pi
-	// (0.32) of that length from its upper half, and the table next to nothing; a tall strip 1.8 m wide 1 m away gets
-	// 0.079 more than the table gives (the tests' lights: 0.21 of the length and 0.056). 0 behind a one-sided light and for
-	// a position on the light's plane; within [0, 1].
-	float FormFactor(const glm::vec3& position, const glm::vec3& normal, const AreaLight& light);
-	// The same form factor with the face clipped by the horizon exactly, without the table.
+	// The form factor a vector form factor comes to once the receiver's horizon has cut it, by the table's horizon term: the
+	// term for a sphere of the same vector form factor, which stands for the polygon. `alongNormal` is the vector's part
+	// along the receiver's normal. It is exact while that sphere's cap is above the horizon. While the horizon cuts the cap
+	// but not the polygon it is off by up to about 3% of the vector form factor's length (the most the face gives any
+	// receiver), most for a panel much wider than its distance whose lower edge is just over the receiver's plane, and by
+	// 0.0076 at most in absolute terms (the tests' 80,000 lights: 2.4% and 0.0059). Where the horizon cuts the polygon it
+	// is an estimate: a thin strip standing across the horizon gets 1 / pi (0.32) of that length from its upper half, and
+	// the table next to nothing; a tall strip 1.8 m wide 1 m away gets 0.079 more than the table gives (the tests' lights:
+	// 0.21 of the length and 0.056). So the shading takes it only for the transformed polygon of the specular lobe, whose
+	// horizon is not the receiver's, and clips at the receiver's horizon exactly. Within [0, 1].
+	float ClipToHorizon(const glm::vec3& vectorFormFactor, float alongNormal);
+	// The form factor of the light seen from a surface point, as the shading's diffuse light takes it: the face clipped by
+	// the receiver's horizon exactly, then the vector form factor of what is above it along the normal (no table). 0 behind
+	// a one-sided light, for a position on the light's plane and for a face wholly under the horizon; within [0, 1].
 	float FormFactorClipped(const glm::vec3& position, const glm::vec3& normal, const AreaLight& light);
 
 	// The share of a clamped cosine lobe the light covers, for the lobe that the inverse transform `transform` (a texel of
-	// layer 0) turns into the cosine around `normal`; `view` (unit, surface to viewer) orients the transform's frame. The
-	// identity (1, 0, 0, 1) gives FormFactor, up to rounding.
+	// layer 0) turns into the cosine around `normal`, over the face's part above the receiver's horizon (GGX reflects
+	// nothing from under it, and a fitted lobe can reach there: its transform lifts directions on the viewer's side above
+	// the transformed horizon); `view` (unit, surface to viewer) orients the transform's frame. The face is cut at the
+	// receiver's horizon exactly, then transformed, and the table's horizon term (ClipToHorizon) cuts it at the
+	// transformed horizon. So a face wholly under the receiver's horizon gives exactly 0, and one sinking under it fades
+	// out without a step. The identity (1, 0, 0, 1) gives ClipToHorizon of the clipped face's vector form factor.
 	float GetLobeCoverage(const glm::vec4& transform, const glm::vec3& position, const glm::vec3& normal, const glm::vec3& view, const AreaLight& light);
 	// The share of the specular lobe the light covers, within [0, 1]: GetLobeCoverage with the table's transform for the
 	// perceptual `roughness` (at least Include/PBR.slang's c_MinRoughness) and the view's angle. Times the lobe's
@@ -175,7 +182,7 @@ namespace Strata::AreaLights
 	// The radiance a surface reflects toward the viewer from the light, unshadowed, faded by the light's range: 0 behind a
 	// one-sided light, on its plane and out of its range. `dfg` and `coatDFG` are the split-sum terms of the BRDF table at
 	// the surface's and the coat's roughness and view angle.
-	//   Diffuse: FormFactor * Albedo * (1 - Metallic) * (1 - Es) * diffuseWeight, with Es = F0 dfg.x + dfg.y, what the
+	//   Diffuse: FormFactorClipped * Albedo * (1 - Metallic) * (1 - Es) * diffuseWeight, with Es = F0 dfg.x + dfg.y, what the
 	//   specular lobe reflects (the rule the image-based light follows).
 	//   Specular: SpecularFraction * Es * SpecularEnergy * specularWeight.
 	//   Under a coat the two lose what the coat reflects, Strength * (c_ClearcoatF0 coatDFG.x + coatDFG.y) * its

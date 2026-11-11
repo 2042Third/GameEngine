@@ -4982,7 +4982,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   `Renderer.AreaLights`) is the shading in float, operation for operation as `Include/AreaLights.slang` runs it, and
   `GPU.SceneRenderer.AreaLights` renders planes under rect lights for every roughness of the fit's tests, views from the
   normal to 87 degrees off it, metals, dielectrics, coats, glass, blended surfaces, two sides and lights across the
-  receiver's horizon, and compares every pixel with `AreaLights::Shade`: within 1.22e-3 relative and 1.2e-3 of the peak
+  receiver's horizon, and compares every pixel with `AreaLights::Shade`: within 1.21e-3 relative and 1.21e-3 of the peak
   (measured; the half-float target rounds to 4.9e-4, the rest is the GPU's divisions and its sampler's weights in the
   BRDF table), allowing where the light changes faster than the rasterizer's placement of a pixel (1/256 of a pixel).
   A change to the shading changes both, and the test.
@@ -4992,28 +4992,40 @@ lights, Post Process and the sky), and never a resolution below the output's.
   specialization constant, so that the others stay the shaders of before, instruction for instruction) hold it, and a
   renderer draws with them in frames whose scene has a rect light anywhere, lit or not (`RenderLights::GetTypeCount`:
   every `RectLightComponent` with a world transform, unlit and inactive ones too; `PipelineKey::AreaLights`, both paths
-  alike; `SceneRendererStats::AreaLightShading`, `editor.perf`'s `areaLightShading`). The forms cost more and shade a
-  little differently even where no rect light reaches, since the driver compiles the rest of the shader differently: an
-  unlit rect light added to the showcase costs its opaque pass 2.7% at Medium (shots 2 and 3, interleaved A/B; the frame
-  0.1-1.1%; the branch compiled into every frame measured 3.1-6.6% on shot 2 and the look-dev room and overview), and
-  moves a few pixels (shot 3 without AA: two specks, 2,048 pixels, by up to 117 codes; under TAA shot 2 by up to 4 codes,
-  shot 3 by up to 27; FXAA's pictures equal), as much as those shots' own repeats in one session differ (2,079 and 59
-  pixels without AA, 158,587 and 94,062 under TAA). So neither a light's intensity nor its activity switches the forms (a
-  sign flickering to nothing would flicker those pixels and that cost with it): only the first rect light added or the
+  alike; `SceneRendererStats::AreaLightShading`, `editor.perf`'s `areaLightShading`). The forms cost more even where no
+  rect light reaches, since the driver compiles the rest of the shader differently: an unlit rect light added to the
+  showcase costs its opaque pass 2.7% at Medium (shots 2 and 3, interleaved A/B; the frame 0.1-1.1%; the branch compiled
+  into every frame measured 3.1-6.6% on shot 2 and the look-dev room and overview). That they shade those surfaces
+  differently is not shown: the pictures with and without such a light differ only where two sessions of one build differ
+  without any rect light (shot 3 without AA by two specks, 2,048 pixels, by up to 117 codes; TAA's shots 2 and 3; FXAA's
+  pictures equal). So neither a light's intensity nor its activity switches the forms (a sign flickering to nothing
+  would switch that cost with it): only the first rect light added or the
   last removed does, and that frame compiles the area forms of the forward pipelines it draws, on the main thread
   (6.3-7.1 ms for the one opaque pipeline of `GPU.SceneRenderer.AreaLights`' scene, first in its process, then 0.6-0.8 ms
   for the next renderer's; the release notes' Known issues). Scenes without rect lights: the A/B against main is within
   its noise (-0.8% to +0.2%) and the look-dev pictures of the Showcase and LookDev projects equal main's but for those
   whose own repeats differ.
-  Diffuse is the face's exact form factor in its clipless form: the vector form factor (the sum of the
+  Diffuse is the face's exact form factor: the face clipped at the receiver's horizon (each stretch of its outline under
+  the horizon closed by an edge along it), then the vector form factor of what is left along the normal (the sum of the
   edges' `IntegrateEdgeVec`, each edge's term `cross(d_i, e_i) / (|d_i| |d_i+1|)` with the exact edge `e_i` from the axes,
-  so small or far lights keep float precision) and the table's horizon term for a sphere of the same vector form factor,
-  exact while that sphere's cap is above the horizon. The highlight is the share of the GGX lobe the face covers under the
-  fit's inverse transform (layer 0 at the widened perceptual roughness and `sqrt(1 - NoV)`), times `F0 dfg.x + dfg.y` from
+  so small or far lights keep float precision; `AreaLights::FormFactorClipped`). The clipless form the course proposes,
+  the table's horizon term for a sphere of the same vector form factor, is exact only while that sphere's cap is above the
+  horizon: it was 2.4% off for faces above the horizon and up to 0.21 of the vector form factor's length for faces the
+  horizon cuts, and it lit faces wholly under the horizon a little. The highlight is the share of the GGX lobe the face's
+  part above the receiver's horizon covers under the fit's inverse transform (layer 0 at the widened perceptual roughness
+  and `sqrt(1 - NoV)`): the face is cut at the receiver's horizon with the same clip (the corners' heights from before the
+  transform, which is linear), then transformed, and the table's horizon term cuts it at the transformed horizon
+  (`AreaLights::ClipToHorizon`). The fitted lobe reaches under the receiver's horizon on the viewer's side (its transform
+  lifts those directions over the transformed horizon), where GGX has nothing: without the cut each light drew a second,
+  faint image of its face there (a ring on the far side of a chrome ball, up to 0.134 of the lobe for a face just under
+  the horizon at grazing views, 0.0055 on the ball), and faces the horizon cuts got the lobe's part under it (their errors'
+  median at roughness 0.25 0.039, now 0.0053). With the cut a face under the horizon gives exactly 0, one sinking under it
+  fades out continuously, and faces wholly above are shaded as before, bit for bit (`Renderer.AreaLights`' horizon cases,
+  `GPU.SceneRenderer.AreaLights`' "under a surface's horizon"). The covered share is then times `F0 dfg.x + dfg.y` from
   `u_BRDFLut` (the engine's own integral, so rect, punctual and image light agree on energy) and `GetSpecularEnergy`. The
   clear coat adds a third evaluation at its roughness and normal and covers the base by `Strength (0.04 coatDFG.x +
   coatDFG.y) SpecularEnergy`. Glass weights diffuse by `1 - Transmission`; probe captures (`MaterialParams.w`) evaluate no
-  lobe. Behind a one-sided face, on its plane and beyond Range: exactly 0. Camera-relative: the CPU path subtracts the
+  lobe. Behind a one-sided face, on its plane, under the receiver's horizon and beyond Range: exactly 0. Camera-relative: the CPU path subtracts the
   center in double, `LightCompact.comp` in float, as for points; the axes are directions.
 - **The table** (`Renderer/LTCTable.inl`, written by `Tools/ConvertLTCTable.py` from selfshadow/ltc_code at 31e5e96b,
   `fit/results/ltc.js`, value for value; BSD 2-clause with a third condition, citing Heitz, Dupuy, Hill and Neubelt,
@@ -5026,9 +5038,11 @@ lights, Post Process and the sky), and never a resolution below the output's.
   declares the table, the shapes and the shading only under `ST_AREA_LIGHT_SHADING` (the forward pass); the clipped form
   factor, the nearest point and the window take plain values, for passes without the scene set.
 - **The fit's error** (the reference's, documented, not a defect of the port): the fitted lobe keeps part of itself under
-  the horizon at grazing views and puts more than GGX near the mirror direction there. Fitted lobe times magnitude against
-  GGX's quadrature, median and 95th percentile of the relative error: roughness 0.25: 0.026 and 0.70; 0.5: 0.086 and 0.96;
-  0.75: 0.063 and 0.86; views within 53.6 degrees of the normal stay under 3% median (stage 0's measurement). In the
+  the horizon at grazing views, which the cut at the horizon takes away (so a face that also covers the horizon's far side
+  gets that much less than GGX gives: 0.935 of GGX's 0.973 for a wall panel the plane cuts at roughness 0.1 seen 87
+  degrees off the normal), and puts more than GGX near the mirror direction there. Fitted lobe times magnitude against
+  GGX's quadrature, median and 95th percentile of the relative error: roughness 0.25: 0.022 and 0.52; 0.5: 0.072 and 0.81;
+  0.75: 0.053 and 0.68; views within 53.6 degrees of the normal stay under 3% median (`Renderer.AreaLights`). In the
   renderer: a rough-ish metal floor's highlight (roughness 0.3) holds 0.934 of GGX's light over the face; a white metal
   under a light filling the sky reflects 0.912 (roughness 0.3) and 0.918 (0.6) seen 78 degrees off its normal, 0.98 and
   0.94 at 60 degrees, and all of it at roughness 0.05 and 1 and seen along the normal. The polished floor's mirror image

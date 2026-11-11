@@ -6,6 +6,7 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
 #include <array>
@@ -208,6 +209,19 @@ namespace
 		for (size_t index = 0; index < clipped.size(); index++)
 			sum += glm::dot(IntegrateReferenceEdge(clipped[index], clipped[(index + 1) % clipped.size()]), normal);
 		return std::max(sum * GetReferenceSide(position, light), 0.0);
+	}
+
+	// The form factor by the table's horizon term on the whole face: AreaLights::ClipToHorizon of its vector form factor, which
+	// the specular lobe's horizon term takes (with the identity transform it is a diffuse light's), measured here against
+	// the exact clip.
+	float GetHorizonTermFormFactor(const glm::vec3& position, const glm::vec3& normal, const AreaLights::AreaLight& light)
+	{
+		const float distance = glm::dot(light.Normal, position - light.Center);
+		const float side = distance > 0.0f ? 1.0f : (light.TwoSided && distance < 0.0f ? -1.0f : 0.0f);
+		if (side == 0.0f)
+			return 0.0f;
+		const glm::vec3 vectorFormFactor = AreaLights::GetVectorFormFactor(position, light) * side;
+		return AreaLights::ClipToHorizon(vectorFormFactor, glm::dot(vectorFormFactor, normal));
 	}
 
 	double GetRelativeError(double value, double reference)
@@ -553,7 +567,7 @@ TEST_SUITE("Renderer.AreaLights")
 			CAPTURE(index);
 			CAPTURE(description);
 
-			const float clipless = AreaLights::FormFactor(position, normal, light);
+			const float clipless = GetHorizonTermFormFactor(position, normal, light);
 			const float clipped = AreaLights::FormFactorClipped(position, normal, light);
 			if (!IsLit(position, light))
 			{
@@ -662,7 +676,7 @@ TEST_SUITE("Renderer.AreaLights")
 		CHECK(GetRelativeError(GetReferenceFormFactor(position, glm::dvec3(normal), strip), upper) <= 1e-4);
 		// The float clip, in absolute terms as over the random lights: its corners 1 km away are rounded to 6e-5 m.
 		CHECK(std::abs(AreaLights::FormFactorClipped(position, normal, strip) - upper) <= 1e-5);
-		const double table = AreaLights::FormFactor(position, normal, strip);
+		const double table = GetHorizonTermFormFactor(position, normal, strip);
 		MESSAGE("horizon: a strip 1 cm wide across the horizon, 1 m away: exact " << upper / length << " of the length, the table " << table / length);
 		// 1.5 times the measured 0.0142.
 		CHECK(table <= 0.0213 * length);
@@ -681,7 +695,7 @@ TEST_SUITE("Renderer.AreaLights")
 		CHECK(glm::length(vector) == doctest::Approx(0.301).epsilon(0.005));
 		CHECK(glm::dot(vector, glm::dvec3(normal)) / glm::length(vector) == doctest::Approx(0.399).epsilon(0.005));
 		CHECK(GetRelativeError(AreaLights::FormFactorClipped(position, normal, panel), exact) <= 1e-4);
-		const double error = (AreaLights::FormFactor(position, normal, panel) - exact) / exact;
+		const double error = (GetHorizonTermFormFactor(position, normal, panel) - exact) / exact;
 		MESSAGE("horizon: the panel 5 cm above the floor, table over exact " << error);
 		CHECK(error > 0.0);
 		// 1.5 times the measured 1.81%.
@@ -694,7 +708,7 @@ TEST_SUITE("Renderer.AreaLights")
 		const double widestExact = GetReferenceFormFactor(position, glm::dvec3(normal), widest);
 		const double widestLength = glm::length(GetReferenceVectorFormFactor(position, widest));
 		CHECK(std::abs(AreaLights::FormFactorClipped(position, normal, widest) - widestExact) <= 1e-5);
-		const double widestError = (AreaLights::FormFactor(position, normal, widest) - widestExact) / widestLength;
+		const double widestError = (GetHorizonTermFormFactor(position, normal, widest) - widestExact) / widestLength;
 		MESSAGE("horizon: a panel 10 km wide on the floor, table over exact " << widestError << " of the vector form factor's length " << widestLength);
 		CHECK(widestError > 0.0);
 		// 1.5 times the measured 2.9%.
@@ -769,7 +783,7 @@ TEST_SUITE("Renderer.AreaLights")
 						worstVector = std::max(worstVector, glm::length(glm::dvec3(AreaLights::GetVectorFormFactor(position, light)) - reference));
 						// The face is in the flush surface's horizon: it gives that surface nothing. The table gives the little
 						// the horizon leaves of a sphere of the same vector form factor.
-						worstFlush = std::max(worstFlush, AreaLights::FormFactor(position, light.Normal, light));
+						worstFlush = std::max(worstFlush, GetHorizonTermFormFactor(position, light.Normal, light));
 						CHECK(AreaLights::FormFactorClipped(position, light.Normal, light) == 0.0f);
 					}
 				}
@@ -874,18 +888,18 @@ TEST_SUITE("Renderer.AreaLights")
 		const glm::vec3 backN = frame.GetDirection(mirror(frontNormal));
 		const glm::vec3 backV = frame.GetDirection(mirror(frontView));
 
-		const float lit = AreaLights::FormFactor(frontPoint, n, oneSided);
+		const float lit = GetHorizonTermFormFactor(frontPoint, n, oneSided);
 		const float litClipped = AreaLights::FormFactorClipped(frontPoint, n, oneSided);
 		const float litSpecular = AreaLights::SpecularFraction(frontPoint, n, v, 0.4f, oneSided);
 		CHECK(lit > 0.05f);
 		CHECK(litClipped > 0.05f);
 		CHECK(litSpecular > 0.01f);
-		CHECK(AreaLights::FormFactor(backPoint, backN, oneSided) == 0.0f);
+		CHECK(GetHorizonTermFormFactor(backPoint, backN, oneSided) == 0.0f);
 		CHECK(AreaLights::FormFactorClipped(backPoint, backN, oneSided) == 0.0f);
 		CHECK(AreaLights::SpecularFraction(backPoint, backN, backV, 0.4f, oneSided) == 0.0f);
 
-		CHECK(AreaLights::FormFactor(frontPoint, n, twoSided) == lit);
-		CHECK(std::abs(AreaLights::FormFactor(backPoint, backN, twoSided) - lit) <= 1e-5f);
+		CHECK(GetHorizonTermFormFactor(frontPoint, n, twoSided) == lit);
+		CHECK(std::abs(GetHorizonTermFormFactor(backPoint, backN, twoSided) - lit) <= 1e-5f);
 		CHECK(std::abs(AreaLights::FormFactorClipped(backPoint, backN, twoSided) - litClipped) <= 1e-5f);
 		CHECK(std::abs(AreaLights::SpecularFraction(backPoint, backN, backV, 0.4f, twoSided) - litSpecular) <= 1e-4f);
 
@@ -895,7 +909,7 @@ TEST_SUITE("Renderer.AreaLights")
 			const AreaLights::AreaLight flat = MakeAxisLight(both);
 			for (const glm::vec3& point : { glm::vec3(0.2f, 0.1f, 0.0f), glm::vec3(0.5f, 0.0f, 0.0f), glm::vec3(0.9f, -0.3f, 0.0f), glm::vec3(0.5f, -0.5f, 0.0f) })
 			{
-				CHECK(AreaLights::FormFactor(point, glm::vec3(1.0f, 0.0f, 0.0f), flat) == 0.0f);
+				CHECK(GetHorizonTermFormFactor(point, glm::vec3(1.0f, 0.0f, 0.0f), flat) == 0.0f);
 				CHECK(AreaLights::FormFactorClipped(point, glm::vec3(1.0f, 0.0f, 0.0f), flat) == 0.0f);
 				CHECK(AreaLights::SpecularFraction(point, glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.6f, 0.0f, 0.8f), 0.5f, flat) == 0.0f);
 			}
@@ -910,13 +924,21 @@ TEST_SUITE("Renderer.AreaLights")
 		const glm::vec3 view = frame.GetDirection(glm::normalize(glm::dvec3(0.5, 0.2, 0.7)));
 
 		const AreaLights::AreaLight panel = MakeParallelLight(frame, -0.3, 1.1, -0.6, 0.4, 0.8);
-		const float formFactor = AreaLights::FormFactor(position, normal, panel);
+		const float formFactor = GetHorizonTermFormFactor(position, normal, panel);
 		CHECK(std::abs(AreaLights::GetLobeCoverage(glm::vec4(1.0f, 0.0f, 0.0f, 1.0f), position, normal, view, panel) - formFactor) <= 1e-5f);
+		CHECK(std::abs(AreaLights::FormFactorClipped(position, normal, panel) - formFactor) <= 1e-5f);
+		// Of a face the horizon cuts, the identity takes the part above it: the table's term of what the exact clip keeps.
+		const AreaLights::AreaLight standing = MakeStandingLight(frame, -0.6, 0.6, -0.4, 0.8, 1.0);
+		const float standingClipped = AreaLights::FormFactorClipped(position, normal, standing);
+		const float standingCoverage = AreaLights::GetLobeCoverage(glm::vec4(1.0f, 0.0f, 0.0f, 1.0f), position, normal, view, standing);
+		MESSAGE("identity on a face the horizon cuts: " << standingCoverage << " against the exact " << standingClipped);
+		CHECK(standingClipped > 0.05f);
+		CHECK(std::abs(standingCoverage - standingClipped) <= 0.0357f * glm::length(AreaLights::GetVectorFormFactor(position, standing)));
 
 		// A light that fills the hemisphere fills the lobes that lie within it: the diffuse term and the fully rough lobe
 		// both receive all of it, and so does a sharp lobe around a direction well above the horizon.
 		const AreaLights::AreaLight sky = MakeSkyLight(frame);
-		CHECK(std::abs(AreaLights::FormFactor(position, normal, sky) - 1.0f) <= 2e-3f);
+		CHECK(std::abs(GetHorizonTermFormFactor(position, normal, sky) - 1.0f) <= 2e-3f);
 		CHECK(std::abs(AreaLights::FormFactorClipped(position, normal, sky) - 1.0f) <= 2e-3f);
 		const float roughSky = AreaLights::SpecularFraction(position, normal, view, 1.0f, sky);
 		const float sharpSky = AreaLights::SpecularFraction(position, normal, view, 0.1f, sky);
@@ -935,7 +957,7 @@ TEST_SUITE("Renderer.AreaLights")
 		// diffuse term, which a mirror-like lobe exceeds by orders of magnitude.
 		const AreaLights::AreaLight zenith = MakeParallelLight(frame, -0.01, 0.01, -0.01, 0.01, 1.0);
 		const glm::vec3 up = normal;
-		const double diffuse = AreaLights::FormFactor(position, normal, zenith);
+		const double diffuse = AreaLights::FormFactorClipped(position, normal, zenith);
 		const double rough = AreaLights::SpecularFraction(position, normal, up, 1.0f, zenith);
 		CHECK(GetRelativeError(rough / diffuse, 1.0 / (1.12813 * 1.12813)) <= 1e-3);
 		CHECK(GetRelativeError(rough / diffuse, 1.0 / (4.0 * (1.0 - std::log(2.0)))) <= 0.05);
@@ -1062,15 +1084,15 @@ TEST_SUITE("Renderer.AreaLights")
 		const glm::vec3 center = glm::vec3(mirrored[3]);
 		const glm::vec3 front = center + shineDirection;
 		const glm::vec3 back = center - shineDirection;
-		const float lit = AreaLights::FormFactor(front, -shineDirection, mirroredLight);
+		const float lit = AreaLights::FormFactorClipped(front, -shineDirection, mirroredLight);
 		CHECK(GetRelativeError(lit, GetParallelFactor(-1.0, 1.0, -0.75, 0.75, 1.0)) <= 1e-4);
-		CHECK(std::abs(lit - AreaLights::FormFactor(front, -shineDirection, twinLight)) <= 1e-4f);
-		CHECK(std::abs(AreaLights::FormFactorClipped(front, -shineDirection, mirroredLight) - AreaLights::FormFactorClipped(front, -shineDirection, twinLight)) <= 1e-4f);
+		CHECK(std::abs(lit - AreaLights::FormFactorClipped(front, -shineDirection, twinLight)) <= 1e-4f);
+		CHECK(std::abs(GetHorizonTermFormFactor(front, -shineDirection, mirroredLight) - GetHorizonTermFormFactor(front, -shineDirection, twinLight)) <= 1e-4f);
 		const glm::vec3 view = glm::normalize(-shineDirection + mirroredRecord.AxisX * 0.5f);
 		CHECK(AreaLights::SpecularFraction(front, -shineDirection, view, 0.3f, mirroredLight) > 0.1f);
 		CHECK(std::abs(AreaLights::SpecularFraction(front, -shineDirection, view, 0.3f, mirroredLight) -
 			AreaLights::SpecularFraction(front, -shineDirection, view, 0.3f, twinLight)) <= 1e-4f);
-		CHECK(AreaLights::FormFactor(back, shineDirection, mirroredLight) == 0.0f);
+		CHECK(GetHorizonTermFormFactor(back, shineDirection, mirroredLight) == 0.0f);
 		CHECK(AreaLights::FormFactorClipped(back, shineDirection, mirroredLight) == 0.0f);
 		CHECK(AreaLights::SpecularFraction(back, shineDirection, shineDirection, 0.3f, mirroredLight) == 0.0f);
 	}
@@ -1123,7 +1145,7 @@ TEST_SUITE("Renderer.AreaLights")
 		const AreaLights::AreaLight light = AreaLights::LoadAreaLight(record);
 		const double halfX = std::sqrt(3.25) * 0.5;
 		const double halfY = std::sqrt(1.75) * 0.25;
-		const float lit = AreaLights::FormFactor(record.Center + record.Normal, -record.Normal, light);
+		const float lit = AreaLights::FormFactorClipped(record.Center + record.Normal, -record.Normal, light);
 		CHECK(GetRelativeError(lit, GetParallelFactor(-halfX, halfX, -halfY, halfY, 1.0)) <= 1e-4);
 	}
 
@@ -1249,7 +1271,7 @@ TEST_SUITE("Renderer.AreaLights")
 
 		// The receiver is 0.8 m under the face, within it: the window of a range of 5 m.
 		const double window = std::pow(1.0 - std::pow(0.64 / 25.0, 2.0), 2.0);
-		const double formFactor = AreaLights::FormFactor(surface.Position, surface.Normal, light);
+		const double formFactor = AreaLights::FormFactorClipped(surface.Position, surface.Normal, light);
 		const double fraction = AreaLights::SpecularFraction(surface.Position, surface.Normal, surface.View, 0.4f, light);
 		CHECK(GetRelativeError(formFactor, GetParallelFactor(-0.3, 1.1, -0.6, 0.4, 0.8)) <= 1e-4);
 		CHECK(fraction > 0.01);
@@ -1289,14 +1311,14 @@ TEST_SUITE("Renderer.AreaLights")
 		checkColor(AreaLights::Shade(surface, coat, coatDFG, dfg, 0.5f, light, 0.75f),
 			radiance * ((diffuse * 0.5 + specular * 0.75) * (1.0 - coatReflectance) + coatFraction * coatReflectance * 0.75) * window);
 
-		// The diffuse term is FormFactor's, the one with the table's horizon term, also where the exact clip gives another
-		// value: of a strip standing across the horizon, 1 m away, the exact clip keeps almost four times what the table does.
+		// The diffuse term is the exact clip's, also where the table's horizon term gives another value: of a strip standing
+		// across the horizon, 1 m away, the exact clip keeps almost four times what the table does.
 		AreaLights::AreaLight strip = MakeStandingLight(frame, -0.1, 0.1, -2.0, 2.0, 1.0);
 		strip.Radiance = light.Radiance;
 		strip.InverseRangeSquared = light.InverseRangeSquared;
-		const double stripFactor = AreaLights::FormFactor(surface.Position, surface.Normal, strip);
+		const double stripFactor = AreaLights::FormFactorClipped(surface.Position, surface.Normal, strip);
 		CHECK(stripFactor > 0.005);
-		CHECK(AreaLights::FormFactorClipped(surface.Position, surface.Normal, strip) > 3.0 * stripFactor);
+		CHECK(stripFactor > 3.0 * GetHorizonTermFormFactor(surface.Position, surface.Normal, strip));
 		const double stripWindow = std::pow(1.0 - std::pow(1.0 / 25.0, 2.0), 2.0);
 		checkColor(AreaLights::Shade(surface, noCoat, coatDFG, dfg, 1.0f, strip, 0.0f),
 			radiance * glm::dvec3(0.8, 0.6, 0.4) * (0.75 * stripFactor) * (1.0 - reflectance) * stripWindow);
@@ -1382,7 +1404,7 @@ TEST_SUITE("Renderer.AreaLights")
 		const double window = std::pow(1.0 - std::pow(4.0 / 25.0, 2.0), 2.0);
 		const double reflectance = 0.04 * 0.7 + 0.2;
 		const double coatReflectance = 0.8 * (0.04 * 0.9 + 0.05);
-		const double formFactor = AreaLights::FormFactor(position, normal, strip);
+		const double formFactor = AreaLights::FormFactorClipped(position, normal, strip);
 		const double expected = ((formFactor * (1.0 - reflectance) + reflectance * least) * (1.0 - coatReflectance) + least * coatReflectance) * window;
 		CHECK(glm::length(glm::dvec3(shaded) - glm::dvec3(expected)) <= 1e-5 * glm::length(glm::dvec3(expected)));
 	}
@@ -1961,24 +1983,35 @@ namespace
 	// The aim is a median within 3% and a 95th percentile within 10% (15% under roughness 0.25). The published fit meets it
 	// for sharp lobes and, of the rougher ones, for the steep views' medians only: toward grazing views its lobe departs
 	// from GGX's, and a part of it lies under the horizon, where no light reaches it. So each bound is 1.5 times the value
-	// measured when the comparison was written (the test prints the values), or the aim where the measurement meets the aim
-	// and 1.5 times it would not. The largest differences of a share belong to the lowest view (a cosine of 0.05): at
-	// roughness 0.05 its mirror direction meets the lower edge of the wall panel that ends 5 cm above the receiver's plane,
-	// which puts half the lobe at stake, and for the rougher lobes they are on the wall panels at the plane. Each row's
-	// measurement is the comment above it, in the order of the fields.
+	// measured (the test prints the values), or the aim where the measurement meets the aim and 1.5 times it would not. The
+	// largest differences of a share belong to the lowest view (a cosine of 0.05): at roughness 0.05 its mirror direction
+	// meets the lower edge of the wall panel that ends 5 cm above the receiver's plane, which puts half the lobe at stake,
+	// at 0.1 the wall panel the plane cuts, and for the rougher lobes they are on the wall panels at the plane. Each row's
+	// measurement is the comment above it, in the order of the fields, as measured once the shading cut faces at the
+	// receiver's horizon (GetLobeCoverage); before, with the lobe's part under the horizon on the faces that reach under it,
+	// they were the second line. The cut takes from the faces that reach under the horizon the share of the lobe it held
+	// there: at roughness 0.05 and 0.1 that share made up for the light the fit misses above the horizon at the lowest view
+	// (the wall panel the plane cuts gets 0.935 of the light where GGX gives 0.973, 0.959 before), and elsewhere it was
+	// light GGX does not have.
 	constexpr SpecularBounds c_SpecularBounds[] = {
+		// 0.00041, 0.021, 0.00041, 0.021, 5.56e-05, 0.32, -0.00278, 0.00339, 0.00116
 		// 0.00047, 0.023, 0.00051, 0.021, 5.2e-05, 0.32, -0.00164, 0.0018, 0.00116
-		{ 0.00071, 0.0346, 0.00077, 0.0316, 0.000078, 0.48, 0.00246, 0.00264, 0.00174 },
+		{ 0.000616, 0.0316, 0.000616, 0.0316, 0.0000834, 0.48, 0.00417, 0.00508, 0.00174 },
+		// 0.00194, 0.0743, 0.00134, 0.064, 0.00119, 0.038, -0.033, 0.0351, 0.00331
 		// 0.0022, 0.087, 0.0015, 0.064, 0.00044, 0.0144, -0.018, 0.0121, 0.0039
-		{ 0.00323, 0.13, 0.0022, 0.096, 0.00067, 0.0217, 0.027, 0.0182, 0.00583 },
+		{ 0.00291, 0.111, 0.00201, 0.096, 0.00179, 0.057, 0.0496, 0.0526, 0.00496 },
+		// 0.0216, 0.521, 0.0063, 0.105, 0.005, 0.145, -0.486, 0.263, 0.0528
 		// 0.026, 0.70, 0.0089, 0.157, 0.0058, 0.233, -0.486, 0.287, 0.053
-		{ 0.03, 1.05, 0.0135, 0.236, 0.0087, 0.35, 0.729, 0.431, 0.0791 },
+		{ 0.03, 0.782, 0.00944, 0.158, 0.0075, 0.218, 0.729, 0.395, 0.0791 },
+		// 0.0719, 0.812, 0.024, 0.332, 0.0449, 0.122, -0.518, 0.345, 0.0719
 		// 0.086, 0.96, 0.023, 0.356, 0.0554, 0.194, -0.518, 0.418, 0.126
-		{ 0.129, 1.45, 0.03, 0.535, 0.0832, 0.291, 0.776, 0.627, 0.189 },
+		{ 0.108, 1.22, 0.03, 0.499, 0.0674, 0.183, 0.776, 0.518, 0.108 },
+		// 0.053, 0.677, 0.0262, 0.48, 0.0518, 0.0441, -0.411, 0.167, 0.0924
 		// 0.063, 0.86, 0.028, 0.661, 0.0544, 0.0486, -0.411, 0.190, 0.106
-		{ 0.0942, 1.29, 0.03, 0.992, 0.0817, 0.0729, 0.616, 0.285, 0.159 },
+		{ 0.0795, 1.02, 0.03, 0.719, 0.0778, 0.0661, 0.616, 0.25, 0.139 },
+		// 0.0318, 0.177, 0.0257, 0.0539, 0.0335, 0.0086, -0.167, 0.0635, 0.0387
 		// 0.035, 0.25, 0.029, 0.093, 0.0375, 0.0086, -0.247, 0.0758, 0.046
-		{ 0.0526, 0.371, 0.03, 0.10, 0.0563, 0.013, 0.370, 0.114, 0.0696 },
+		{ 0.0477, 0.266, 0.03, 0.0808, 0.0502, 0.013, 0.25, 0.0952, 0.058 },
 	};
 }
 
@@ -2196,5 +2229,307 @@ TEST_SUITE("Renderer.AreaLights")
 				CHECK(std::isfinite(magnitude));
 			}
 		}
+	}
+}
+
+namespace
+{
+
+	// The face moved along the receiver's normal until its highest corner is `margin` under the horizon (or, with a negative
+	// margin, its highest corner that far above it).
+	Rectangle LowerUnderHorizon(Rectangle rectangle, double margin)
+	{
+		const glm::dvec3 axisY = glm::cross(rectangle.AxisX, rectangle.Normal);
+		const double reach = std::abs(rectangle.AxisX.z) * rectangle.HalfX + std::abs(axisY.z) * rectangle.HalfY;
+		rectangle.Center.z = -margin - reach;
+		return rectangle;
+	}
+
+	// Faces wholly under a receiver's horizon (the receiver's frame of Rectangle: normal +Z, the view toward +X), for a view
+	// whose cosine with the normal is `viewCosine`: on the viewer's side, where the fitted lobe reaches under the horizon (its
+	// inverse transform sends directions there above the transformed horizon), straight under the receiver and on the mirror
+	// direction's side, small and large, near and far, facing the receiver or tilted, one two-sided.
+	std::vector<Rectangle> GetUnderHorizonRectangles(double viewCosine)
+	{
+		const double viewSine = std::sqrt(std::max(1.0 - viewCosine * viewCosine, 0.0));
+		const glm::dvec3 opposite(viewSine, 0.0, -viewCosine); // Opposite the mirror direction
+		const glm::dvec3 viewSide = glm::normalize(glm::dvec3(1.0, 0.0, -0.05));
+		const glm::dvec3 up(0.0, 0.0, 1.0);
+		const glm::dvec3 alongX(1.0, 0.0, 0.0);
+		const glm::dvec3 alongY(0.0, 1.0, 0.0);
+		std::vector<Rectangle> rectangles;
+		for (const double margin : { 0.001, 0.05 })
+		{
+			rectangles.push_back(LowerUnderHorizon(MakeFacingRectangle(opposite * 2.0, 0.0, 0.4, 0.6), margin));
+			rectangles.push_back(LowerUnderHorizon(MakeFacingRectangle(opposite * 1.0, 0.7, 0.8, 0.15), margin));
+			rectangles.push_back(LowerUnderHorizon(MakeFacingRectangle(viewSide * 3.0, 0.0, 1.0, 1.0), margin));
+			rectangles.push_back(LowerUnderHorizon(MakeFacingRectangle(viewSide * 0.5 + glm::dvec3(0.0, 0.4, 0.0), 0.3, 0.1, 0.1), margin));
+			rectangles.push_back(LowerUnderHorizon(MakeFacingRectangle(glm::dvec3(-viewSine, 0.0, -viewCosine) * 2.0, 0.2, 0.5, 0.5), margin));
+			// A panel under the receiver facing up, and a wall panel on the viewer's side reaching up to the horizon.
+			rectangles.push_back(LowerUnderHorizon(MakeRectangle(glm::dvec3(0.3, 0.0, -1.0), up, alongX, 1.5, 1.0), margin));
+			rectangles.push_back(LowerUnderHorizon(MakeRectangle(glm::dvec3(2.0, 0.0, -0.5), -alongX, alongY, 1.0, 0.5), margin));
+			// A strip light across the view on the viewer's side, and a two-sided panel seen from behind.
+			rectangles.push_back(LowerUnderHorizon(MakeRectangle(glm::dvec3(1.5, 0.0, -0.2), glm::dvec3(-1.0, 0.0, 0.3), alongY, 2.0, 0.03), margin));
+			rectangles.push_back(LowerUnderHorizon(MakeRectangle(glm::dvec3(1.5, 0.5, -0.5), glm::dvec3(1.5, 0.5, -0.5), alongY, 0.6, 0.4, true), margin));
+		}
+		return rectangles;
+	}
+
+	// Faces the receiver's horizon cuts: standing across it on the viewer's side, ahead and to the side, tilted, a wall panel
+	// ahead, one facing the receiver on the mirror direction's side, a panel facing down whose far edge dips under it.
+	std::vector<Rectangle> GetCutByHorizonRectangles(double viewCosine)
+	{
+		const double viewSine = std::sqrt(std::max(1.0 - viewCosine * viewCosine, 0.0));
+		const glm::dvec3 alongX(1.0, 0.0, 0.0);
+		const glm::dvec3 alongY(0.0, 1.0, 0.0);
+		std::vector<Rectangle> rectangles;
+		for (const double above : { 0.02, 0.2 })
+		{
+			rectangles.push_back(LowerUnderHorizon(MakeFacingRectangle(glm::dvec3(viewSine * 2.0 + 0.05, 0.0, 0.0), 0.0, 0.4, 0.6), -above));
+			rectangles.push_back(LowerUnderHorizon(MakeRectangle(glm::dvec3(2.0, 0.0, 0.0), -alongX, alongY, 1.0, 0.5), -above));
+			rectangles.push_back(LowerUnderHorizon(MakeRectangle(glm::dvec3(1.0, 1.0, 0.0), glm::dvec3(-0.6, -0.8, 0.0), glm::dvec3(0.8, -0.6, 0.0), 0.7, 0.4),
+				-above));
+			rectangles.push_back(LowerUnderHorizon(MakeRectangle(glm::dvec3(-1.5, 0.0, 0.0), alongX, alongY, 1.0, 0.6), -above));
+			rectangles.push_back(LowerUnderHorizon(MakeFacingRectangle(glm::dvec3(-viewSine * 2.0 - 0.05, 0.0, 0.0), 0.5, 0.6, 0.3), -above));
+			rectangles.push_back(LowerUnderHorizon(MakeRectangle(glm::dvec3(1.2, -0.6, 0.0), glm::dvec3(-1.0, 0.4, -0.5), alongY, 0.8, 0.8), -above));
+			rectangles.push_back(LowerUnderHorizon(MakeRectangle(glm::dvec3(-1.2, 0.0, 0.0), glm::dvec3(0.3, 0.0, -1.0), alongY, 0.5, 1.2), -above));
+		}
+		return rectangles;
+	}
+
+	// The chrome ball of the confirming check's pictures (0.5 m at (-1.2, 0.5, 0), seen from (0, 1.2, 4.5)) and its two lights:
+	// a 0.8 x 1.2 m softbox at (3, 1.2, -0.5) shining along -X and a 1.6 x 0.3 m ceiling panel at (0, 2.6, 0.3) shining down.
+	struct BallLight
+	{
+		AreaLights::AreaLight Light;
+		const char* Name = "";
+	};
+
+	std::array<BallLight, 2> GetBallLights()
+	{
+		const glm::mat4 softbox = glm::translate(glm::mat4(1.0f), glm::vec3(3.0f, 1.2f, -0.5f)) * glm::mat4_cast(glm::quat(glm::radians(glm::vec3(0.0f, 90.0f, 0.0f))));
+		const glm::mat4 panel = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 2.6f, 0.3f)) * glm::mat4_cast(glm::quat(glm::radians(glm::vec3(-90.0f, 0.0f, 0.0f))));
+		std::array<BallLight, 2> lights;
+		lights[0].Light = AreaLights::LoadAreaLight(AreaLights::MakeRecord(softbox, true, glm::vec3(1.0f), 1.0f, glm::vec2(0.4f, 0.6f), 20.0f, false));
+		lights[0].Name = "softbox";
+		lights[1].Light = AreaLights::LoadAreaLight(AreaLights::MakeRecord(panel, true, glm::vec3(1.0f), 1.0f, glm::vec2(0.8f, 0.15f), 20.0f, false));
+		lights[1].Name = "panel";
+		return lights;
+	}
+
+	bool IsUnderHorizon(const glm::vec3& position, const glm::vec3& normal, const AreaLights::AreaLight& light)
+	{
+		const std::array<glm::dvec3, 4> corners = GetCorners(position, light);
+		return std::all_of(corners.begin(), corners.end(), [&](const glm::dvec3& corner) { return glm::dot(corner, glm::dvec3(normal)) <= 0.0; });
+	}
+
+	// What the faces the horizon cuts are held to at each of c_SpecularRoughness: the median and 95th percentile of the
+	// highlight's errors relative to GGX's integral (or to a hundredth of the lobe, as GetSignedSpecularErrors), and the
+	// greatest difference of a share. Each is 1.5 times the value measured, which the comment above it gives with the
+	// values the shading had before it cut the face at the receiver's horizon.
+	struct HorizonCutBounds
+	{
+		double Median = 0.0;
+		double Percentile = 0.0;
+		double Share = 0.0;
+	};
+
+	constexpr HorizonCutBounds c_HorizonCutBounds[] = {
+		// 0.000131, 0.0382, 0.00431; before: 0.0022, 0.194, 0.00473
+		{ 0.000196, 0.0574, 0.00646 },
+		// 0.000288, 0.100, 0.0395; before: 0.0156, 0.556, 0.0402
+		{ 0.000432, 0.15, 0.0593 },
+		// 0.00534, 0.530, 0.129; before: 0.0393, 2.50, 0.230
+		{ 0.00801, 0.795, 0.193 },
+		// 0.032, 0.914, 0.0822; before: 0.0867, 6.46, 0.166
+		{ 0.0481, 1.37, 0.123 },
+		// 0.096, 0.852, 0.0707; before: 0.175, 3.66, 0.0922
+		{ 0.144, 1.28, 0.106 },
+		// 0.0103, 0.261, 0.0179; before: 0.0813, 0.302, 0.0166
+		{ 0.0154, 0.392, 0.0268 },
+	};
+
+}
+
+TEST_SUITE("Renderer.AreaLights")
+{
+	TEST_CASE("A light wholly under the receiver's horizon gives it no highlight and no diffuse light")
+	{
+		// GGX reflects nothing from under the surface, nor does a Lambertian surface, so a face whose corners all lie under the
+		// receiver's horizon gives exactly 0. The fitted lobe keeps a part of itself under the horizon on the viewer's side
+		// (where its inverse transform lifts directions above the transformed horizon), which drew a second, ghost image of
+		// each light on the far side of polished balls.
+		const Frame frame = MakeFrame();
+		const glm::vec3 position = frame.GetPoint(glm::dvec3(0.0));
+		const glm::vec3 normal = frame.GetDirection(glm::dvec3(0.0, 0.0, 1.0));
+		double worstShare = 0.0;
+		double worstDiffuse = 0.0;
+		int faces = 0;
+		for (const float roughness : { 0.045f, 0.05f, 0.1f, 0.2f, 0.25f, 0.5f, 0.75f, 1.0f })
+		{
+			for (int step = 0; step < c_SpecularViewSteps; step++)
+			{
+				const double viewCosine = GetSpecularViewCosine(step);
+				const glm::vec3 view = frame.GetDirection(glm::dvec3(std::sqrt(std::max(1.0 - viewCosine * viewCosine, 0.0)), 0.0, viewCosine));
+				const float magnitude = AreaLights::SampleTable(AreaLights::c_TermsLayer, glm::vec2(roughness, std::sqrt(1.0f - static_cast<float>(viewCosine)))).x;
+				const std::vector<Rectangle> rectangles = GetUnderHorizonRectangles(viewCosine);
+				for (size_t index = 0; index < rectangles.size(); index++)
+				{
+					CAPTURE(roughness);
+					CAPTURE(viewCosine);
+					CAPTURE(index);
+					const AreaLights::AreaLight light = MakeLight(frame, rectangles[index]);
+					REQUIRE(IsUnderHorizon(position, normal, light));
+					REQUIRE(IsLit(position, light));
+					faces++;
+					const double share = AreaLights::SpecularFraction(position, normal, view, roughness, light) * magnitude;
+					const float diffuse = AreaLights::FormFactorClipped(position, normal, light);
+					worstShare = std::max(worstShare, share);
+					worstDiffuse = std::max(worstDiffuse, static_cast<double>(diffuse));
+					CHECK(share == 0.0);
+					CHECK(diffuse == 0.0f);
+					CHECK(Integrate(Integrand::Specular, roughness, viewCosine, rectangles[index]) == 0.0);
+				}
+			}
+		}
+		MESSAGE("under the horizon: " << faces << " faces, largest highlight share " << worstShare << ", largest form factor " << worstDiffuse);
+
+		// The ball's points that have either light wholly under their horizon.
+		int ballPoints = 0;
+		double worstBall = 0.0;
+		for (const BallLight& ballLight : GetBallLights())
+		{
+			for (const float roughness : { 0.05f, 0.2f })
+			{
+				for (int a = 0; a < 100; a++)
+				{
+					for (int b = 0; b < 100; b++)
+					{
+						const float theta = static_cast<float>(c_Pi) * (static_cast<float>(a) + 0.5f) / 100.0f;
+						const float phi = 2.0f * static_cast<float>(c_Pi) * (static_cast<float>(b) + 0.5f) / 100.0f;
+						const glm::vec3 ballNormal(std::sin(theta) * std::cos(phi), std::cos(theta), std::sin(theta) * std::sin(phi));
+						const glm::vec3 point = glm::vec3(-1.2f, 0.5f, 0.0f) + ballNormal * 0.5f;
+						const glm::vec3 ballView = glm::normalize(glm::vec3(0.0f, 1.2f, 4.5f) - point);
+						if (glm::dot(ballNormal, ballView) <= 0.0f || !IsUnderHorizon(point, ballNormal, ballLight.Light) || !IsLit(point, ballLight.Light))
+							continue;
+						ballPoints++;
+						const float share = AreaLights::SpecularFraction(point, ballNormal, ballView, roughness, ballLight.Light);
+						worstBall = std::max(worstBall, static_cast<double>(share));
+						CAPTURE(ballLight.Name);
+						CAPTURE(roughness);
+						CAPTURE(ballNormal);
+						CHECK(share == 0.0f);
+						CHECK(AreaLights::FormFactorClipped(point, ballNormal, ballLight.Light) == 0.0f);
+					}
+				}
+			}
+		}
+		MESSAGE("the chrome ball: " << ballPoints << " points with a light under their horizon, largest share of the lobe " << worstBall);
+		CHECK(ballPoints > 1000);
+	}
+
+	TEST_CASE("A light the receiver's horizon cuts gives what GGX and the form factor give of its part above the horizon")
+	{
+		// The diffuse light is the exact clip's, and the highlight the fitted lobe's share of the part above the horizon: the
+		// fit's own error stays (most at grazing views), the lobe's part under the horizon no longer adds to it.
+		const Frame frame = MakeFrame();
+		const glm::vec3 position = frame.GetPoint(glm::dvec3(0.0));
+		const glm::vec3 normal = frame.GetDirection(glm::dvec3(0.0, 0.0, 1.0));
+		REQUIRE(std::size(c_HorizonCutBounds) == std::size(c_SpecularRoughness));
+		double worstDiffuse = 0.0;
+		for (size_t roughnessIndex = 0; roughnessIndex < std::size(c_SpecularRoughness); roughnessIndex++)
+		{
+			const float roughness = c_SpecularRoughness[roughnessIndex];
+			double worstShare = 0.0;
+			double worstRelative = 0.0;
+			std::vector<double> errors;
+			for (int step = 0; step < c_SpecularViewSteps; step++)
+			{
+				const double viewCosine = GetSpecularViewCosine(step);
+				const glm::vec3 view = frame.GetDirection(glm::dvec3(std::sqrt(std::max(1.0 - viewCosine * viewCosine, 0.0)), 0.0, viewCosine));
+				const float magnitude = AreaLights::SampleTable(AreaLights::c_TermsLayer, glm::vec2(roughness, std::sqrt(1.0f - static_cast<float>(viewCosine)))).x;
+				const std::vector<Rectangle> rectangles = GetCutByHorizonRectangles(viewCosine);
+				for (size_t index = 0; index < rectangles.size(); index++)
+				{
+					CAPTURE(roughness);
+					CAPTURE(viewCosine);
+					CAPTURE(index);
+					const AreaLights::AreaLight light = MakeLight(frame, rectangles[index]);
+					REQUIRE(!IsUnderHorizon(position, normal, light));
+					REQUIRE(IsLit(position, light));
+					const double reference = Integrate(Integrand::Specular, roughness, viewCosine, rectangles[index]);
+					const double share = AreaLights::SpecularFraction(position, normal, view, roughness, light) * magnitude;
+					worstShare = std::max(worstShare, std::abs(share - reference));
+					const double relative = std::abs(share - reference) / std::max(reference, 0.01 * magnitude);
+					worstRelative = std::max(worstRelative, relative);
+					errors.push_back(relative);
+					const double diffuse = AreaLights::FormFactorClipped(position, normal, light);
+					worstDiffuse = std::max(worstDiffuse, std::abs(diffuse - GetReferenceFormFactor(position, glm::dvec3(normal), light)));
+				}
+			}
+			MESSAGE("cut by the horizon, roughness " << roughness << ": median " << GetPercentile(errors, 0.5) << ", 95th " << GetPercentile(errors, 0.95)
+				<< ", worst " << worstRelative << ", worst share difference " << worstShare);
+			CAPTURE(roughness);
+			const HorizonCutBounds& bounds = c_HorizonCutBounds[roughnessIndex];
+			CHECK(GetPercentile(errors, 0.5) <= bounds.Median);
+			CHECK(GetPercentile(errors, 0.95) <= bounds.Percentile);
+			CHECK(worstShare <= bounds.Share);
+		}
+		MESSAGE("cut by the horizon: the form factor's worst difference from the exact clip " << worstDiffuse);
+		// The float clip against the double one, as over the random lights.
+		CHECK(worstDiffuse <= 1e-5);
+	}
+
+	TEST_CASE("A light sinking under the receiver's horizon fades out of its highlight without a step")
+	{
+		// A softbox facing the receiver on the viewer's side (where the fitted lobe reaches under the horizon) and on the mirror
+		// direction's side (where the lobe is), lowered through the horizon 1 mm at a time: its highlight falls to exactly 0 once
+		// its last corner is under, and no step between two heights is larger than the light's own change. A shading that only
+		// dropped faces wholly under the horizon would step there by what the lobe's part under the horizon held.
+		const Frame frame = MakeFrame();
+		const glm::vec3 position = frame.GetPoint(glm::dvec3(0.0));
+		const glm::vec3 normal = frame.GetDirection(glm::dvec3(0.0, 0.0, 1.0));
+		double largestStep = 0.0;
+		double largestShare = 0.0;
+		double largestLastAbove = 0.0;
+		for (const double place : { 1.0, -1.0 })
+		{
+			for (const float roughness : { 0.05f, 0.2f })
+			{
+				for (const double viewCosine : { 0.05, 0.2, 0.6 })
+				{
+					CAPTURE(place);
+					CAPTURE(roughness);
+					CAPTURE(viewCosine);
+					const glm::vec3 view = frame.GetDirection(glm::dvec3(std::sqrt(1.0 - viewCosine * viewCosine), 0.0, viewCosine));
+					const Rectangle facing = MakeFacingRectangle(glm::dvec3(2.0 * place, 0.0, 0.0), 0.0, 0.4, 0.6);
+					double previous = -1.0;
+					double step = 0.0;
+					double lastAbove = 0.0;
+					for (int millimeter = 300; millimeter >= -50; millimeter--)
+					{
+						const AreaLights::AreaLight light = MakeLight(frame, LowerUnderHorizon(facing, -0.001 * millimeter));
+						const double share = AreaLights::SpecularFraction(position, normal, view, roughness, light);
+						largestShare = std::max(largestShare, share);
+						if (previous >= 0.0)
+							step = std::max(step, std::abs(share - previous));
+						previous = share;
+						if (millimeter == 1)
+							lastAbove = share;
+						if (millimeter < 0)
+							CHECK(share == 0.0);
+					}
+					MESSAGE("sinking softbox at x " << place * 2.0 << ", roughness " << roughness << ", view " << viewCosine << ": largest step " << step
+						<< ", 1 mm above the horizon " << lastAbove);
+					largestStep = std::max(largestStep, step);
+					largestLastAbove = std::max(largestLastAbove, lastAbove);
+				}
+			}
+		}
+		MESSAGE("sinking softbox: largest step " << largestStep << " (the light's own change where the face's edge crosses a sharp lobe), largest share "
+			<< largestShare << ", largest 1 mm above the horizon " << largestLastAbove);
+		CHECK(largestShare > 0.1);
+		// 1.5 times the measured 0.00118 (0.131 while the lobe kept its part under the horizon).
+		CHECK(largestLastAbove <= 0.00177);
 	}
 }

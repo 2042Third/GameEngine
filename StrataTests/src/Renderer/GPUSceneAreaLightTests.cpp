@@ -327,9 +327,9 @@ namespace
 	}
 
 	// How far the GPU's shading may be from the reference (CompareWithReference), 1.5 times the largest differences measured
-	// (2026-11-10, RTX 5090: 1.22e-3 relative and 1.20e-3 of the peak over the first case's 331,776 pixels, 1.04e-3 of the
-	// peak on wet ground): the HDR target's half floats round to 4.9e-4 of a value, the rest is the GPU's division and square
-	// roots and its sampler's weights in the BRDF table.
+	// (2026-11-10, RTX 5090: 1.21e-3 relative and 1.21e-3 of the peak over the first case's 331,776 pixels since faces are cut
+	// at the receiver's horizon, 1.22e-3 and 1.20e-3 before; 1.04e-3 of the peak on wet ground): the HDR target's half floats
+	// round to 4.9e-4 of a value, the rest is the GPU's division and square roots and its sampler's weights in the BRDF table.
 	constexpr double c_AgreementRelative = 1.8e-3;
 	constexpr double c_AgreementAbsolute = 1.8e-3;
 	// What the fit's lobe keeps under the horizon of a white metal at grazing views, short of 1 under a light filling the sky
@@ -519,6 +519,67 @@ TEST_SUITE("GPU.SceneRenderer.AreaLights")
 			"absolute {:.3g} of the peak", compared, worst.MaxRelative, c_RelativeFloor, worst.MaxAbsolute));
 		CHECK(worst.MaxRelative <= c_AgreementRelative);
 		CHECK(worst.MaxAbsolute <= c_AgreementAbsolute);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A rect light under a surface's horizon puts no ghost of its face on it")
+	{
+		// A polished metal floor and lights under its horizon on the viewer's side (where the fitted lobe used to reach under the
+		// surface and draw a second image of each light) and straight under it: GGX reflects nothing from under the surface, so
+		// every pixel stays exactly black. The same lights raised over the floor light it, so the check is not blind.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		constexpr uint32_t c_ViewSize = 64;
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_ViewSize, c_ViewSize);
+		for (const float roughness : { 0.05f, 0.2f })
+		{
+			for (const float cosine : { 0.05f, 0.2f, 0.5f })
+			{
+				for (const float side : { -1.0f, 1.0f })
+				{
+					CAPTURE(roughness);
+					CAPTURE(cosine);
+					CAPTURE(side);
+					PlaneMaterial material;
+					material.Albedo = glm::vec3(0.95f);
+					material.Metallic = 1.0f;
+					material.Roughness = roughness;
+					Scene scene;
+					AddNeutralPostProcess(scene);
+					AddDarkSky(scene);
+					AddPlane(scene, assets, material, 0.0f, 200.0f);
+					const glm::vec3 toCamera = glm::angleAxis(glm::radians(35.0f), glm::vec3(0.0f, 1.0f, 0.0f)) * ViewWithCosine(cosine);
+					const glm::vec3 viewSide = glm::normalize(glm::vec3(toCamera.x, 0.0f, toCamera.z));
+					// Every corner of each face is at least 25 cm under the floor (side -1), or over it (side 1).
+					const glm::vec3 softbox = viewSide * 2.0f + glm::vec3(0.0f, 0.8f * side, 0.0f);
+					AddRectLight(scene, softbox, -softbox, glm::vec3(0.0f, 1.0f, 0.0f), 0.8f, 1.2f, 3000.0f, 20.0f);
+					const glm::vec3 strip = viewSide * 1.2f + glm::vec3(0.0f, 0.3f * side, 0.0f);
+					AddRectLight(scene, strip, glm::vec3(-viewSide.x, -0.2f * side, -viewSide.z), glm::cross(viewSide, glm::vec3(0.0f, 1.0f, 0.0f)), 1.6f, 0.1f,
+						3000.0f, 20.0f);
+					AddRectLight(scene, glm::vec3(0.3f, 0.5f * side, -0.2f), glm::vec3(0.0f, -side, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), 1.0f, 1.0f, 3000.0f, 20.0f);
+					const SceneCamera camera = OrthographicFrom(glm::vec3(0.0f), toCamera, 3.0f, 6.0f);
+					const ReadbackImage hdr = RenderHDR(renderer, scene, camera);
+					CHECK(GetLightCounts(renderer).AreaLights == 3);
+					float brightest = 0.0f;
+					for (uint32_t y = 0; y < hdr.Height; y++)
+					{
+						for (uint32_t x = 0; x < hdr.Width; x++)
+						{
+							const glm::vec4 value = ReadHalfTexel(hdr, x, y);
+							brightest = std::max(brightest, std::max(value.r, std::max(value.g, value.b)));
+						}
+					}
+					MESSAGE(fmt::format("Lights {} the floor's horizon, roughness {}, view cosine {}: the brightest pixel {:.4g} nits", side < 0.0f ? "under" : "over",
+						roughness, cosine, brightest));
+					if (side < 0.0f)
+						CHECK(brightest == 0.0f);
+					else
+						CHECK(brightest > 10.0f);
+				}
+			}
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

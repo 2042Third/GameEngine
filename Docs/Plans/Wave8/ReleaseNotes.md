@@ -342,7 +342,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   cosines, Heitz et al. 2016, from the authors' published fit): a polished floor mirrors the rectangle with crisp edges,
   wet ground draws a streak, rough metal a soft glow of its shape, with nothing sampled, no noise and nothing that needs
   TAA. Clear coats, glass, blended surfaces and reflection probe captures (diffuse only) take it; its Range fades it to
-  zero at that distance from the face.
+  zero at that distance from the face. A surface gets nothing from a light below its horizon and only the part above it
+  from one its horizon cuts, so a polished ball shows no second image of a light behind it.
 - Rect lights cast no shadow yet (the stream's next stage): they light through objects.
 - Scenes without rect lights render as before, bit for bit, and their forward pass costs what it did: the rect-light code
   is in shaders of their own, drawn while a scene has a rect light, lit or not (Known issues). Every light record grew by
@@ -568,10 +569,10 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
 **area-lights**
 
 - A rect light's highlight is the published fit's (the shading equals the CPU reference `Renderer/AreaLights.h` within
-  1.22e-3 relative), which is less exact than GGX at grazing views of surfaces of middling roughness. Fitted lobe times magnitude
-  against GGX's quadrature, median and 95th percentile of the relative error: roughness 0.25: 0.026 and 0.70; 0.5: 0.086
-  and 0.96; 0.75: 0.063 and 0.86. Views within 53.6 degrees of the normal: 0.0089 and 0.157, 0.023 and 0.356, 0.028 and
-  0.661 (on the faces that hold a twentieth of the lobe or more: 0.0049 and 0.053, 0.016 and 0.126, 0.026 and 0.106: most
+  1.21e-3 relative), which is less exact than GGX at grazing views of surfaces of middling roughness. Fitted lobe times magnitude
+  against GGX's quadrature, median and 95th percentile of the relative error: roughness 0.25: 0.022 and 0.52; 0.5: 0.072
+  and 0.81; 0.75: 0.053 and 0.68. Views within 53.6 degrees of the normal: 0.0063 and 0.105, 0.024 and 0.332, 0.026 and
+  0.48 (on the faces that hold a twentieth of the lobe or more: 0.0049 and 0.053, 0.016 and 0.072, 0.018 and 0.092: most
   of the tail lies on faces that catch only the lobe's edge). Seen 87 degrees from the normal, faces centered on the
   mirror direction get 1.1 to 1.4 times GGX's light at roughness 0.25 and 1.6 to 2.4 times at 0.5; a metal floor of
   roughness 0.3 holds 0.934 of GGX's light in its highlight; under a light filling the sky a white metal of roughness 0.3
@@ -579,9 +580,9 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   reflect all of it.
 - Rect lights cast no shadows yet: Cast Shadows and its biases are kept, and nothing is shadowed.
 - A scene with a rect light, even an unlit one out of sight, draws every surface with the forward shaders that shade rect
-  lights: an unlit one added to the showcase costs its opaque pass 2.7% at Medium (shots 2 and 3, interleaved A/B) and
-  moves a few pixels (shot 3 without AA: two specks of 2,048 pixels by up to 117 codes; under TAA up to 4 codes in shot 2
-  and 27 in shot 3, about what those shots' own repeats differ by). Turning a light off and on keeps the shaders; adding
+  lights: an unlit one added to the showcase costs its opaque pass 2.7% at Medium (shots 2 and 3, interleaved A/B); its
+  pictures differ from those without it only where two sessions of one build differ without any rect light (shot 3
+  without AA by two specks, TAA's shots 2 and 3), so no change to other surfaces' shading is shown. Turning a light off and on keeps the shaders; adding
   the first rect light to a running scene or removing the last (a spawned prefab, a streamed world cell) switches them,
   and the frame that adds the first compiles the forms of the forward pipelines it draws on the main thread: 6.3-7.1 ms
   for the one opaque pipeline of a small test scene, first in its process (0.6-0.8 ms for the next renderer's). A scene

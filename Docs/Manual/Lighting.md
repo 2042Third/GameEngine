@@ -106,7 +106,7 @@ linearly transformed cosines), the same in every frame.
   reads (an integral over its face for the diffuse light, another for the highlight), and a clear-coated surface a third
   integral and eight reads more; lights that reach few pixels cost little. Besides, a scene that has a rect light, lit or
   not and wherever it is, draws all its surfaces with the shaders that can shade one, which cost more everywhere: an unlit
-  rect light added to the showcase costs its opaque pass 2.7% at Medium and changes a few pixels slightly. Scenes without
+  rect light added to the showcase costs its opaque pass 2.7% at Medium. Scenes without
   rect lights pay none of this. Turning a light off and on keeps those shaders; adding the first rect light to a running
   scene (or removing the last) switches them, and the first frame with one prepares them (6 to 7 ms for the one kind of
   surface of a small test scene, the first time in a program; a scene drawing more kinds prepares shaders for each, and
@@ -117,8 +117,10 @@ linearly transformed cosines), the same in every frame.
   roughness 0.3 to 0.6 reflects 0.91 to 0.92 of it seen 78 degrees from its normal (0.94 to 0.98 at 60 degrees) where the
   real one would reflect all of it. Smooth and fully rough surfaces keep all their light. Seen within 54 degrees of their
   normal, the highlight's median error over the measured lights and views is under 3%, but one in twenty is off by more
-  than 16% at roughness 0.25, 36% at 0.5 and 66% at 0.75, mostly from lights that catch only the edge of the highlight
-  (less than a twentieth of its lobe): from lights that catch more, one in twenty is off by more than 5%, 13% and 11%.
+  than 11% at roughness 0.25, 33% at 0.5 and 48% at 0.75, mostly from lights that catch only the edge of the highlight
+  (less than a twentieth of its lobe): from lights that catch more, one in twenty is off by more than 5%, 7% and 9%.
+  A light wholly below a surface's horizon (behind the surface as seen from it) gives that surface nothing, and one the
+  horizon cuts lights it with its part above.
 
 ## The sky
 

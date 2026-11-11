@@ -78,26 +78,6 @@ float3 IntegrateAreaEdge(float3 start, float3 end, float3 crossProduct)
 	return sine * weight;
 }
 
-// The face as seen from a point at the origin, through its center and half axes: the sum of its four edges' terms.
-float3 IntegrateAreaPolygon(float3 center, float3 axisX, float3 axisY)
-{
-	float3 corners[4];
-	corners[0] = center - axisX - axisY;
-	corners[1] = center + axisX - axisY;
-	corners[2] = center + axisX + axisY;
-	corners[3] = center - axisX + axisY;
-	float3 edges[4];
-	edges[0] = axisX * 2.0;
-	edges[1] = axisY * 2.0;
-	edges[2] = axisX * -2.0;
-	edges[3] = axisY * -2.0;
-	float3 sum = float3(0.0);
-	[unroll]
-	for (uint index = 0u; index < 4u; index++)
-		sum += IntegrateAreaEdge(corners[index], corners[(index + 1u) % 4u], cross(corners[index], edges[index]));
-	return sum;
-}
-
 // 1 in front of the light, -1 behind a two-sided one (where the corners' order is reversed and with it the sign of every edge
 // sum) and 0 where it lights nothing: behind a one-sided light and on its plane.
 float GetAreaLightSide(float3 position, AreaLight light)
@@ -108,30 +88,14 @@ float GetAreaLightSide(float3 position, AreaLight light)
 	return light.TwoSided && distance < 0.0 ? -1.0 : 0.0;
 }
 
-// The form factor of the light seen from a surface point with its face clipped by the receiver's horizon exactly (no table):
-// what AreaLights::FormFactorClipped computes. Each stretch of the outline under the horizon is closed by an edge along it.
-float AreaLightFormFactorClipped(float3 position, float3 normal, AreaLight light)
+// The vector form factor of the face's part above the receiver's horizon, seen from the origin: its corners, the exact edge that
+// leaves each one and the corners' heights over the horizon (AreaLights.cpp's IntegratePolygonAbove). The edges above the horizon,
+// cut where they cross it, and an edge along the horizon that closes each stretch of the outline under it; with every corner above
+// the horizon it is the four edges' sum, with none 0. The heights may be the corners' before a linear transform took them where
+// they are: the result is then the transformed image's sum of the part above the untransformed horizon.
+float3 IntegrateAreaPolygonAbove(float3 corners[4], float3 edges[4], float heights[4])
 {
-	float side = GetAreaLightSide(position, light);
-	if (side == 0.0)
-		return 0.0;
-	float3 center = light.Center - position;
-	float3 corners[4];
-	corners[0] = center - light.AxisX - light.AxisY;
-	corners[1] = center + light.AxisX - light.AxisY;
-	corners[2] = center + light.AxisX + light.AxisY;
-	corners[3] = center - light.AxisX + light.AxisY;
-	float3 edges[4];
-	edges[0] = light.AxisX * 2.0;
-	edges[1] = light.AxisY * 2.0;
-	edges[2] = light.AxisX * -2.0;
-	edges[3] = light.AxisY * -2.0;
-	float heights[4];
-	[unroll]
-	for (uint corner = 0u; corner < 4u; corner++)
-		heights[corner] = dot(corners[corner], normal);
-
-	float sum = 0.0;
+	float3 sum = float3(0.0);
 	float3 exitPoint = float3(0.0);  // Where the outline last went under, while no entry has closed it
 	float3 firstEntry = float3(0.0); // An entry met before any exit: it follows the last exit, around the outline's start
 	bool exitOpen = false;
@@ -146,21 +110,21 @@ float AreaLightFormFactorClipped(float3 position, float3 normal, AreaLight light
 		float3 crossProduct = cross(start, edges[index]);
 		if (startHeight > 0.0 && endHeight > 0.0)
 		{
-			sum += dot(IntegrateAreaEdge(start, end, crossProduct), normal);
+			sum += IntegrateAreaEdge(start, end, crossProduct);
 		}
 		else if (startHeight > 0.0)
 		{
 			exitPoint = end * startHeight - start * endHeight;
 			exitOpen = true;
-			sum += dot(IntegrateAreaEdge(start, exitPoint, crossProduct * startHeight), normal);
+			sum += IntegrateAreaEdge(start, exitPoint, crossProduct * startHeight);
 		}
 		else if (endHeight > 0.0)
 		{
 			float3 entry = start * endHeight - end * startHeight;
-			sum += dot(IntegrateAreaEdge(entry, end, crossProduct * endHeight), normal);
+			sum += IntegrateAreaEdge(entry, end, crossProduct * endHeight);
 			if (exitOpen)
 			{
-				sum += dot(IntegrateAreaEdge(exitPoint, entry, cross(exitPoint, entry)), normal);
+				sum += IntegrateAreaEdge(exitPoint, entry, cross(exitPoint, entry));
 				exitOpen = false;
 			}
 			else
@@ -170,8 +134,39 @@ float AreaLightFormFactorClipped(float3 position, float3 normal, AreaLight light
 		}
 	}
 	if (exitOpen)
-		sum += dot(IntegrateAreaEdge(exitPoint, firstEntry, cross(exitPoint, firstEntry)), normal);
-	return clamp(sum * side, 0.0, 1.0);
+		sum += IntegrateAreaEdge(exitPoint, firstEntry, cross(exitPoint, firstEntry));
+	return sum;
+}
+
+// The face's corners from a point at the origin, through its center and half axes, in AreaLight's order, and the exact edge that
+// leaves each one.
+void MakeAreaPolygon(float3 center, float3 axisX, float3 axisY, out float3 corners[4], out float3 edges[4])
+{
+	corners[0] = center - axisX - axisY;
+	corners[1] = center + axisX - axisY;
+	corners[2] = center + axisX + axisY;
+	corners[3] = center - axisX + axisY;
+	edges[0] = axisX * 2.0;
+	edges[1] = axisY * 2.0;
+	edges[2] = axisX * -2.0;
+	edges[3] = axisY * -2.0;
+}
+
+// The form factor of the light seen from a surface point with its face clipped by the receiver's horizon exactly (no table):
+// what AreaLights::FormFactorClipped computes, and the shading's diffuse light.
+float AreaLightFormFactorClipped(float3 position, float3 normal, AreaLight light)
+{
+	float side = GetAreaLightSide(position, light);
+	if (side == 0.0)
+		return 0.0;
+	float3 corners[4];
+	float3 edges[4];
+	MakeAreaPolygon(light.Center - position, light.AxisX, light.AxisY, corners, edges);
+	float heights[4];
+	[unroll]
+	for (uint corner = 0u; corner < 4u; corner++)
+		heights[corner] = dot(corners[corner], normal);
+	return clamp(dot(IntegrateAreaPolygonAbove(corners, edges, heights), normal) * side, 0.0, 1.0);
 }
 
 // The point of the light's face nearest to `position` (the axes are perpendicular, so the nearest along each).
@@ -236,7 +231,8 @@ float4 SampleAreaLightTable(uint layer, float2 uv)
 }
 
 // The form factor a vector form factor comes to once the horizon has cut it: the table's term for a sphere cap of the same
-// vector form factor. `alongNormal` is the vector's part along the receiver's normal.
+// vector form factor (AreaLights::ClipToHorizon). `alongNormal` is the vector's part along the receiver's normal. The shading
+// takes it for the transformed horizon of the specular lobe only: at the receiver's own horizon it clips exactly.
 float ClipAreaToHorizon(float3 vectorFormFactor, float alongNormal)
 {
 	float vectorLength = length(vectorFormFactor);
@@ -245,17 +241,6 @@ float ClipAreaToHorizon(float3 vectorFormFactor, float alongNormal)
 	float cosine = alongNormal / vectorLength;
 	float share = SampleAreaLightTable(ST_AREA_TABLE_TERMS, float2(cosine * 0.5 + 0.5, vectorLength)).w;
 	return min(vectorLength * share, 1.0);
-}
-
-// The face's form factor as the shading takes it (AreaLights::FormFactor): the vector form factor with the table's horizon
-// term. 0 behind a one-sided light and on the light's plane.
-float AreaLightFormFactor(float3 position, float3 normal, AreaLight light)
-{
-	float side = GetAreaLightSide(position, light);
-	if (side == 0.0)
-		return 0.0;
-	float3 vectorFormFactor = IntegrateAreaPolygon(light.Center - position, light.AxisX, light.AxisY) * side;
-	return ClipAreaToHorizon(vectorFormFactor, dot(vectorFormFactor, normal));
 }
 
 // A tangent of the normal that does not depend on the view (Include/IBL.slang's TangentBasis).
@@ -272,8 +257,8 @@ float3 TransformAreaVector(float4 transform, float3 tangent, float3 bitangent, f
 	return float3(transform.x * local.x + transform.z * local.z, local.y, transform.y * local.x + transform.w * local.z);
 }
 
-// The share of the clamped cosine lobe the light covers, for the lobe that `transform` turns into the cosine around `normal`;
-// `view` orients the transform's frame (AreaLights::GetLobeCoverage).
+// The share of the clamped cosine lobe the light covers, for the lobe that `transform` turns into the cosine around `normal`, over
+// the face's part above the receiver's horizon; `view` orients the transform's frame (AreaLights::GetLobeCoverage).
 float GetAreaLobeCoverage(float4 transform, float3 position, float3 normal, float3 view, AreaLight light)
 {
 	float side = GetAreaLightSide(position, light);
@@ -286,11 +271,22 @@ float GetAreaLobeCoverage(float4 transform, float3 position, float3 normal, floa
 	else
 		tangent *= 1.0 / sqrt(tangentLengthSquared);
 	float3 bitangent = cross(normal, tangent);
+	// GGX reflects nothing from under the receiver's horizon, but the fitted lobe keeps a part of itself there on the viewer's
+	// side: the face is cut at the receiver's horizon (the corners' heights before the transform) before the transformed
+	// horizon's term, so a face under the horizon gives nothing and one sinking under it fades out.
+	float3 corners[4];
+	float3 edges[4];
+	MakeAreaPolygon(light.Center - position, light.AxisX, light.AxisY, corners, edges);
+	float heights[4];
+	[unroll]
+	for (uint corner = 0u; corner < 4u; corner++)
+		heights[corner] = dot(corners[corner], normal);
 	// The transform is linear, so the face stays a parallelogram: its center and its two half axes are transformed.
 	float3 center = TransformAreaVector(transform, tangent, bitangent, normal, light.Center - position);
 	float3 axisX = TransformAreaVector(transform, tangent, bitangent, normal, light.AxisX);
 	float3 axisY = TransformAreaVector(transform, tangent, bitangent, normal, light.AxisY);
-	float3 vectorFormFactor = IntegrateAreaPolygon(center, axisX, axisY) * side;
+	MakeAreaPolygon(center, axisX, axisY, corners, edges);
+	float3 vectorFormFactor = IntegrateAreaPolygonAbove(corners, edges, heights) * side;
 	return ClipAreaToHorizon(vectorFormFactor, vectorFormFactor.z);
 }
 
@@ -329,7 +325,7 @@ float3 ShadeAreaLight(SurfaceData surface, ClearcoatData coat, float2 coatDFG, f
 		return float3(0.0);
 
 	float3 reflectance = surface.F0 * dfg.x + dfg.y;
-	float formFactor = AreaLightFormFactor(surface.Position, surface.Normal, light);
+	float formFactor = AreaLightFormFactorClipped(surface.Position, surface.Normal, light);
 	float3 result = surface.Albedo * ((1.0 - surface.Metallic) * formFactor * diffuseWeight) * (float3(1.0) - reflectance);
 	if (specularWeight > 0.0)
 	{
