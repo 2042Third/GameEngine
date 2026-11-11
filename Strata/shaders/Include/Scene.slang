@@ -5,7 +5,7 @@
 // in sync (std140 for the constant buffer, std430 for storage buffers, 16-byte aligned members).
 
 // The scene layout's slots (SceneRenderer::CreateResources): SRV 0-21, 27, 28, 29 (the aerial perspective volume), 32, 33, 35,
-// 37-40 and 54-56, samplers 0-5 (materials), 8, 9 and 10, CBV 0 and 3 (the GI field's constants, Include/GIField.slang): pipelines
+// 37-40 and 54-58, samplers 0-5 (materials), 8, 9 and 10, CBV 0 and 3 (the GI field's constants, Include/GIField.slang): pipelines
 // pairing this layout with push constants or a constant buffer of their own give them neither slot.
 // SRV 22-26 belong to the compute layouts of temporal anti-aliasing and screen-space reflections, never to this one.
 // Assigned in wave 7: SRV 28 the sun's screen-space shadow mask, 32 the cascades' depth ranges and 33 the shadows'
@@ -13,8 +13,9 @@
 // below its cut), 34 volumetric fog (volumetric), 35 the GI field (global illumination's irradiance per probe), 36 fog
 // volumes (volumetric, below its cut), 37 the GI probes' validity, 38-40 its voxel levels 0-2, 54 its probes' depth
 // moments (Include/GIField.slang; 41-53 are the GI's light passes' own, which read the field too); 55 the area lights' LTC table
-// and 56 the lights' shapes (Include/AreaLights.slang). A new scene resource takes the next free slot (57: area-lights' local
-// shadow ranges), and a pass that does not run binds a dummy.
+// and 56 the lights' shapes (Include/AreaLights.slang), 57 the local shadow atlas's depth ranges and 58 the rect lights' shadow
+// masks (Include/AreaShadows.slang, Scene/Forward.frag). A new scene resource takes the next free slot (59), and a pass that does
+// not run binds a dummy.
 
 #include "Include/Common.slang"
 

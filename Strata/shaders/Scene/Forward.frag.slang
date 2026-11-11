@@ -9,6 +9,7 @@
 #ifdef ST_AREA_LIGHTS
 #define ST_AREA_LIGHT_SHADING
 #include "Include/AreaLights.slang"
+#include "Include/AreaShadows.slang"
 #endif
 #include "Include/Clusters.slang"
 #include "Include/Fog.slang"
@@ -75,6 +76,11 @@ Texture2D<float4> u_SceneColor : register(t19);
 Texture2D<float4> u_ScreenReflections : register(t18);
 // The sun's screen-space shadow mask (Effects/ScreenShadows.frag): red the square root of the sun's visibility at the pixel.
 Texture2D<float4> u_ScreenShadows : register(t28);
+#ifdef ST_AREA_LIGHTS
+// The shadowed rect lights' masks (Effects/AreaScreenShadows.frag), a layer per light (its SpotAngles.w is the layer plus one):
+// red the square root of its visibility at the pixel.
+Texture2DArray<float4> u_AreaShadowMasks : register(t58);
+#endif
 #endif
 
 // The frame's lighting debug view (ST_LIGHTING_VIEW_*, SceneRenderOptions::LightingView): the same for every pixel.
@@ -274,8 +280,26 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 #else
 				float areaDiffuseWeight = 1.0;
 #endif
-				color += ShadeAreaLight(surface, coat, coatDFG, dfg, areaDiffuseWeight, LoadAreaLight(light, u_LightShapes[lightIndex]),
-					1.0 - u_Frame.MaterialParams.w);
+				AreaLight area = LoadAreaLight(light, u_LightShapes[lightIndex]);
+				float3 areaColor = ShadeAreaLight(surface, coat, coatDFG, dfg, areaDiffuseWeight, area, 1.0 - u_Frame.MaterialParams.w);
+				// A shadowed light's slot plus one (SceneRenderer's local shadows): opaque surfaces read its mask, transparent ones
+				// filter per pixel (Include/AreaShadows.slang), as for the sun.
+				uint areaSlot = uint(light.SpotAngles.z + 0.5);
+				if (areaSlot > 0u && any((areaColor > float3(0.0))))
+				{
+#ifdef ST_FORWARD_TRANSPARENT
+					float3 areaNormal = normalize(v_Normal) * (st_FrontFacing ? 1.0 : -1.0);
+					areaColor *= SampleAreaLightShadow(areaSlot - 1u, surface.Position, areaNormal, st_FragCoord.xy, area);
+#else
+					uint maskLayer = uint(light.SpotAngles.w + 0.5);
+					if (maskLayer > 0u)
+					{
+						float encoded = u_AreaShadowMasks.Load(int4(int2(st_FragCoord.xy), int(maskLayer - 1u), 0)).r;
+						areaColor *= encoded * encoded;
+					}
+#endif
+				}
+				color += areaColor;
 				continue;
 			}
 #endif

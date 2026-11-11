@@ -218,13 +218,12 @@ namespace Strata
 			const RectLightComponent* light = registry.try_get<RectLightComponent>(entity);
 			if (!light)
 				return false;
-			// The units' conversion takes the face's area in the world (a lumens light keeps its power as it is resized). The
-			// local shadows draw point and spot lights only, so the record is never marked shadowed and keeps the default
-			// settings.
+			// The units' conversion takes the face's area in the world (a lumens light keeps its power as it is resized). Its
+			// shadows are filtered with its own size (Include/AreaShadows.slang): no filter radius of its own.
 			const glm::vec2 halfExtents = glm::vec2(light->Width, light->Height) * 0.5f;
 			const float luminance = AreaLights::GetLuminance(light->Intensity, light->Units, AreaLights::GetWorldHalfExtents(placed, halfExtents), light->TwoSided);
 			outRecord = MakeAreaRecord(placed, world->ActiveInHierarchy, light->Color, luminance, halfExtents, light->Range, light->TwoSided);
-			outShadow = LightShadowSettings {};
+			setShadows(light->CastShadows, light->ShadowBias, light->ShadowNormalBias, 0.0f);
 			return true;
 		}
 		if (type == RenderData::c_LightSpot)

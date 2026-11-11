@@ -67,9 +67,11 @@ namespace Strata
 
 		uint64_t LocalShadowAtlasBytes(const RendererQualitySettings& settings, glm::uvec2)
 		{
-			// The point and spot lights' D32 atlas (SceneRendererLocalShadows.cpp).
+			// The local lights' D32 atlas (SceneRendererLocalShadows.cpp), and with a shadowed rect light its depth ranges
+			// (Scene/LocalShadowRanges.comp: R32 cells of 4 texels and their coarser levels, about a third more).
 			const uint64_t size = settings.LocalShadowAtlasSize;
-			return size * size * 4;
+			const uint64_t ranges = (size / RenderData::c_ShadowRangeCellTexels) * (size / RenderData::c_ShadowRangeCellTexels) * 4 * 4 / 3;
+			return size * size * 4 + ranges;
 		}
 
 		uint64_t EnvironmentBytes(const RendererQualitySettings& settings, glm::uvec2)

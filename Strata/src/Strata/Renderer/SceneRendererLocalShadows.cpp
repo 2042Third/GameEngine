@@ -21,11 +21,15 @@
 #include <cmath>
 #include <limits>
 
-// Shadows of point and spot lights (RendererQualitySettings::LocalShadowAtlasSize). The shadowed lights in view that matter
-// most (GetLocalShadowImportance, with a margin for those holding a shadow) get tiles of the renderer's depth atlas, as many
-// as MaxShadowedLocalLights allows and the atlas holds: a spot light one perspective view, a point light six (a cube's faces),
-// each view widened by a guard band of what its lookups reach (the normal bias and the filter) so that they never leave the
-// face they sample. Tiles follow the light's size on screen, stepped down for the less important lights while they do not
+// Shadows of point, spot and rect lights (RendererQualitySettings::LocalShadowAtlasSize). The shadowed lights in view that
+// matter most (GetLocalShadowImportance, with a margin for those holding a shadow) get tiles of the renderer's depth atlas, as
+// many as MaxShadowedLocalLights allows and the atlas holds: a spot light one perspective view, a point light six (a cube's
+// faces), a rect light six around its face's center (the face behind a one-sided light is never drawn: its tile is only
+// cleared), each view widened by a guard band of what its lookups reach (the normal bias and the filter, for a rect light its
+// penumbra's reach) so that they never leave the face they sample. A rect light's views reach its range from the face plus the
+// face's half diagonal from the center (its bounds), which every range test of its views takes; at most
+// RenderData::c_MaxAreaShadowMasks rect lights hold a shadow at once (the area shadow masks), and the frame's drawn rect light
+// views get the atlas's depth ranges (Scene/LocalShadowRanges.comp) their filter classifies receivers with. Tiles follow the light's size on screen, stepped down for the less important lights while they do not
 // fit seven eighths of the atlas; a light whose tiles change size keeps sampling its old tiles until the new ones are drawn,
 // and at most two lights change at a time. A view is drawn again only when what it shows changed (its key, a caster reaching
 // it, what casters are drawn with), at most LocalShadowViewsPerFrame of them per frame where SpreadLightingUpdates spreads
@@ -89,6 +93,20 @@ namespace Strata
 		// more than the render scene's proxies.
 		constexpr size_t c_LocalShadowBoundsPerLight = 4096;
 		constexpr size_t c_MinFollowedLocalShadowLights = 16;
+
+		// Point and rect lights have six views (a cube's faces around the light's position or the face's center), spot lights one.
+		bool HasSixViews(uint32_t type)
+		{
+			return type == RenderData::c_LightPoint || type == RenderData::c_LightRect;
+		}
+
+		// The sphere a shadowed light's views reach and every range test of them takes: a point or spot light's position and
+		// range, a rect light's center and bounds (its range from the face plus the face's half diagonal: receivers it lights and
+		// casters between them and the face lie that far from the center).
+		glm::vec4 GetShadowSphere(const RenderData::LightRecord& record)
+		{
+			return static_cast<uint32_t>(record.DirectionType.w) >= RenderData::c_LightRect ? record.Bounds : record.PositionRange;
+		}
 
 		// A point light's views: the cube's faces in the order the shaders pick them by the major axis.
 		constexpr std::array<glm::vec3, RenderData::c_LocalShadowFaces> c_FaceDirections = {
@@ -262,6 +280,7 @@ namespace Strata
 			light.Tiles[view] = {};
 			state.HasContent = false;
 			state.Drawing = false;
+			state.ClearedTile = {};
 		}
 		light.TileSize = 0;
 	}
@@ -334,6 +353,7 @@ namespace Strata
 			released.emplace_back(m_LocalShadowFramebuffer.Get());
 		m_LocalShadowAtlas = nullptr;
 		m_LocalShadowFramebuffer = nullptr;
+		ReleaseLocalShadowRanges(released);
 		Renderer::ReleaseDeferred(std::move(released));
 		// The scene's binding sets, which read the atlas, are made again by the next frame's comparison.
 		m_BoundLocalShadowAtlas = nullptr;
@@ -392,16 +412,36 @@ namespace Strata
 
 		// As many as the quality allows and the atlas holds at its smallest tiles in the share tiles are fitted into, counted
 		// before the ranks are cut: lights the atlas cannot hold lose their shadows as those beyond the quality's count do, fading.
+		// Rect lights hold a layer of the area shadow masks each while they have a shadow, also while it fades out: those holding
+		// one keep it while they rank among the first c_MaxAreaShadowMasks rect lights in view (else they fade out), and one
+		// without a shadow gets one while they rank so and a layer is free (counting those that fade out), else it waits. A rect
+		// light never switches to another filter, and never takes the layer of one still fading.
 		const uint32_t atlasSize = m_LocalShadowAllocator.GetAtlasSize();
 		const uint64_t tilesEachWay = atlasSize / std::max(std::min(c_MinLocalShadowTile, atlasSize), 1u);
 		const uint64_t capacity = tilesEachWay * tilesEachWay * c_LocalShadowAtlasEighths / 8;
+		uint32_t areaHolding = 0;
+		for (const Candidate& candidate : candidates)
+			areaHolding += candidate.Held != c_NoLocalShadowLight && lights.GetType(candidate.Record) == RenderData::c_LightRect ? 1u : 0u;
+		std::vector<uint8_t> keep(candidates.size(), 0);
 		size_t kept = 0;
 		uint64_t views = 0;
-		while (kept < candidates.size() && kept < m_Specification.Quality.MaxShadowedLocalLights)
+		uint32_t areaSeen = 0;
+		uint32_t areaNew = 0;
+		for (size_t rank = 0; rank < candidates.size() && kept < m_Specification.Quality.MaxShadowedLocalLights; rank++)
 		{
-			const uint64_t viewCount = lights.GetType(candidates[kept].Record) == RenderData::c_LightPoint ? RenderData::c_LocalShadowFaces : 1u;
+			const uint32_t type = lights.GetType(candidates[rank].Record);
+			const uint64_t viewCount = HasSixViews(type) ? RenderData::c_LocalShadowFaces : 1u;
 			if (views + viewCount > capacity)
 				break;
+			if (type == RenderData::c_LightRect)
+			{
+				const bool placed = areaSeen++ < RenderData::c_MaxAreaShadowMasks;
+				const bool held = candidates[rank].Held != c_NoLocalShadowLight;
+				if (!placed || (!held && areaHolding + areaNew >= RenderData::c_MaxAreaShadowMasks))
+					continue;
+				areaNew += held ? 0u : 1u;
+			}
+			keep[rank] = 1;
 			views += viewCount;
 			kept++;
 		}
@@ -422,7 +462,7 @@ namespace Strata
 			LocalShadowLight& light = m_LocalShadowLights[candidate.Held];
 			light.Record = candidate.Record;
 			light.Importance = candidate.Importance;
-			fates[candidate.Held] = rank < kept ? Fate::Ranked : Fate::Unranked;
+			fates[candidate.Held] = keep[rank] != 0 ? Fate::Ranked : Fate::Unranked;
 		}
 		// The ranked lights: those that held a shadow in their previous order (the order their sizes are fitted in), then the new
 		// ones. A light then moves up past those it matters c_LocalShadowKeepRatio more than, so the order follows importance
@@ -442,9 +482,9 @@ namespace Strata
 			if (fates[index] == Fate::Ranked)
 				places.push_back(Place { m_LocalShadowLights[index].Importance, index, 0 });
 		}
-		for (size_t rank = 0; rank < kept; rank++)
+		for (size_t rank = 0; rank < candidates.size(); rank++)
 		{
-			if (candidates[rank].Held == c_NoLocalShadowLight)
+			if (keep[rank] != 0 && candidates[rank].Held == c_NoLocalShadowLight)
 				places.push_back(Place { candidates[rank].Importance, c_NoLocalShadowLight, static_cast<uint32_t>(rank) });
 		}
 		for (size_t index = 1; index < places.size(); index++)
@@ -469,7 +509,7 @@ namespace Strata
 			LocalShadowLight& light = m_LocalShadowScratch.emplace_back();
 			light.Entity = lights.GetEntity(candidate.Record);
 			light.Type = lights.GetType(candidate.Record);
-			light.ViewCount = light.Type == RenderData::c_LightPoint ? RenderData::c_LocalShadowFaces : 1u;
+			light.ViewCount = HasSixViews(light.Type) ? RenderData::c_LocalShadowFaces : 1u;
 			light.Record = candidate.Record;
 			light.Importance = candidate.Importance;
 			light.Ranked = true;
@@ -591,13 +631,17 @@ namespace Strata
 			const RenderData::LightRecord& record = records[light.Record];
 			const LightShadowSettings& settings = lights.GetShadowSettings(light.Record);
 			light.ShadowSettings = glm::vec3(settings.Bias, settings.NormalBias, settings.FilterRadius);
-			const float range = record.PositionRange.w;
+			const bool area = light.Type == RenderData::c_LightRect;
+			const float range = GetShadowSphere(record).w;
 			// The guard band: what a lookup reaches (and one texel more) on every side of what the view must cover. The normal bias
 			// moves a lookup by up to its texels times c_NormalBiasReach toward a neighbouring face, the filter's taps reach their
-			// radius beyond that.
-			const float guard = std::ceil(settings.FilterRadius + settings.NormalBias * c_NormalBiasReach) + 1.0f;
+			// radius beyond that (a rect light's: its penumbra's reach, c_AreaShadowReach of the tile).
 			const float tileSize = static_cast<float>(light.TileSize);
+			const float filterReach = area ? tileSize * RenderData::c_AreaShadowReach : settings.FilterRadius;
+			const float guard = std::ceil(filterReach + settings.NormalBias * c_NormalBiasReach) + 1.0f;
 			const float widen = tileSize / std::max(tileSize - 2.0f * guard, 1.0f);
+			// The near plane follows the light's own range (a rect light's from its face).
+			const float nearRange = record.PositionRange.w;
 			float tanHalfAngle = 1.0f; // A cube face's 45 degrees
 			if (light.Type == RenderData::c_LightSpot)
 				tanHalfAngle = std::tan(std::clamp(std::acos(std::clamp(record.SpotAngles.y, -1.0f, 1.0f)), 0.001f, c_MaxSpotShadowHalfAngle));
@@ -608,9 +652,41 @@ namespace Strata
 				key.Direction = light.Type == RenderData::c_LightSpot ? glm::vec3(record.DirectionType) : c_FaceDirections[view];
 				key.Range = range;
 				// Within its bounds, and below half the range for tiny lights (std::clamp would need the bounds in order).
-				key.Near = std::min(std::max(range * c_LocalShadowNearScale, c_MinLocalShadowNear), std::min(c_MaxLocalShadowNear, range * 0.5f));
+				key.Near = std::min(std::max(nearRange * c_LocalShadowNearScale, c_MinLocalShadowNear), std::min(c_MaxLocalShadowNear, nearRange * 0.5f));
 				key.TanHalfAngle = tanHalfAngle * widen;
 				key.Tile = light.Tiles[view];
+
+				// A one-sided rect light lights nothing behind its plane: a face whose four corner rays (the guard band's) all lie
+				// behind it shows nothing a receiver it lights could select. Its tile is cleared instead of drawn (unshadowed if a
+				// turn of the light makes it needed again before it is drawn).
+				LocalShadowView& state = light.Views[view];
+				bool needed = true;
+				if (area && record.Source.y != RenderData::c_LightRecordTwoSided)
+				{
+					const glm::vec3 normal(record.DirectionType);
+					const glm::vec3 right = glm::normalize(glm::cross(key.Direction, GetViewUp(key.Direction)));
+					const glm::vec3 up = glm::cross(right, key.Direction);
+					needed = false;
+					for (uint32_t corner = 0; corner < 4 && !needed; corner++)
+					{
+						const glm::vec3 ray = key.Direction + right * ((corner & 1u) != 0 ? key.TanHalfAngle : -key.TanHalfAngle)
+							+ up * ((corner & 2u) != 0 ? key.TanHalfAngle : -key.TanHalfAngle);
+						needed = glm::dot(ray, normal) > 0.0f;
+					}
+				}
+				if (!needed && state.HasContent)
+				{
+					// Its content is of no use any more; a light between tile sizes still holds it in its old tile.
+					if (state.DrawnKey.Tile != light.Tiles[view])
+						m_LocalShadowAllocator.Free(state.DrawnKey.Tile);
+					state.HasContent = false;
+				}
+				state.Needed = needed;
+				if (!needed && state.ClearedTile != key.Tile)
+				{
+					m_LocalShadowClears.push_back(key.Tile);
+					state.ClearedTile = key.Tile;
+				}
 			}
 		}
 	}
@@ -681,7 +757,7 @@ namespace Strata
 				std::vector<float> ranges;
 				ranges.reserve(m_LocalShadowLights.size());
 				for (const LocalShadowLight& light : m_LocalShadowLights)
-					ranges.push_back(records[light.Record].PositionRange.w);
+					ranges.push_back(GetShadowSphere(records[light.Record]).w);
 				std::nth_element(ranges.begin(), ranges.begin() + static_cast<std::ptrdiff_t>(ranges.size() / 2), ranges.end());
 				const float cellSize = std::max(ranges.empty() ? 1.0f : ranges[ranges.size() / 2] * 2.0f, 0.5f);
 				bool gridValid = cellSize == m_LocalShadowCellSize && m_LocalShadowReach.size() == m_LocalShadowLights.size();
@@ -690,7 +766,7 @@ namespace Strata
 				for (uint32_t index = 0; index < m_LocalShadowLights.size(); index++)
 				{
 					const LocalShadowLight& light = m_LocalShadowLights[index];
-					const glm::vec4 position = records[light.Record].PositionRange;
+					const glm::vec4 position = GetShadowSphere(records[light.Record]);
 					AABB box;
 					ExpandByReach(box, glm::vec3(position), position.w);
 					AABB cleanBox;
@@ -904,8 +980,11 @@ namespace Strata
 			{
 				LocalShadowView& view = light.Views[face];
 				view.Drawing = false;
-				if (light.TileSize == 0)
+				if (light.TileSize == 0 || !view.Needed)
+				{
+					view.WaitedFrames = 0;
 					continue;
+				}
 				if (cache && view.HasContent && !view.Dirty && view.Key == view.DrawnKey)
 				{
 					view.WaitedFrames = 0;
@@ -1004,6 +1083,7 @@ namespace Strata
 		m_LocalShadowViews.clear();
 		m_LocalShadowCasters.clear();
 		m_LocalShadowCandidates.clear();
+		m_LocalShadowClears.clear();
 		// The atlas holds the shadows of one render scene: another one (also a clone, entering Play) starts without them.
 		if (renderScene.GetId() != m_LocalShadowSceneId)
 		{
@@ -1039,9 +1119,15 @@ namespace Strata
 		m_Stats.LocalShadowSizeCounts = {};
 		for (LocalShadowLight& light : m_LocalShadowLights)
 		{
+			// A view no receiver needs counts as complete, and so does one needed again whose tile was cleared (it reads
+			// unshadowed until it is drawn, first).
 			light.Complete = light.TileSize > 0;
 			for (uint32_t face = 0; face < light.ViewCount; face++)
-				light.Complete = light.Complete && (light.Views[face].HasContent || light.Views[face].Drawing);
+			{
+				const LocalShadowView& view = light.Views[face];
+				const bool cleared = view.ClearedTile.IsValid() && view.ClearedTile == light.Tiles[face];
+				light.Complete = light.Complete && (view.HasContent || view.Drawing || !view.Needed || cleared);
+			}
 			if (!light.Complete)
 				light.Strength = 0.0f;
 			else if (!spread)
@@ -1099,7 +1185,7 @@ namespace Strata
 				LocalShadowJob& job = jobs[group];
 				const auto [firstView, viewCount] = lightGroups[group];
 				const LocalShadowLight& light = m_LocalShadowLights[m_LocalShadowViews[firstView].Light];
-				const glm::vec4 position = records[light.Record].PositionRange;
+				const glm::vec4 position = GetShadowSphere(records[light.Record]);
 				spatialIndex.QuerySphere(glm::vec3(position), position.w * c_CasterQueryScale + c_CasterQueryMargin, job.Candidates);
 				job.ViewCasters.resize(viewCount);
 				if (!exactCasters)
@@ -1301,9 +1387,13 @@ namespace Strata
 				data.Tiles[face] = glm::vec4(static_cast<float>(key.Tile.X) / atlasSize, static_cast<float>(key.Tile.Y) / atlasSize, tileSize / atlasSize,
 					2.0f * key.TanHalfAngle / tileSize);
 			}
-			data.Parameters = glm::vec4(light.ShadowSettings, light.Strength);
+			// A rect light's filter takes twice the sun's penumbra taps (ShadowFilterQuality) where a point or spot light has its
+			// radius: its penumbrae are much wider, and with the sun's count a slow strafe across them shimmered more than the sun's.
+			const float filter = light.Type == RenderData::c_LightRect ? static_cast<float>(RenderData::c_AreaShadowTapsPerFilterTap * m_Specification.Quality.ShadowFilterQuality)
+				: light.ShadowSettings.z;
+			data.Parameters = glm::vec4(light.ShadowSettings.x, light.ShadowSettings.y, filter, light.Strength);
 			const glm::vec3 position(glm::dvec3(light.Views[0].Key.Position) - origin);
-			data.Light = glm::vec4(position, light.Type == RenderData::c_LightPoint ? 1.0f : 0.0f);
+			data.Light = glm::vec4(position, HasSixViews(light.Type) ? 1.0f : 0.0f);
 		}
 	}
 
@@ -1383,6 +1473,12 @@ namespace Strata
 		commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
 	}
 
+	void SceneRenderer::ClearUnneededLocalShadowTiles(nvrhi::ICommandList* commandList)
+	{
+		for (const ShadowAtlasTile& tile : m_LocalShadowClears)
+			ClearLocalShadowTile(commandList, tile);
+	}
+
 	void SceneRenderer::DrawLocalShadows(nvrhi::ICommandList* commandList)
 	{
 		const uint32_t firstArgument = static_cast<uint32_t>(m_OpaqueBatches.size() + m_TransparentBatches.size() + m_ShadowBatches.size() + m_SelectionBatches.size());
@@ -1427,6 +1523,7 @@ namespace Strata
 				view.DrawnPlanes = Frustum(GetLocalShadowViewProjection(view.Key, glm::dvec3(0.0))).GetPlanes();
 				view.DrawnBox = GetLocalShadowChangeBox(view.Key.Position, view.Key.Range, view.DrawnPlanes);
 				view.DrawnEpoch = m_LocalShadowDrawEpoch;
+				view.ClearedTile = {};
 				view.HasContent = true;
 				view.Dirty = false;
 				view.Drawing = false;

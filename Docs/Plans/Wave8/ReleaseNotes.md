@@ -344,7 +344,10 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   TAA. Clear coats, glass, blended surfaces and reflection probe captures (diffuse only) take it; its Range fades it to
   zero at that distance from the face. A surface gets nothing from a light below its horizon and only the part above it
   from one its horizon cuts, so a polished ball shows no second image of a light behind it.
-- Rect lights cast no shadow yet (the stream's next stage): they light through objects.
+- Rect lights cast soft shadows (Cast Shadows): percentage-closer soft shadows from six views of the local shadow atlas at
+  the face's center (five for a one-sided ceiling panel), filtered with the light's own size, so they are sharp where an
+  object meets the floor and wide further from it; opaque surfaces take them from screen-space masks blurred as the sun's
+  are, transparent ones filter per pixel. At most four rect lights cast shadows at a time; nothing turns with the frame.
 - Scenes without rect lights render as before, bit for bit, and their forward pass costs what it did: the rect-light code
   is in shaders of their own, drawn while a scene has a rect light, lit or not (Known issues). Every light record grew by
   32 bytes, and the light buffers carry a 48-byte face per light.
@@ -578,7 +581,11 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   roughness 0.3 holds 0.934 of GGX's light in its highlight; under a light filling the sky a white metal of roughness 0.3
   to 0.6 seen 78 degrees from its normal reflects 0.912 to 0.918 of it (0.94 to 0.98 at 60 degrees) where it should
   reflect all of it.
-- Rect lights cast no shadows yet: Cast Shadows and its biases are kept, and nothing is shadowed.
+- Rect light shadows: penumbrae wider than an eighth of the light's shadow tile come out narrower than real ones (a blocker
+  0.3 m under a 2 m light gets 16% of the true width); at a contact the shadow is 3.3 cm wide where the true one is 1.2 cm
+  (a 6 cm post, 5 mm behind it); in the Cornell box 42% of the fully lit pixels still run the filter's comparisons. Their
+  wide penumbrae take twice the Shadow Filter Quality's taps, so a slow strafe across them shimmers no more than the sun's
+  widest soft shadows. At most four rect lights cast shadows at once; a fifth waits.
 - A scene with a rect light, even an unlit one out of sight, draws every surface with the forward shaders that shade rect
   lights: an unlit one added to the showcase costs its opaque pass 2.7% at Medium (shots 2 and 3, interleaved A/B); its
   pictures differ from those without it only where two sessions of one build differ without any rect light (shot 3

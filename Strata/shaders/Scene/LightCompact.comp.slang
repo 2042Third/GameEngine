@@ -11,8 +11,8 @@
 
 StructuredBuffer<uint> u_LightVisible : register(t19);
 StructuredBuffer<uint> u_LightGroupCounts : register(t20);
-// Per light record its shadow slot plus one (0: no shadow): the renderer's shadowed point and spot lights (SceneRenderer's
-// local shadows).
+// Per light record its shadow slot plus one (0: no shadow) in the low 24 bits, and a shadowed rect light's area shadow mask
+// layer plus one in the top 8 (SceneRenderer's local shadows).
 StructuredBuffer<uint> u_LightShadowSlots : register(t21);
 RWStructuredBuffer<LightData> o_Lights : register(u3);
 RWStructuredBuffer<float4> o_LightBounds : register(u4);
@@ -69,7 +69,9 @@ void st_Main()
 		data.PositionRange = float4(light.PositionRange.xyz - u_Frame.CameraPosition.xyz, light.PositionRange.w);
 		data.Color = light.Color;
 		data.DirectionType = light.DirectionType;
-		data.SpotAngles = float4(light.SpotAngles.xy, float(u_LightShadowSlots[record]), light.Source.x);
+		// The table's top byte is a rect light's mask layer plus one (its Source.x is 0), the rest the slot plus one.
+		uint shadowSlot = u_LightShadowSlots[record];
+		data.SpotAngles = float4(light.SpotAngles.xy, float(shadowSlot & 0xFFFFFFu), light.Source.x + float(shadowSlot >> 24u));
 		o_Lights[position] = data;
 		float3 center = light.Bounds.xyz - u_Frame.CameraPosition.xyz;
 		o_LightBounds[position] = float4(mul(((float3x3)(u_Frame.View)), center), light.Bounds.w);

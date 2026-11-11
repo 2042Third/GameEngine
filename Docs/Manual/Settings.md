@@ -94,7 +94,7 @@ to find a page or a field), the selected page on the right:
   rays: for large GPUs), or **Custom** to set each value yourself in the table's Custom column (the shadow resolution,
   the number of cascades, the point and spot lights' shadow atlas and largest tile, how many of those lights cast
   shadows, the level-of-detail error, the smallest size drawn, the shadow filter quality: taps of the sun's wide
-  penumbrae, the contact shadows' steps, the ambient occlusion's quality, the sky reflections' resolution, the
+  penumbrae (rect lights take twice as many), the contact shadows' steps, the ambient occlusion's quality, the sky reflections' resolution, the
   screen-space reflections, and the motion blur's samples: Low has none, Medium 8, High 12, Ultra 16, for scenes whose
   Post Process turns motion blur on): choosing a preset keeps your Custom values for when you come back, and editing
   the column under a preset switches to Custom from the values it shows (your earlier Custom values, or that preset's

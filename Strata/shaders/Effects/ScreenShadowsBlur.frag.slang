@@ -23,7 +23,13 @@ struct ScreenShadowBlurParameters
 
 static float2 o_Mask;
 
+#ifdef ST_AREA_SHADOW_BLUR
+// The rect lights' masks (Effects/AreaScreenShadows.frag, registered as Effects/AreaShadowsBlur.frag): their penumbrae are wider,
+// and a radius twice the sun's takes the grain of their lattice's taps.
+static const float c_ScreenShadowMaxBlurPixels = 16.0;
+#else
 static const float c_ScreenShadowMaxBlurPixels = 8.0;
+#endif
 
 float3 NormalAt(int2 pixel)
 {

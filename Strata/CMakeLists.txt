@@ -98,6 +98,7 @@ strata_add_shaders(Strata_Renderer
 		Scene/CullFeedback.comp
 		Scene/CascadeFit.comp
 		Scene/ShadowRanges.comp
+		Scene/LocalShadowRanges.comp
 		Scene/HZBBuild.comp
 		Scene/MotionCopy.comp
 		Debug/LODSelection.comp
@@ -119,6 +120,7 @@ strata_add_shaders(Strata_Renderer
 		Effects/ScreenShadows.frag
 		Effects/ContactShadows.frag
 		Effects/ScreenShadowsBlur.frag
+		Effects/AreaScreenShadows.frag
 		Effects/LightingViewStats.comp
 		GI/VoxelTriangles.comp
 		GI/VoxelTiles.comp
@@ -198,6 +200,8 @@ strata_add_shaders(Strata_Renderer
 		"Scene/Cull.comp|Scene/CullShadow.comp|ST_CULL_SHADOW"
 		"Scene/HZBBuild.comp|Scene/HZBBuildArray.comp|ST_HZB_ARRAY"
 		"Scene/ShadowRanges.comp|Scene/ShadowRangesDownsample.comp|ST_SHADOW_RANGES_DOWNSAMPLE"
+		"Scene/LocalShadowRanges.comp|Scene/LocalShadowRangesDownsample.comp|ST_LOCAL_SHADOW_RANGES_DOWNSAMPLE"
+		"Effects/ScreenShadowsBlur.frag|Effects/AreaShadowsBlur.frag|ST_AREA_SHADOW_BLUR"
 		"Effects/GTAO.comp|Effects/GTAOHalf.comp|ST_AO_HALF"
 		"Scene/Skybox.frag|Scene/SkyboxAtmosphere.frag|ST_ATMOSPHERE"
 		"Effects/AODenoise.comp|Effects/AODenoiseHalf.comp|ST_AO_HALF"

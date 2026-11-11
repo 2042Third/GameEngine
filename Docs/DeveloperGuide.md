@@ -297,7 +297,8 @@ on an Apple M2 Max with MoltenVK 1.4.2 (Homebrew), where every test of the `gpu`
   min/max samplers.
 - **Tight limits**: 31 storage buffers per shader stage and 32 KiB of compute shared memory, and 16 samplers per stage.
   The scene set uses 13 storage buffers (the reflection probes' and the lights' shapes among them), 9 samplers and the
-  scene-color copy and the rect lights' table as more sampled images (SRV 19, 55), the GPU culling's layout 23
+  scene-color copy, the rect lights' table, the local shadow atlas's depth ranges and the area shadow masks as more sampled
+  images (SRV 19, 55, 57, 58), the GPU culling's layout 23
   storage buffers (the local shadow views' among them): a new binding counts against these.
 - **Bindless tables**: the descriptor set support query rejects any set beyond `maxPerSetDescriptors` (1,212), also
   update-after-bind sets within the update-after-bind limits (a million sampled images), and MoltenVK samples every slot
@@ -4758,9 +4759,23 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 ### Local light shadows
 
-- Rect lights cast no shadow yet: their components keep `CastShadows` and its biases, but `RenderLights` never marks their
-  records shadowed, so no view, tile or filter of this section sees them, and their branch of the forward pass samples
-  nothing.
+- Rect lights (`RectLightComponent::CastShadows`, records of `c_LightRect`) are six-view lights here, as point lights: the
+  cube's faces around the face's center. Every range test of their views (the far plane, the CPU's caster query and test,
+  the GPU culling's `CullLocalShadowView::Light.w`, the change tracking's grid, reach and followed bounds) takes the light's
+  bounds, its range from the face plus the face's half diagonal (`GetShadowSphere`: receivers and casters lie that far from
+  the center), never `PositionRange.w`; the near plane keeps the range's rule. So a light's size is part of its views' key
+  (changing Width or Height redraws them; Intensity, Color and Units redraw nothing). A face whose four corner rays (the guard
+  band's) all lie behind a one-sided light's plane is not needed (`LocalShadowView::Needed`): no receiver the light lights
+  selects it, so it is never drawn and its tile is only cleared, to the far plane (`m_LocalShadowClears`,
+  `ClearUnneededLocalShadowTiles`, on either path before the views; `ClearedTile` names it); a ceiling panel draws five
+  views. A turn that makes such a face needed again draws it first, and until then it reads unshadowed from its cleared tile
+  while the light stays complete (its fade is not restarted). The guard band holds the area filter's reach,
+  `RenderData::c_AreaShadowReach` (an eighth of the tile) plus the normal bias's, so a rect light's tile has about a quarter
+  fewer texels per degree than a point light's of the same size. At most `RenderData::c_MaxAreaShadowMasks` (4) rect lights
+  hold a shadow at once (each takes a layer of the area shadow masks while it does, fading out included; `RankLocalShadowLights`):
+  one holding a shadow keeps it while it ranks among the first four rect lights in view, else it fades out; a new one takes a
+  place only when one is free. So no light ever switches filter, and a fifth waits. Their filter, depth ranges and masks:
+  "Area lights".
 - Point and spot lights cast shadows with `CastShadows` (off by default, so scenes saved before it render as they did), with
   `ShadowBias` and `ShadowNormalBias` (texels of the light's tiles) and `ShadowFilterRadius` (texels, at most 8). A renderer
   gives tiles of one D32 atlas (`RendererQualitySettings::LocalShadowAtlasSize`: 4096 texels, 64 MiB; made with the first
@@ -5047,6 +5062,50 @@ lights, Post Process and the sky), and never a resolution below the output's.
   under a light filling the sky reflects 0.912 (roughness 0.3) and 0.918 (0.6) seen 78 degrees off its normal, 0.98 and
   0.94 at 60 degrees, and all of it at roughness 0.05 and 1 and seen along the normal. The polished floor's mirror image
   has its half-peak edges within 0.17 pixels of the face's mirror image at 1920 x 1080.
+- **Shadows** (`Include/AreaShadows.slang`, `SampleAreaLightShadow`; the views: "Local light shadows"): percentage-closer
+  soft shadows from the light's six views at its face's center, filtered with the light's own size. In the cube face that sees
+  the receiver (the normal and depth biases as point lights'), the atlas's **depth ranges** (`u_LocalShadowRanges`, scene SRV
+  57: R32_UINT cells of 4 << level texels, nearest and farthest packed as the sun's, levels up to an eighth of the largest tile,
+  6 at Medium and High's 1024, 7 at Ultra's 2048; built by `Scene/LocalShadowRanges.comp` and its `Downsample` form over the
+  frame's drawn and cleared rect light tiles, in `GPU.Shadows` right after either path drew the views; made with the atlas by
+  the first frame that shadows a rect light, released with it, 5.6 MB at a 4096 atlas, `LocalShadowAtlasBytes` counts them)
+  classify it: every cell lit (its nearest no nearer than the receiver's plane over it, a texel more for the footprints that
+  straddle two) or too far for its own blockers' penumbra (the kernel for the cell's nearest depth) to reach the receiver:
+  lit; every cell's farthest beyond the plane: umbra; both without a comparison. The search starts over the reach (the kernel
+  for blockers at the near plane, clamped), at the level that holds it in 5 x 5 cells, and is read again at finer levels while
+  the nearest blocker that reaches the receiver lets one hold the smaller region (at most three times), so the blockers'
+  depth at a contact is the contact's: their mean (cells weighted by their overlap with their own reach around the receiver,
+  continuous as it moves) gives the **kernel**: the light's two half axes projected into the view through the receiver's ray,
+  times `(z_r - z_b) / (z_r z_b)`, each column clamped to the reach. It is exact for the image's linearization: a rectangle
+  light's shadow is filtered by a parallelogram, long along a strip light, foreshortened in the faces that see it edge-on.
+  Each tap compares with the **receiver's plane** at that tap (a plane's NDC depth is affine in the image), from half the
+  receiver's depth to its own: what lies beyond the receiver along a ray shadows nothing, which keeps curved receivers where
+  the light grazes them, the floor by a wall's foot and the background from shadowing a receiver. Under a texel of kernel the
+  sun's four-tap tent filters; from one to two texels a lattice of `c_AreaShadowTapsPerFilterTap` (2) times
+  `ShadowFilterQuality` taps (a golden-ratio rank-1 lattice over the face, shifted per pixel by the blue-noise tile's far
+  shifts (17, 43) and (43, 17)) takes over; nothing turns with the frame. Taps and cells whose rays leave the center behind a
+  one-sided light's plane are left out (no path from the face meets what they see: the lamp's housing, the ceiling). The
+  light's strength (its fade) mixes the result toward lit. **Opaque surfaces** read **masks** (`Effects/AreaScreenShadows.frag`,
+  `RenderAreaShadowMasks`, in `GPU.ScreenShadows` after the sun's): per shadowed rect light in view (at most four:
+  `SceneRendererStats::AreaShadowMasks`) the filter at every prepass pixel within the light's bounds on screen (the pass's
+  scissor, grown by the blur's reach), with a blur radius of 0.35 of the penumbra's half-width in pixels as the sun's, then
+  `Effects/ScreenShadowsBlur.frag`'s two passes in their `ST_AREA_SHADOW_BLUR` form (`Effects/AreaShadowsBlur.frag`: radii up
+  to 16 pixels, the sun's 8) into the light's layer of an R8 array (scene SRV 58; a 1 x 1 dummy without masks). The light
+  buffer's `SpotAngles.w` is a rect light's layer plus one (the CPU path writes it with the slot, the GPU-driven path packs it
+  in the top byte of the slot table, t21, which `Scene/LightCompact.comp` unpacks). The masks and two RG8 scratch targets
+  (66 MB at 3840 x 2160) are made by the first frame with one and released with the render targets; a frame whose masks or
+  ranges cannot be made draws its rect lights unshadowed (reported). Transparent surfaces filter per pixel, without the blur.
+  The last masked light's evaluation (`GetAreaShadowEvaluation`) marks every pixel that compared depths.
+  Measured (`GPU.SceneRenderer.AreaShadows`, both paths alike to the code): a wall's penumbra under a 1 x 0.5 m light within
+  0.063 of the reference and 8.5% of its 10-90% width; a 6 cm post's shadow 5 mm behind it 3.3 cm wide (the reference's 1.2 cm:
+  the spec's two shadow texels are not met, the blockers' depth comes from cells holding the post's lower part), 1 m on within
+  5%; a blocker 0.3 m under a 2 m light gets 16% of the reference's width: the **reach clamp**, the known limit of very wide
+  penumbrae (a blocker within about a third of the receiver's distance of a large light); in the Cornell box 42% of the fully
+  lit pixels still reach the taps (the spec's 30% is not met: by walls and corners geometry nearer than the receiver lies
+  within its own reach); a strafe across the Cornell box's penumbrae without anti-aliasing measures 0.062% of blocks and 1.02%
+  at their 99th percentile on the flicker meter, the sun's widest soft shadows in the same room 0.062% and 0.84% (with the
+  row's taps alone rect lights measured 0.092% and 1.46%, hence the factor 2); the masks' grain in a still penumbra (RMS from
+  the 9 x 9 mean) 0.003 against the sun's 0.026.
 - **Cost**: setup and the one-sided test, the diffuse integral (four edges), the specular transform and integral (four
   more) and three table lookups (twelve loads: the diffuse horizon term, the lobe's transform and its horizon term) per
   light and pixel; a coat's lobe adds an integral and two lookups (eight loads) on coated materials; probe captures skip

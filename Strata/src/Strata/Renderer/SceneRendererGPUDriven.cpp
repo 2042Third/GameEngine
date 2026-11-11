@@ -498,7 +498,8 @@ namespace Strata
 		{
 			if (m_LocalShadowLights[slot].Strength <= 0.0f)
 				continue;
-			change(m_LocalShadowLights[slot].Record, slot + 1);
+			// A rect light's mask layer plus one rides in the top byte (Scene/LightCompact.comp writes it into SpotAngles.w).
+			change(m_LocalShadowLights[slot].Record, (slot + 1) | (m_LocalShadowLights[slot].MaskLayer << RenderData::c_LightShadowSlotMaskShift));
 			m_LightShadowSlotRecords.push_back(m_LocalShadowLights[slot].Record);
 		}
 		if (end > first)

@@ -322,6 +322,50 @@ namespace Strata
 		};
 		static_assert(sizeof(LocalShadowData) == c_LocalShadowFaces * 64 + c_LocalShadowFaces * 16 + 2 * 16);
 
+		// Rect lights' shadows (Include/AreaShadows.slang): six views at the face's center as a point light's, filtered with the
+		// light's own size. The filter reaches this share of a view's tile beyond what the view covers on every side, which the
+		// view's guard band holds, so that a penumbra crosses a cube face's seam without a step; wider penumbrae are clamped to
+		// it. A rect light's LocalShadowData::Parameters.z is its filter's taps, not a radius.
+		constexpr float c_AreaShadowReach = 0.125f;
+		// A rect light's penumbrae take this many taps per tap of RendererQualitySettings::ShadowFilterQuality (the sun's): they are
+		// much wider than the sun's, and their grain moves with the screen as the camera does.
+		constexpr uint32_t c_AreaShadowTapsPerFilterTap = 2;
+		// Opaque surfaces take rect lights' shadows from screen-space masks, as the sun's (Effects/AreaScreenShadows.frag, one
+		// layer of an R8 array each): at most this many shadowed rect lights in view, the most important; more fade out by the
+		// ranking's margin, so no light switches its filter.
+		constexpr uint32_t c_MaxAreaShadowMasks = 4;
+		// The GPU-driven path's table of shadow slots by light record (Scene/LightCompact.comp's u_LightShadowSlots) holds a rect
+		// light's mask layer plus one from this bit on, below it the slot plus one (slots stay far below 2^24).
+		constexpr uint32_t c_LightShadowSlotMaskShift = 24;
+		static_assert(c_MaxShadowedLocalLights < (1u << c_LightShadowSlotMaskShift));
+		// The local shadow atlas's depth ranges for rect lights' tiles (Scene/LocalShadowRanges.comp): levels of cells of
+		// c_ShadowRangeCellTexels << level texels, as many as cells of at most an eighth of the largest tile take (a tile's
+		// lookups take no level of cells larger than an eighth of it, so a cell never holds two tiles).
+		constexpr uint32_t c_LocalShadowRangeMinTileShare = 8;
+
+		// Scene/LocalShadowRanges.comp: one level of the ranges of the frame's drawn rect light tiles (u_Tiles: x, y, size, 0
+		// in atlas texels).
+		struct LocalShadowRangeParameters
+		{
+			glm::uvec2 SourceSize;      // The level below's texels (level 0: the atlas's)
+			uint32_t Level;
+			uint32_t TileCount;
+			uint32_t CellTexels;        // c_ShadowRangeCellTexels << Level
+			uint32_t Reserved[3];
+		};
+		static_assert(sizeof(LocalShadowRangeParameters) == 32);
+
+		// Effects/AreaScreenShadows.frag: the rect light whose mask a pass draws, camera-relative (Include/AreaLights.slang's
+		// AreaLight, the half sizes in the axes).
+		struct AreaShadowMaskParameters
+		{
+			glm::vec4 Center; // xyz: the face's center, w: 1 when two-sided
+			glm::vec4 AxisX;  // xyz: the half axis along its width
+			glm::vec4 AxisY;  // xyz: the half axis along its height
+			glm::vec4 Normal; // xyz: the way it shines, w: its shadow slot
+		};
+		static_assert(sizeof(AreaShadowMaskParameters) == 64);
+
 		// Reflection probes (ReflectionProbeComponent; Include/ReflectionProbes.slang): a renderer keeps at most this many in
 		// view, each capture converted into a slot of its cube array (a prefiltered cube, one level per roughness step,
 		// RendererQualitySettings::ReflectionProbeResolution texels across: 128 or 256) with its irradiance as spherical-harmonic

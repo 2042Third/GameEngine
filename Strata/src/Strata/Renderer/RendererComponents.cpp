@@ -375,7 +375,8 @@ namespace Strata
 				"power); Lumens: the faces share the power (each half as bright)"))
 			.Property("Range", &RectLightComponent::Range, WithTooltip(Range(0.01f, c_Unbounded, 0.1f), "Light fades to zero at this distance from the rectangle"))
 			.Property("CastShadows", &RectLightComponent::CastShadows,
-				WithTooltip({}, "Kept for the light's shadows: rect lights cast no shadow yet, so they light through objects"))
+				WithTooltip({}, "Soft shadows, filtered with the light's own size: sharp where an object meets the floor, wider further away. "
+					"Takes six views of the local shadow atlas (five for a one-sided ceiling panel) from Max Shadowed Local Lights' budget"))
 			.Property("ShadowBias", &RectLightComponent::ShadowBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), c_LocalShadowBiasTooltip))
 			.Property("ShadowNormalBias", &RectLightComponent::ShadowNormalBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), c_LocalShadowNormalBiasTooltip));
 		SetInactiveReasons<RectLightComponent>({ "ShadowBias", "ShadowNormalBias" }, &WithShadows<RectLightComponent>);

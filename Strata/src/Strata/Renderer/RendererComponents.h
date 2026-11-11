@@ -92,7 +92,8 @@ namespace Strata
 		float Height = 0.5f;                       // Meters along its Y axis, times its world scale
 		bool TwoSided = false;
 		float Range = 10.0f;                       // Light fades to zero at this distance from the rectangle
-		// The local shadows draw point and spot lights only: a rect light keeps these settings but casts no shadow yet.
+		// Soft shadows from six views of the local shadow atlas at the face's center (the face behind a one-sided light is not
+		// drawn), filtered with the light's own size: sharp where an object meets what it shadows, wider further from it.
 		bool CastShadows = false;
 		float ShadowBias = 1.0f;                   // As PointLightComponent's, in texels of the light's shadow tiles
 		float ShadowNormalBias = 1.5f;

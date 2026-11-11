@@ -1268,7 +1268,7 @@ TEST_SUITE("Renderer.RenderScene")
 			glm::vec2(0.75f, 0.2f), 6.0f, false);
 		CHECK(glm::vec3(record->AxisY) == area.AxisY);
 		CHECK(record->Bounds.w == area.BoundsRadius);
-		// The local shadows draw point and spot lights only: a rect light that asks for shadows is not listed among them.
+		// Without Cast Shadows it is not among the shadowed lights.
 		CHECK(lights.GetShadowedRecords().empty());
 		std::string error;
 		CHECK_MESSAGE(renderScene.Validate(&error), error);
@@ -1288,7 +1288,14 @@ TEST_SUITE("Renderer.RenderScene")
 		const float area2 = 3.0f * 0.4f;
 		CHECK(record->Color.r == doctest::Approx(1000.0f / (glm::pi<float>() * area2 * 2.0f)).epsilon(1e-5));
 		CHECK(record->Source.y == RenderData::c_LightRecordTwoSided);
-		CHECK(lights.GetShadowedRecords().empty());
+		// With it, the local shadows draw it (six views at its face's center), with its biases and no filter radius: its filter
+		// takes the light's own size.
+		CHECK(record->SpotAngles.w == RenderData::c_LightRecordShadowed);
+		REQUIRE(lights.GetShadowedRecords().size() == 1);
+		CHECK(lights.GetShadowedRecords()[0] == rect);
+		CHECK(lights.GetShadowSettings(rect).Bias == light.ShadowBias);
+		CHECK(lights.GetShadowSettings(rect).NormalBias == light.ShadowNormalBias);
+		CHECK(lights.GetShadowSettings(rect).FilterRadius == 0.0f);
 		std::vector<uint32_t> changes;
 		REQUIRE(lights.GetChanges(version, changes));
 		CHECK(std::find(changes.begin(), changes.end(), rect) != changes.end());

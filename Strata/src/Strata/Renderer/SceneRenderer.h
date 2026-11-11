@@ -721,6 +721,9 @@ namespace Strata
 		uint32_t CascadeCount = 0;
 		// The frame drew the sun's screen-space shadow mask (SceneRenderer::GetScreenShadowTexture): every frame with a shadowed sun.
 		bool ScreenShadows = false;
+		// The shadowed rect lights the frame drew area shadow masks for (at most RenderData::c_MaxAreaShadowMasks; opaque
+		// surfaces take their shadows from them, SceneRenderer::GetAreaShadowMasks).
+		uint32_t AreaShadowMasks = 0;
 		// Automatic exposure, from the newest readback of the renderer's metering (frames late, as the pre-exposure's): the
 		// adapted log2 average luminance, the exposure key's stops and the log2 luminance of the sun's gray card the key compares
 		// with (unset without a directional light). Unset with manual exposure and until a readback arrived.
@@ -961,6 +964,15 @@ namespace Strata
 		// the pixel's blur radius over c_ScreenShadowMaxBlurPixels; Effects/ScreenShadows.frag): null until a frame draws a
 		// shadowed sun, and again once the render targets are released.
 		nvrhi::ITexture* GetScreenShadowTexture() const { return m_ScreenShadowTextures[0]; }
+		// Rect lights' shadow masks (R8_UNORM array, a layer per masked light: the square root of its visibility; Effects/
+		// AreaScreenShadows.frag) and the last masked light's evaluation before its blur (RG8_UNORM: red as the mask's, green
+		// the blur radius over c_ScreenShadowMaxBlurPixels, at least 1/255 wherever the filter compared depths: lit and umbra
+		// pixels the depth ranges classified hold 0). Null until a frame draws a mask, and again once the targets are released.
+		nvrhi::ITexture* GetAreaShadowMasks() const { return m_AreaShadowMaskArray; }
+		nvrhi::ITexture* GetAreaShadowEvaluation() const { return m_AreaShadowScratch[0]; }
+		// The rect lights' depth ranges over the local shadow atlas (Scene/LocalShadowRanges.comp), with the atlas once a frame
+		// drew a shadowed rect light.
+		nvrhi::ITexture* GetLocalShadowRanges() const { return m_LocalShadowRanges; }
 		static constexpr float c_ScreenShadowMaxBlurPixels = 8.0f;
 		// The mask's blur keeps taps within this fraction of a pixel's view distance of its plane.
 		static constexpr float c_ScreenShadowPlaneTolerance = 0.01f;
@@ -1303,6 +1315,12 @@ namespace Strata
 			bool HasContent = false;
 			bool Dirty = false;
 			bool Drawing = false;             // Drawn this frame (FindLocalShadowCasters to CommitLocalShadows)
+			// False for the cube face that lies wholly behind a one-sided rect light's plane: no receiver it lights sees it, so
+			// it is never drawn and its tile only cleared (to the far plane: unshadowed), which ClearedTile names once done. A
+			// face that the light's turn makes needed again is drawn first and, until then, reads unshadowed from that tile
+			// while its light stays complete.
+			bool Needed = true;
+			ShadowAtlasTile ClearedTile;      // The tile cleared while the view was not needed (invalid once drawn into)
 		};
 		// A point or spot light with shadows: its tiles and views, kept from frame to frame while it holds a shadow. Ranked
 		// lights were given a shadow this frame (in the order the atlas's sizes are fitted in); the others lost theirs while in
@@ -1323,6 +1341,8 @@ namespace Strata
 			float Fade = 0.0f;                // Its strength in the last frame drawn (where lighting updates are spread)
 			bool Complete = false;            // This frame: every view holds content (or is drawn)
 			float Strength = 0.0f;            // This frame's (RenderData::LocalShadowData::Parameters.w)
+			// A rect light's layer of the area shadow masks plus one this frame (0: none; RenderData::c_MaxAreaShadowMasks)
+			uint32_t MaskLayer = 0;
 		};
 		// A light as the change tracking asks it, beside m_LocalShadowLights in their order (a change passes most lights
 		// without reading more than this): the box its range and its drawn views' ranges lie in, its views a change can still
@@ -1913,6 +1933,21 @@ namespace Strata
 		static uint32_t GetLocalShadowCullMode(uint32_t firstView, uint32_t viewCount);
 		// Clears a view's tile (a quad at depth 0: the atlas's other tiles keep their shadows).
 		void ClearLocalShadowTile(nvrhi::ICommandList* commandList, const ShadowAtlasTile& tile);
+		// Clears the tiles of the views no receiver needs (m_LocalShadowClears), on either path before the views are drawn.
+		void ClearUnneededLocalShadowTiles(nvrhi::ICommandList* commandList);
+		// The depth ranges of the rect lights' views drawn this frame (Scene/LocalShadowRanges.comp; u_LocalShadowRanges), after
+		// either path drew them. Made with the first frame that draws a shadowed rect light's view (EnsureLocalShadowRanges, false
+		// when that fails: the frame's rect lights then cast no shadow), released with the atlas.
+		bool EnsureLocalShadowRanges();
+		void BuildLocalShadowRanges(nvrhi::ICommandList* commandList);
+		void ReleaseLocalShadowRanges(std::vector<nvrhi::ResourceHandle>& released);
+		// The layers of the area shadow masks the frame's shadowed rect lights take (LocalShadowLight::MaskLayer), the light
+		// buffer's SpotAngles.w of each, and the masks' targets (EnsureAreaShadowMasks: false, reported, when they cannot be
+		// made); RenderAreaShadowMasks draws them after the prepass, in GPU.ScreenShadows.
+		void AssignAreaShadowMasks(const RenderLights& lights, const SceneCamera& camera);
+		bool EnsureAreaShadowMasks();
+		void RenderAreaShadowMasks(nvrhi::ICommandList* commandList);
+		void ReleaseAreaShadowMasks(std::vector<nvrhi::ResourceHandle>& released);
 		// After the frame's command list was executed: its views hold what their keys describe.
 		void CommitLocalShadows();
 		// Forgets every shadowed light and what the atlas holds (another render scene, released targets).
@@ -2307,6 +2342,49 @@ namespace Strata
 		float m_LocalShadowCellSize = 1.0f;
 		// The CPU path's shadow slot plus one per light record (0: none), filled for the frame's lights and cleared after.
 		std::vector<uint32_t> m_LocalShadowRecordSlots;
+		// The tiles of views no receiver needs that the frame's shadow pass clears (ClearUnneededLocalShadowTiles).
+		std::vector<ShadowAtlasTile> m_LocalShadowClears;
+		// Rect lights' shadows. The atlas's depth ranges (u_LocalShadowRanges, scene SRV 57; the dummy, 1 x 1, while there are
+		// none), their levels with a binding set each (the level below, or the atlas, as SRV and the level as UAV), the frame's
+		// drawn rect light tiles (x, y, size, 0) and the buffer they are uploaded to, and the pipelines.
+		nvrhi::TextureHandle m_LocalShadowRanges;
+		nvrhi::TextureHandle m_DummyLocalShadowRanges;
+		nvrhi::ITexture* m_BoundLocalShadowRanges = nullptr;
+		uint32_t m_LocalShadowRangeLevels = 0;
+		std::vector<nvrhi::BindingSetHandle> m_LocalShadowRangeSets;
+		nvrhi::BindingLayoutHandle m_LocalShadowRangeLayout;
+		nvrhi::ComputePipelineHandle m_LocalShadowRangePipeline;
+		nvrhi::ComputePipelineHandle m_LocalShadowRangeDownsamplePipeline;
+		nvrhi::BufferHandle m_LocalShadowRangeTileBuffer;
+		std::vector<glm::uvec4> m_LocalShadowRangeTiles;
+		// The area shadow masks of the frame (AssignAreaShadowMasks): per masked light its parameters and its scissor on screen
+		// (x, y, width, height in pixels).
+		struct AreaShadowMask
+		{
+			RenderData::AreaShadowMaskParameters Parameters;
+			glm::ivec4 Scissor = glm::ivec4(0);
+		};
+		std::vector<AreaShadowMask> m_AreaShadowMasks;
+		// The masks (R8, a layer per masked light; scene SRV 58, the 1 x 1 dummy without them), a framebuffer per layer, two RG8
+		// targets the evaluation and the horizontal blur write (the blur's taps read the first, the vertical pass the second into
+		// a layer), the evaluation's layout, binding set and pipeline (the set names the atlas, the ranges and the local shadows'
+		// buffer it was made with), the blur's sets and its two pipelines (into the RG8 target, into a layer).
+		nvrhi::TextureHandle m_AreaShadowMaskArray;
+		nvrhi::TextureHandle m_DummyAreaShadowMasks;
+		nvrhi::ITexture* m_BoundAreaShadowMasks = nullptr;
+		std::array<nvrhi::FramebufferHandle, RenderData::c_MaxAreaShadowMasks> m_AreaShadowMaskFramebuffers;
+		std::array<nvrhi::TextureHandle, 2> m_AreaShadowScratch;
+		std::array<nvrhi::FramebufferHandle, 2> m_AreaShadowScratchFramebuffers;
+		nvrhi::BindingLayoutHandle m_AreaShadowMaskLayout;
+		nvrhi::BindingLayoutHandle m_AreaShadowBlurLayout;
+		nvrhi::GraphicsPipelineHandle m_AreaShadowMaskPipeline;
+		nvrhi::GraphicsPipelineHandle m_AreaShadowBlurPipeline;
+		nvrhi::GraphicsPipelineHandle m_AreaShadowBlurLayerPipeline;
+		nvrhi::BindingSetHandle m_AreaShadowMaskSet;
+		std::array<nvrhi::BindingSetHandle, 2> m_AreaShadowBlurSets;
+		nvrhi::ITexture* m_AreaShadowBoundAtlas = nullptr;
+		nvrhi::ITexture* m_AreaShadowBoundRanges = nullptr;
+		nvrhi::IBuffer* m_AreaShadowBoundBuffer = nullptr;
 		std::array<CascadeBox, RenderData::c_MaxCascades> m_Cascades = {};
 		glm::mat4 m_LightView = glm::mat4(1.0f);
 		uint32_t m_CascadeCount = 0;

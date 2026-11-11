@@ -403,6 +403,8 @@ namespace Strata
 			nvrhi::BindingLayoutItem::Texture_SRV(54),
 			nvrhi::BindingLayoutItem::Texture_SRV(55),          // The rect lights' LTC table (Renderer::GetAreaLightTable)
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(56), // The lights' faces (RenderData::LightShape, parallel to SRV 2)
+			nvrhi::BindingLayoutItem::Texture_SRV(57),          // The local shadow atlas's depth ranges (Include/AreaShadows.slang)
+			nvrhi::BindingLayoutItem::Texture_SRV(58),          // The rect lights' screen-space shadow masks (Scene/Forward.frag)
 			nvrhi::BindingLayoutItem::Sampler(0).setSize(RenderData::c_SamplerCount),
 			nvrhi::BindingLayoutItem::Sampler(8),
 			nvrhi::BindingLayoutItem::Sampler(9),
@@ -473,6 +475,20 @@ namespace Strata
 		dummyAtlasDesc.dimension = nvrhi::TextureDimension::Texture2D;
 		dummyAtlasDesc.debugName = m_Specification.DebugName + ".NoLocalShadows";
 		m_DummyLocalShadowAtlas = m_Device->createTexture(dummyAtlasDesc);
+		// The rect lights' depth ranges and shadow masks while no rect light casts a shadow (never read then).
+		nvrhi::TextureDesc dummyLocalRangesDesc;
+		dummyLocalRangesDesc.format = nvrhi::Format::R32_UINT;
+		dummyLocalRangesDesc.debugName = m_Specification.DebugName + ".NoLocalShadowRanges";
+		dummyLocalRangesDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+		dummyLocalRangesDesc.keepInitialState = true;
+		m_DummyLocalShadowRanges = m_Device->createTexture(dummyLocalRangesDesc);
+		nvrhi::TextureDesc dummyMasksDesc;
+		dummyMasksDesc.dimension = nvrhi::TextureDimension::Texture2DArray;
+		dummyMasksDesc.format = nvrhi::Format::R8_UNORM;
+		dummyMasksDesc.debugName = m_Specification.DebugName + ".NoAreaShadowMasks";
+		dummyMasksDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+		dummyMasksDesc.keepInitialState = true;
+		m_DummyAreaShadowMasks = m_Device->createTexture(dummyMasksDesc);
 		// Sixteen slots to begin with (8 KiB); grown with the frame's shadowed lights (Render).
 		m_LocalShadowBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
 			.setByteSize(16 * sizeof(RenderData::LocalShadowData))
@@ -604,7 +620,7 @@ namespace Strata
 			[](const nvrhi::InputLayoutHandle& layout) { return layout != nullptr; });
 		ST_CORE_VERIFY(inputLayoutsCreated && m_SceneBindingLayout && m_FrameConstantBuffer && m_GIFieldConstantBuffer && m_CommandList && m_ShadowPushBindingSet
 			&& m_PointClampSampler && m_LinearClampSampler && m_EquirectSampler && m_ShadowCompareSampler && m_DummyShadowMap && m_DummyShadowRanges && m_DummyLocalShadowAtlas
-			&& m_LocalShadowBuffer && m_ReflectionProbeBuffer && m_ClusterBuffer
+			&& m_DummyLocalShadowRanges && m_DummyAreaShadowMasks && m_LocalShadowBuffer && m_ReflectionProbeBuffer && m_ClusterBuffer
 			&& m_ClusterBindingLayout && m_ClusterPipeline
 			&& m_TemporalBindingLayout && m_TemporalPipeline, "SceneRenderer: failed to create GPU resources");
 		CreateIBLResources();
@@ -1072,6 +1088,8 @@ namespace Strata
 		nvrhi::ITexture* shadowMap = m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get();
 		nvrhi::ITexture* shadowRanges = m_ShadowRanges ? m_ShadowRanges.Get() : m_DummyShadowRanges.Get();
 		nvrhi::ITexture* localShadowAtlas = m_LocalShadowAtlas ? m_LocalShadowAtlas.Get() : m_DummyLocalShadowAtlas.Get();
+		nvrhi::ITexture* localShadowRanges = m_LocalShadowRanges ? m_LocalShadowRanges.Get() : m_DummyLocalShadowRanges.Get();
+		nvrhi::ITexture* areaShadowMasks = m_AreaShadowMaskArray ? m_AreaShadowMaskArray.Get() : m_DummyAreaShadowMasks.Get();
 		// Without a motion history the scene's own buffers stand in (nothing reads them then).
 		nvrhi::IBuffer* previousInstances = m_PreviousInstances ? m_PreviousInstances.Get() : m_SceneGPU->GetInstanceBuffer();
 		nvrhi::IBuffer* previousPalette = m_PreviousPalette ? m_PreviousPalette.Get() : m_SceneGPU->GetPaletteBuffer();
@@ -1085,7 +1103,7 @@ namespace Strata
 		// The shadow pass reads the same resources except for its own draw list (and never the shadow maps it draws into).
 		nvrhi::ITexture* screenShadows = GetBoundScreenShadows();
 		auto create = [&](nvrhi::IBuffer* drawList, nvrhi::ITexture* boundShadowMap, nvrhi::ITexture* boundRanges, nvrhi::ITexture* boundAtlas,
-			nvrhi::ITexture* boundMask)
+			nvrhi::ITexture* boundMask, nvrhi::ITexture* boundLocalRanges, nvrhi::ITexture* boundAreaMasks)
 		{
 			nvrhi::BindingSetDesc desc;
 			desc.bindings = {
@@ -1114,6 +1132,8 @@ namespace Strata
 				nvrhi::BindingSetItem::Texture_SRV(55, Renderer::GetAreaLightTable(), nvrhi::Format::UNKNOWN, nvrhi::AllSubresources,
 					nvrhi::TextureDimension::Texture2DArray),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(56, m_LightShapeBuffer),
+				nvrhi::BindingSetItem::Texture_SRV(57, boundLocalRanges),
+				nvrhi::BindingSetItem::Texture_SRV(58, boundAreaMasks, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture2DArray),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SceneGPU->GetMaterialBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment->Irradiance.Get() : blackCube),
@@ -1135,13 +1155,15 @@ namespace Strata
 				desc.bindings.push_back(nvrhi::BindingSetItem::Sampler(0, m_MaterialSamplers[index]).setArrayElement(index));
 			return m_Device->createBindingSet(desc, m_SceneBindingLayout);
 		};
-		m_SceneBindingSet = create(m_DrawListBuffer, shadowMap, shadowRanges, localShadowAtlas, screenShadows);
-		m_ShadowBindingSet = create(m_ShadowDrawListBuffer, m_DummyShadowMap, m_DummyShadowRanges, m_DummyLocalShadowAtlas, Renderer::GetWhiteTexture());
+		m_SceneBindingSet = create(m_DrawListBuffer, shadowMap, shadowRanges, localShadowAtlas, screenShadows, localShadowRanges, areaShadowMasks);
+		m_ShadowBindingSet = create(m_ShadowDrawListBuffer, m_DummyShadowMap, m_DummyShadowRanges, m_DummyLocalShadowAtlas, Renderer::GetWhiteTexture(),
+			m_DummyLocalShadowRanges, m_DummyAreaShadowMasks);
 		// The GPU-driven path's passes read the draw list its culling writes.
 		const bool gpuSets = m_GPUDrawListBuffer != nullptr;
-		m_GPUSceneBindingSet = gpuSets ? create(m_GPUDrawListBuffer, shadowMap, shadowRanges, localShadowAtlas, screenShadows) : nullptr;
-		m_GPUShadowBindingSet = gpuSets ? create(m_GPUDrawListBuffer, m_DummyShadowMap, m_DummyShadowRanges, m_DummyLocalShadowAtlas, Renderer::GetWhiteTexture())
+		m_GPUSceneBindingSet = gpuSets ? create(m_GPUDrawListBuffer, shadowMap, shadowRanges, localShadowAtlas, screenShadows, localShadowRanges, areaShadowMasks)
 			: nullptr;
+		m_GPUShadowBindingSet = gpuSets ? create(m_GPUDrawListBuffer, m_DummyShadowMap, m_DummyShadowRanges, m_DummyLocalShadowAtlas, Renderer::GetWhiteTexture(),
+			m_DummyLocalShadowRanges, m_DummyAreaShadowMasks) : nullptr;
 
 		nvrhi::BindingSetDesc clusterSet;
 		clusterSet.bindings = {
@@ -1159,6 +1181,8 @@ namespace Strata
 		m_BoundShadowRanges = shadowRanges;
 		m_BoundScreenShadows = screenShadows;
 		m_BoundLocalShadowAtlas = localShadowAtlas;
+		m_BoundLocalShadowRanges = localShadowRanges;
+		m_BoundAreaShadowMasks = areaShadowMasks;
 		m_BoundSceneGPUVersion = m_SceneGPU->GetBufferVersion();
 		m_BoundTextureTableVersion = Renderer::GetTextureTable().GetBufferVersion();
 		m_BoundPreviousInstances = previousInstances;
@@ -2309,6 +2333,7 @@ namespace Strata
 		release(m_GlassMotionFramebuffer);
 		release(m_MotionViewBindingSet);
 		ReleaseScreenShadowTargets(released);
+		ReleaseAreaShadowMasks(released);
 		// The shadows debug view's binding sets name the depth (its buffers and readbacks stay with the renderer).
 		release(m_ShadowViewBindingSet);
 		release(m_ShadowViewCountBindingSet);
@@ -2349,6 +2374,7 @@ namespace Strata
 		// allocation made it smaller).
 		release(m_LocalShadowAtlas);
 		release(m_LocalShadowFramebuffer);
+		ReleaseLocalShadowRanges(released); // Made with the atlas
 		ResetLocalShadows();
 		if (m_LocalShadowAllocator.GetAtlasSize() != m_Specification.Quality.LocalShadowAtlasSize)
 			m_LocalShadowAllocator.Reset(m_Specification.Quality.LocalShadowAtlasSize, m_LocalShadowAllocator.GetMinTileSize());
@@ -3230,6 +3256,24 @@ namespace Strata
 			m_Stats.LocalShadowViewsPending = 0;
 			degraded = true;
 		}
+		// Opaque surfaces take the shadowed rect lights' shadows from masks drawn after the prepass, which read the atlas's depth
+		// ranges: a frame whose masks or ranges cannot be made renders the rect lights without their shadows (reported).
+		AssignAreaShadowMasks(renderScene.GetLights(), camera);
+		if (!m_AreaShadowMasks.empty() && (!EnsureLocalShadowRanges() || !EnsureAreaShadowMasks()))
+		{
+			m_Errors.Report("failed to create the rect lights' shadow masks or depth ranges; rendering rect lights without shadows");
+			for (LocalShadowLight& light : m_LocalShadowLights)
+			{
+				if (light.Type == RenderData::c_LightRect)
+				{
+					light.Strength = 0.0f;
+					light.MaskLayer = 0;
+				}
+			}
+			m_AreaShadowMasks.clear();
+			m_Stats.AreaShadowMasks = 0;
+			degraded = true;
+		}
 		// The CPU's lights name their shadow slots (the GPU-driven path's light culling reads them from a table).
 		if (!m_GPULightsFrame && !m_LocalShadowLights.empty())
 		{
@@ -3244,8 +3288,13 @@ namespace Strata
 			for (size_t index = 0; index < m_Lights.size(); index++)
 			{
 				const uint32_t record = m_LightRecordIndices[index];
-				if (record < m_LocalShadowRecordSlots.size() && m_LocalShadowRecordSlots[record] != 0)
-					m_Lights[index].SpotAngles.z = static_cast<float>(m_LocalShadowRecordSlots[record]);
+				if (record >= m_LocalShadowRecordSlots.size() || m_LocalShadowRecordSlots[record] == 0)
+					continue;
+				m_Lights[index].SpotAngles.z = static_cast<float>(m_LocalShadowRecordSlots[record]);
+				// A rect light's mask layer plus one (its SpotAngles.w is 0 otherwise).
+				const uint32_t maskLayer = m_LocalShadowLights[m_LocalShadowRecordSlots[record] - 1].MaskLayer;
+				if (maskLayer > 0)
+					m_Lights[index].SpotAngles.w = static_cast<float>(maskLayer);
 			}
 			for (const LocalShadowLight& light : m_LocalShadowLights)
 			{
@@ -3299,6 +3348,8 @@ namespace Strata
 		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get())
 			|| m_BoundShadowRanges != (m_ShadowRanges ? m_ShadowRanges.Get() : m_DummyShadowRanges.Get()) || m_BoundScreenShadows != GetBoundScreenShadows()
 			|| m_BoundLocalShadowAtlas != (m_LocalShadowAtlas ? m_LocalShadowAtlas.Get() : m_DummyLocalShadowAtlas.Get())
+			|| m_BoundLocalShadowRanges != (m_LocalShadowRanges ? m_LocalShadowRanges.Get() : m_DummyLocalShadowRanges.Get())
+			|| m_BoundAreaShadowMasks != (m_AreaShadowMaskArray ? m_AreaShadowMaskArray.Get() : m_DummyAreaShadowMasks.Get())
 			|| m_BoundSceneGPUVersion != m_SceneGPU->GetBufferVersion()
 			|| m_BoundPreviousInstances != (m_PreviousInstances ? m_PreviousInstances.Get() : m_SceneGPU->GetInstanceBuffer())
 			|| m_BoundPreviousPalette != (m_PreviousPalette ? m_PreviousPalette.Get() : m_SceneGPU->GetPaletteBuffer());
@@ -3441,7 +3492,7 @@ namespace Strata
 			commandList->endMarker();
 		}
 
-		if (frame.ShadowParams.w > 0.0f || !m_LocalShadowViews.empty())
+		if (frame.ShadowParams.w > 0.0f || !m_LocalShadowViews.empty() || !m_LocalShadowClears.empty())
 		{
 			gpuTimer.Next(gpuStages.Shadows);
 			commandList->beginMarker("Shadows");
@@ -3457,13 +3508,15 @@ namespace Strata
 					BuildShadowRanges(commandList, (1u << m_CascadeCount) - 1u);
 				}
 			}
-			if (!m_LocalShadowViews.empty())
+			if (!m_LocalShadowViews.empty() || !m_LocalShadowClears.empty())
 			{
 				commandList->beginMarker("LocalShadows");
+				ClearUnneededLocalShadowTiles(commandList);
 				if (m_GPUDrivenFrame)
 					DrawGPULocalShadows(commandList);
 				else
 					DrawLocalShadows(commandList);
+				BuildLocalShadowRanges(commandList);
 				commandList->endMarker();
 			}
 			commandList->endMarker();
@@ -3497,14 +3550,19 @@ namespace Strata
 			DrawBatches(commandList, Pass::Prepass, false);
 		commandList->endMarker();
 
-		// The sun's shadow on every opaque pixel of the prepass, before anything shades them.
-		if (frame.ShadowParams.w > 0.0f)
+		// The sun's and the shadowed rect lights' shadows on every opaque pixel of the prepass, before anything shades them.
+		if (frame.ShadowParams.w > 0.0f || !m_AreaShadowMasks.empty())
 		{
 			gpuTimer.Next(gpuStages.ScreenShadows);
 			commandList->beginMarker("ScreenShadows");
-			RenderScreenShadows(commandList, frame);
+			if (frame.ShadowParams.w > 0.0f)
+			{
+				RenderScreenShadows(commandList, frame);
+				m_Stats.ScreenShadows = true;
+			}
+			if (!m_AreaShadowMasks.empty())
+				RenderAreaShadowMasks(commandList);
 			commandList->endMarker();
-			m_Stats.ScreenShadows = true;
 		}
 
 		if (postProcess.AmbientOcclusion)

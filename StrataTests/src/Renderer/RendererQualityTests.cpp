@@ -753,18 +753,19 @@ TEST_SUITE("Renderer.Quality")
 
 	TEST_CASE("Memory estimates")
 	{
-		// Cascades: cascades x size^2 x 4 bytes (D32), AutoFine resolved by the output's rows; the local atlas: size^2 x 4.
+		// Cascades: cascades x size^2 x 4 bytes (D32), AutoFine resolved by the output's rows; the local atlas: size^2 x 4, and the
+		// rect lights' depth ranges over it: (size / 4)^2 x 4 bytes and a third more for the coarser levels.
 		const RendererQualitySettings medium = RendererQuality::GetPreset(RendererQualityPreset::Medium);
 		const RendererQualitySettings high = RendererQuality::GetPreset(RendererQualityPreset::High);
 		const RendererQualitySettings ultra = RendererQuality::GetPreset(RendererQualityPreset::Ultra);
 		CHECK(MemoryMiB(high, { 3840, 2160 }, "ShadowResolution") == 1280);
-		CHECK(MemoryMiB(high, { 3840, 2160 }, "LocalShadowAtlasSize") == 64);
+		CHECK(MemoryMiB(high, { 3840, 2160 }, "LocalShadowAtlasSize") == 69);
 		CHECK(MemoryMiB(high, { 1920, 1080 }, "ShadowResolution") == 320);
 		CHECK(MemoryMiB(ultra, { 3840, 2160 }, "ShadowResolution") == 1280);
 		CHECK(MemoryMiB(ultra, { 1920, 1080 }, "ShadowResolution") == 1280);
-		CHECK(MemoryMiB(ultra, { 3840, 2160 }, "LocalShadowAtlasSize") == 256);
+		CHECK(MemoryMiB(ultra, { 3840, 2160 }, "LocalShadowAtlasSize") == 277);
 		CHECK(MemoryMiB(medium, { 1920, 1080 }, "ShadowResolution") == 64);
-		CHECK(MemoryMiB(medium, { 1920, 1080 }, "LocalShadowAtlasSize") == 64);
+		CHECK(MemoryMiB(medium, { 1920, 1080 }, "LocalShadowAtlasSize") == 69);
 		// The motion blur's targets, for a scene that blurs: RGBA16F and R32_UINT per pixel (12 bytes) and two RGBA16F tile
 		// targets of ceil(size / 8) texels; none without samples or with the players' Motion blur off.
 		const RendererQuality::RowTraits* motionBlur = nullptr;

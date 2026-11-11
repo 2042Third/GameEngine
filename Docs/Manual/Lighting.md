@@ -96,8 +96,13 @@ linearly transformed cosines), the same in every frame.
   the faces share the power (each half as bright).
 - **Range** fades the light smoothly to zero at that distance from the face. It does not change how the light falls off
   before that: a panel's own falloff is physical. Make it reach what the light should light; a smaller range costs less.
-- **Shadows**: rect lights cast no shadow yet. They light through objects: a box under a panel is lit on its top and the
-  floor beneath it is lit too. **Cast Shadows** and its biases are kept for them.
+- **Shadows**: with **Cast Shadows** a rect light casts soft shadows filtered with its own size: sharp where an object meets
+  the floor, wider and softer further from it and the larger the light. It takes six views of the point and spot lights'
+  shadow atlas (five for a one-sided ceiling panel: nothing behind it needs a shadow) from the same budget (Max Shadowed
+  Local Lights, the atlas size and largest tile), and at most four rect lights cast shadows at once: a fifth waits until one
+  leaves the view or matters less, and a light losing its shadow fades it out. Very wide penumbrae (a large light close above
+  an object) come out narrower than real ones: the filter reaches at most an eighth of the light's shadow tile. Shadows of
+  shadowed rect lights cost every pixel near their penumbrae a filter of twice the Shadow Filter Quality's taps.
 - **An emissive panel is not a light by itself.** A mesh with an emissive material shows its glow, but it lights the scene
   only through global illumination's probes, with their coarse resolution. To make a panel light the room, place a Rect
   Light on its face (the Hierarchy's **Create > Rect Light**, then size and place it as the face), with the panel's
@@ -207,7 +212,7 @@ The project's **Graphics Quality** (Project Settings, [Graphics.md](Graphics.md)
 | --- | --- | --- | --- | --- |
 | Shadow resolution (texels each way of every cascade) | 1024 | 2048 | 4096, 8192 from 1440 output rows | 8192 |
 | Shadow cascades | 3 | 4 | 4 | 4 |
-| Shadow Filter Quality (taps of the wide soft edges) | 8 | 16 | 24 | 32 |
+| Shadow Filter Quality (taps of the sun's wide soft edges; rect lights take twice as many) | 8 | 16 | 24 | 32 |
 | Contact Shadows (steps; off in every preset) | off | off | off | off |
 
 High and Ultra's shadow maps are large (four 8192 texel cascades take 1 GiB of video memory) because stable cascades
