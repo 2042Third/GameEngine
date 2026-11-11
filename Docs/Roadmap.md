@@ -656,6 +656,13 @@ rendering streams branch from its tip:
   not fit a 4K display). Later: grass with coverage-preserving alpha, people, the B-list of scans, sound, the walk on a
   character controller (after `physics-timing`), supersampled stills, a night after dusk (a station with probes of its
   own), and sunlight thrown off a sheet onto nearby surfaces (after `radiance-cascades`).
+- `area-lights` stages 0 to 3 (on `agent/wave8-area-lights`, to land through `ci/wave8-area-lights`): the Rect Light,
+  shaded per pixel from linearly transformed cosines (Heitz et al.) with nothing sampled, cut at each surface's horizon;
+  soft, contact-hardening shadows from six views of the local shadow atlas, opaque surfaces taking them from screen-space
+  masks; Light Surface and `lighting.makeAreaLight` (an emissive panel made a light in one step, its emission left out of
+  SSR, probe captures and its own shadows); the look-dev shots `lookdev.cornell.rect`, `.rect.top`, `lookdev.rect.wet`,
+  `.wet.low`, `.metal` and `.strip`. Stage 4 (area lights in the GI: until then a GI scene counts a light surface's light
+  twice) and stage 5 (disk lights) follow.
 
 Open items and deferrals later waves own:
 

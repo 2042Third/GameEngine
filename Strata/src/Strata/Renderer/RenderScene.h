@@ -46,6 +46,8 @@ namespace Strata
 		// Posed: its skinned mesh is drawn from its palette with the skinned pipelines, and its bounds are the pose's
 		// (RenderScene::GetPaletteFirst). A Skin proxy without a pose shows the bind pose like any mesh.
 		constexpr uint32_t Skinned = 1u << 6;
+		// Has a LightSurfaceComponent: its instances carry c_InstanceLightSurface, and area lights' shadow views leave it out.
+		constexpr uint32_t LightSurface = 1u << 7;
 	}
 
 	struct RenderSceneStats
@@ -390,6 +392,8 @@ namespace Strata
 		void OnMeshRendererDestroyed(entt::registry& registry, entt::entity entity);
 		// SkinComponents created, signaled or destroyed: the proxy reads them at the next sync.
 		void OnSkinChanged(entt::registry& registry, entt::entity entity);
+		// LightSurfaceComponents added or removed (a tag has no fields to signal): the proxy reads them at the next sync.
+		void OnLightSurfaceChanged(entt::registry& registry, entt::entity entity);
 		// Queues the entity for the next sync, once; a destroyed one leaves the queue.
 		void QueuePending(entt::entity entity);
 		void DropPending(entt::entity entity);

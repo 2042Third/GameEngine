@@ -43,7 +43,7 @@ TEST_SUITE("Reflection")
 	{
 		const char* expected[] = {
 			"ID", "Name", "Transform", "Relationship", "Tag", "Inactive", "PrefabInstance", "Camera", "MeshRenderer",
-			"DirectionalLight", "PointLight", "SpotLight", "RectLight", "SkyLight", "HeightFog", "ReflectionProbe", "PostProcess", "Text",
+			"DirectionalLight", "PointLight", "SpotLight", "RectLight", "LightSurface", "SkyLight", "HeightFog", "ReflectionProbe", "PostProcess", "Text",
 #if ST_WITH_PHYSICS
 			"RigidBody", "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "CharacterController",
 #endif

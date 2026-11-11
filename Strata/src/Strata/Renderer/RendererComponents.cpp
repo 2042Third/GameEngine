@@ -381,6 +381,13 @@ namespace Strata
 			.Property("ShadowNormalBias", &RectLightComponent::ShadowNormalBias, WithTooltip(Range(0.0f, 10.0f, 0.01f), c_LocalShadowNormalBiasTooltip));
 		SetInactiveReasons<RectLightComponent>({ "ShadowBias", "ShadowNormalBias" }, &WithShadows<RectLightComponent>);
 
+		ComponentRegistry::Register<LightSurfaceComponent>("LightSurface")
+			.DisplayName("Light Surface")
+			.Category("Lighting")
+			.Description("Marks this emissive mesh as the face of an area light (Make Area Light adds it): screen-space reflections, reflection "
+				"probe captures and area lights' shadows leave its emission out, so the panel is not counted twice. The mesh still draws, casts "
+				"the sun's and other lights' shadows and is picked as before");
+
 		ComponentRegistry::Register<SkyLightComponent>("SkyLight")
 			.DisplayName("Sky Light")
 			.Category("Lighting")

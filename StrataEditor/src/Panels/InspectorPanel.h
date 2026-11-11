@@ -83,8 +83,8 @@ namespace Strata
 		// override).
 		void DrawPrefabBar(EditorPanelContext& panelContext, const PrefabView& view);
 		void DrawComponent(EditorPanelContext& panelContext, std::span<const Entity> entities, const ComponentInfo& info, const PrefabView* prefab);
-		void DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info,
-			const PrefabView* prefab);
+		void DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, EditorCommandRunner& runner, std::span<const Entity> entities,
+			const ComponentInfo& info, const PrefabView* prefab);
 		// A notice and an Add button for each component the shown one requires that some of the entities lack.
 		void DrawMissingRequirements(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities,
 			const ComponentInfo& info);

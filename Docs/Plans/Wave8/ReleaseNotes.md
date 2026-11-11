@@ -356,6 +356,25 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   `areaLights`, the rect lights in view, and `areaLightShading`, whether the frame drew with the shaders that shade them.
 - Scripts and agents reach it as every light: `Entity::SetProperty("RectLight", "Width", 1.5f)`, `component.set`.
 
+**area-lights (stage 3: light surfaces and the panel helper)**
+
+- **Make Area Light** (the Hierarchy's context menu and the Mesh Renderer's menu; `lighting.makeAreaLight`): an emissive
+  panel becomes a real light in one step. A child Rect Light goes on its emitting face (a ceiling panel's lower face by
+  itself; a side for wall panels and signs) with the panel's size and luminance, casting shadows, and the panel is tagged
+  **Light Surface**; one undo step takes both away, and a second call says the panel already is a light.
+- **Light Surface** (component `LightSurface`): a mesh that shows a light's face is not counted twice. Screen-space
+  reflections show the light's own highlight where they saw the panel (a polished floor reads the same with them on and
+  off), reflection probe captures hold the room the light lit rather than the panel, and the light's own shadows leave the
+  panel out. It changes nothing else: the mesh draws, is picked and casts the sun's and other lights' shadows.
+- Rect light shadows no longer darken a band along walls: each of the filter's taps now tests the path from its point of
+  the light to the surface, so a wall beside a floor point blocks nothing (in the Cornell box the floor was 0.40 off the
+  reference by the walls before, within 0.03 now but at one point under the sphere's foot), and a post's contact shadow is
+  2.0 cm wide instead of 3.3 cm.
+- Look-dev: the Cornell box with its panel made a light (`lookdev.cornell.rect`, `.rect.top`), a shop light over wet ground
+  (`lookdev.rect.wet`, `.wet.low`), a softbox over the polished, satin and glossy floors (`lookdev.rect.metal`) and a strip
+  over the metal sheet (`lookdev.rect.strip`). Perf entries `PerfGPU.Renderer.AreaLights8` and `.AreaShadows4`
+  (provisional).
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and
@@ -582,8 +601,12 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   to 0.6 seen 78 degrees from its normal reflects 0.912 to 0.918 of it (0.94 to 0.98 at 60 degrees) where it should
   reflect all of it.
 - Rect light shadows: penumbrae wider than an eighth of the light's shadow tile come out narrower than real ones (a blocker
-  0.3 m under a 2 m light gets 16% of the true width); at a contact the shadow is 3.3 cm wide where the true one is 1.2 cm
-  (a 6 cm post, 5 mm behind it); in the Cornell box 42% of the fully lit pixels still run the filter's comparisons. Their
+  0.3 m under a 2 m light gets 16% of the true width); at a contact the shadow is 2.0 cm wide where the true one is 1.2 cm
+  (a 6 cm post, 5 mm behind it); the filter looks from the light's center, so under the Cornell sphere's foot, which the
+  center sees, the floor gets 0.124 of the light where it should get none, and its penumbrae are within 0.199 of the
+  reference (the spec asked 0.03 and 0.1); behind a thick wall's top edge the penumbra is 38% narrower than the true one
+  (its side, seen beyond the paths that enter it nearer the floor, blocks less); in the Cornell box 46% of the fully lit
+  pixels still run the filter's comparisons. Their
   wide penumbrae take twice the Shadow Filter Quality's taps, so a slow strafe across them shimmers no more than the sun's
   widest soft shadows. At most four rect lights cast shadows at once; a fifth waits.
 - A scene with a rect light, even an unlit one out of sight, draws every surface with the forward shaders that shade rect
@@ -596,6 +619,13 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   drawing more kinds of surfaces (skinned, mirrored, double-sided, transparent, glass) compiles a form for each, and what
   that costs was not measured. Compiling them ahead, or on a worker thread while the old forms draw, is left for later:
   every pipeline the renderer has is made on first use, and making them ahead is a change to all of them.
+- Until area lights reach global illumination (the stream's stage 4), a scene with GI on counts a light surface's light
+  twice: once per pixel from its rect light and once through the GI, which still takes the panel's glow. In the Cornell box
+  with its panel made a light, the floor's center reads 162 nits with GI on against 43.8 from the light alone (+270%); the
+  emissive panel alone with GI gives 118 nits there, 2.7 times the direct light, so nearly all of the excess is the second
+  count. Along the floor's row through the center no staircase shows (the largest step between neighbours 0.0034 of the
+  light with GI on, 0.0032 off); the GI's own staircases and bands at the box's foot and the red wall (decisions.md) are
+  those of GI scenes generally. Look at Cornell scenes with GI off until then (`lookdev.cornell.rect` is).
 
 **Showcase (the reflections' adoption)**
 

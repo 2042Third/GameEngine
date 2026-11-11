@@ -26,7 +26,7 @@ namespace Strata
 
 		constexpr uint32_t c_NoOwner = ~0u;
 		constexpr uint32_t c_NotListed = ~0u;
-		static_assert(RenderProxyFlags::Skinned < (1u << RenderData::c_GPUProxyOverrideShift), "The proxy flags must fit below the override slot");
+		static_assert(RenderProxyFlags::LightSurface < (1u << RenderData::c_GPUProxyOverrideShift), "The proxy flags must fit below the override slot");
 		// Changed instances (or records) this close together are uploaded in one run: fewer copies for a little more data.
 		constexpr uint32_t c_InstanceRunGap = 16;
 		constexpr uint32_t c_RecordRunGap = 16;

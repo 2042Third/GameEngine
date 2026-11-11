@@ -158,7 +158,7 @@ namespace Strata::RenderData
 		glm::vec4 Light = glm::vec4(0.0f);           // xyz: the light's world position (screen fractions), w: its range
 		glm::vec4 RelativeLight = glm::vec4(0.0f);   // xyz: the light's camera-relative position (the range test), w: the near plane
 		// x: tan(half the view's field of view), y: its tile's texels, z: LODSelection::GetErrorThreshold for a viewport of the
-		// tile's height
+		// tile's height, w: 1 for an area light's view, which leaves light surfaces (RenderProxyFlags::LightSurface) out
 		glm::vec4 Parameters = glm::vec4(0.0f);
 	};
 	static_assert(sizeof(CullLocalShadowView) == 9 * 16);

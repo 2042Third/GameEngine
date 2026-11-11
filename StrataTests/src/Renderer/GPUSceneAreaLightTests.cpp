@@ -1,4 +1,5 @@
 #include "Renderer/SceneRendererTestUtils.h"
+#include "Renderer/TAATestUtils.h"
 #include "Strata/Math/Math.h"
 #include "Strata/Renderer/AreaLights.h"
 #include "Strata/Renderer/RendererComponents.h"
@@ -1298,6 +1299,86 @@ TEST_SUITE("GPU.SceneRenderer.AreaLights")
 				CHECK(agreement.Peak > 1.0);
 				CHECK(agreement.MaxRelative <= c_AgreementRelative);
 			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Screen-space reflections count a light surface once: the light's own highlight is the panel's reflection")
+	{
+		// L1: a tagged emissive panel 2 m over a polished metal floor, a one-sided light 1 mm under its face with its luminance, no
+		// sky: the panel's mirror image in the floor reads the same with screen-space reflections on as off (within 5%), on both
+		// tracers. Without the prepass's marker the reflections added the panel's image to the light's highlight: twice the light.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		constexpr uint32_t c_ViewSize = 256;
+		constexpr float c_Nits = 2000.0f;
+		// The panel and its mirror image both on screen (the reflections can only find what the screen shows).
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.0f, 3.0f), glm::vec3(0.0f, 0.19f, -1.0f));
+		for (const ReflectionsQuality reflections : { ReflectionsQuality::Checkerboard, ReflectionsQuality::Spatial })
+		{
+			CAPTURE(static_cast<int>(reflections));
+			const auto measure = [&](bool screenReflections)
+			{
+				Scene scene;
+				PostProcessComponent& post = AddNeutralPostProcess(scene);
+				post.ScreenSpaceReflections = screenReflections;
+				// The checkerboard tracer runs under TAA only (its frames fill the blocks in turn); the spatial one needs no history.
+				post.AntiAliasing = true;
+				post.AntiAliasingMethod = reflections == ReflectionsQuality::Checkerboard ? AntiAliasingMode::TAA : AntiAliasingMode::FXAA;
+				AddDarkSky(scene);
+				PlaneMaterial mirror;
+				mirror.Albedo = glm::vec3(0.9f);
+				mirror.Metallic = 1.0f;
+				mirror.Roughness = 0.02f;
+				AddPlane(scene, assets, mirror, 0.0f, 20.0f);
+				MaterialProperties emitter = DarkUnlit();
+				emitter.EmissiveColor = glm::vec3(1.0f);
+				emitter.EmissiveIntensity = c_Nits;
+				Entity panel = AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(emitter), glm::vec3(0.0f, 2.025f, -1.0f), "Panel");
+				panel.GetComponent<TransformComponent>().Scale = glm::vec3(1.0f, 0.05f, 0.6f);
+				panel.AddComponent<LightSurfaceComponent>();
+				AddRectLight(scene, glm::vec3(0.0f, 1.999f, -1.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), 1.0f, 0.6f, c_Nits, 20.0f);
+				SceneRendererSpecification specification = ExactSpecification();
+				specification.Quality.Reflections = reflections;
+				SceneRenderer renderer(specification);
+				renderer.SetViewportSize(c_ViewSize, c_ViewSize);
+				ReadbackImage hdr;
+				for (int frame = 0; frame < 8; frame++)
+				{
+					hdr = RenderHDR(renderer, scene, camera);
+					TAA::FinishFrame(gpu);
+				}
+				CHECK(renderer.GetStats().ScreenSpaceReflections == screenReflections);
+				// The middle half of the panel's mirror image (its face reflected in the floor's plane).
+				const glm::dvec2 low = ProjectToPixelCoordinates(camera, glm::dvec3(-0.25, -2.0, -1.15), c_ViewSize, c_ViewSize);
+				const glm::dvec2 high = ProjectToPixelCoordinates(camera, glm::dvec3(0.25, -2.0, -0.85), c_ViewSize, c_ViewSize);
+				const uint32_t x0 = static_cast<uint32_t>(std::ceil(std::min(low.x, high.x)));
+				const uint32_t x1 = static_cast<uint32_t>(std::floor(std::max(low.x, high.x)));
+				const uint32_t y0 = static_cast<uint32_t>(std::ceil(std::min(low.y, high.y)));
+				const uint32_t y1 = static_cast<uint32_t>(std::floor(std::max(low.y, high.y)));
+				REQUIRE(x1 > x0 + 4);
+				REQUIRE(y1 > y0 + 1);
+				REQUIRE(y1 < c_ViewSize);
+				double sum = 0.0;
+				uint32_t count = 0;
+				for (uint32_t y = y0; y <= y1; y++)
+				{
+					for (uint32_t x = x0; x <= x1; x++)
+					{
+						const glm::vec4 value = ReadHalfTexel(hdr, x, y);
+						sum += 0.2126 * value.r + 0.7152 * value.g + 0.0722 * value.b;
+						count++;
+					}
+				}
+				return sum / static_cast<double>(count);
+			};
+			const double without = measure(false);
+			const double with = measure(true);
+			MESSAGE(fmt::format("L1: the panel's mirror image reads {:.1f} nits with screen-space reflections, {:.1f} without ({:+.2f}%)", with, without,
+				100.0 * (with / without - 1.0)));
+			REQUIRE(without > 0.1 * c_Nits);
+			CHECK(std::abs(with / without - 1.0) <= 0.05);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

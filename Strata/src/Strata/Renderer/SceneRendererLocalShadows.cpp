@@ -1202,11 +1202,13 @@ namespace Strata
 				// Camera-relative, in float, as the GPU's culling takes them (Scene/Cull.comp).
 				const glm::vec3 lightRelative(glm::dvec3(glm::vec3(position)) - origin);
 				const float range = position.w;
+				// An area light's views leave out the meshes that show its face (LightSurfaceComponent): the light leaves them.
+				const bool area = light.Type == RenderData::c_LightRect;
 				for (const uint32_t proxy : job.Candidates)
 				{
 					const uint32_t flags = renderScene.GetProxyFlags(proxy);
 					const uint32_t required = RenderProxyFlags::Active | RenderProxyFlags::Indexed | RenderProxyFlags::CastShadows | RenderProxyFlags::MeshBounds;
-					if ((flags & required) != required || renderScene.GetInstanceCount(proxy) == 0)
+					if ((flags & required) != required || renderScene.GetInstanceCount(proxy) == 0 || (area && (flags & RenderProxyFlags::LightSurface) != 0))
 						continue;
 					const AABB& bounds = renderScene.GetWorldBounds(proxy);
 					const glm::vec3 relativeMin = bounds.Min - cameraPosition;

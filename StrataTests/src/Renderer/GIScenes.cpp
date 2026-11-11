@@ -6,6 +6,7 @@
 #include "Strata/Renderer/GlobalIlluminationLayout.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/Renderer.h"
+#include "Strata/Renderer/RendererComponents.h"
 
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -576,7 +577,7 @@ namespace Strata::Tests
 		return voxels;
 	}
 
-	void BuildCornellBox(Scene& scene, SceneTestAssets& assets)
+	void BuildCornellBox(Scene& scene, SceneTestAssets& assets, CornellLight light)
 	{
 		AddNeutralPostProcess(scene);
 		const auto diffuse = [&](const glm::vec3& albedo)
@@ -601,7 +602,37 @@ namespace Strata::Tests
 		tallTransform.Scale = glm::vec3(1.6f, 3.2f, 1.6f);
 		tallTransform.Rotation = glm::angleAxis(glm::radians(18.0f), glm::vec3(0.0f, 1.0f, 0.0f));
 		AddSphere(scene, white, glm::vec3(1.15f, 0.9f, -0.3f), 0.9f);
-		AddBox(scene, AddEmitter(assets, glm::vec3(c_CornellPanelLuminance)), { -0.65f, c_Height - 0.3f, -0.525f }, { 0.65f, c_Height, 0.525f });
+		const glm::vec3 panelMin(-0.65f, c_Height - 0.3f, -0.525f);
+		const glm::vec3 panelMax(0.65f, c_Height, 0.525f);
+		// The light, as lighting.makeAreaLight makes it: its -Z down, X along the panel's longer side, 1 mm under the face.
+		const glm::quat facingDown = glm::quat_cast(glm::mat3(glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f)));
+		RectLightComponent rect;
+		rect.Intensity = c_CornellPanelLuminance;
+		rect.CastShadows = true;
+		if (light == CornellLight::RectLightOnly)
+		{
+			Entity entity = scene.CreateEntity("Cornell Light");
+			TransformComponent& transform = entity.GetComponent<TransformComponent>();
+			transform.Translation = glm::vec3(0.0f, panelMin.y - 0.001f, 0.0f);
+			transform.Rotation = facingDown;
+			rect.Width = panelMax.x - panelMin.x;
+			rect.Height = panelMax.z - panelMin.z;
+			entity.AddComponent<RectLightComponent>(rect);
+			return;
+		}
+		Entity panel = AddMesh(scene, BuiltinAssets::CubeMesh, AddEmitter(assets, glm::vec3(c_CornellPanelLuminance)), 0.5f * (panelMin + panelMax), "Cornell Panel");
+		panel.GetComponent<TransformComponent>().Scale = panelMax - panelMin;
+		if (light == CornellLight::Emissive)
+			return;
+		panel.AddComponent<LightSurfaceComponent>();
+		Entity child = scene.CreateChildEntity(panel, "Cornell Panel Light");
+		TransformComponent& transform = child.GetComponent<TransformComponent>();
+		// In the panel's space (the unit cube scaled): its bottom face at -0.5, 1 mm below it in the world.
+		transform.Translation = glm::vec3(0.0f, -0.5f - 0.001f / (panelMax.y - panelMin.y), 0.0f);
+		transform.Rotation = facingDown;
+		rect.Width = 1.0f;  // Times the panel's scale: 1.3 m
+		rect.Height = 1.0f; // 1.05 m
+		child.AddComponent<RectLightComponent>(rect);
 	}
 
 	SceneCamera CornellCamera(float aspectRatio)

@@ -386,7 +386,7 @@ namespace Strata
 		if (m_View.GetRows().empty() && !m_View.IsFiltering())
 			DrawEmptyScene(context, commands);
 		else
-			DrawRows(context, commands, scene);
+			DrawRows(context, commands, panelContext.Runner, scene);
 		ImGui::EndDisabled();
 
 		// Applied after drawing, so the rows are never changed while they are drawn.
@@ -653,7 +653,7 @@ namespace Strata
 		}
 	}
 
-	void SceneHierarchyPanel::DrawRows(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene)
+	void SceneHierarchyPanel::DrawRows(EditorContext& context, const EditorCommandRegistry& commands, EditorCommandRunner& runner, Scene& scene)
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
 		if (!ImGui::BeginChild("Rows", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_None))
@@ -709,7 +709,7 @@ namespace Strata
 			while (clipper.Step())
 			{
 				for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++)
-					DrawRow(context, commands, scene, static_cast<size_t>(row));
+					DrawRow(context, commands, runner, scene, static_cast<size_t>(row));
 			}
 			io = ImGui::EndMultiSelect();
 			ApplySelectionRequests(context, scene, *io);
@@ -731,7 +731,7 @@ namespace Strata
 		ImGui::EndChild();
 	}
 
-	void SceneHierarchyPanel::DrawRow(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene, size_t index)
+	void SceneHierarchyPanel::DrawRow(EditorContext& context, const EditorCommandRegistry& commands, EditorCommandRunner& runner, Scene& scene, size_t index)
 	{
 		const HierarchyRow& row = m_View.GetRows()[index];
 		const entt::registry& registry = scene.GetRegistry();
@@ -789,7 +789,7 @@ namespace Strata
 			ImGui::EndDragDropSource();
 		}
 		AcceptRowDrops(context, commands, scene, index, min, max);
-		DrawRowContextMenu(context, commands, scene, row);
+		DrawRowContextMenu(context, commands, runner, scene, row);
 
 		// The eye at the right end, the prefab badge before it, then the name in what is left.
 		const float button = ImGui::GetFrameHeight();
@@ -921,7 +921,8 @@ namespace Strata
 		m_Deferred.push_back([&context, &commands, parameters]() { RunEditorCommand(context, commands, "entity.rename", parameters); });
 	}
 
-	void SceneHierarchyPanel::DrawRowContextMenu(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene, const HierarchyRow& row)
+	void SceneHierarchyPanel::DrawRowContextMenu(EditorContext& context, const EditorCommandRegistry& commands, EditorCommandRunner& runner, Scene& scene,
+		const HierarchyRow& row)
 	{
 		if (!ImGui::BeginPopupContextItem("RowMenu"))
 			return;
@@ -946,6 +947,14 @@ namespace Strata
 		ImGui::Separator();
 		DrawPrefabMenuItems(context, commands, scene, row);
 		ImGui::Separator();
+		// An emissive panel made a real light (lighting.makeAreaLight): a child Rect Light on its face, the panel tagged.
+		const bool makesLight = !context.IsPlaying() && scene.GetRegistry().all_of<MeshRendererComponent>(row.Handle);
+		if (ImGui::MenuItem("Make Area Light", nullptr, false, makesLight))
+		{
+			const nlohmann::json parameters = { { "entity", UUIDToJson(id) } };
+			schedule([&context, &commands, &runner, parameters]() { RunEditorCommandDeferred(runner, context, commands, "lighting.makeAreaLight", parameters); });
+		}
+		UI::ItemProbe::Record("Hierarchy.MakeAreaLight", makesLight);
 		const bool hasParent = scene.GetRegistry().get<HierarchyComponent>(row.Handle).Parent != entt::null;
 		if (ImGui::MenuItem("Unparent", nullptr, false, hasParent))
 		{

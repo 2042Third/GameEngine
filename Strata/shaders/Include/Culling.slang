@@ -15,6 +15,7 @@
 #define ST_PROXY_INDEXED      8u
 #define ST_PROXY_MESH_BOUNDS  16u
 #define ST_PROXY_SKINNED      64u
+#define ST_PROXY_LIGHT_SURFACE 128u // Area lights' shadow views leave it out (RenderProxyFlags::LightSurface)
 
 #define ST_CULL_MESH_SKINNED_ARENA     0x80000000u
 #define ST_CULL_MATERIAL_AVAILABLE     1u
@@ -135,7 +136,9 @@ struct CullLocalShadowView
 	float4 Planes[6];      // Its frustum, camera-relative, inward
 	float4 Light;          // xyz: the light's world position, w: its range
 	float4 RelativeLight;  // xyz: the light's camera-relative position, w: the near plane
-	float4 Parameters;     // x: tan(half its field of view), y: its tile's texels, z: the level-of-detail error threshold of its tile
+	// x: tan(half its field of view), y: its tile's texels, z: the level-of-detail error threshold of its tile, w: 1 for an area
+	// light's view (it leaves light surfaces out)
+	float4 Parameters;
 };
 
 struct CullCascade

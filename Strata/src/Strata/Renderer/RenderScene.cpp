@@ -9,6 +9,7 @@
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/RenderSceneGPU.h"
 #include "Strata/Renderer/Renderer.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneServices.h"
@@ -136,6 +137,8 @@ namespace Strata
 		registry.on_construct<SkinComponent>().connect<&RenderScene::OnSkinChanged>(*this);
 		registry.on_update<SkinComponent>().connect<&RenderScene::OnSkinChanged>(*this);
 		registry.on_destroy<SkinComponent>().connect<&RenderScene::OnSkinChanged>(*this);
+		registry.on_construct<LightSurfaceComponent>().connect<&RenderScene::OnLightSurfaceChanged>(*this);
+		registry.on_destroy<LightSurfaceComponent>().connect<&RenderScene::OnLightSurfaceChanged>(*this);
 		m_Lights.Connect(registry);
 	}
 
@@ -202,6 +205,13 @@ namespace Strata
 	void RenderScene::OnSkinChanged(entt::registry& registry, entt::entity entity)
 	{
 		// Only mesh renderers have proxies; a destroyed SkinComponent is gone by the next sync, which reads its absence.
+		if (registry.all_of<MeshRendererComponent>(entity))
+			QueuePending(entity);
+	}
+
+	void RenderScene::OnLightSurfaceChanged(entt::registry& registry, entt::entity entity)
+	{
+		// As for a skin: the next sync reads the tag's presence into the proxy's flags (a removed tag is gone by then).
 		if (registry.all_of<MeshRendererComponent>(entity))
 			QueuePending(entity);
 	}
@@ -510,6 +520,12 @@ namespace Strata
 			m_Flags[proxy] = (m_Flags[proxy] & ~RenderProxyFlags::CastShadows) | castShadows;
 			changed = true;
 		}
+		const uint32_t lightSurface = registry.all_of<LightSurfaceComponent>(entity) ? RenderProxyFlags::LightSurface : 0u;
+		if ((m_Flags[proxy] & RenderProxyFlags::LightSurface) != lightSurface)
+		{
+			m_Flags[proxy] = (m_Flags[proxy] & ~RenderProxyFlags::LightSurface) | lightSurface;
+			changed = true;
+		}
 		const SkinComponent* skin = registry.try_get<SkinComponent>(entity);
 		const UUID animator = skin ? skin->Animator : UUID::Null();
 		const bool hadSkin = (m_Flags[proxy] & RenderProxyFlags::Skin) != 0;
@@ -653,7 +669,8 @@ namespace Strata
 		const uint32_t meshSlot = m_MeshSlots[proxy];
 		const MeshEntry* mesh = meshSlot != c_InvalidIndex ? &m_Meshes[meshSlot] : nullptr;
 
-		uint32_t flags = m_Flags[proxy] & (RenderProxyFlags::Active | RenderProxyFlags::CastShadows | RenderProxyFlags::Skin | RenderProxyFlags::Skinned);
+		uint32_t flags = m_Flags[proxy] & (RenderProxyFlags::Active | RenderProxyFlags::CastShadows | RenderProxyFlags::Skin | RenderProxyFlags::Skinned
+			| RenderProxyFlags::LightSurface);
 		if (determinant < 0.0f)
 			flags |= RenderProxyFlags::Mirrored;
 		if (mesh && (mesh->LayoutKnown || mesh->RecordedBounds))
@@ -1120,6 +1137,8 @@ namespace Strata
 			data.Flags |= RenderData::c_InstanceSkinned;
 			data.SkinPalette = m_Skins[m_SkinIndices[proxy]].PaletteFirst;
 		}
+		if ((m_Flags[proxy] & RenderProxyFlags::LightSurface) != 0)
+			data.Flags |= RenderData::c_InstanceLightSurface;
 		for (uint32_t index = 0; index < count; index++)
 		{
 			data.MaterialIndex = overrideSlot != c_InvalidIndex ? overrideSlot : mesh.SubmeshMaterialSlots[index];
@@ -1522,6 +1541,9 @@ namespace Strata
 			if (m_MeshHandles[proxy] != renderer.Mesh || m_MaterialOverrides[proxy] != renderer.Material
 				|| ((m_Flags[proxy] & RenderProxyFlags::CastShadows) != 0) != renderer.CastShadows)
 				return fail(fmt::format("the proxy of entity {} has another mesh, material or shadow setting than its MeshRendererComponent", static_cast<uint32_t>(entity)));
+			const bool lightSurface = registry.all_of<LightSurfaceComponent>(entity);
+			if (((m_Flags[proxy] & RenderProxyFlags::LightSurface) != 0) != lightSurface)
+				return fail(fmt::format("the proxy of entity {} has another light surface tag than the entity", static_cast<uint32_t>(entity)));
 			const auto drawnAt = renderTransforms.find(entity);
 			const glm::mat4* interpolated = m_Scene->FindDrawnTransform(entity);
 			const glm::mat4& drawn = drawnAt != renderTransforms.end() ? drawnAt->second : interpolated ? *interpolated : world.Matrix;
@@ -1593,7 +1615,8 @@ namespace Strata
 			{
 				const RenderData::InstanceData& instance = m_Instances[m_FirstInstances[proxy] + index];
 				const uint32_t material = overrideSlot != c_InvalidIndex ? overrideSlot : m_Meshes[meshSlot].SubmeshMaterialSlots[index];
-				const uint32_t flags = (determinant < 0.0f ? RenderData::c_InstanceMirrored : 0u) | (isPosed ? RenderData::c_InstanceSkinned : 0u);
+				const uint32_t flags = (determinant < 0.0f ? RenderData::c_InstanceMirrored : 0u) | (isPosed ? RenderData::c_InstanceSkinned : 0u)
+					| (lightSurface ? RenderData::c_InstanceLightSurface : 0u);
 				if (!SameBytes(instance.World, RenderData::AffineTransform::FromMatrix(matrix)) || instance.MaterialIndex != material
 					|| instance.EntityID != static_cast<uint32_t>(entity) + 1 || instance.Flags != flags || instance.SkinPalette != (isPosed ? m_Skins[skinIndex].PaletteFirst : 0u))
 					return fail(fmt::format("instance {} of entity {} is stale", index, static_cast<uint32_t>(entity)));

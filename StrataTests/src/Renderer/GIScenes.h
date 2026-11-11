@@ -73,11 +73,21 @@ namespace Strata::Tests
 	// sphere of radius 0.9 m at the right; a 1.3 x 1.05 m panel 0.3 m thick under the middle of the ceiling (thick enough that
 	// every quality's voxels hold its faces apart: a thinner one is two-sided at Low and sends nothing), emitting
 	// c_CornellPanelLuminance; no sun and no sky. Neutral post-processing. The colors are the measured Cornell box's reflectances.
+	// What lights it (CornellLight): the panel's emission alone (Emissive, the GI cases'); the panel made a light as
+	// lighting.makeAreaLight makes it (RectLight: the panel "Cornell Panel" tagged LightSurface, and its child "Cornell Panel
+	// Light", a shadowed Rect Light 1 mm under its bottom face with its size and luminance); or that light alone, without the
+	// panel (RectLightOnly, for the energy cases).
+	enum class CornellLight : uint8_t
+	{
+		Emissive = 0,
+		RectLight,
+		RectLightOnly
+	};
 	constexpr float c_CornellPanelLuminance = 5000.0f;
 	const glm::vec3 c_CornellWhite(0.73f, 0.71f, 0.68f);
 	const glm::vec3 c_CornellRed(0.63f, 0.065f, 0.05f);
 	const glm::vec3 c_CornellGreen(0.14f, 0.45f, 0.091f);
-	void BuildCornellBox(Scene& scene, SceneTestAssets& assets);
+	void BuildCornellBox(Scene& scene, SceneTestAssets& assets, CornellLight light = CornellLight::Emissive);
 	// The look-dev shot's camera (lookdev.cornell): from (0, 2.75, 4.6), 1.85 m in front of the opening, toward (0, 2.4, 0), 70
 	// degrees: the whole inside within the field's full extent at High.
 	SceneCamera CornellCamera(float aspectRatio);

@@ -673,6 +673,7 @@ namespace Strata
 		for (uint32_t index = 0; index < localViews; index++)
 		{
 			const LocalShadowDrawView& view = m_LocalShadowViews[index];
+			const bool area = m_LocalShadowLights[view.Light].Type == RenderData::c_LightRect;
 			if (++m_CullLocalStamp == 0)
 			{
 				std::fill(m_CullLocalStamps.begin(), m_CullLocalStamps.end(), 0u);
@@ -682,7 +683,8 @@ namespace Strata
 			for (uint32_t item = view.FirstCandidate; item < view.FirstCandidate + view.CandidateCount; item++)
 			{
 				const uint32_t proxy = m_LocalShadowCandidates[item];
-				if ((renderScene.GetProxyFlags(proxy) & RenderProxyFlags::CastShadows) == 0)
+				if ((renderScene.GetProxyFlags(proxy) & RenderProxyFlags::CastShadows) == 0
+					|| (area && (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::LightSurface) != 0))
 					continue;
 				const uint32_t slot = renderScene.GetMeshSlot(proxy);
 				if (slot >= meshSlots || mirror.GetMeshRecords(slot) == 0)
@@ -703,7 +705,7 @@ namespace Strata
 				record.Planes[plane] = view.Planes[plane];
 			record.Light = glm::vec4(key.Position, key.Range);
 			record.RelativeLight = glm::vec4(glm::vec3(glm::dvec3(key.Position) - cameraPosition), key.Near);
-			record.Parameters = glm::vec4(key.TanHalfAngle, static_cast<float>(key.Tile.Size), view.LOD.ErrorThreshold, 0.0f);
+			record.Parameters = glm::vec4(key.TanHalfAngle, static_cast<float>(key.Tile.Size), view.LOD.ErrorThreshold, area ? 1.0f : 0.0f);
 			m_CullLocalViews.push_back(record);
 		}
 

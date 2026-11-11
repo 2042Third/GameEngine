@@ -5078,9 +5078,16 @@ lights, Post Process and the sky), and never a resolution below the output's.
   continuous as it moves) gives the **kernel**: the light's two half axes projected into the view through the receiver's ray,
   times `(z_r - z_b) / (z_r z_b)`, each column clamped to the reach. It is exact for the image's linearization: a rectangle
   light's shadow is filtered by a parallelogram, long along a strip light, foreshortened in the faces that see it edge-on.
-  Each tap compares with the **receiver's plane** at that tap (a plane's NDC depth is affine in the image), from half the
-  receiver's depth to its own: what lies beyond the receiver along a ray shadows nothing, which keeps curved receivers where
-  the light grazes them, the floor by a wall's foot and the background from shadowing a receiver. Under a texel of kernel the
+  Each tap stands for a point of the face (its lattice coordinates) and compares with the **path** from that point to the
+  receiver where the path crosses the tap (`CompareAreaShadowPath`: the tap's offset in the kernel's own units, through the
+  columns' inverse, over the lattice's reach is the path's spread (z_r - z) / (z_r z) there, and NDC depth is affine in
+  1 / z), and with the **receiver's plane** there (affine in the image), kept from half the receiver's depth to its own: what
+  lies beyond the receiver along a ray shadows nothing, which keeps curved receivers where the light grazes them and the
+  background from shadowing a receiver. An occluder beside every path, such as a wall rising beside a floor point, is farther
+  than the path where a tap sees it and blocks nothing; with the plane alone the Cornell box showed a band along every wall
+  and the back wall's foot (0.40 of the light). Each tap looks once more at a third of its offset with the plane alone
+  (`c_AreaShadowNearTap`): solid blockers just above the receiver, which the path at the kernel's depth passes in front of
+  (a sphere's or a post's foot). Under a texel of kernel the
   sun's four-tap tent filters; from one to two texels a lattice of `c_AreaShadowTapsPerFilterTap` (2) times
   `ShadowFilterQuality` taps (a golden-ratio rank-1 lattice over the face, shifted per pixel by the blue-noise tile's far
   shifts (17, 43) and (43, 17)) takes over; nothing turns with the frame. Taps and cells whose rays leave the center behind a
@@ -5096,16 +5103,38 @@ lights, Post Process and the sky), and never a resolution below the output's.
   (66 MB at 3840 x 2160) are made by the first frame with one and released with the render targets; a frame whose masks or
   ranges cannot be made draws its rect lights unshadowed (reported). Transparent surfaces filter per pixel, without the blur.
   The last masked light's evaluation (`GetAreaShadowEvaluation`) marks every pixel that compared depths.
-  Measured (`GPU.SceneRenderer.AreaShadows`, both paths alike to the code): a wall's penumbra under a 1 x 0.5 m light within
-  0.063 of the reference and 8.5% of its 10-90% width; a 6 cm post's shadow 5 mm behind it 3.3 cm wide (the reference's 1.2 cm:
-  the spec's two shadow texels are not met, the blockers' depth comes from cells holding the post's lower part), 1 m on within
-  5%; a blocker 0.3 m under a 2 m light gets 16% of the reference's width: the **reach clamp**, the known limit of very wide
-  penumbrae (a blocker within about a third of the receiver's distance of a large light); in the Cornell box 42% of the fully
-  lit pixels still reach the taps (the spec's 30% is not met: by walls and corners geometry nearer than the receiver lies
-  within its own reach); a strafe across the Cornell box's penumbrae without anti-aliasing measures 0.062% of blocks and 1.02%
-  at their 99th percentile on the flicker meter, the sun's widest soft shadows in the same room 0.062% and 0.84% (with the
-  row's taps alone rect lights measured 0.092% and 1.46%, hence the factor 2); the masks' grain in a still penumbra (RMS from
-  the 9 x 9 mean) 0.003 against the sun's 0.026.
+  Measured (`GPU.SceneRenderer.AreaShadows` and `.AreaLightCornell`, both paths alike to the code): the Cornell box's floor
+  seen from under its ceiling within 0.124 of the reference outside the penumbrae (at one point under the sphere's foot that
+  the light's center sees, where the filter misses part of the sphere just above the floor; elsewhere within 0.03) and 0.199
+  inside them (the spec's 0.03 and 0.1), no step between neighbours beyond 0.016 where the reference is flat; a wall's
+  penumbra under a 1 x 0.5 m light within 0.167 of the reference and 38% narrower (the side of a solid blocker, seen beyond
+  the path that enters it nearer the receiver, blocks less: with the plane alone 0.063 and 8.5%, the spec's 0.12 and 25%); a
+  6 cm post's shadow 5 mm behind it 2.0 cm wide (the reference's 1.2 cm: the spec's two shadow texels are not met, the
+  blockers' depth comes from cells holding the post's lower part), 1 m on as the reference's; a blocker 0.3 m under a 2 m
+  light gets 16% of the reference's width: the **reach clamp**, the known limit of very wide penumbrae (a blocker within about
+  a third of the receiver's distance of a large light); in the Cornell box 46% of the fully lit pixels still reach the taps
+  (the spec's 30% is not met: by walls and corners geometry nearer than the receiver lies within its own reach); a strafe
+  across the Cornell box's penumbrae without anti-aliasing measures 0.048% of blocks and 0.78% at their 99th percentile on the
+  flicker meter, the sun's widest soft shadows in the same room 0.062% and 0.84% (with the row's taps alone rect lights
+  measured 0.092% and 1.46%, hence the factor 2); the masks' grain in a still penumbra (RMS from the 9 x 9 mean) 0.003
+  against the sun's 0.026.
+- **Light surfaces** (`LightSurfaceComponent`, Lighting, a tag): the emissive mesh that shows an area light's face, which
+  `lighting.makeAreaLight` tags when it makes the panel a light (a child Rect Light on its emitting face, `auto` judging the
+  face on the mesh's bounds times the panel's world scale; a second call finds the light: "already a light"). The light lights
+  the room and its highlight is the panel's reflection, so the passes that would count the panel's emission again leave it
+  out: `RenderProxyFlags::LightSurface` (bit 7) on the proxy and `c_InstanceLightSurface` (`ST_INSTANCE_LIGHT_SURFACE`, bit 2)
+  on its instances (a tag change is a proxy change: the shadow caches redraw the views it reaches); the prepass writes
+  `c_SurfaceLightMarker` (-1) as the surface target's metallic factor, and both SSR tracers trace nothing from such a pixel and
+  keep a hit on one with its confidence but no light (the probes' and sky's specular is replaced by nothing there, the area
+  light's highlight stands for the reflection); reflection probe captures draw its emission as 0, lit or unlit (the forms of
+  frames with rect lights, `ST_AREA_LIGHTS`, which a light surface needs); area lights' views leave it out on both paths
+  (`FindLocalShadowCasters`; `Cull.comp` through `CullLocalShadowView::Parameters.w`), point, spot and sun shadows keep it.
+  It never hides the mesh or leaves it out of the prepass, picking or the GI's occupancy. Until area lights reach the GI the
+  voxelizer keeps its emission: a GI scene counts the panel's light twice (Known issue). Measured: SSR on and off read the
+  panel's mirror image alike on both tracers (`GPU.SceneRenderer.AreaLights`); a capture's mean radiance with the tagged panel
+  equals the light's alone (the untagged panel raised it by 355%); a two-sided light inside its double-sided panel lights the
+  floor fully once tagged (`.AreaShadows`). A light inside a closed single-sided mesh is not shadowed by it untagged either:
+  from inside, its faces are back faces, which shadow views cull.
 - **Cost**: setup and the one-sided test, the diffuse integral (four edges), the specular transform and integral (four
   more) and three table lookups (twelve loads: the diffuse horizon term, the lobe's transform and its horizon term) per
   light and pixel; a coat's lobe adds an integral and two lookups (eight loads) on coated materials; probe captures skip
@@ -5230,7 +5259,9 @@ probe-field levels and local lights follow.
   (32,768 tiles) is full it walks its tiles itself and counts `GITileOverflow`. Glowing voxels add their small
   triangles' share of the face (area over the voxels touched in one layer), so a glowing surface's voxels in a layer sum
   to its area wherever it lies on the grid; the voxel's emission is the brightest triangle's times that share, at
-  most 1.
+  most 1. A light surface's emission ("Area lights") is voxelized as any emission until area lights reach the injection
+  (the `area-lights` stream's stage 4): a GI scene counts such a panel's light twice, once per pixel from its light and once
+  through the field.
 - **Closed meshes and the fill** (`MeshUtils::IsClosed`, `Mesh::IsClosed`): positions welded by exact equality, every
   directed edge of the full-detail levels meets exactly one opposite edge. A closed mesh whose every submesh is opaque as
   drawn adds winding steps along +y columns (+1 entering, -1 leaving, at the first voxel whose center is above the
@@ -6136,6 +6167,10 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   matrix: a command of the same frame may have moved it or a parent, as a script that moves a probe and bakes it does),
   the probes' current captures included, its own too: every further bake adds a bounce, and bakes repeated in an
   unchanged scene settle.
+- **Light surfaces** ("Area lights"): both tracers trace nothing from a pixel whose surface target's metallic factor is
+  `c_SurfaceLightMarker` (-1, written by the prepass for `LightSurfaceComponent` meshes) and keep a hit on one with its
+  confidence but no light; reflection probe captures draw such a mesh's emission as 0: the area light it shows stands for its
+  reflection and its light, counted once.
 - **Screen-space reflections** (`PostProcessComponent::ScreenSpaceReflections`, `SceneRendererScreenReflections.cpp`)
   trace in the mode of the `Reflections` quality row (`ReflectionsQuality`, "Quality settings"): none at Low (Off),
   Checkerboard at Medium (Strata 0.6.0's, with TAA only), Spatial at High and SpatialHigh at Ultra (with or without TAA).

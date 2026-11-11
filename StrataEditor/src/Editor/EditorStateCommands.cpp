@@ -269,6 +269,7 @@ namespace Strata
 				{ "lights", stats.Lights },
 				{ "areaLights", stats.AreaLights },
 				{ "areaLightShading", stats.AreaLightShading },
+				{ "areaShadowMasks", stats.AreaShadowMasks },
 				{ "droppedLights", stats.DroppedLights },
 				{ "materials", stats.Materials },
 				{ "pendingAssets", stats.PendingAssets },
@@ -956,7 +957,8 @@ namespace Strata
 			"localShadowCasters, reflectionProbes (reflection probes the view shaded with), reflectionProbesPending (in view, their capture "
 			"still loading or waiting to be converted), culledProxies, "
 			"sizeCulledProxies (in view but below a pixel), instancesPerLod, lights, areaLights (of lights, the rect lights), areaLightShading (the forward passes used "
-			"the shaders that shade rect lights, a little costlier: the scene has a rect light, lit or not, in view or not), droppedLights, "
+			"the shaders that shade rect lights, a little costlier: the scene has a rect light, lit or not, in view or not), areaShadowMasks (the shadowed rect lights whose shadows opaque surfaces took from "
+			"screen-space masks, at most 4), droppedLights, "
 			"materials, pendingAssets, extractMs, sortMs, proxyUpdates, instanceBytesUploaded, deferredInstanceBytes (new mesh renderers waiting for "
 			"their upload to the GPU), geometryPool "
 			"(the meshes' GPU geometry: usedMB, capacityMB, allocations, fragmentation, moves, growths), sceneMirrorMB (the GPU memory of the scenes' "

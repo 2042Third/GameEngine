@@ -7,8 +7,10 @@
 // in umbra without a comparison, else give the blockers' mean depth, from which the light's face seen through the receiver
 // is the kernel: the parallelogram of its two half axes projected into the view, scaled by (z_r - z_b) / (z_r z_b) (a light of
 // half size s and a blocker at z_b give a penumbra half width s (z_r - z_b) / z_b at the receiver z_r), long along a strip
-// light and narrow across it. Its taps compare with the receiver's plane at each tap (in a perspective view a plane's depth is
-// affine in the image, so this is exact for planar receivers), from half the receiver's depth to its own. Under a texel of
+// light and narrow across it. Each tap stands for a point of the face: it compares with the path from that point to the receiver
+// where the path crosses the tap (an occluder beside every path, such as a wall beside a floor point, blocks nothing), and once
+// more at a third of its offset with the receiver's plane (solid blockers at a contact); the plane, exact for planar receivers
+// (in a perspective view its depth is affine in the image), is kept from half the receiver's depth to its own. Under a texel of
 // kernel the sun's four-tap tent filters, from one to two texels the wide filter takes over: ShadowFilterQuality taps of a
 // fixed lattice shifted per pixel by the blue-noise tile (fixed noise: a still view is the same in every frame), whose grain
 // the opaque surfaces' mask blur takes (Effects/AreaScreenShadows.frag). The kernel is clamped to RenderData::c_AreaShadowReach
@@ -58,11 +60,46 @@ struct AreaShadowView
 	float DepthB;
 	float2 ColumnX;       // The kernel's columns (atlas texels) per unit of the blockers' spread (z_r - z_b) / (z_r z_b)
 	float2 ColumnY;
+	float4 Inverse;       // The columns' inverse (spread units per texel of offset: x, y the first row, z, w the second)
+	bool HasPyramid;      // The columns span the image (not a face seen edge-on): the taps' paths are known
 	float Reach;          // The columns' longest (c_AreaShadowReach of the tile)
 	bool OneSided;        // Leave out what lies behind the light's plane: a ray's side of it is Front + dot(FrontGradient, texel -
 	float Front;          // TileMin), positive in front
 	float2 FrontGradient;
 };
+
+// Where a tap looks a second time, a fraction of its offset from the receiver (compared with the receiver's plane alone): solid
+// blockers just above the receiver, which the path at the kernel's depth (the blockers' mean) passes in front of, as at a
+// sphere's or a post's foot. In the Cornell box a third gave the floor within 0.124 of the reference outside the penumbrae and
+// 0.199 inside; a half 0.216 and 0.312, and a ninth more (with every look on the path) closed the light under the sphere's
+// foot but darkened its penumbra by 0.24.
+static const float c_AreaShadowNearTap = 1.0 / 3.0;
+
+// The receiver's plane's NDC depth at `offset` atlas texels from its lookup, kept from half the receiver's depth to its own:
+// what lies beyond the receiver shadows nothing.
+float GetAreaShadowPlaneReference(AreaShadowView view, float2 offset)
+{
+	return clamp(view.Reference + dot(view.Gradient, offset), view.Low, view.High);
+}
+
+// A tap's comparison (1: shadowed) at `offset` atlas texels from the receiver's lookup on the path from the light's point at
+// `lattice` on its face to the receiver. That path crosses the view at the depth whose spread (z_r - z) / (z_r z) is the tap's
+// offset in the kernel's own units over the lattice's reach, and an occluder seen there blocks it if it is nearer than the path
+// (and than the receiver's plane): NDC depths DepthB / z - DepthA are affine in 1 / z, so the path's is the receiver's plus
+// DepthB times the spread. An occluder beside every path, such as a wall rising beside a floor point, is farther than the path
+// where a tap sees it and blocks nothing; compared with the receiver's plane alone (the floor's, extended under the wall) it
+// darkened a band along every wall of the Cornell box (0.40 of the light at its worst).
+float CompareAreaShadowPath(AreaShadowView view, float2 offset, float2 lattice, float2 lowest, float2 highest, float2 atlasTexel)
+{
+	float reference = GetAreaShadowPlaneReference(view, offset);
+	float reach = max(abs(lattice.x), abs(lattice.y));
+	if (view.HasPyramid && reach > 1e-3)
+	{
+		float2 spread = float2(dot(view.Inverse.xy, offset), dot(view.Inverse.zw, offset));
+		reference = max(reference, view.Low + view.DepthB * max(abs(spread.x), abs(spread.y)) / reach);
+	}
+	return u_LocalShadowAtlas.SampleCmpLevelZero(u_ShadowCompareSampler, clamp(view.Texel + offset, lowest, highest) * atlasTexel, reference);
+}
 
 // A kernel column clamped to the reach.
 float2 ClampAreaShadowColumn(float2 column, float reach)
@@ -245,6 +282,11 @@ AreaShadowSample EvaluateAreaLightShadow(uint slot, float3 relativePosition, flo
 	float4 axisY = mul(viewProjection, float4(light.AxisY, 0.0));
 	shadowView.ColumnX = (axisX.xy - ndc.xy * axisX.w) * float2(0.5, -0.5) * shadowView.TileTexels;
 	shadowView.ColumnY = (axisY.xy - ndc.xy * axisY.w) * float2(0.5, -0.5) * shadowView.TileTexels;
+	float determinant = shadowView.ColumnX.x * shadowView.ColumnY.y - shadowView.ColumnY.x * shadowView.ColumnX.y;
+	float columnScale = max(dot(shadowView.ColumnX, shadowView.ColumnX), dot(shadowView.ColumnY, shadowView.ColumnY));
+	shadowView.HasPyramid = abs(determinant) > 1e-6 * columnScale;
+	shadowView.Inverse = shadowView.HasPyramid
+		? float4(shadowView.ColumnY.y, -shadowView.ColumnY.x, -shadowView.ColumnX.y, shadowView.ColumnX.x) / determinant : float4(0.0);
 	shadowView.Reach = c_AreaShadowReach * shadowView.TileTexels;
 
 	// The search: blockers anywhere from the view's near plane to the receiver, within the reach; then, as long as it lets a finer
@@ -285,8 +327,6 @@ AreaShadowSample EvaluateAreaLightShadow(uint slot, float3 relativePosition, flo
 	float penumbraTexels = max(length(kernelX), length(kernelY));
 
 	float2 texel = shadowView.Texel;
-	float2 gradient = shadowView.Gradient;
-	float reference = shadowView.Reference;
 	float2 atlasTexel = 1.0 / float2(atlasSize);
 	float2 lowest = shadowView.TileMin + 0.5;
 	float2 highest = shadowView.TileMax - 0.5;
@@ -295,7 +335,7 @@ AreaShadowSample EvaluateAreaLightShadow(uint slot, float3 relativePosition, flo
 	for (int tap = 0; tap < 4; tap++)
 	{
 		float2 offset = float2((tap & 1) == 0 ? -0.5 : 0.5, (tap & 2) == 0 ? -0.5 : 0.5);
-		float tapReference = clamp(reference + dot(gradient, offset), shadowView.Low, shadowView.High);
+		float tapReference = GetAreaShadowPlaneReference(shadowView, offset);
 		tent += 0.25 * u_LocalShadowAtlas.SampleCmpLevelZero(u_ShadowCompareSampler, clamp(texel + offset, lowest, highest) * atlasTexel, tapReference);
 	}
 	float shadowed = tent;
@@ -315,8 +355,11 @@ AreaShadowSample EvaluateAreaLightShadow(uint slot, float3 relativePosition, flo
 			float2 tapTexel = clamp(texel + offset, lowest, highest);
 			if (shadowView.OneSided && !(shadowView.Front + dot(shadowView.FrontGradient, tapTexel - shadowView.TileMin) > 0.0))
 				continue;
-			float tapReference = clamp(reference + dot(gradient, tapTexel - texel), shadowView.Low, shadowView.High);
-			disk += u_LocalShadowAtlas.SampleCmpLevelZero(u_ShadowCompareSampler, tapTexel * atlasTexel, tapReference);
+			float2 tapOffset = tapTexel - texel;
+			float2 nearOffset = tapOffset * c_AreaShadowNearTap;
+			disk += max(CompareAreaShadowPath(shadowView, tapOffset, lattice, lowest, highest, atlasTexel),
+				u_LocalShadowAtlas.SampleCmpLevelZero(u_ShadowCompareSampler, clamp(texel + nearOffset, lowest, highest) * atlasTexel,
+					GetAreaShadowPlaneReference(shadowView, nearOffset)));
 			counted += 1.0;
 		}
 		shadowed = lerp(tent, counted > 0.0 ? disk / counted : 0.0, diskWeight);

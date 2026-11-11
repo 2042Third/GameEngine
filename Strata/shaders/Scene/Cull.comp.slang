@@ -376,6 +376,9 @@ void CullLocalShadowViews(GPUProxy proxy, bool meshDrawable, GeometryEntry entry
 	for (uint index = 0u; index < count; index++)
 	{
 		CullLocalShadowView view = u_LocalShadowViews[first + index];
+		// An area light's views (Parameters.w 1) leave the meshes that show its face out (SceneRenderer::FindLocalShadowCasters).
+		if (view.Parameters.w > 0.5 && (proxy.Flags & ST_PROXY_LIGHT_SURFACE) != 0u)
+			continue;
 		float3 offset = clamp(view.RelativeLight.xyz, relativeMin, relativeMax) - view.RelativeLight.xyz;
 		if (dot(offset, offset) > view.Light.w * view.Light.w || !IsBoxInPlanes(relativeMin, relativeMax, view.Planes))
 			continue;

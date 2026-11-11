@@ -18,6 +18,8 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Atmosphere.h>
 #include <Strata/Renderer/ImageWriter.h>
+#include <Strata/Renderer/Material.h>
+#include <Strata/Renderer/Mesh.h>
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Renderer/SceneRenderer.h>
@@ -26,7 +28,9 @@
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
 
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/packing.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -42,7 +46,8 @@
 
 // lighting.bakeProbes: reflection probes' captures rendered from the edited scene (ProbeBake.h), written as HDR textures of
 // the project and set as the probes' Capture, in one undo step. lighting.extractSun: the sun of the sky's environment map
-// (Asset/HDRSun.h) written as the scene's directional light, in one undo step.
+// (Asset/HDRSun.h) written as the scene's directional light, in one undo step. lighting.makeAreaLight: an emissive panel made
+// a light (a child Rect Light on its face, the panel tagged LightSurface), in one undo step.
 
 namespace Strata
 {
@@ -815,6 +820,228 @@ namespace Strata
 			return EditorCommandResult::Ok(std::move(result));
 		}
 
+		// lighting.makeAreaLight's request, which its poll keeps while the panel's mesh and material load. The poll re-checks the
+		// scene and the panel every frame and allocates nothing while it waits.
+		struct AreaLightRequest
+		{
+			std::weak_ptr<Scene> EditScene;
+			UUID Panel;
+			int Axis = -1;       // The face's local axis (0 X, 1 Y, 2 Z); -1: auto
+			float Sign = 1.0f;   // Its outward direction along the axis
+			bool TwoSided = false;
+			bool CastShadows = true;
+			float Offset = 0.001f;
+		};
+
+		constexpr float c_MaxAreaLightOffset = 0.1f;
+		const std::array<const char*, 7> c_AreaLightSides = { "auto", "+X", "-X", "+Y", "-Y", "+Z", "-Z" };
+
+		std::string GetSideName(int axis, float sign)
+		{
+			return fmt::format("{}{}", sign > 0.0f ? '+' : '-', static_cast<char>('X' + axis));
+		}
+
+		float MaxChannel(const glm::vec3& value)
+		{
+			return std::max({ value.r, value.g, value.b });
+		}
+
+		// The most emissive of the materials the panel draws (its override, else its submeshes'): null while one is loading.
+		// Fails when one failed to load or none emits.
+		std::optional<EditorCommandResult> FindPanelEmission(AssetManagerBase& manager, const MeshRendererComponent& renderer, const Mesh& mesh,
+			const std::string& name, glm::vec3& outLuminance)
+		{
+			outLuminance = glm::vec3(0.0f);
+			bool waiting = false;
+			auto take = [&](AssetHandle handle) -> std::optional<EditorCommandResult>
+			{
+				if (!handle.IsValid())
+					return std::nullopt; // The default material emits nothing
+				const Ref<Material> material = manager.GetAsset<Material>(handle);
+				if (!material)
+				{
+					if (manager.GetAssetState(handle) == AssetState::Failed || !manager.IsHandleValid(handle))
+						return EditorCommandResult::Fail(fmt::format("'{}': its material {} could not be loaded: {}", name, handle.ToString(), manager.GetAssetError(handle)));
+					waiting = true;
+					return std::nullopt;
+				}
+				const MaterialProperties& properties = material->GetProperties();
+				const glm::vec3 luminance = properties.EmissiveColor * properties.EmissiveIntensity;
+				if (std::isfinite(luminance.r) && std::isfinite(luminance.g) && std::isfinite(luminance.b)
+					&& MaxChannel(luminance) > MaxChannel(outLuminance))
+					outLuminance = luminance;
+				return std::nullopt;
+			};
+			if (renderer.Material.IsValid())
+			{
+				if (std::optional<EditorCommandResult> failure = take(renderer.Material))
+					return failure;
+			}
+			else
+			{
+				for (const Submesh& submesh : mesh.GetSubmeshes())
+				{
+					if (std::optional<EditorCommandResult> failure = take(submesh.Material))
+						return failure;
+				}
+			}
+			if (waiting)
+			{
+				outLuminance = glm::vec3(0.0f); // Decided once every material is known
+				return std::nullopt;
+			}
+			if (MaxChannel(outLuminance) <= 0.0f)
+				return EditorCommandResult::Fail(fmt::format("'{}' is not emissive: its material's EmissiveColor x EmissiveIntensity is 0, so there is no "
+					"light to make (give it an emissive material first)", name));
+			return std::nullopt;
+		}
+
+		// Makes the light once the panel's mesh and material are loaded; nullopt while they load.
+		std::optional<EditorCommandResult> PollMakeAreaLight(EditorContext& context, const AreaLightRequest& request)
+		{
+			const Ref<Scene> scene = request.EditScene.lock();
+			if (!scene || scene != context.GetEditScene())
+				return EditorCommandResult::Fail("The scene changed before the panel's mesh had loaded; nothing was changed");
+			if (context.IsPlaying())
+				return EditorCommandResult::Fail("Play started before the panel's mesh had loaded; nothing was changed (run it again once stopped)");
+			std::string editable;
+			if (!context.CheckSceneEditable(&editable))
+				return EditorCommandResult::Fail(std::move(editable));
+			Entity panel = scene->GetEntityByUUID(request.Panel);
+			if (!panel)
+				return EditorCommandResult::Fail("The panel was deleted before its mesh had loaded; nothing was changed");
+			const std::string& name = panel.GetName();
+			const MeshRendererComponent* renderer = panel.HasComponent<MeshRendererComponent>() ? &panel.GetComponent<MeshRendererComponent>() : nullptr;
+			if (!renderer || !renderer->Mesh.IsValid())
+				return EditorCommandResult::Fail(fmt::format("'{}' has no Mesh Renderer with a mesh: only a mesh can show a light's face", name));
+			AssetManagerBase* manager = scene->GetAssetManager();
+			if (!manager)
+				return EditorCommandResult::Fail("The scene has no asset manager to load the panel's mesh from");
+			const Ref<Mesh> mesh = manager->GetAsset<Mesh>(renderer->Mesh);
+			if (!mesh)
+			{
+				if (manager->GetAssetState(renderer->Mesh) == AssetState::Failed || !manager->IsHandleValid(renderer->Mesh))
+					return EditorCommandResult::Fail(fmt::format("'{}': its mesh {} could not be loaded: {}", name, renderer->Mesh.ToString(), manager->GetAssetError(renderer->Mesh)));
+				return std::nullopt;
+			}
+			glm::vec3 luminance(0.0f);
+			if (std::optional<EditorCommandResult> failure = FindPanelEmission(*manager, *renderer, *mesh, name, luminance))
+				return failure;
+			if (MaxChannel(luminance) <= 0.0f)
+				return std::nullopt; // A material is still loading
+
+			// The face, judged in the world: the mesh's local extents times the panel's world scale per axis (its world matrix's
+			// column lengths), so a unit cube scaled to a panel is a panel.
+			const AABB& bounds = mesh->GetBounds();
+			if (!bounds.IsValid())
+				return EditorCommandResult::Fail(fmt::format("'{}': its mesh has no bounds (no vertices)", name));
+			const glm::mat3 world(scene->GetWorldTransform(panel));
+			const glm::vec3 scale(glm::length(world[0]), glm::length(world[1]), glm::length(world[2]));
+			const glm::vec3 localSize = bounds.Max - bounds.Min;
+			const glm::vec3 worldSize = localSize * scale;
+			for (int axis = 0; axis < 3; axis++)
+			{
+				if (!std::isfinite(worldSize[axis]) || !(scale[axis] > 0.0f))
+					return EditorCommandResult::Fail(fmt::format("'{}' has a zero or infinite scale: it has no face to light from", name));
+			}
+			int axis = request.Axis;
+			float sign = request.Sign;
+			if (axis < 0)
+			{
+				std::array<int, 3> order = { 0, 1, 2 };
+				std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return worldSize[a] < worldSize[b]; });
+				axis = order[0];
+				if (!(worldSize[axis] < 0.5f * worldSize[order[1]]))
+				{
+					return EditorCommandResult::InvalidParameters(fmt::format("'{}' is not a thin panel ({:.3g} x {:.3g} x {:.3g} m: no side under half "
+						"of the next): pass side", name, worldSize.x, worldSize.y, worldSize.z));
+				}
+				// A ceiling panel shines down: of the axis' two faces the one whose outward normal points more downward, when the
+				// axis is within 45 degrees of vertical. A wall panel has no "down".
+				const glm::vec3 direction = world[axis] / scale[axis];
+				if (std::abs(direction.y) < std::cos(glm::radians(45.0f)))
+					return EditorCommandResult::InvalidParameters(fmt::format("'{}' is a panel standing more upright than 45 degrees, so the panel is "
+						"symmetric: pass side (which face emits)", name));
+				sign = direction.y > 0.0f ? -1.0f : 1.0f;
+			}
+			// X along the face's longer side in the world, Y the other.
+			const int first = (axis + 1) % 3;
+			const int second = (axis + 2) % 3;
+			const int widthAxis = worldSize[first] >= worldSize[second] ? first : second;
+			const int heightAxis = widthAxis == first ? second : first;
+			const float width = localSize[widthAxis];
+			const float height = localSize[heightAxis];
+			// The light's Width and Height are the mesh's, before the scale the child inherits: they must lie in the component's
+			// range, and the face in the world must be large enough to be drawn.
+			const bool localFits = width >= RectLightComponent::c_MinSize && height >= RectLightComponent::c_MinSize
+				&& width <= RectLightComponent::c_MaxSize && height <= RectLightComponent::c_MaxSize;
+			if (!localFits || width * scale[widthAxis] < RectLightComponent::c_MinSize || height * scale[heightAxis] < RectLightComponent::c_MinSize)
+			{
+				return EditorCommandResult::Fail(fmt::format("'{}': its {} face ({:.4g} x {:.4g} in the mesh, {:.4g} x {:.4g} m in the world) is outside a "
+					"Rect Light's sizes ({} m to {} before the scale, at least {} m in the world)", name, GetSideName(axis, sign), width, height,
+					width * scale[widthAxis], height * scale[heightAxis], RectLightComponent::c_MinSize, RectLightComponent::c_MaxSize,
+					RectLightComponent::c_MinSize));
+			}
+			glm::vec3 faceCenter = (bounds.Min + bounds.Max) * 0.5f;
+			faceCenter[axis] = sign > 0.0f ? bounds.Max[axis] : bounds.Min[axis];
+
+			// A Rect Light child already on that face (its center on the face's plane, within the offsets' range) is that light.
+			for (const Entity child : panel.GetChildren())
+			{
+				if (!child.HasComponent<RectLightComponent>())
+					continue;
+				const glm::vec3& at = child.GetComponent<TransformComponent>().Translation;
+				const float along = (at[axis] - faceCenter[axis]) * sign * scale[axis];
+				const bool onFace = along >= -1.0e-4f && along <= c_MaxAreaLightOffset + 1.0e-4f
+					&& std::abs(at[first] - faceCenter[first]) <= 0.5f * localSize[first] + 1.0e-4f
+					&& std::abs(at[second] - faceCenter[second]) <= 0.5f * localSize[second] + 1.0e-4f;
+				if (onFace)
+					return EditorCommandResult::Fail(fmt::format("'{}' is already a light: {} lights its {} face", name, child.GetName(), GetSideName(axis, sign)));
+			}
+
+			// The light's axes in the panel's space: -Z the face's outward normal, X along its longer side.
+			glm::vec3 normal(0.0f);
+			normal[axis] = sign;
+			glm::vec3 axisX(0.0f);
+			axisX[widthAxis] = 1.0f;
+			const glm::vec3 axisZ = -normal;
+			const glm::vec3 axisY = glm::cross(axisZ, axisX);
+			const glm::quat rotation = glm::normalize(glm::quat_cast(glm::mat3(axisX, axisY, axisZ)));
+			const glm::vec3 translation = faceCenter + normal * (request.Offset / scale[axis]);
+
+			RectLightComponent light;
+			light.Intensity = MaxChannel(luminance);
+			light.Color = luminance / light.Intensity;
+			light.Units = AreaLightUnits::Nits;
+			light.Width = width;
+			light.Height = height;
+			light.TwoSided = request.TwoSided;
+			light.CastShadows = request.CastShadows;
+
+			// A copy: creating the light's entity may move the names' storage.
+			const std::string panelName = name;
+			SceneEditTransaction transaction(*scene, fmt::format("Make {} an Area Light", SceneEdit::QuoteName(panelName)), {});
+			transaction.Track(panel.GetUUID());
+			Entity entity = scene->CreateChildEntity(panel, panelName + " Light");
+			if (!entity)
+				return RollBackEdit(transaction, fmt::format("The scene is full: it holds at most {} entities", Scene::c_MaxEntities), EditorCommandError::Failed);
+			transaction.TrackCreated(entity.GetUUID());
+			TransformComponent& transform = entity.GetComponent<TransformComponent>();
+			transform.Translation = translation;
+			transform.Rotation = rotation;
+			entity.MarkModified<TransformComponent>();
+			entity.AddComponent<RectLightComponent>(light);
+			const bool tagged = !panel.HasComponent<LightSurfaceComponent>();
+			if (tagged)
+				panel.AddComponent<LightSurfaceComponent>();
+			const float worldWidth = width * scale[widthAxis];
+			const float worldHeight = height * scale[heightAxis];
+			const float lumens = glm::pi<float>() * light.Intensity * worldWidth * worldHeight * (request.TwoSided ? 2.0f : 1.0f);
+			return FinishEdit(context, transaction, { { "light", UUIDToJson(entity.GetUUID()) }, { "panel", UUIDToJson(panel.GetUUID()) },
+				{ "side", GetSideName(axis, sign) }, { "size", { worldWidth, worldHeight } }, { "luminance", light.Intensity },
+				{ "color", { light.Color.r, light.Color.g, light.Color.b } }, { "lumens", lumens }, { "tagged", tagged } });
+		}
+
 		std::optional<EditorCommandResult> PollExtract(EditorContext& context, ExtractState& state)
 		{
 			const Ref<Scene> scene = state.EditScene.lock();
@@ -1050,6 +1277,69 @@ namespace Strata
 				return EditorCommandResult::Defer([state](EditorContext& pollContext) -> std::optional<EditorCommandResult>
 				{
 					return PollExtract(pollContext, *state);
+				});
+			} }));
+
+		registry.Register(MayDefer({ "lighting.makeAreaLight",
+			"Makes an emissive panel a real light: adds a child Rect Light on the panel's emitting face with the panel's luminance and size "
+			"(Units Nits), and tags the panel Light Surface so its emission is not counted twice (screen-space reflections, probe captures and "
+			"the light's own shadows leave it out). Use it on any thin emissive mesh (ceiling panels, signs, screens); the panel keeps its "
+			"look. `side` auto takes the thinnest axis of the mesh's bounds times the panel's world scale when it is under half of the next, "
+			"and of its two faces the lower one when that axis is within 45 degrees of vertical (a ceiling panel); pass side for wall panels. "
+			"Waits while the mesh or material loads; fails, changing nothing, on an entity without a mesh, a material that emits nothing, a "
+			"face that already has a Rect Light child, or while playing. One undo step removes the light and the tag. Returns {light, panel, "
+			"side, size (meters in the world), luminance (nits), color, lumens (pi x luminance x area, twice for two-sided), tagged (the tag "
+			"was added)}.",
+			ObjectSchema({ { "entity", EntitySchema("The emissive panel: an entity with a MeshRenderer") },
+				{ "side", { { "type", "string" }, { "enum", c_AreaLightSides }, { "description", "Which face of the mesh's local axes emits; default auto" } } },
+				{ "twoSided", BoolSchema("The light emits from both faces (default false)") },
+				{ "castShadows", BoolSchema("The light casts soft shadows (default true)") },
+				{ "offset", { { "type", "number" }, { "minimum", 0.0 }, { "maximum", c_MaxAreaLightOffset },
+					{ "description", "Meters in front of the face, along its outward normal (default 0.001): keeps the light off the panel's own surface" } } } },
+				{ "entity" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				if (context.IsPlaying())
+					return EditorCommandResult::Fail("Stop playing first: lighting.makeAreaLight changes the edited scene");
+				std::string error;
+				if (!context.CheckSceneEditable(&error))
+					return EditorCommandResult::Fail(std::move(error));
+				const Ref<Scene>& scene = context.GetEditScene();
+				CommandArguments arguments(parameters);
+				Entity panel = arguments.GetEntity(*scene, "entity");
+				const std::string side = arguments.GetString("side", "auto");
+				const bool twoSided = arguments.GetBool("twoSided", false);
+				const bool castShadows = arguments.GetBool("castShadows", true);
+				float offset = 0.001f;
+				if (const auto value = parameters.find("offset"); value != parameters.end())
+				{
+					if (!value->is_number() || !std::isfinite(value->get<double>()) || value->get<double>() < 0.0 || value->get<double>() > c_MaxAreaLightOffset)
+						arguments.SetError(fmt::format("Parameter 'offset': a number of meters from 0 to {}", c_MaxAreaLightOffset));
+					else
+						offset = static_cast<float>(value->get<double>());
+				}
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				const auto sideIt = std::find(c_AreaLightSides.begin(), c_AreaLightSides.end(), side);
+				if (sideIt == c_AreaLightSides.end())
+					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'side': '{}' is none of auto, +X, -X, +Y, -Y, +Z, -Z", side));
+				if (!panel.HasComponent<MeshRendererComponent>() || !panel.GetComponent<MeshRendererComponent>().Mesh.IsValid())
+					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'entity': '{}' has no Mesh Renderer with a mesh", panel.GetName()));
+
+				AreaLightRequest request;
+				request.EditScene = scene;
+				request.Panel = panel.GetUUID();
+				const int index = static_cast<int>(sideIt - c_AreaLightSides.begin());
+				request.Axis = index == 0 ? -1 : (index - 1) / 2;
+				request.Sign = index % 2 == 1 ? 1.0f : -1.0f;
+				request.TwoSided = twoSided;
+				request.CastShadows = castShadows;
+				request.Offset = offset;
+				if (std::optional<EditorCommandResult> result = PollMakeAreaLight(context, request))
+					return std::move(*result);
+				return EditorCommandResult::Defer([request](EditorContext& pollContext) -> std::optional<EditorCommandResult>
+				{
+					return PollMakeAreaLight(pollContext, request);
 				});
 			} }));
 	}

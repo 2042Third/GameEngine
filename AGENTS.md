@@ -403,7 +403,8 @@ reaches the application only through `EditorHost`. Every command family, panel a
   and screen-space lighting denoises within the frame; check lighting changes with the debug views and the white-furnace
   test ([Lighting](Docs/DeveloperGuide.md#lighting)).
 - Rect lights are records (`c_LightRect`, faces in `u_LightShapes`); `AreaLights::Shade` is their shading's contract:
-  change it with `Include/AreaLights.slang` and `GPU.SceneRenderer.AreaLights`
+  change it with `Include/AreaLights.slang` and `GPU.SceneRenderer.AreaLights`. A mesh showing a rect light's face carries
+  `LightSurface` (SSR, probe captures and area shadows leave it out); make panels lights with `lighting.makeAreaLight`
   ([Area lights](Docs/DeveloperGuide.md#area-lights)).
 - Global illumination (experimental) traces world data only, never the screen; a frame without it (not asked, the row Off,
   pending) keeps the indirect light's old expression, bit for bit ([GI](Docs/DeveloperGuide.md#global-illumination)).

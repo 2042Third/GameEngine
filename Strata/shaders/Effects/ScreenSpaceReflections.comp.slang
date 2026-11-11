@@ -55,7 +55,8 @@ float4 TraceReflection(int2 pixel, int2 size)
 		return float4(0.0);
 	float4 surface = u_Surface.Load(int3(pixel, 0));
 	float roughnessFade = clamp((u_Reflections.MaxRoughness - surface.z) / max(0.25 * u_Reflections.MaxRoughness, 1e-4), 0.0, 1.0);
-	if (roughnessFade <= 0.0 || u_Reflections.Intensity <= 0.0)
+	// A light surface (its metallic factor c_SurfaceLightMarker) traces nothing: what it shows is the light's emission.
+	if (roughnessFade <= 0.0 || u_Reflections.Intensity <= 0.0 || surface.w < 0.0)
 		return float4(0.0);
 
 	ScreenRay ray;
@@ -110,6 +111,10 @@ float4 TraceReflection(int2 pixel, int2 size)
 	if (any((previousUV < float2(0.0))) || any((previousUV > float2(1.0))))
 		return float4(0.0);
 	float3 color = u_History.SampleLevel(u_LinearClampSampler, previousUV, 0.0).rgb * u_Reflections.HistoryScale;
+	// A ray that met a light surface keeps its confidence and sends no light: the probes' and sky's specular are replaced by
+	// nothing there, and the area light's own highlight is the panel's reflection, once.
+	if (u_Surface.Load(int3(hitPixel, 0)).w < 0.0)
+		color = float3(0.0);
 	float confidence = roughnessFade * GetHitConfidence(hitUV, hitPixel, ray) * min(u_Reflections.Intensity, 1.0);
 	return float4(SanitizeHDR(color) * confidence, confidence);
 }

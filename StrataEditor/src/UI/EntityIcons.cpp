@@ -37,6 +37,7 @@ namespace Strata::UI
 			{ "PointLight", Icons::Lightbulb },
 			{ "SpotLight", Icons::Flashlight },
 			{ "RectLight", Icons::LampCeiling },
+			{ "LightSurface", Icons::RectangleHorizontal },
 			{ "SkyLight", Icons::CloudSun },
 			{ "PostProcess", Icons::Aperture },
 			{ "Text", Icons::Type },

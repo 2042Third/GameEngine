@@ -84,10 +84,10 @@ namespace Strata
 		void UpdateCellResolver(EditorContext& context);
 		void DrawHeader(EditorContext& context, const EditorCommandRegistry& commands);
 		void DrawEmptyScene(EditorContext& context, const EditorCommandRegistry& commands);
-		void DrawRows(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene);
-		void DrawRow(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene, size_t row);
+		void DrawRows(EditorContext& context, const EditorCommandRegistry& commands, EditorCommandRunner& runner, Scene& scene);
+		void DrawRow(EditorContext& context, const EditorCommandRegistry& commands, EditorCommandRunner& runner, Scene& scene, size_t row);
 		void DrawRowName(Scene& scene, const HierarchyRow& row, float textX, float right);
-		void DrawRowContextMenu(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene, const HierarchyRow& row);
+		void DrawRowContextMenu(EditorContext& context, const EditorCommandRegistry& commands, EditorCommandRunner& runner, Scene& scene, const HierarchyRow& row);
 		// Create Prefab, and for entities of prefab instances Apply, Revert, Unpack, Select Prefab Root and Show Prefab Asset.
 		void DrawPrefabMenuItems(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene, const HierarchyRow& row);
 		void AcceptRowDrops(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene, size_t row, const ImVec2& min, const ImVec2& max);

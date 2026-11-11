@@ -350,7 +350,11 @@ sun with `component.set` (find their IDs with `entity.find {"name": "Main Camera
 keeps its own sun: `lighting.extractSun {"sky"?, "light"?}` (it reads the map in the background, a few frames; one undo
 step) turns the scene's directional light toward it, with its color and illuminance, and
 `asset.setImportSettings {"settings": {"RemoveSun": true}}` on the map paints it out of the sky (the Inspector's Sky
-section has Extract Sun for both). `lighting.bakeProbes` bakes reflection probes from the scene as it is.
+section has Extract Sun for both). `lighting.bakeProbes` bakes reflection probes from the scene as it is. An emissive
+panel (a box or plane with an emissive material) lights the room only through GI until it is made a light:
+`lighting.makeAreaLight {"entity": <id>, "side"?: "auto" | "+X" | ... | "-Z", "twoSided"?, "castShadows"?, "offset"?}`
+adds a child Rect Light on its face with its luminance and size and tags the panel `LightSurface` (one undo step;
+`auto` takes a ceiling panel's lower face, pass `side` for wall panels; it fails on a panel that already has one).
 
 **Assets**: `asset.import {"file": "<absolute path>", "directory": "Models"}` copies a file into the project and
 imports it: models `.gltf`/`.glb` (also meshopt-compressed), textures `.png`/`.jpg`/`.tga`/`.bmp`/`.psd`/`.gif`/`.hdr`,

@@ -28,6 +28,11 @@
 
 #define ST_INSTANCE_MIRRORED 1u // Negative determinant: winding and tangent handedness are flipped
 #define ST_INSTANCE_SKINNED  2u // Posed: SkinPalette is the first joint matrix of its palette (the skinned pipelines)
+// The face of an area light (LightSurfaceComponent): the prepass writes c_SurfaceLightMarker for screen-space reflections,
+// and reflection probe captures draw its emission as 0
+#define ST_INSTANCE_LIGHT_SURFACE 4u
+// The surface target's metallic factor (w) of a light surface's pixels: below 0, which no material writes.
+static const float c_SurfaceLightMarker = -1.0;
 
 #define ST_LIGHT_POINT 0u
 #define ST_LIGHT_SPOT  1u

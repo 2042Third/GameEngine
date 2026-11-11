@@ -101,12 +101,22 @@ linearly transformed cosines), the same in every frame.
   shadow atlas (five for a one-sided ceiling panel: nothing behind it needs a shadow) from the same budget (Max Shadowed
   Local Lights, the atlas size and largest tile), and at most four rect lights cast shadows at once: a fifth waits until one
   leaves the view or matters less, and a light losing its shadow fades it out. Very wide penumbrae (a large light close above
-  an object) come out narrower than real ones: the filter reaches at most an eighth of the light's shadow tile. Shadows of
+  an object) come out narrower than real ones: the filter reaches at most an eighth of the light's shadow tile. Walls beside
+  a lit floor do not shadow it. Where an object's lower part hangs over the floor close above it (a sphere's foot) a little
+  light reaches under it, and the soft edge behind a thick object's top comes out narrower than a real one. Shadows of
   shadowed rect lights cost every pixel near their penumbrae a filter of twice the Shadow Filter Quality's taps.
 - **An emissive panel is not a light by itself.** A mesh with an emissive material shows its glow, but it lights the scene
-  only through global illumination's probes, with their coarse resolution. To make a panel light the room, place a Rect
-  Light on its face (the Hierarchy's **Create > Rect Light**, then size and place it as the face), with the panel's
-  emission as its Intensity in nits.
+  only through global illumination's probes, with their coarse resolution. To make a panel light the room, right-click it
+  in the Hierarchy and choose **Make Area Light** (also in the Mesh Renderer's menu in the Inspector; agents:
+  `lighting.makeAreaLight`). It adds a Rect Light as a child on the panel's emitting face, with the panel's size and its
+  emission as the Intensity in nits, casting shadows, and tags the panel **Light Surface**, in one undo step; the panel keeps
+  its look. A ceiling panel's lower face is found by itself; for a wall panel or a sign pick the face (Side) in the command.
+- **Light Surface** marks the mesh that shows a light's face, so that its glow is not counted twice: screen-space
+  reflections show the light's own highlight instead of the panel's image a second time, reflection probes capture it dark
+  (the light lights what they hold), and the light's own shadows leave it out (the light sits on or in it). The mesh still
+  draws, is picked and casts the sun's and other lights' shadows. Put it only on meshes a light stands for: on any other
+  emissive mesh it only takes that mesh's glow out of reflections and probes. With global illumination on, the panel's glow
+  still reaches the GI as well as the light's (counted twice: a known issue until area lights reach the GI).
 - **What it costs**: each rect light costs every pixel it reaches a few hundred arithmetic operations and twelve table
   reads (an integral over its face for the diffuse light, another for the highlight), and a clear-coated surface a third
   integral and eight reads more; lights that reach few pixels cost little. Besides, a scene that has a rect light, lit or

@@ -435,6 +435,12 @@ void st_Main()
 	// (texture levels of detail, the shadow's filter) left (Architecture.Shaders).
 	float4 baseColor = material.BaseColor * SampleMaterialTexture(material.BaseColorMap, uv);
 	float3 emissive = material.Emissive.rgb * SampleMaterialTexture(material.EmissiveMap, uv).rgb;
+#ifdef ST_AREA_LIGHTS
+	// A reflection probe's capture (MaterialParams.w 1) draws a light surface's emission as 0, lit or unlit: the probe holds
+	// the room its light lit, not the panel, whose light and highlight the area light adds per pixel.
+	if ((instance.Flags & ST_INSTANCE_LIGHT_SURFACE) != 0u && u_Frame.MaterialParams.w > 0.5)
+		emissive = float3(0.0);
+#endif
 	float3 color = baseColor.rgb + emissive;
 	// The lighting debug view: Lighting shades every lit surface white without its emission (unlit ones draw as they are).
 	uint lightingView = GetLightingView();

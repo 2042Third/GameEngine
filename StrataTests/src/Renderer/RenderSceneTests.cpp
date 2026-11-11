@@ -1412,6 +1412,47 @@ TEST_SUITE("Renderer.RenderScene")
 		CHECK(changes.size() == cubes.size());
 	}
 
+	TEST_CASE("A light surface tag flags its proxy and instances, and adding or removing it is a proxy change")
+	{
+		Scene scene("LightSurfaces");
+		Entity panel = AddCube(scene, glm::vec3(0.0f, 3.0f, 0.0f));
+		Entity other = AddCube(scene, glm::vec3(2.0f, 0.0f, 0.0f));
+		RenderScene& renderScene = RenderScene::Get(scene);
+		renderScene.Sync(nullptr);
+		renderScene.SetMeshLayout(renderScene.GetMeshesWithoutBounds()[0], *MeshFactory::CreateCube());
+		const uint32_t proxy = renderScene.FindProxy(panel.GetHandle());
+		const auto instanceFlags = [&]() { return renderScene.GetInstances()[renderScene.GetFirstInstance(proxy)].Flags; };
+		CHECK((renderScene.GetProxyFlags(proxy) & RenderProxyFlags::LightSurface) == 0);
+		CHECK(instanceFlags() == 0u);
+
+		const uint64_t before = renderScene.GetProxyVersion();
+		panel.AddComponent<LightSurfaceComponent>();
+		CHECK(renderScene.Sync(nullptr) == 1);
+		CHECK((renderScene.GetProxyFlags(proxy) & RenderProxyFlags::LightSurface) != 0);
+		CHECK(instanceFlags() == RenderData::c_InstanceLightSurface);
+		CHECK((renderScene.GetProxyFlags(renderScene.FindProxy(other.GetHandle())) & RenderProxyFlags::LightSurface) == 0);
+		std::vector<uint32_t> changes;
+		REQUIRE(renderScene.GetProxyChanges(before, changes));
+		CHECK(changes == std::vector<uint32_t> { proxy });
+		CheckProxies(renderScene);
+
+		// The flag stays through other changes of the proxy (its transform, its shadow setting).
+		panel.GetComponent<TransformComponent>().Translation.y += 1.0f;
+		panel.MarkModified<TransformComponent>();
+		panel.GetComponent<MeshRendererComponent>().CastShadows = false;
+		panel.MarkModified<MeshRendererComponent>();
+		renderScene.Sync(nullptr);
+		CHECK((renderScene.GetProxyFlags(proxy) & RenderProxyFlags::LightSurface) != 0);
+		CHECK(instanceFlags() == RenderData::c_InstanceLightSurface);
+		CheckProxies(renderScene);
+
+		panel.RemoveComponent<LightSurfaceComponent>();
+		CHECK(renderScene.Sync(nullptr) == 1);
+		CHECK((renderScene.GetProxyFlags(proxy) & RenderProxyFlags::LightSurface) == 0);
+		CHECK(instanceFlags() == 0u);
+		CheckProxies(renderScene);
+	}
+
 	TEST_CASE("The proxy change log names the proxies that changed since a reader's version, each once, until it overflows")
 	{
 		Scene scene("ProxyChanges");

@@ -104,6 +104,16 @@ namespace Strata
 		static constexpr float c_MaxSize = 100.0f;
 	};
 
+	// Tags the emissive mesh that shows an area light's face (lighting.makeAreaLight adds it). The light lights the room and
+	// its highlight is the panel's reflection, so the passes that would count the panel's emission a second time leave it
+	// out: screen-space reflections send no light from it, reflection probe captures draw its emission as 0, and area lights'
+	// shadow views do not draw it. It never hides the mesh or changes its material, and the depth prepass, picking, the sun's,
+	// point and spot lights' shadows and the GI's occupancy keep it (it is a solid object). A tag: HasComponent and
+	// AddComponent only.
+	struct LightSurfaceComponent
+	{
+	};
+
 	enum class SkyLightSource : uint8_t
 	{
 		EnvironmentMap = 0, // An equirectangular HDR texture

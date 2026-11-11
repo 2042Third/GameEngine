@@ -752,7 +752,7 @@ namespace Strata
 			const std::string tooltip = "Remove " + info.DisplayName;
 			remove = UI::IconButton(removeId.c_str(), Icons::X, tooltip.c_str());
 		}
-		DrawComponentMenu(context, commands, entities, info, prefab);
+		DrawComponentMenu(context, commands, panelContext.Runner, entities, info, prefab);
 
 		if (remove)
 			RunEditorCommand(context, commands, "component.remove", { { "entities", ToJson(entities) }, { "component", info.Name } });
@@ -833,8 +833,8 @@ namespace Strata
 		}
 	}
 
-	void InspectorPanel::DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info,
-		const PrefabView* prefab)
+	void InspectorPanel::DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, EditorCommandRunner& runner, std::span<const Entity> entities,
+		const ComponentInfo& info, const PrefabView* prefab)
 	{
 		if (!ImGui::BeginPopup("ComponentMenu"))
 			return;
@@ -873,9 +873,19 @@ namespace Strata
 				RunEditorCommand(context, commands, "component.set", { { "entities", ids }, { "component", info.Name }, { "values", *clipboard } });
 			UI::ItemProbe::Record(probe + "Paste", clipboard.has_value());
 		}
+		// A mesh that shows an emissive panel made a real light (lighting.makeAreaLight), one entity at a time.
+		if (info.Name == "MeshRenderer")
+		{
+			const bool makesLight = entities.size() == 1 && !context.IsPlaying();
+			if (settable)
+				ImGui::Separator();
+			if (ImGui::MenuItem("Make Area Light", nullptr, false, makesLight))
+				RunEditorCommandDeferred(runner, context, commands, "lighting.makeAreaLight", { { "entity", UUIDToJson(entities.back().GetUUID()) } });
+			UI::ItemProbe::Record(probe + "MakeAreaLight", makesLight);
+		}
 		if (info.IsRemovable() && !HasFlag(info.Flags, ComponentFlags::EngineAdded))
 		{
-			if (settable)
+			if (settable || info.Name == "MeshRenderer")
 				ImGui::Separator();
 			if (ImGui::MenuItem("Remove"))
 				RunEditorCommand(context, commands, "component.remove", { { "entities", ids }, { "component", info.Name } });

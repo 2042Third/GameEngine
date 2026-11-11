@@ -28,6 +28,9 @@ namespace Strata
 		// InstanceData::Flags
 		constexpr uint32_t c_InstanceMirrored = 1u; // Negative determinant: winding and tangent handedness are flipped
 		constexpr uint32_t c_InstanceSkinned = 2u;  // Posed: the skinned pipelines blend its palette (InstanceData::SkinPalette)
+		// The face of an area light (LightSurfaceComponent): the prepass marks it for screen-space reflections
+		// (c_SurfaceLightMarker) and reflection probe captures draw its emission as 0
+		constexpr uint32_t c_InstanceLightSurface = 4u;
 
 		constexpr uint32_t c_LightPoint = 0u;
 		constexpr uint32_t c_LightSpot = 1u;
