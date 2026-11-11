@@ -16,7 +16,8 @@ set -u
 # from the first run of this step, on the modules of the compiler before Slang: they read the bindless table (set 1, Texture2D u_Textures[]), a
 # runtime array MoltenVK places in an argument buffer it configures from the pipeline layout at run time, which the
 # offline converter cannot know. Reason of each: "[mvk-error] SPIR-V to MSL conversion error: Runtime sized variables must
-# be in device storage argument buffers."
+# be in device storage argument buffers." The forward pass's field variants (*Field.frag: the same source with
+# ST_FORWARD_FIELD, for frames that run global illumination) read the same table and fail with the same reason.
 c_KnownFailures=(
 	GameUI/UIQuad.frag
 	Scene/DepthPrepass.frag
@@ -26,11 +27,17 @@ c_KnownFailures=(
 	Scene/DepthPrepassSurface.frag
 	Scene/DepthPrepassVelocity.frag
 	Scene/Forward.frag
+	Scene/ForwardField.frag
 	Scene/ForwardGlass.frag
+	Scene/ForwardGlassField.frag
 	Scene/ForwardGlassNoEntityIDs.frag
+	Scene/ForwardGlassNoEntityIDsField.frag
 	Scene/ForwardGlassNoEntityIDsVelocity.frag
+	Scene/ForwardGlassNoEntityIDsVelocityField.frag
 	Scene/ForwardGlassVelocity.frag
+	Scene/ForwardGlassVelocityField.frag
 	Scene/ForwardTransparent.frag
+	Scene/ForwardTransparentField.frag
 	Scene/SelectionMask.frag
 	Scene/ShadowMask.frag
 )
