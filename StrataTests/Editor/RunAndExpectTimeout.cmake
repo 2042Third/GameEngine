@@ -18,8 +18,9 @@ endif()
 if(seconds GREATER 60)
 	message(FATAL_ERROR "RunAndExpectTimeout: the program was not stopped at its bound (${seconds} s)")
 endif()
-string(FIND "${output}" "did not finish within 2 s" position)
-if(position EQUAL -1)
+# CMake wraps the message's lines where it likes (a longer path of the program, as on CI's runners, moves the break), so the
+# words are looked for with any white space between them.
+if(NOT output MATCHES "did[ \t\r\n]+not[ \t\r\n]+finish[ \t\r\n]+within[ \t\r\n]+2[ \t\r\n]+s[ \t\r\n]")
 	message(FATAL_ERROR "RunAndExpectTimeout: the failure does not name the bound:\n${output}")
 endif()
 message("RunAndExpectTimeout: stopped and failed after ${seconds} s")
