@@ -539,12 +539,17 @@ if(TARGET StrataEditor AND TARGET StrataCLI)
 
 	# The showcase sample's ground is what its generator writes: the design's checks pass, two runs write the same bytes,
 	# the committed models equal them, shots 2-4 see the sun where the layout says and the scripts' times of day
-	# (Samples/Showcase/Scripts/Stations.h) are the generator's (Tools/GenerateShowcaseTerrain.py).
+	# (Samples/Showcase/Scripts/Stations.h) are the generator's (Tools/GenerateShowcaseTerrain.py). So are the stations'
+	# steps that the render test's commands and the look-dev shots hold, the script that retakes the sample's pictures
+	# takes each complete, at its station and from its look-dev shot's camera, and the sample's Picture.png shows what its
+	# Screenshots/Shot2.png shows.
 	if(Python3_Interpreter_FOUND)
 		add_test(NAME StrataTools.ShowcaseTerrain
 			COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/Tools/GenerateShowcaseTerrain.py" selftest
 				--committed "${PROJECT_SOURCE_DIR}/Samples/Showcase/Assets/Generated/Terrain"
 				--stations "${PROJECT_SOURCE_DIR}/Samples/Showcase/Scripts/Stations.h"
+				--sample "${PROJECT_SOURCE_DIR}/Samples/Showcase"
+				--render-commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/ShowcaseRenderCommands.json"
 				--work "${CMAKE_CURRENT_BINARY_DIR}/ShowcaseTerrain/$<CONFIG>")
 	else()
 		add_test(NAME StrataTools.ShowcaseTerrain
@@ -1034,8 +1039,8 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	# The six shots rendered by a headless editor on the exported project at their times of day: nothing pending, the dawn
 	# cascades reach 550 m, the lean-to in the hut's dawn shadow lit by the yard's probe, not the dark hut's (12.5 EV against
 	# 10.1 when the hut's box reached over it), the hut's interior a third or less of the yard's light
-	# (StrataTests/Editor/ShowcaseRenderCommands.json; the yard's 14.0 EV is the graybox's measurement, measured again by every
-	# change of the yard's light).
+	# (StrataTests/Editor/ShowcaseRenderCommands.json; the yard's 14.0 EV is the graybox's measurement, 14.03 again after the
+	# probes were baked without the sun's disk, measured again by every change of the yard's light).
 	add_test(NAME StrataEditor.ShowcaseRender
 		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:StrataEditor>"
 			"-DARGUMENTS=--headless|--no-automation|--quit-after-commands|--frames|36000|--project|${STRATA_SHOWCASE_DIR}/Project|--commands|${CMAKE_CURRENT_SOURCE_DIR}/Editor/ShowcaseRenderCommands.json"

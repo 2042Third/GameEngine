@@ -218,6 +218,13 @@ namespace Strata
 			nlohmann::json tileSizes = nlohmann::json::array();
 			for (uint32_t light = 0; light < stats.LocalShadowLights && light < stats.LocalShadowTileSizes.size(); light++)
 				tileSizes.push_back(stats.LocalShadowTileSizes[light]);
+			// How many shadowed lights have tiles of each size, by size in texels.
+			nlohmann::json sizeCounts = nlohmann::json::object();
+			for (size_t sizeClass = 0; sizeClass < stats.LocalShadowSizeCounts.size(); sizeClass++)
+			{
+				if (stats.LocalShadowSizeCounts[sizeClass] > 0)
+					sizeCounts[std::to_string(128u << sizeClass)] = stats.LocalShadowSizeCounts[sizeClass];
+			}
 			// The sun's cascades as the frame laid them out: each one's slice of view distances and texel size (world units).
 			nlohmann::json cascades = nlohmann::json::array();
 			for (uint32_t cascade = 0; cascade < stats.CascadeCount && cascade < stats.Cascades.size(); cascade++)
@@ -227,11 +234,13 @@ namespace Strata
 			}
 			return {
 				// What the frame drew with: the Renderer.Quality section's fields and values (project.setSettings takes them), the
-				// sun's cascades' size and each shadowed point and spot light's tile.
+				// sun's cascades' size and the tiles of the shadowed point and spot lights (the first 64 by rank, and how many have
+				// each size).
 				{ "quality", RendererQuality::ToSectionValue(stats.Quality) },
 				{ "shadowMapSize", stats.ShadowMapSize },
 				{ "cascades", std::move(cascades) },
 				{ "localShadowTileSizes", std::move(tileSizes) },
+				{ "localShadowTileSizeCounts", std::move(sizeCounts) },
 				{ "gpuDriven", stats.GPUDriven },
 				{ "gpuCulled", stats.GPUCulled },
 				{ "gpuCounts", stats.GPUDriven && gpu.HasCounters },
@@ -247,7 +256,9 @@ namespace Strata
 				{ "occludedProxies", stats.OccludedProxies },
 				{ "occludedCasters", stats.OccludedCasters },
 				{ "cachedCascades", std::popcount(stats.CachedCascadeMask) },
+				{ "localShadowRequested", stats.LocalShadowRequested },
 				{ "localShadowLights", stats.LocalShadowLights },
+				{ "localShadowFading", stats.LocalShadowFading },
 				{ "localShadowViewsDrawn", stats.LocalShadowViewsDrawn },
 				{ "localShadowViewsPending", stats.LocalShadowViewsPending },
 				{ "localShadowCasters", stats.LocalShadowCasters },
@@ -928,8 +939,8 @@ namespace Strata
 			"the CPU's frame time, cpu when the CPU's does, capped when neither does (vsync or a frame-rate cap sets the pace), unknown without GPU "
 			"times. renderStats is the viewport's latest frame (null while it renders none): quality (the Graphics Quality it drew with, as "
 			"project.settings shows Renderer.Quality), shadowMapSize (the sun's cascades' texels), cascades (each sun cascade's slice near and far in "
-			"meters of view distance and texelSize in meters: stable cascades, which depend on the view alone), localShadowTileSizes (each shadowed point and spot "
-			"light's tile), gpuDriven (the frame took the GPU-driven path: "
+			"meters of view distance and texelSize in meters: stable cascades, which depend on the view alone), localShadowTileSizes (the tiles of the first 64 "
+			"shadowed point and spot lights by rank), localShadowTileSizeCounts (how many have tiles of each size, by size in texels), gpuDriven (the frame took the GPU-driven path: "
 			"its counts are the GPU's, of a frame 2-3 frames older, once gpuCounts is true; transparent surfaces are the CPU's), gpuCulled (the GPU "
 			"culled the scene's mesh renderers and built their draws; false in a scene without mesh renderers, whose frames record no culling and "
 			"take their requests from the CPU), feedbackRequests (its "
@@ -937,8 +948,9 @@ namespace Strata
 			"calls the CPU recorded), draws (instanced draws of the view), opaqueDraws, shadowDraws, instances, shadowCasters, triangles, "
 			"visibleProxies, occludedProxies (in the frustum but hidden behind what the view draws: left out on the GPU-driven path), occludedCasters "
 			"(shadow casters hidden from the light behind other casters, per cascade: left out of those cascades on the GPU-driven path), cachedCascades "
-			"(shadow cascades kept from the previous frame: nothing reaching them changed), localShadowLights (point and spot lights with "
-			"shadows), localShadowViewsDrawn (their shadow views drawn: none while nothing reaching them changed), localShadowViewsPending, "
+			"(shadow cascades kept from the previous frame: nothing reaching them changed), localShadowRequested (shadowed point and spot "
+			"lights in view, which ask for a shadow), localShadowLights (those given one: Graphics Quality's MaxShadowedLocalLights and the atlas "
+			"decide), localShadowFading (those fading the shadow they lost out), localShadowViewsDrawn (their shadow views drawn: none while nothing reaching them changed), localShadowViewsPending, "
 			"localShadowCasters, reflectionProbes (reflection probes the view shaded with), reflectionProbesPending (in view, their capture "
 			"still loading or waiting to be converted), culledProxies, "
 			"sizeCulledProxies (in view but below a pixel), instancesPerLod, lights, droppedLights, "

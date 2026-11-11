@@ -4026,7 +4026,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | `ShadowCascades` (the fifth near the camera) | 3 | 4 | 5 | 5 |
 | `LocalShadowAtlasSize` (point and spot lights) | 2048 | 4096 | 4096 | 8192 |
 | `LocalShadowMaxTile` | 512 | 1024 | 1024 | 2048 |
-| `MaxShadowedLocalLights` | 4 | 16 | 16 | 16 |
+| `MaxShadowedLocalLights` | 4 | 16 | 64 | 256 |
+| `LocalShadowViewsPerFrame` (point and spot views drawn again per frame) | 12 | 12 | 24 | 48 |
 | `LODErrorPixels` / `MinProjectedPixels` | 2 / 1 | 1 / 0.5 | 1 / 0.5 | 0.5 / 0.25 |
 | `ShadowFilterQuality` (taps of the sun's wide penumbrae) | 8 | 16 | 24 | 32 |
 | `ContactShadows` (steps of the sun's contact shadows; 0 off) | 0 | 0 | 0 | 0 |
@@ -4049,7 +4050,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
   High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for rows that cost at every
   size (`ShadowResolution`, 4096 against 2048, and `ShadowCascades`, five against four: the stable cascades' detail;
   `ShadowFilterQuality`, `AmbientOcclusionQuality`, `EnvironmentResolution`, `Reflections`, and `MotionBlurQuality`,
-  `ReflectionProbeResolution` and `GlobalIllumination` for scenes that use them; `Renderer.Quality` checks it).
+  `ReflectionProbeResolution`, `GlobalIllumination`, `MaxShadowedLocalLights` and `LocalShadowViewsPerFrame` for scenes
+  that use them; `Renderer.Quality` checks it).
   Custom is the section's fields (High's values by default). `RendererQuality::Clamp` keeps every knob in its range.
 - **Auto by rows:** `RendererQuality::ResolveShadowMapSize` resolves Auto and AutoFine for the renderer's viewport rows
   (its output: the Scene and Game views' panel pixels, the window's back buffer, a capture's image), limited to
@@ -4415,22 +4417,29 @@ lights, Post Process and the sky), and never a resolution below the output's.
   where it calls `ResetExposureAdaptation`). It is counted in frames, never in time: slow frames never reset it. Tests
   may render many frames back to back without device frames: the renderer waits for its own oldest frames before its
   frame constants' versions run out (`SceneRenderer::ReserveFrameConstantVersions`; Architecture rules, NVRHI pitfalls).
-- With TAA, the local lights' shadow filter and the Checkerboard screen-space reflections turn their per-pixel noise by the
-  golden ratio's fraction of a turn per frame of the history (`TemporalParams.z`, counted from the reset so captures are
-  deterministic), and the history averages it; without TAA the turn is 0 and the images are unchanged. The sun's shadow
-  filter turns nothing: a fixed blue-noise tile, whose grain the shadow mask's blur takes in the frame ("Sun shadows").
+- With TAA, the Checkerboard screen-space reflections turn their per-pixel noise by the golden ratio's fraction of a turn
+  per frame of the history (`TemporalParams.z`, counted from the reset so captures are deterministic), and the history
+  averages it; without TAA the turn is 0 and the images are unchanged. The shadow filters turn nothing: the sun's a fixed
+  blue-noise tile, whose grain the shadow mask's blur takes in the frame ("Sun shadows"), the local lights' a fixed
+  interleaved gradient noise per pixel ("Local light shadows"; `GPU.SceneRenderer.TAA` checks it holds still).
   Ambient occlusion never turns either: it resolves its pattern within the frame ("Ambient occlusion").
 - Renderers of single images settle or turn TAA off: `viewport.capture` and the project's picture render their still view
   again until the history holds `c_TemporalSettleFrames` (8) complete frames (a frame still incomplete for another reason
   starts it again while its own bounded wait lasts, so a view that stays incomplete still settles once that wait ended),
   bounded by `c_MaxCaptureTemporalFrames` and `ProjectThumbnail::c_MaxTemporalFrames` (16); the thumbnails' renderer sets
-  `SceneRendererSpecification::TemporalAntiAliasing` off and draws TAA scenes with FXAA.
-- Tests (`GPU.SceneRenderer.TAA`): culling, levels of detail and the cached cascades match a renderer without the jitter;
-  a still edge between colors of equal luminance is the mean of its eight jittered frames at eight frames (0.5%) and stays
-  within 15% of their spread; a moving box leaves no trail beyond two pixels once it stops; every reset outputs the
-  frame's own image; slow frames keep the history; both paths resolve the same image over sixteen moving frames; the
-  noise turns and the converged penumbra is smoother. Overlays, the outline, captures and thumbnails have theirs
-  (`GPU.SceneRenderer.Overlays`, `GPU.GameUI`, `GPU.Editor.Viewport`, `GPU.Editor.Thumbnails`).
+  `SceneRendererSpecification::TemporalAntiAliasing` off and draws TAA scenes with FXAA. The two share the viewport's
+  capture renderer at sizes of their own, and a renderer whose size changes starts its history again: rendering in the
+  same frames, neither would ever hold more than a frame or two of it. So a capture renders only while the project's
+  picture does not (`ProjectThumbnail::IsRendering`: from the save that asks for it until its frame is read back, which
+  its own limits bound): a `viewport.capture` right after a `scene.save` waits those frames, and one a save interrupts
+  starts over after the picture, which settled the pre-exposure for its own view and released the targets: its first
+  frame starts the pre-exposure again, and its waits have their whole budgets (`GPU.Editor.Viewport`).
+- Tests (`GPU.SceneRenderer.TAA`): culling, levels of detail and the cached cascades match a renderer without the
+  jitter; a still edge between colors of equal luminance is the mean of its eight jittered frames at eight frames (0.5%)
+  and stays within 15% of their spread; a moving box leaves no trail beyond two pixels once it stops; every reset
+  outputs the frame's own image; slow frames keep the history; both paths resolve the same image over sixteen moving
+  frames; the local lights' shadow noise holds still and the history adds no grain. Overlays, the outline, captures and
+  thumbnails have theirs (`GPU.SceneRenderer.Overlays`, `GPU.GameUI`, `GPU.Editor.Viewport`, `GPU.Editor.Thumbnails`).
 - **The TAA's look** (`PostProcessComponent::TAAPreset`): `Sharp` (0), `Original` (1) or `Custom` (2), and ten tunables
   read only under Custom (`TAAHistoryFrames`, `TAAMotionResponse`, `TAAMaxMotionWeight`, `TAAResampleWeight`,
   `TAAHistoryClamp` {`MinMax` "Range", `Variance` "Tight (variance)"}, `TAAClipWidth`, `TAATransparentWeight`,
@@ -4751,50 +4760,92 @@ lights, Post Process and the sky), and never a resolution below the output's.
 
 - Point and spot lights cast shadows with `CastShadows` (off by default, so scenes saved before it render as they did), with
   `ShadowBias` and `ShadowNormalBias` (texels of the light's tiles) and `ShadowFilterRadius` (texels, at most 8). A renderer
-  gives the `Quality.MaxShadowedLocalLights` most relevant shadowed lights in view (16, at most `RenderData::
-  c_MaxShadowedLocalLights`; ranked as the light clusters rank lights) tiles of one D32 atlas
-  (`RendererQualitySettings::LocalShadowAtlasSize`: 4096 texels, 64 MiB; made with the first shadowed light it draws,
-  released with its render targets, `GetLocalShadowAtlas`): a spot light one perspective view (at most 80 degrees each way
-  from its axis), a point light six, a cube's faces, which the shader picks by the major axis toward the pixel. Each view
-  is widened by a guard band of what its lookups reach (`ceil(ShadowFilterRadius + 1.42 ShadowNormalBias) + 1` texels: the
-  normal bias moves a lookup by up to sqrt(2) times its texels across the view), so neither the offset nor the filter
-  leaves the face it samples and faces meet without a seam. Tiles are 128 to `RendererQualitySettings::LocalShadowMaxTile`
-  texels (1024 at Medium, at most the atlas) from a quadtree (`ShadowAtlasAllocator`), sized by the light's range on screen
-  with hysteresis; while they do not fit, the least relevant lights' tiles step down first, in rounds (`FitTileSizes`), and
-  lights that do not fit even at 128 cast none (`SceneRendererStats::LocalShadowTileSizes`: each shadowed light's tile).
+  gives tiles of one D32 atlas (`RendererQualitySettings::LocalShadowAtlasSize`: 4096 texels, 64 MiB; made with the first
+  shadowed light it draws, released with its render targets, `GetLocalShadowAtlas`) to the shadowed lights in view that
+  matter most, as many as `Quality.MaxShadowedLocalLights` allows (4, 16, 64, 256 by preset; the setting's ceiling
+  `RenderData::c_MaxShadowedLocalLights`, 4096) and the atlas holds at 128-texel tiles in seven eighths of its area (about 37,
+  149 and 597 point lights in a 2048, 4096 and 8192 atlas, six times as many spot lights): a spot light one perspective view
+  (at most 80 degrees each way from its axis), a point light six, a cube's faces, which the shader picks by the major axis
+  toward the pixel. The light and view buffers grow with the frame's lights and views (`EnsureBufferCapacity`), and the
+  GPU's culling takes a batch's first view in 16 bits of its mode (`GetLocalShadowCullMode`), so one frame may draw
+  thousands of views (a capture of 200 point lights draws 1200).
+- **Importance** (`SceneRenderer::GetLocalShadowImportance`): the projected size of the light's range `r / (d - r)`,
+  saturating at 10 where the camera nears it and rising to 20 at its center (the lights around the camera first, the
+  nearer the more), times the square root of its luminous intensity (the record's color times intensity, as luminance).
+  Lights holding a shadow rank as if they mattered a quarter more (`c_LocalShadowKeepRatio`), so a light near the cut
+  does not trade places every frame; the order their tiles are fitted in is the previous frame's, a light moving up only
+  past one it matters a quarter more than. A light that loses its rank while in view keeps its tiles and fades its
+  shadow out, then gives the tiles back; one that leaves the view loses it at once (it lights nothing the view shows).
+- **Tiles** are 128 to `RendererQualitySettings::LocalShadowMaxTile` texels (1024 at Medium, at most the atlas) from a
+  quadtree (`ShadowAtlasAllocator`, a bit per free node per level), each light's sized by its range on screen with
+  hysteresis; while they do not fit seven eighths of the atlas, the least important lights' tiles step down first, in
+  rounds (`FitTileSizes` with an area budget). A light whose tiles change size keeps sampling its old tiles until its
+  views are drawn into the new ones (`LocalShadowView::DrawnKey.Tile` holds them, `CommitLocalShadows` frees them), so a
+  resize never blanks a shadow; the eighth kept free is its room. Changes run shrinks first (largest first), then new
+  lights (at their size, else a smaller one), then grows; at most two lights are between sizes at a time
+  (`c_MaxLocalShadowTransitions`) where lighting updates are spread, and a light the atlas has no room for keeps its size
+  (or waits, if new) instead of the atlas being laid out again. `SceneRendererStats::LocalShadowRequested`,
+  `LocalShadowLights`, `LocalShadowFading`, `LocalShadowTileSizes` (the first 64 by rank) and `LocalShadowSizeCounts` (how
+  many have each size) say what a frame chose; the Scene view's statistics and `editor.perf`'s `renderStats`
+  (`localShadowRequested`, `localShadowLights`, `localShadowFading`, `localShadowTileSizes`, `localShadowTileSizeCounts`)
+  show them.
 - Views are cached like the cascades: a view is drawn again only when its key changes (the light's position, direction,
   range and cone, its tile, its guard band), when what casters are drawn with changes (`LocalShadowContent`: the scene's
   GPU copy's tables and deferred proxies, the geometry pool's content, the texture table's entries while materials are
-  alpha-masked, read through `TextureTable::GetEntryVersion` so renderers of one scene decide alike), or when a proxy whose
-  bounds before or after its change reach the view changes. The bounds of every proxy within a light's range are recorded
-  when its views are drawn, so even a caster's first move redraws only the views it reaches; beyond 65,536 followed
-  proxies the following starts over. The camera is not part of a view's key: the matrices that draw and sample a tile are
-  made relative to the frame's camera in double from what the tile was drawn with, so a light that moved keeps its old
-  shadow until its views are drawn again.
-- `SpreadLightingUpdates` (on by default) draws at most `LocalShadowViewsPerFrame` (12) views per frame, the nearest
-  lights' first; a light casts its shadow once all its views hold content and then fades it in over
-  `SceneRenderer::c_LocalShadowFadeFrames` frames, and the lights ranked just above the most relevant one left out fade by
-  their margin over it. Off (renderers of single images: the editor's capture renderer, which also draws the project's
-  picture at the quality of the view it shows, and the thumbnails' renderer with a 2048 atlas, 16 MiB), every view that
-  is not up to date is drawn in the frame and nothing fades; captures and the project's picture still count views left
-  pending as incomplete.
-  `CacheLocalShadows` off draws every view of every shadowed light every frame (the perf tests' worst case), and nothing
-  fades. `SceneRendererStats::LocalShadowLights`, `LocalShadowViewsDrawn` and `LocalShadowViewsPending` say what a frame
-  did.
-- Which views a frame draws is the CPU's decision on both paths (`FindLocalShadowCasters`, one job per drawn light: a
-  sphere query of its range, then the exact tests per view on the CPU path); what each view draws is decided twice
+  alpha-masked, read through `TextureTable::GetEntryVersion` so renderers of one scene decide alike), or when a proxy
+  whose bounds before or after its change reach the view changes. A grid of the lights' reach (cells twice the median
+  range, sorted again only in a frame with changes whose lights' reach or cell size differ from the grid's; lights or
+  bounds spanning more than 64 cells are tested without it) finds the lights a change can reach. Most changes pass a
+  light without testing its views: a drawn view keeps a box no change that reaches it misses
+  (`LocalShadowView::DrawnBox`: its range's box cut by the planes that face along an axis, so a cube face keeps the half
+  before it), a light the box of its views no change has reached yet (`LocalShadowReach`), and the boxes are compared
+  without a branch per side (`BoxesTouch`: which side fails first is as good as random there). A caster that keeps
+  moving on the ground thus costs one comparison per lamp around it once the views it reaches wait to be drawn: the
+  boxes of the views that look up lie above it. A change to a view's test changes its box with it
+  (`GetLocalShadowChangeBox`). The bounds of every proxy within a light's range are recorded when its views are drawn,
+  so even a caster's first move redraws only the views it reaches. At most 4,096 proxies are followed per light the
+  quality shadows (`MaxShadowedLocalLights`, counted as at least 16: 65,536 at Low and Medium, 1,048,576 at Ultra);
+  beyond, the following starts over, and until every view is drawn again within one following, a change of any proxy not
+  followed (even one far from every light) draws every view again. The camera is not part of a view's key: the matrices
+  that draw and sample a tile are made relative to the frame's camera in double from what the tile was drawn with, so a
+  light that moved keeps its old shadow until its views are drawn again.
+- `SpreadLightingUpdates` (on by default) draws at most `Quality.LocalShadowViewsPerFrame` views per frame (12, 12, 24,
+  48 by preset): views without content first (a light casts nothing until all its views hold content; in the lights'
+  order, a light's views together), a quarter of the budget to the views with content that waited longest
+  (`SceneRenderer::c_LocalShadowAgedShare`), so none starves while nearer lights change every frame (at a budget of one
+  view a frame, that view takes the place only when it waited longer than the view without content the budget would take
+  otherwise), and the rest by frames waited times importance. A light that gains a shadow fades it in once all its views
+  hold content, one that loses it fades it out as fast, by the time since the renderer's previous frame
+  (`SceneRenderOptions::AdaptationSeconds`, which tests set): over `SceneRenderer::c_LocalShadowFadeSeconds` (0.2 s) and
+  at least `c_LocalShadowFadeFrames` (8) frames, so a fade lasts as long at 240 Hz as at 60 and a shadow changes by at
+  most an eighth a frame where frames are slow (`SceneRendererStats::LocalShadowFadingIn` counts the lights still fading
+  in). Off (renderers of single images: the editor's capture renderer, which also draws the project's picture at the
+  quality of the view it shows, and the thumbnails' renderer with a 2048 atlas, 16 MiB), every view that is not up to
+  date is drawn in the frame, every light takes its size at once and nothing fades; captures and the project's picture
+  still count views left pending as incomplete. `CacheLocalShadows` off draws every view of every shadowed light every
+  frame (the perf tests' worst case), and nothing fades. `SceneRendererStats::LocalShadowViewsDrawn` and
+  `LocalShadowViewsPending` say what a frame drew and left waiting, `LocalShadowFindMs` what deciding it took of the
+  main thread (within `ExtractMs`).
+- Which views a frame draws is the CPU's decision on both paths (`FindLocalShadowCasters`: `RankLocalShadowLights`,
+  `PlaceLocalShadowTiles`, `TrackLocalShadowChanges`, `ScheduleLocalShadowViews`, then one job per drawn light: a sphere
+  query of its range, then the exact tests per view on the CPU path); what each view draws is decided twice
   ("GPU-driven path"). The views draw in `GPU.Shadows` with `Scene/LocalShadowMesh(Skinned).vert` (perspective, no
   pancaking) from `RenderData::LocalShadowData` (scene set SRV 13, a slot per light: six camera-relative matrices, the
   tiles, the biases and the light's strength); a redrawn tile is first cleared by a quad at depth 0, since a clear would
   also clear the cached tiles. The forward passes sample the atlas (SRV 8; the shadow passes bind a dummy) through the
   cascades' comparison sampler, 16 taps kept inside the tile (`c_LocalShadowPoissonDisk`, turned per pixel by
-  `LocalShadowSampleRotation`, which still turns with the TAA frame: the sun's filter no longer does), for lights whose
-  `LightData::SpotAngles.z` names their
-  slot plus one: the CPU path writes it with the frame's lights, `Scene/LightCompact.comp` from the renderer's slot table per
-  light record (light-culling SRV 21). The depth bias moves the lookup toward the light and the normal bias off the surface,
-  both in texels at the surface's depth.
+  `LocalShadowSampleRotation`'s interleaved gradient noise, fixed as the sun's filter's is: nothing that needs TAA), for
+  lights whose `LightData::SpotAngles.z` names their slot plus one: the CPU path writes it with the frame's lights through
+  a table by light record, `Scene/LightCompact.comp` from the renderer's slot table per light record (light-culling SRV 21).
+  The depth bias moves the lookup toward the light and the normal bias off the surface, both in texels at the surface's
+  depth. A light behind a surface without a clear coat (N.L <= 0, where `EvaluateLightWeighted` adds nothing, glass too)
+  is skipped before its shadow's taps.
 - Cost: the views drawn (none in a still scene), their casters' culling (a sphere query per drawn light on the CPU, or the
-  GPU's tests per view), and 16 comparison taps per pixel for each shadowed light reaching it.
+  GPU's tests per view), and 16 comparison taps per pixel for each shadowed light in front of it. The main thread's
+  share (`FindLocalShadowCasters`, `LocalShadowFindMs`) grows with the lights and with the proxies that changed in the
+  frame: `PerfGPU.Renderer.LocalShadows256LightsUltraMoving1kFind` measures it under Ultra's 256 lights with 1,000
+  casters moving every frame (wave 8's target: 0.5 ms), beside the 256 lights' whole frame with every view drawn and
+  with all of them cached (`LocalShadows256LightsUltra*`).
 
 ### Lighting
 
@@ -6095,7 +6146,10 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   cancels the import, so nothing reaches the project (one that ends once the copy is done leaves its captures there,
   unused); a scene change or Play before the import leaves nothing behind,
   after it the imported files go to the trash.
-  A probe bakes what is drawn at its position, other probes' current captures included: baking twice adds a bounce.
+  A probe bakes what is drawn where it stands when the command runs (`Scene::GetWorldTransform`, never the cached
+  matrix: a command of the same frame may have moved it or a parent, as a script that moves a probe and bakes it does),
+  the probes' current captures included, its own too: every further bake adds a bounce, and bakes repeated in an
+  unchanged scene settle.
 - **Screen-space reflections** (`PostProcessComponent::ScreenSpaceReflections`, `SceneRendererScreenReflections.cpp`)
   trace in the mode of the `Reflections` quality row (`ReflectionsQuality`, "Quality settings"): none at Low (Off),
   Checkerboard at Medium (Strata 0.6.0's, with TAA only), Spatial at High and SpatialHigh at Ultra (with or without TAA).
@@ -6671,8 +6725,14 @@ streaks instead of one even glare). Both seed their noise,
 use no transcendental functions where a vertex depends on them and quantize every attribute, so every platform writes
 the same bytes; `selftest` (CTests `StrataTools.ShowcaseTerrain` and `.ShowcaseProps`, label `tools`) writes twice, compares
 with the committed files (the maps by their pixels), checks the design's rules (the golden sun clears the hills from the
-apron, the pads are flat, the letterboard is vertical, the shots' mirror points lie on their surfaces) and that the
-scripts' `Scripts/Stations.h` rows equal the generator's table. To change the ground or a prop, change the generator,
+apron, the pads are flat, the letterboard is vertical, the shots' mirror points lie on their surfaces, the dusk sun
+stands beside the bus and above the hills from the fire, the lantern, the fuel tank and the hut's door) and that the
+scripts' `Scripts/Stations.h` rows equal the generator's table. The terrain's `selftest` also holds the copies of the
+stations' steps to what `setup` writes (`StrataTests/Editor/ShowcaseRenderCommands.json` in the script form,
+`Tools/LookDev/Shots.json`'s `showcase.shot<N>` shots in the look-dev form: after a change to the table, write them
+again with `setup --station <name> --format script|lookdev`, never by hand), checks the pictures script (below; scripts
+with one thing wrong must fail the check) and that `Picture.png` shows what `Screenshots/Shot2.png` shows (the mean
+codes of 16 x 9 blocks, within 1 on average and 4 in any block). To change the ground or a prop, change the generator,
 write in place (`terrain` or `props --output Samples/Showcase/Assets/Generated/...`): the editor reimports and keeps the
 handles. The generators' command scripts (`materials`, `prefabs`, `layout`, `controls`, `dress`, `bake`) are run once
 with `StrataEditor --quit-after-commands` (on Windows through `Start-Process -Wait`: the editor is a GUI program, and a
@@ -6681,13 +6741,23 @@ The materials' values live in `GenerateShowcaseProps.py`'s table: change them th
 sets them on the existing materials.
 
 The three times of day are stations: the sun's direction and the values that go with it (`Stations.h`, `setup --station`).
+A station's sun must reach what its shots show lit: the probes hold no sun (a bake draws neither its disk nor the
+highlights it makes), so what stands in a shadow has the sky's light and the local lights' alone. Dusk's azimuth, 16, is
+where the last sun passes beside the bus (the checks' rule 7); at 32 the bus's shadow lay over the hut's front, the fire
+and the fuel tank's near end, which came out near black. A change to a station's sun or to what stands in the yard runs
+`check` before anything is baked.
 Each has two reflection probe entities, `Probe.<Dawn, Golden or Dusk>.<Yard or Hut>`, never two probes baked three times
 (a bake trashes the capture an earlier bake made for that entity). `bake` sets each station with only its own probes
-active and bakes them twice (the second pass adds a bounce), Golden last, the saved station; rebake after any change the
-probes see, only through `bake`, and never in a session that does not save (the old captures would be trashed under the
-saved scene). The hut's box is its interior, so nothing outside takes the dark interior's light; its capture is taken in
-the back corner away from the sun's patches (from the middle the hut came out only 0.3 EV below the yard), so `bake`
-moves the probe there and back, and the probe projects no box (`BoxProjection` off: its capture is not at the box's center).
+active and bakes them eight times (`BAKE_PASSES`), Golden last, the saved station. A bake draws the probes' present
+captures, the baked probe's own too, so every pass adds a bounce and a few passes leave captures that depend on those the
+project held: two passes begun from the sample's earlier captures left the dusk hut's 18% above where it settles. A pass
+leaves about 0.16 of the difference in the hut; after eight, bakes begun from different captures agree to 0.01% in every
+64 x 64 block's mean, so one run reproduces the committed captures (`selftest` holds the script to the probes' table:
+`check_bake`). Rebake after any change the probes see, only through `bake`, and never in a session that does not save
+(the old captures would be trashed under the saved scene). The hut's box is its interior, so nothing outside takes the
+dark interior's light; its capture is taken in the back corner away from the sun's patches (from the middle the hut came
+out only 0.3 EV below the yard), so `bake` moves the probe there and back, and the probe projects no box (`BoxProjection`
+off: its capture is not at the box's center).
 The director switches stations with `SetActive`, holding the old probes on for a second with the new ones' priority raised,
 so a box never falls to the sky while its capture converts; `Assets::GetLoadProgress` in `OnCreate` keeps all six loaded.
 
@@ -6697,4 +6767,12 @@ the dawn cascades at 550 m and the hut a third of the yard's light (the yard's E
 measures it again); `StrataRuntime.ShowcaseWindowed` checks the exported game's shot 2 in a window. The LookDev project
 `Showcase` holds the `showcase.*` shots ([Look-dev harness](#look-dev-harness)), and `PerfGPU.Samples` measures the tour at
 High and Ultra ([Perf tests](#perf-tests)). A change to the showcase's look retakes its screenshots, `Picture.png`, its
-icon and its look-dev shots.
+icon and its look-dev shots: `GenerateShowcaseTerrain.py pictures` writes the command script that captures the six shots
+and the icon, each right after its station's steps from its look-dev shot's camera, saves the scene at Golden and waits
+for the project's thumbnail (the scene's camera stands at shot 2's key). Every capture expects a complete picture (nothing
+loading, no texture below the level the view wants, the local lights' shadow views and the probes drawn, the exposure
+settled and temporal anti-aliasing's history holding its eight phases: `viewport.capture` returns a picture that lacks
+one of them after its wait, saying so), so the script stops instead of leaving such a picture. Run it on the sample in
+place after `bake`, in a session of its own, then `GenerateShowcaseTerrain.py picture --project Samples/Showcase`, which
+copies `.strata/Thumbnail.png` to `Picture.png` and refuses a thumbnail that is missing, not 480 x 270, older than a
+screenshot or the icon, or that does not show what `Screenshots/Shot2.png` shows.

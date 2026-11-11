@@ -177,12 +177,23 @@ screen.
 
 They cost more than the sun's shadows, so use them where they show:
 
-- At most 16 point and spot lights in view cast shadows at a time, the most relevant ones (those around the camera, then
-  those whose range looks largest); a light that drops out of the 16 fades its shadow out rather than losing it at once.
+- The Graphics Quality decides how many point and spot lights in view cast shadows at a time: 4 at Low, 16 at Medium, 64
+  at High and 256 at Ultra (Custom: any number the shadow atlas holds, about 37, 149 and 597 point lights in a 2048,
+  4096 and 8192 atlas, six times as many spot lights). They go to the lights that matter most: those around the camera,
+  then those whose range looks largest, the brighter ones before dim ones. A light that drops out fades its shadow out
+  over a fifth of a second and one that comes in fades it in, and a light near the cut keeps its shadow until another
+  one clearly matters more, so shadows neither pop nor flicker while the camera moves. The others still light the scene,
+  without shadows.
+- A light's shadow is sharper the larger its range looks on screen; when there are many, the less important ones get
+  smaller shadow maps. When the shadow atlas is full every light's map steps down in turn, so at High and Ultra, with
+  many lamps in view, even the nearest lamps' shadows can be softer than at Medium, which shadows 16: under Custom,
+  **Shadowed point and spot lights** 16 keeps their detail. A light whose shadow map changes size keeps its old shadow
+  until the new one is drawn.
 - A light's shadow is drawn again only when something in its range moves or changes, or the light itself does: a still
   lantern over a still room costs nothing after its first frame, while a light carried around, or one over moving
-  characters, redraws every frame. A point light costs six times what a spot light costs. A few lights redraw per frame;
-  the others keep their previous shadow meanwhile, and a light just switched on fades its shadow in over a few frames.
+  characters, redraws every frame. A point light costs six times what a spot light costs. A few lights redraw per frame
+  (12 views at Low and Medium, 24 at High, 48 at Ultra; a point light has six): the others keep their previous shadow
+  meanwhile, no light waits long, and a light just switched on fades its shadow in over a fifth of a second.
 - Keep the lamp's own model out of its light's shadow: turn **Cast Shadows** off on the lamp's mesh (Mesh Renderer), or
   place the light outside it, or the model darkens everything around.
 
@@ -199,8 +210,10 @@ it.
 **Bake**, in the probe's section of the Inspector (or **Bake Reflection Probes** in the Sky section, with nothing
 selected, for all of them; agents use `lighting.bakeProbes`), takes the picture: the editor renders what the probe sees, saves it as
 `Assets/Lighting/<scene>/<probe>.hdr` and sets **Capture** to it, in one step you can undo. Bake again after you change
-the lighting or move things: the new picture replaces the probe's earlier one (which goes to the project's trash). Probes
-see each other's pictures, so a second bake adds light that bounced twice. Pictures are not taken while the game runs:
+the lighting or move things: the new picture replaces the probe's earlier one (which goes to the project's trash). A bake
+draws every probe's present picture, the baked probe's own included, so each bake adds a bounce of light, and part of the
+light of the pictures before stays in the new ones: after a large change of the lighting, bake again until the pictures
+no longer change (the showcase's script bakes eight times). Pictures are not taken while the game runs:
 a probe shows the scene as it was baked (a day-night cycle or a moving door is not reflected).
 
 - **Box Projection** (on by default) makes reflections land where the walls are, as in a room whose walls are the box's

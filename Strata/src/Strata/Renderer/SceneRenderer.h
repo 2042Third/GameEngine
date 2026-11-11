@@ -46,6 +46,7 @@ namespace Strata
 	class FontAtlasCache;
 	class Material;
 	class Mesh;
+	class RenderLights;
 	class RenderScene;
 	class RenderSceneGPU;
 	class Scene;
@@ -259,16 +260,16 @@ namespace Strata
 		// geometry pool's content and, while materials are alpha-masked, the texture table's entries). Off: every view of
 		// every shadowed light is drawn every frame (perf tests measure that), and nothing fades (SpreadLightingUpdates).
 		bool CacheLocalShadows = true;
-		// Lighting work is spread over frames, for renderers that draw views continuously: at most LocalShadowViewsPerFrame
-		// shadow views are drawn per frame, the nearest lights' first; a light whose views were not all drawn yet casts no
-		// shadow, then fades its shadow in over c_LocalShadowFadeFrames frames, and the lights ranked just above the ones left
-		// out (Quality.MaxShadowedLocalLights) fade by their margin over them, so shadows do not pop. Off (renderers of single images:
-		// captures, thumbnails): each frame draws every view that is not up to date, and nothing fades
+		// Lighting work is spread over frames, for renderers that draw views continuously: at most
+		// Quality.LocalShadowViewsPerFrame shadow views are drawn per frame (views without content first, then by how long they
+		// waited and how much their light matters, so none starves); a light whose views were not all drawn yet casts no shadow,
+		// and a light that gains or loses its shadow (Quality.MaxShadowedLocalLights, the atlas) fades it in or out over
+		// c_LocalShadowFadeSeconds (at least c_LocalShadowFadeFrames frames), so shadows do not pop. Off (renderers of single
+		// images: captures, thumbnails): each frame draws every view that is not up to date, and nothing fades
 		// (SceneRendererStats::LocalShadowViewsPending is 0 after every frame). Reflection probes likewise: at most
 		// SceneRenderer::c_ReflectionProbeConversionsPerFrame captures are converted per frame, else every one in view at once
 		// (SceneRendererStats::ReflectionProbesPending then counts only captures still loading).
 		bool SpreadLightingUpdates = true;
-		uint32_t LocalShadowViewsPerFrame = 12;
 		// Reflection probes (ReflectionProbeComponent): the renderer keeps the strongest this many in view (at most
 		// RenderData::c_MaxReflectionProbes; by priority, then the smaller box), each capture converted into a slot of its cube
 		// array (made with the first probe in view, released with the render targets or once the scene has none: about 1 MiB a
@@ -433,9 +434,9 @@ namespace Strata
 		// wrong place (lookdev.patch). (The procedural sky's disk is part of its environment cube, as for every surface's image
 		// light, and surfaces keep the image light's specular.)
 		bool ProbeCapture = false;
-		// The time since this renderer's previous frame that automatic exposure adapts over; unset, the wall clock between its
-		// frames (at most 0.25 s, so pauses do not turn into one huge step). Tests and tools that step time, and tests that
-		// compare two renderers' frames, set it.
+		// The time since this renderer's previous frame that automatic exposure adapts over and point and spot shadows fade
+		// over (SceneRenderer::c_LocalShadowFadeSeconds); unset, the wall clock between its frames (at most 0.25 s, so pauses
+		// do not turn into one huge step). Tests and tools that step time, and tests that compare two renderers' frames, set it.
 		std::optional<float> AdaptationSeconds;
 		// The scene's motion blur applies (PostProcessComponent::MotionBlur, unless the quality turns it off). Editor views and
 		// renderers of single images (captures, thumbnails) turn it off: they never blur.
@@ -635,15 +636,28 @@ namespace Strata
 		// Ambient occlusion's samples per pixel (slices x steps per side x 2, RendererQualitySettings::AmbientOcclusionQuality);
 		// 0 in frames without it.
 		uint32_t AmbientOcclusionSamples = 0;
-		// Local light shadows (RendererQualitySettings::LocalShadowAtlasSize): the point and spot lights with atlas tiles,
-		// the shadow views (tiles) drawn this frame, and those of these lights still waiting to be drawn (their lights cast no
+		// Local light shadows (RendererQualitySettings::LocalShadowAtlasSize): the shadowed point and spot lights in view (those
+		// that ask for a shadow), those given one (atlas tiles: at most Quality.MaxShadowedLocalLights, and what the atlas holds),
+		// those still fading out the shadow they lost, those of the lights given one whose shadow is still fading in, the shadow
+		// views (tiles) drawn this frame, and those of the lights given a shadow still waiting to be drawn (their lights cast no
 		// shadow until all of theirs are drawn, or keep the shadows drawn before they changed).
+		uint32_t LocalShadowRequested = 0;
 		uint32_t LocalShadowLights = 0;
+		uint32_t LocalShadowFading = 0;
+		uint32_t LocalShadowFadingIn = 0;
 		uint32_t LocalShadowViewsDrawn = 0;
 		uint32_t LocalShadowViewsPending = 0;
-		// The tile size of each of those lights, by rank (the first LocalShadowLights entries; 128 to
-		// RendererQualitySettings::LocalShadowMaxTile texels).
-		std::array<uint16_t, RenderData::c_MaxShadowedLocalLights> LocalShadowTileSizes = {};
+		// CPU time of deciding the frame's local shadows, a part of ExtractMs: the lights' ranks and tiles, the changes that
+		// reach their views, the views to draw and those views' casters (what grows with lights times moved proxies).
+		float LocalShadowFindMs = 0.0f;
+		// The tile size of the first of the lights given a shadow, by rank (the first min(LocalShadowLights,
+		// c_LocalShadowStatsLights) entries; 128 to RendererQualitySettings::LocalShadowMaxTile texels), and how many of them have
+		// tiles of each size (entry i: 128 << i texels). A light given a shadow counts once it has its tiles (when the atlas has
+		// no room for a new one, it waits).
+		static constexpr size_t c_LocalShadowStatsLights = 64;
+		static constexpr size_t c_LocalShadowSizeClasses = 7;
+		std::array<uint16_t, c_LocalShadowStatsLights> LocalShadowTileSizes = {};
+		std::array<uint32_t, c_LocalShadowSizeClasses> LocalShadowSizeCounts = {};
 		// The quality the frame drew with (SceneRenderer::GetQuality), and the sun's cascades' texels each way
 		// (SceneRenderer::GetShadowMapSize: the resolution resolved for the viewport's rows, after the limits and an
 		// allocation's fallback).
@@ -954,9 +968,17 @@ namespace Strata
 		static constexpr float c_ContactShadowMaxScreenShare = 0.05f;
 		static constexpr float c_ContactShadowThickness = 0.02f;
 		static constexpr float c_ContactShadowThicknessScale = 0.005f;
-		// Frames over which a light's shadow fades in once all its views are drawn (SceneRendererSpecification::
-		// SpreadLightingUpdates).
+		// How long a light's shadow takes to fade in once all its views are drawn, and out once it lost its shadow while in view
+		// (SceneRendererSpecification::SpreadLightingUpdates): c_LocalShadowFadeSeconds of the time between the renderer's
+		// frames (SceneRenderOptions::AdaptationSeconds), and at least c_LocalShadowFadeFrames frames, so that where frames
+		// are slow a shadow still changes by at most 1 / c_LocalShadowFadeFrames a frame.
+		static constexpr float c_LocalShadowFadeSeconds = 0.2f;
 		static constexpr uint32_t c_LocalShadowFadeFrames = 8;
+		// The share of a shadow's fade a frame `seconds` after the renderer's previous one takes.
+		static float GetLocalShadowFadeStep(float seconds);
+		// Where lighting updates are spread, the share of the shadow views drawn per frame (1 / this of
+		// Quality.LocalShadowViewsPerFrame, at least one) given to the views with content that waited longest.
+		static constexpr uint32_t c_LocalShadowAgedShare = 4;
 		// The reflection probes' cube array (RGBA16_FLOAT, RendererQualitySettings::ReflectionProbeResolution texels across, one level per
 		// roughness step, a cube per slot of SceneRendererSpecification::MaxReflectionProbes): null until a frame has a probe in
 		// view, and again once the render targets are released or a frame's scene has no probe. The array frames shade with:
@@ -1270,33 +1292,50 @@ namespace Strata
 			bool operator==(const LocalShadowViewKey&) const = default;
 		};
 		// A shadow view's tile: what it should show this frame, what it holds, and whether a caster's change reached what it holds.
+		// DrawnKey.Tile is the tile its content lies in: after its light's tiles changed size, the old one until the view is drawn
+		// into the new one (Key.Tile), which frees the old one (CommitLocalShadows).
 		struct LocalShadowView
 		{
 			LocalShadowViewKey Key;
 			LocalShadowViewKey DrawnKey;      // Valid while HasContent
 			std::array<glm::vec4, 6> DrawnPlanes = {}; // DrawnKey's frustum in world space (what changes it)
+			AABB DrawnBox;                    // A box no change that reaches DrawnKey's content misses (GetLocalShadowChangeBox)
 			uint64_t DrawnEpoch = 0;          // m_LocalShadowEpoch when it was drawn
+			uint32_t WaitedFrames = 0;        // Frames it has not been up to date without being drawn
 			bool HasContent = false;
 			bool Dirty = false;
+			bool Drawing = false;             // Drawn this frame (FindLocalShadowCasters to CommitLocalShadows)
 		};
-		// A point or spot light with shadows: its tiles and views, kept from frame to frame while it stays among the shadowed
-		// lights, with the atlas tiles it holds.
+		// A point or spot light with shadows: its tiles and views, kept from frame to frame while it holds a shadow. Ranked
+		// lights were given a shadow this frame (in the order the atlas's sizes are fitted in); the others lost theirs while in
+		// view and fade it out, keeping their tiles until it is gone.
 		struct LocalShadowLight
 		{
 			entt::entity Entity = entt::null; // With Type, which light it is
 			uint32_t Type = 0;
 			uint32_t Record = 0;              // RenderLights' record this frame
-			float Relevance = 0.0f;
-			float RankFade = 1.0f;            // Its margin over the most relevant light left out (SpreadLightingUpdates)
+			float Importance = 0.0f;          // GetLocalShadowImportance this frame
+			bool Ranked = false;
 			uint32_t WantedSize = 0;          // The tile size its size on screen asks for (with hysteresis)
-			uint32_t TileSize = 0;            // The size of its tiles (0: none)
+			uint32_t TileSize = 0;            // The size of its tiles (0: none yet)
 			uint32_t ViewCount = 0;
 			std::array<ShadowAtlasTile, RenderData::c_LocalShadowFaces> Tiles = {};
 			std::array<LocalShadowView, RenderData::c_LocalShadowFaces> Views = {};
 			glm::vec3 ShadowSettings = glm::vec3(0.0f); // LightShadowSettings: depth bias, normal bias, filter radius
-			uint32_t FadeFrames = 0;          // Frames its views have all held content since they last did not
+			float Fade = 0.0f;                // Its strength in the last frame drawn (where lighting updates are spread)
 			bool Complete = false;            // This frame: every view holds content (or is drawn)
 			float Strength = 0.0f;            // This frame's (RenderData::LocalShadowData::Parameters.w)
+		};
+		// A light as the change tracking asks it, beside m_LocalShadowLights in their order (a change passes most lights
+		// without reading more than this): the box its range and its drawn views' ranges lie in, its views a change can still
+		// reach (a bit per view that holds content and is not dirty) with the box of their DrawnBoxes, and its range now.
+		struct LocalShadowReach
+		{
+			AABB Box;
+			AABB CleanBox;                    // Invalid while CleanViews is 0. Views marked since it was made stay in it
+			glm::vec4 PositionRange = glm::vec4(0.0f);
+			uint32_t CleanViews = 0;
+			bool DrawnElsewhere = false;      // A view holds content drawn from another position or range than PositionRange
 		};
 		// A shadow view the frame draws: its light (shadow slot) and face, the casters the CPU found in it, and its batches.
 		struct LocalShadowDrawView
@@ -1835,8 +1874,30 @@ namespace Strata
 		// Local light shadows (SceneRendererLocalShadows.cpp). Chooses the shadowed point and spot lights of the frame and their
 		// tiles, follows what changed what their views hold, chooses the views the frame draws (m_LocalShadowViews) and finds
 		// their casters: with `exactCasters` each view's (the CPU path; their meshes and materials marked with `markCasters`),
-		// else only what bounds the GPU's culling of them.
-		void FindLocalShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, bool exactCasters, bool markCasters);
+		// else only what bounds the GPU's culling of them. Shadows fade by `fadeStep` (GetLocalShadowFadeStep) where lighting
+		// updates are spread.
+		void FindLocalShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, float fadeStep, bool exactCasters,
+			bool markCasters);
+		// FindLocalShadowCasters' steps. Ranks the shadowed lights in view and keeps the lights given a shadow and those fading
+		// theirs out (m_LocalShadowLights, those whose fade outlasts this frame's step); returns how many asked for one.
+		uint32_t RankLocalShadowLights(const RenderLights& lights, const SceneCamera& camera, const Frustum& frustum, bool spread, float fadeStep);
+		// Sizes the ranked lights' tiles and changes them within the frame's limits (a light keeps its old tiles' shadows until
+		// the new ones are drawn).
+		void PlaceLocalShadowTiles(const RenderLights& lights, const SceneCamera& camera, bool spread);
+		// Allocates `size` texel tiles for every view of a light, keeping the tiles that hold its views' content; false (nothing
+		// changed) when the atlas has no room.
+		bool ResizeLocalShadowTiles(LocalShadowLight& light, uint32_t size);
+		// Marks the views a proxy's change reached (its bounds before, as followed, or after), and follows the proxies within
+		// the lights' ranges.
+		void TrackLocalShadowChanges(RenderScene& renderScene);
+		// How many proxies within the shadowed lights' ranges TrackLocalShadowChanges follows at most (more than that draws
+		// every view again and starts over): a number per light the quality shadows.
+		size_t GetMaxLocalShadowBounds() const;
+		// Chooses the views the frame draws (m_LocalShadowViews); returns how many of the ranked lights' views wait.
+		uint32_t ScheduleLocalShadowViews(bool spread);
+		// How much a shadowed light matters to the view: the projected size of its range (more within it, the nearer its center)
+		// times the square root of its luminous intensity.
+		static float GetLocalShadowImportance(const SceneCamera& camera, const RenderData::LightRecord& record);
 		// The CPU path's draws of the views (m_LocalShadowBatches), after the frame's assets are resolved (none with
 		// `casterDraws` false: the GPU's culling draws them).
 		void GatherLocalShadowDraws(RenderScene& renderScene, bool casterDraws);
@@ -2175,7 +2236,7 @@ namespace Strata
 		bool m_ShadowMapFallbackReported = false;
 		bool m_LocalShadowAtlasFallbackReported = false;
 		// Local light shadows (RendererQualitySettings::LocalShadowAtlasSize): the atlas and what hands out its tiles, the
-		// shadowed lights of the frame (in order of relevance: their shadow slots), the views it draws with their casters and
+		// shadowed lights of the frame (their shadow slots: the ranked ones, then those fading out), the views it draws with their casters and
 		// batches, the shaders' data per slot, and how the views' content is followed (the render scene, the content they were
 		// drawn with, the proxy log's version read, and the bounds of the proxies within their lights' ranges when they were
 		// drawn, whose changes redraw what they reach; complete for views drawn in m_LocalShadowEpoch).
@@ -2224,12 +2285,27 @@ namespace Strata
 		std::vector<SceneDrawBatch> m_LocalShadowBatches;
 		std::vector<RenderData::LocalShadowData> m_LocalShadowData;
 		uint64_t m_LocalShadowSceneId = 0;
+		std::optional<std::chrono::steady_clock::time_point> m_LastLocalShadowFadeTime; // The fades' clock (StepSeconds)
 		LocalShadowContent m_LocalShadowContent;
 		uint64_t m_LocalShadowProxyVersion = 0;
 		uint64_t m_LocalShadowEpoch = 1;
 		uint64_t m_LocalShadowDrawEpoch = 0; // The epoch of the frame's drawn views: 0 when their proxies could not all be followed
 		std::unordered_map<uint32_t, AABB> m_LocalShadowBounds;
 		std::vector<uint32_t> m_LocalShadowChanges;
+		// Lights by (entity, type) key, sorted: what a ranking finds a light's state by. The change tracking's grid of lights:
+		// (cell key, light) sorted by cell, the lights too large for it, and a stamp per light that keeps a query's lights unique.
+		// The grid holds m_LocalShadowReach's boxes in cells of m_LocalShadowCellSize (TrackLocalShadowChanges alone writes
+		// the three, together).
+		std::vector<std::pair<uint64_t, uint32_t>> m_LocalShadowLightIndex;
+		std::vector<LocalShadowReach> m_LocalShadowReach;
+		std::vector<std::pair<uint64_t, uint32_t>> m_LocalShadowGrid;
+		std::vector<uint32_t> m_LocalShadowLargeLights;
+		std::vector<uint32_t> m_LocalShadowStamps;
+		std::vector<uint32_t> m_LocalShadowQueried;
+		uint32_t m_LocalShadowStamp = 0;
+		float m_LocalShadowCellSize = 1.0f;
+		// The CPU path's shadow slot plus one per light record (0: none), filled for the frame's lights and cleared after.
+		std::vector<uint32_t> m_LocalShadowRecordSlots;
 		std::array<CascadeBox, RenderData::c_MaxCascades> m_Cascades = {};
 		glm::mat4 m_LightView = glm::mat4(1.0f);
 		uint32_t m_CascadeCount = 0;

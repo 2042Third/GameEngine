@@ -188,5 +188,68 @@ TEST_SUITE("Renderer.ShadowAtlas")
 		const std::vector<uint32_t> six(20, 6);
 		CHECK(ShadowAtlasAllocator::FitTileSizes(crowded, six, 512, 128) == 2);
 		CHECK(std::all_of(crowded.begin(), crowded.end(), [](uint32_t size) { return size == 128; }));
+
+		// Within a budget below the atlas (SceneRenderer fits seven eighths): the sizes add up to at most the budget.
+		std::vector<uint32_t> budgeted(64, 512);
+		const std::vector<uint32_t> points(64, 6);
+		const uint64_t budget = 4096ull * 4096ull / 8 * 7;
+		CHECK(ShadowAtlasAllocator::FitTileSizes(budgeted, points, 4096, 128, budget) == 64);
+		area = 0;
+		for (size_t entry = 0; entry < budgeted.size(); entry++)
+			area += static_cast<uint64_t>(points[entry]) * budgeted[entry] * budgeted[entry];
+		CHECK(area <= budget);
+		CHECK(area > budget / 2);
+		// At the smallest size 149 point lights fit seven eighths of a 4096 atlas, 150 do not.
+		std::vector<uint32_t> many(150, 128);
+		const std::vector<uint32_t> manyPoints(150, 6);
+		CHECK(ShadowAtlasAllocator::FitTileSizes(many, manyPoints, 4096, 128, budget) == 149);
+	}
+
+	TEST_CASE("Allocation takes the first free block in a fixed order, the same for the same requests, in every level of a large atlas")
+	{
+		// An 8192 atlas of 128-texel tiles: 4096 of them, each found through the free bits of its level.
+		ShadowAtlasAllocator first(8192, 128);
+		ShadowAtlasAllocator second(8192, 128);
+		std::mt19937 random(7);
+		std::vector<ShadowAtlasTile> held;
+		for (uint32_t step = 0; step < 3000; step++)
+		{
+			if (!held.empty() && random() % 3 == 0)
+			{
+				const size_t index = random() % held.size();
+				first.Free(held[index]);
+				second.Free(held[index]);
+				held.erase(held.begin() + static_cast<std::ptrdiff_t>(index));
+				continue;
+			}
+			const uint32_t size = 128u << (random() % 4);
+			const ShadowAtlasTile tile = first.Allocate(size);
+			CHECK(second.Allocate(size) == tile);
+			if (tile.IsValid())
+				held.push_back(tile);
+		}
+		CheckTiles(held, 8192);
+		uint64_t used = 0;
+		for (const ShadowAtlasTile& tile : held)
+			used += static_cast<uint64_t>(tile.Size) * tile.Size;
+		CHECK(first.GetFreeArea() == 8192ull * 8192ull - used);
+
+		// Filled with the smallest tiles, the atlas has none left; a freed one is the next handed out, and freeing all of them
+		// merges the atlas back into one block.
+		ShadowAtlasAllocator full(8192, 128);
+		std::vector<ShadowAtlasTile> tiles;
+		for (uint32_t index = 0; index < 4096; index++)
+		{
+			tiles.push_back(full.Allocate(128));
+			REQUIRE(tiles.back().IsValid());
+		}
+		CHECK_FALSE(full.Allocate(128).IsValid());
+		CHECK(full.GetFreeArea() == 0);
+		full.Free(tiles[2345]);
+		CHECK(full.Allocate(128) == tiles[2345]);
+		for (const ShadowAtlasTile& tile : tiles)
+			full.Free(tile);
+		CHECK(full.GetFreeArea() == 8192ull * 8192ull);
+		CHECK(full.Allocate(8192).IsValid());
 	}
 }

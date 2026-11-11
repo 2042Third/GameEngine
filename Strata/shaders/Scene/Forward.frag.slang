@@ -274,6 +274,11 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 				attenuation *= SpotAttenuation(-toLight, light.DirectionType.xyz, light.SpotAngles.x, light.SpotAngles.y);
 			if (attenuation <= 0.0)
 				continue;
+			float3 lightDirection = normalize(toLight);
+			// A light behind the surface adds nothing without a clear coat (EvaluateLightWeighted returns 0 for N.L <= 0, also
+			// for glass): skipped before its shadow's taps.
+			if (coat.Strength <= 0.0 && dot(surface.Normal, lightDirection) <= 0.0)
+				continue;
 			// A shadowed light's slot plus one (SceneRenderer's local shadows).
 			uint shadowSlot = uint(light.SpotAngles.z + 0.5);
 			if (shadowSlot > 0u)
@@ -283,7 +288,7 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 			}
 			// The highlight takes the bulb's or flame's angular size (SpotAngles.w: its radius; 0, a point, skips it).
 			float sourceAlpha2 = GetSourceLobeAlpha2(light.SpotAngles.w, distanceSquared);
-			color += LightSurface(surface, coat, diffuseWeight, normalize(toLight), light.Color.rgb * attenuation, sourceAlpha2);
+			color += LightSurface(surface, coat, diffuseWeight, lightDirection, light.Color.rgb * attenuation, sourceAlpha2);
 		}
 	}
 	uint lightingView = GetLightingView();

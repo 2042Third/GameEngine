@@ -330,7 +330,6 @@ namespace Strata
 		m_RequestedShadowMapSize = ResolveShadowMapSize(m_Specification.Quality);
 		m_ShadowMapSize = m_RequestedShadowMapSize;
 		m_Specification.MaxLights = std::max(m_Specification.MaxLights, 1u);
-		m_Specification.LocalShadowViewsPerFrame = std::max(m_Specification.LocalShadowViewsPerFrame, 1u);
 		m_LocalShadowAllocator.Reset(m_Specification.Quality.LocalShadowAtlasSize, 128);
 		glm::uvec3& grid = m_Specification.LightClusterGrid;
 		grid = glm::clamp(grid, glm::uvec3(1), glm::uvec3(c_MaxClusterGridSize));
@@ -471,8 +470,9 @@ namespace Strata
 		dummyAtlasDesc.dimension = nvrhi::TextureDimension::Texture2D;
 		dummyAtlasDesc.debugName = m_Specification.DebugName + ".NoLocalShadows";
 		m_DummyLocalShadowAtlas = m_Device->createTexture(dummyAtlasDesc);
+		// Sixteen slots to begin with (8 KiB); grown with the frame's shadowed lights (Render).
 		m_LocalShadowBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
-			.setByteSize(RenderData::c_MaxShadowedLocalLights * sizeof(RenderData::LocalShadowData))
+			.setByteSize(16 * sizeof(RenderData::LocalShadowData))
 			.setStructStride(sizeof(RenderData::LocalShadowData))
 			.setInitialState(nvrhi::ResourceStates::ShaderResource)
 			.setKeepInitialState(true)
@@ -3191,14 +3191,21 @@ namespace Strata
 		}
 		FindShadowCasters(renderScene, camera, frustum, frame, !m_FeedbackFrame);
 		// The local shadow views' casters: the CPU's on frames that walk the view (both paths), else bounds for the GPU's culling.
-		FindLocalShadowCasters(renderScene, camera, frustum, !m_FeedbackFrame, !m_FeedbackFrame);
+		// Their fades step by the time since the previous frame, not by frames: a fade lasts as long at any frame rate.
+		const float localShadowFadeStep = GetLocalShadowFadeStep(StepSeconds(m_LastLocalShadowFadeTime, options));
+		const auto localShadowStart = std::chrono::steady_clock::now();
+		FindLocalShadowCasters(renderScene, camera, frustum, localShadowFadeStep, !m_FeedbackFrame, !m_FeedbackFrame);
+		m_Stats.LocalShadowFindMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - localShadowStart).count();
 		// Rendered with a reported limitation: keep the error so it is not logged every frame.
 		bool degraded = motionFailed || temporalFailed || giFailed || (reflectionsWanted && !m_ReflectionFrame && !m_ReflectionCopyFrame);
 		if (!m_LocalShadowLights.empty() && !EnsureLocalShadowAtlas())
 		{
 			ResetLocalShadows(); // Reported; no light casts a local shadow this frame
 			m_Stats.LocalShadowLights = 0;
+			m_Stats.LocalShadowFading = 0;
+			m_Stats.LocalShadowFadingIn = 0;
 			m_Stats.LocalShadowTileSizes = {};
+			m_Stats.LocalShadowSizeCounts = {};
 			m_Stats.LocalShadowViewsDrawn = 0;
 			m_Stats.LocalShadowViewsPending = 0;
 			degraded = true;
@@ -3206,13 +3213,24 @@ namespace Strata
 		// The CPU's lights name their shadow slots (the GPU-driven path's light culling reads them from a table).
 		if (!m_GPULightsFrame && !m_LocalShadowLights.empty())
 		{
+			// Through a table by light record, filled for the frame's shadowed lights and cleared after.
+			if (m_LocalShadowRecordSlots.size() < renderScene.GetLights().GetCount())
+				m_LocalShadowRecordSlots.resize(renderScene.GetLights().GetCount(), 0u);
+			for (uint32_t slot = 0; slot < m_LocalShadowLights.size(); slot++)
+			{
+				if (m_LocalShadowLights[slot].Strength > 0.0f && m_LocalShadowLights[slot].Record < m_LocalShadowRecordSlots.size())
+					m_LocalShadowRecordSlots[m_LocalShadowLights[slot].Record] = slot + 1;
+			}
 			for (size_t index = 0; index < m_Lights.size(); index++)
 			{
-				for (uint32_t slot = 0; slot < m_LocalShadowLights.size(); slot++)
-				{
-					if (m_LocalShadowLights[slot].Record == m_LightRecordIndices[index] && m_LocalShadowLights[slot].Strength > 0.0f)
-						m_Lights[index].SpotAngles.z = static_cast<float>(slot + 1);
-				}
+				const uint32_t record = m_LightRecordIndices[index];
+				if (record < m_LocalShadowRecordSlots.size() && m_LocalShadowRecordSlots[record] != 0)
+					m_Lights[index].SpotAngles.z = static_cast<float>(m_LocalShadowRecordSlots[record]);
+			}
+			for (const LocalShadowLight& light : m_LocalShadowLights)
+			{
+				if (light.Record < m_LocalShadowRecordSlots.size())
+					m_LocalShadowRecordSlots[light.Record] = 0;
 			}
 		}
 		ResolveAssets(renderScene);
@@ -3273,6 +3291,7 @@ namespace Strata
 				BufferKind::StructuredUAV)
 			&& EnsureBufferCapacity(m_LightBoundsBuffer, m_GPULightsFrame ? m_GPULightRecords : m_LightBounds.size(), sizeof(RenderData::LightBounds), "LightBounds",
 				buffersRecreated, BufferKind::StructuredUAV)
+			&& EnsureBufferCapacity(m_LocalShadowBuffer, m_LocalShadowData.size(), sizeof(RenderData::LocalShadowData), "LocalShadows", buffersRecreated)
 			&& EnsureBufferCapacity(m_DrawArgumentBuffer, m_DrawArgumentsBuild.size(), sizeof(nvrhi::DrawIndexedIndirectArguments), "DrawArguments", drawListsRecreated,
 				BufferKind::IndirectArguments);
 		buffersRecreated = buffersRecreated || drawListsRecreated || cullRecreated;

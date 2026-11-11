@@ -646,12 +646,16 @@ rendering streams branch from its tip:
   of six shots at three baked times of day (dawn over the valley, the low sun sliding along a bus's painted and bare
   sheet steel, the streak on a weathered oil tank, the glint column on a wet apron, the hut's interior, dusk with the fire
   and lanterns), each time of day with its own reflection probe entities; a first-person walk, free flight and a photo
-  mode (time of day, exposure, lens, the Graphics options, seven bookmarks); High by default. Its metal and wet ground
-  are tuned against 0.7.0's screen-space reflections: `reflections`' adoption pass retunes them, rebakes and retakes.
-  `PerfGPU.Samples.ShowcaseHigh1440` and `.ShowcaseUltra1440` record the tour at 2560 x 1440 (a 4K window does not fit
-  a 4K display). Later: grass with coverage-preserving alpha, people, the B-list of scans, sound, the walk on a
-  character controller (after `physics-timing`), supersampled stills, and sunlight thrown off a sheet onto nearby
-  surfaces (after `radiance-cascades`).
+  mode (time of day, exposure, lens, the Graphics options, seven bookmarks); High by default. It adopted `reflections`
+  after R2: the six probes are baked again without the sun's disk (eight passes, until the captures settle), dusk's sun
+  stands beside the bus (azimuth 16 instead of 32, held by the generator's rule 7) so that the hut's front, the fire and
+  the fuel tank are not left in the bus's shadow, the fire and the lanterns have their flames' sizes for their
+  highlights, the puddles are water (IOR 1.33), and `GenerateShowcaseTerrain.py pictures` retakes the pictures. What
+  dusk's sun does not reach is darker than with the old probes, whose sun's disk lit it (the release notes' known
+  issues). `PerfGPU.Samples.ShowcaseHigh1440` and `.ShowcaseUltra1440` record the tour at 2560 x 1440 (a 4K window does
+  not fit a 4K display). Later: grass with coverage-preserving alpha, people, the B-list of scans, sound, the walk on a
+  character controller (after `physics-timing`), supersampled stills, a night after dusk (a station with probes of its
+  own), and sunlight thrown off a sheet onto nearby surfaces (after `radiance-cascades`).
 
 Open items and deferrals later waves own:
 
@@ -936,10 +940,11 @@ Open items and deferrals later waves own:
   blended surfaces behind glass do not show), gets no ambient occlusion and casts no shadow, and its thickness comes
   from the material, not a thickness map; screen-space reflections cover a clear coat's base only and trace no
   transparent surface; TAA keeps a few softer frames where a surface uncovers what it hid, cannot reject surfaces that
-  recede fast, and Original stays soft in slow pans; probes are baked, so a moving sun does not relight them; at most 16
-  shadowed point and spot lights per view. Left for later (also in "Later" below): MSAA (rendering below native
-  resolution and temporal upscaling are ruled out: the owner's direction of 2026-10-26, in "Later"); layered shadow
-  rendering, occlusion culling of local shadow views, more than 16 shadowed lights, sized local lights' diffuse light and
+  recede fast, and Original stays soft in slow pans; probes are baked, so a moving sun does not relight them; shadowed
+  point and spot lights per view are as many as the quality allows (4, 16, 64 and 256 by preset) and the atlas holds
+  (about 37, 149 and 597 point lights in a 2048, 4096 and 8192 atlas). Left for later (also in "Later" below): MSAA
+  (rendering below native resolution and temporal upscaling are ruled out: the owner's direction of 2026-10-26, in
+  "Later"); layered shadow rendering, occlusion culling of local shadow views, sized local lights' diffuse light and
   shadows (PCSS; their highlights take `SourceRadius` since wave 8) and their contact shadows (wave 7 gave the sun both); run-time probe capture, cube texture assets and clustered probe lists; SSR
   for transparent surfaces; volumetric fog and light shafts, the atmosphere from altitude (wave 7 added aerial
   perspective); thickness maps, sheen, specular, iridescence and anisotropy, EXR import and area lights; shadows of a
@@ -1620,6 +1625,12 @@ the previous frame's lit color, as screen-space reflections' is.
 - **`local-lights`: many shadowed lights.** No fixed limit, 64 at High and 256 at Ultra at the same atlas sizes; tiles
   that keep their shadow while they resize, no global layouts, a scheduler that starves nothing, a grid for change
   tracking, the filter on fixed noise. Below the cut: a time governor.
+  Landed on its branch (2026-11-09): the shadows go to the lights that matter most (screen size, distance, brightness)
+  with hysteresis and fade in and out over 0.2 s (at least eight frames); resized lights keep their old tiles until the
+  new ones are drawn; a quarter of the views per frame (the new row 12, 12, 24, 48) goes to the views that waited
+  longest; the light and view buffers grow; lights behind a surface skip their shadow's taps. Still below its cut: the
+  time governor (a GPU.LocalShadows stage scaling the views per frame), tap counts by rank, retained tiles for lights
+  that left the view, and the cached rotation-projection per view.
 
 **Tranche 3, wave 9 unless usage remains:**
 

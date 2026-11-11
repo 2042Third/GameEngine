@@ -148,6 +148,43 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   view, focus, f-number, depth of field, the quality preset and anti-aliasing, seven bookmarks), H hides the UI.
 - Samples: a showcase may hold six screenshots in 8 MB (the others three in 3 MB).
 - Manual, Lighting: "Times of day with baked probes".
+- The showcase adopts this wave's reflections: its six probes are baked again without the sun's disk and highlights (the
+  golden-hour yard's capture peaked at 5.5e8, now 4.6e4), so what stands in the sun's shadow has the sky's light and
+  the local lights' alone. Dusk's sun therefore stands at azimuth 16, beside the bus: at 32 it stood behind it, and the
+  bus's shadow lay over the hut's front, the fire and the fuel tank's near end, which came out near black. The
+  generator's checks hold it there (rule 7: seen from the fire, the lantern, the fuel tank and the hut's door, the sun
+  at least 0.75 degrees beside the bus and 0.15 above the hills), and `selftest` fails if the rule would pass the sun
+  behind the bus. The fire and the lanterns have the size of their flames for their highlights (Source Radius 0.25 and
+  0.04 m); the puddles are water (IOR 1.33).
+- `GenerateShowcaseTerrain.py pictures` retakes the showcase's screenshots, icon and launcher picture after a change to
+  its look: its script stops at a capture that does not report a complete, settled picture, and
+  `GenerateShowcaseTerrain.py picture` copies the thumbnail to `Picture.png` only when it is the one that run left
+  (480 x 270, not older than the screenshots, showing what `Screenshots/Shot2.png` shows). `StrataTools.ShowcaseTerrain`
+  now also fails when that script, the stations' steps in the render test's commands and the look-dev shots, or
+  `Picture.png` no longer follow the generator.
+- Editor: a `viewport.capture` taken right after a `scene.save` is settled again, and so is the launcher's picture the
+  save asks for. The two render through one renderer at sizes of their own, and in shared frames each started the
+  other's temporal history again: the capture was read back with two frames of it instead of eight (aliased edges,
+  speckled highlights; `temporalFrames` 2), the picture with one. A capture now renders once the picture's frame is
+  being read back, and one a save interrupted starts over then: it meters its own view again instead of keeping the
+  pre-exposure the picture settled for the scene camera's (without TAA it was read back on its first frame after the
+  picture, its `preExposureSettled` true), and its waits have their whole budgets again.
+- Editor: `lighting.bakeProbes` bakes a probe where it stands when the command runs. A probe that a command of the same
+  frame had moved (itself or a parent) was baked from the place it had left, because the bake read the world matrix the
+  frame's update had not yet brought up to date: a script that moves a probe and bakes it at once, as the showcase's bake
+  does with its hut probes, took the first capture from the old place.
+- The showcase's `bake` script bakes each station's probes eight times, not twice, so one run reproduces the committed
+  captures whatever captures the project held. A bake draws the probes' present captures, the baked probe's own too:
+  two passes left the hut's captures depending on the ones before (begun from the sample's earlier captures, the dusk
+  hut's came out 18% above where further passes settle it), while after eight passes bakes begun from different
+  captures agree to 0.01% in every 64 x 64 block's mean. `StrataTools.ShowcaseTerrain` holds the script to the probes'
+  table.
+- Measured, the tour's station switches with the probes' cubes at 256 texels against 128 (the exported Release game at
+  2560 x 1440 and High, three runs of each in turns, on a machine other agents worked on): the larger cubes hold 49-51
+  MB more device memory and make no frame at a switch longer that the runs can show. The main thread's worst frame at
+  the switch to golden hour took 5.4-6.9 ms at 256 and 5.4-6.2 ms at 128, to dusk 4.5-9.0 and 4.5-5.5 ms, and every
+  run has frames of 5.1-9.5 ms away from the switches; the GPU's longest busy time after a switch was 6.2-11.1 against
+  6.4-10.3 ms. The showcase's plan gives each run (`specs/showcase.md`, section 11).
 
 **Global illumination (stage 1: the voxels).**
 
@@ -352,6 +389,34 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   the gamepad pushing an axis furthest. 0.7.0's packages, built with Apple Clang 15, are not affected, and Vector2
   actions on whole sticks never were.
 
+**local-lights**
+
+- Many point and spot lights cast shadows at once: 64 at High and 256 at Ultra (16 at Medium, 4 at Low, as before), and
+  Custom any number the shadow atlas holds (about 149 point lights at 4096 texels, 597 at 8192). The shadows go to the
+  lights that matter most (near, large on screen, bright); a light that gains or loses its shadow fades it in or out over
+  0.2 s at any frame rate (at least eight frames where frames are slower than 40 a second), and one near the cut keeps it
+  until another clearly matters more: shadows no longer pop or blink while the camera moves.
+- A light whose shadow map changes size keeps its old shadow until the new one is drawn (0.7.0 showed it unshadowed for a
+  frame or more), and the atlas is never laid out again all at once. The new map then takes over in one frame, so the
+  shadow's edge changes softness at once (in a walk past lanterns at High and 1280x720, an edge narrowed from 3 to 2
+  pixels from one frame to the next).
+- No light's shadow waits long for an update while nearer lights move every frame: a quarter of each frame's shadow
+  updates goes to those that waited longest. Graphics Quality's new **Point and spot shadow updates per frame** (12, 12,
+  24, 48) sets how many views are drawn again per frame.
+- The point and spot shadows' filter noise no longer turns from frame to frame under TAA, so a soft shadow edge no
+  longer needs the history to look right. A still image under TAA now shows the filter's fine fixed pattern, as images
+  without TAA always did, where 0.7.0's history averaged it away: a serration of one or two pixels along soft edges at
+  twice the size of a 3840x2160 capture, not seen at the capture's own size. Without TAA the filter is unchanged.
+- Lights behind a surface skip their shadow's taps. In a town of 256 lanterns at 3840x2160 and Ultra, what their shadows
+  add to the opaque pass falls from 0.15 ms to 0.07 ms (226 shadowed), and from 0.78 ms to 0.34 ms with their ranges set
+  to 25 m (244 shadowed). Where the lights hang over what they light, nothing lies behind a surface and nothing changes.
+- Casters that keep moving under many shadowed lights cost the main thread little: with 1,000 casters moving every
+  frame under 256 shadowed point lights at Ultra, deciding which shadow views to draw again takes 0.31 ms a frame
+  (`SceneRendererStats::LocalShadowFindMs`; the perf case `PerfGPU.Renderer.LocalShadows256LightsUltraMoving1kFind`).
+- The Scene view's statistics and `editor.perf` report how many shadowed lights in view asked for a shadow
+  (`localShadowRequested`), got one (`localShadowLights`), are fading theirs out (`localShadowFading`) and how many tiles
+  of each size they have (`localShadowTileSizeCounts`).
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and
@@ -368,6 +433,9 @@ projects, the template and scenes or projects without the value get.
 | Sun shadow resolution of the High and Ultra presets | High 2048 / 4096 from 1440 rows, Ultra 4096 / 8192 | High 4096 / 8192 from 1440 rows, Ultra 8192 | stable cascades |
 | Sun cascade splits | fitted to the receivers the GPU read back (0.6.0's from the near clip until then) | fixed: from 1.5 m to the shadow distance by Cascade Distribution | stable cascades |
 | Sun shadow cascades of the High and Ultra presets | 4 | 5 (a near one within 1.5 m) | stable cascades |
+| Shadowed point and spot lights of the High and Ultra presets | 16 | High 64, Ultra 256 | local-lights |
+| Point and spot shadow views drawn again per frame | 12 (renderer specification) | the presets' row: 12, 12, 24, 48 | local-lights |
+| Point and spot shadows' filter noise under TAA | turns every frame | fixed | local-lights |
 
 ## Upgrading from 0.7.0
 
@@ -412,6 +480,11 @@ projects, the template and scenes or projects without the value get.
 | `SceneRendererStats::ShadowFit*`, `ShadowCascadeStats::Fitted`; `renderStats.shadowFit`, `cascades[].fitted`, `viewport.capture`'s `shadowFitSettled` | The fit's state | Removed | Command scripts drop expectations of `shadowFitSettled` |
 | Video memory of the sun's shadow maps at High | 256 MiB at 3840x2160 | 1 GiB at 3840x2160 (256 MiB at 1920x1080) | Graphics Quality Custom with Shadow Resolution 4096, or Medium |
 | A light's Cascade Distribution | shared the receivers' range of distances once fitted | shares 1.5 m to the shadow distance (0.6.0 shared the near clip to it with 0.8) | 0.9 stays the default; scenes keep their value |
+| **local-lights** | | | |
+| `SceneRendererSpecification::LocalShadowViewsPerFrame` | The renderer's redraw budget (12) | Removed: `RendererQualitySettings::LocalShadowViewsPerFrame`, a Graphics Quality row (`Renderer.Quality` section version 7) | Set the row in the specification's `Quality` |
+| `SceneRendererStats::LocalShadowTileSizes` | 16 entries, every shadowed light's | The first 64 lights' by rank; `LocalShadowSizeCounts` counts every light's sizes | Read `LocalShadowSizeCounts` for more than 64 lights |
+| `RenderData::c_MaxShadowedLocalLights` | 16, the lights a view shadows | 4096, the ceiling of the quality row (buffers grow with the frame's lights) | Read `RendererQualitySettings::MaxShadowedLocalLights` |
+| Shadowed lights at High and Ultra | 16 | 64 and 256: more GPU time in scenes with many shadowed lights | Graphics Quality Custom with **Shadowed point and spot lights** 16 |
 
 ## Known issues
 
@@ -616,4 +689,54 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   at 30 degrees, 1.24 against 8.35 (p90 1.48 against 9.93; no shadow edge shows in it); the look-dev sun room seen from
   behind, 0.88 against 1.61; the Third-Person and Physics Playground editor views from high above, 0.31 and 0.57
   against 0.96, still under a pixel.
+
+**local-lights**
+
+- At High and Ultra, with many lamps in view, the nearest lamps' shadows are softer than 0.7.0's and Medium's: the extra
+  lights share the same atlas, and while the tiles do not fit seven eighths of it every light's tiles step down in turn,
+  the nearest ones' too. In the lantern town at 3840x2160, High gives the 8 nearest lamps two 512-texel and six
+  256-texel tiles (0.7.0 and Medium: 512 each) beside 47 lamps at 128, and a crate's wall shadow edge widens from 2-3 to
+  5 pixels without anti-aliasing; at Ultra the nearest lamp's tiles fall from 2048 to 1024 texels with 143 lamps
+  shadowed, and its shadow's edge widens from 3 to 4-6 pixels. Keeping the nearest lamps' sizes would take shadows from
+  the farther lamps instead (the walk over a full atlas checks that no lamp loses the shadow it shows), a choice left to
+  the owner. Graphics Quality Custom with **Shadowed point and spot lights** 16 gives High Medium's tiles. At Medium the
+  eighth kept free for resizes alone turns the eighth or ninth lamp's 512 texels into 256.
+- Under TAA a still soft point or spot shadow edge keeps the filter's fixed pattern, which 0.7.0's turning noise let the
+  history average away: in the `GPU.SceneRenderer.TAA` scene the converged penumbra keeps 0.71 of one frame's roughness
+  under Original and 0.55 under variance clipping and Sharp (0.7.0: 0.042 and 0.047), and in the lantern town at Medium a
+  crate's shadow edge shows a stipple at three times the capture's size where 0.7.0's was smooth. Without anti-aliasing
+  and with FXAA the images are unchanged. Turning the taps with the sun's fixed blue-noise tile, or filtering the shadow
+  within the frame, may hide it; neither has been judged in look-dev yet.
+- Beyond 4,096 proxies per shadowed light the quality allows within their lights' ranges (1,048,576 at Ultra), the
+  shadow views' following starts over, and any proxy's change then draws every view again until one following holds
+  them all.
+- Ordering the shadowed lights stays quadratic where a camera cut reorders many of them: each light moves up one place
+  at a time past those it matters a quarter more than. In a micro-benchmark of the pass (GCC -O2 on this machine, other
+  builds running), a cut that leaves the previous order in two halves, the second mattering twice as much, takes
+  0.02 ms at Ultra's 256 lights and 3.7 ms at Graphics Quality Custom's ceiling (3,584 spot lights in an 8192 atlas:
+  3.2 million moves of 12 bytes); in sixteen groups each twice the last, 0.04 ms and 7.0 ms (6.0 million moves), in the
+  frame of the cut alone. Bounding it (past a number of moves, ordering that frame by importance alone) gives up the
+  hysteresis in that frame and needs a test at hundreds of lights; it is left for later because only Custom counts far
+  beyond Ultra's pay it, once per cut.
+
+**Showcase (the reflections' adoption)**
+
+- At dusk, what the sun does not reach is darker than in landing 1's pictures. Their probes held the sun's disk and lit
+  such surfaces with it; this wave's hold the sky alone, and the light sunlit ground throws back is global
+  illumination's work, which stays off in the showcase. Shot 6 at 960 x 540, mean code before the adoption against now:
+  the lean-to 17.6 against 11.7 (16% of its pixels under 8 codes, now 44%), the wall at lantern A 94.5 against 85.0, the
+  wet apron 12.4 against 11.8 (31% under 8 codes, now 44%); of the whole picture 15.2% of the pixels were under 8 codes
+  and 22.6% are (its mean 38.0 against 39.0).
+- In shot 5, at golden hour, the hut's roof underside is darker for the same reason (mean code 65.8 against 56.5); its
+  back wall (23.9 against 24.0) and the dark corner the hut's measurement view reads (surface EV100 8.77 against 8.74 at
+  960 x 540) are as they were.
+- Dusk's sun stands at azimuth 16 instead of 32, so that the bus's shadow leaves the hut's front, the fire and the fuel
+  tank (the tank's shadowed half: 27.3 before the adoption, 13.5 with the new probes and the sun behind the bus, 40.8
+  now; the hut's front 85.5, 61.8 and 77.7; the ground at the fire 70.2, 61.8 and 78.8). The shadow now lies on the
+  slope's foot at shot 6's left (46.7 against 9.4, 46% of it under 8 codes), and the slope beyond it is lit (14.0
+  against 53.3). The photo mode's sweep from golden hour to dusk turns the sun 29 degrees instead of 13.
+- The photo mode's day still ends at dusk (19.0 h). The night after it, which the showcase's plan tied to R2's fix of
+  the night sky's bands (the slider to 19.5 h, the sun below the horizon and its light faded to nothing), is not
+  adopted: the day's course has no values below the horizon yet, and dusk's probes hold dusk's sky, which a darker sky
+  would no longer match, so a night needs a station with probes of its own and a look to be judged. Not tried.
 

@@ -2,6 +2,7 @@
 #include "Strata/Renderer/ShadowAtlasAllocator.h"
 
 #include <algorithm>
+#include <bit>
 
 namespace Strata
 {
@@ -55,21 +56,29 @@ namespace Strata
 		m_Levels = 0;
 		m_LevelStart.clear();
 		m_Nodes.clear();
+		m_FreeWordStart.clear();
+		m_FreeWords.clear();
 		if (m_AtlasSize == 0)
 		{
 			m_FreeArea = 0;
 			return;
 		}
 		size_t nodes = 0;
+		size_t words = 0;
 		for (uint32_t size = m_AtlasSize; size >= m_MinTileSize; size /= 2)
 		{
+			const size_t levelNodes = static_cast<size_t>(1) << (2 * m_Levels);
 			m_LevelStart.push_back(nodes);
-			nodes += static_cast<size_t>(1) << (2 * m_Levels);
+			m_FreeWordStart.push_back(words);
+			nodes += levelNodes;
+			words += (levelNodes + 63) / 64;
 			m_Levels++;
 			if (size == m_MinTileSize)
 				break;
 		}
 		m_Nodes.assign(nodes, NodeState::Absent);
+		m_FreeWordStart.push_back(words); // The end of the last level's words
+		m_FreeWords.assign(words, 0);
 		Clear();
 	}
 
@@ -78,8 +87,27 @@ namespace Strata
 		if (m_Levels == 0)
 			return;
 		std::fill(m_Nodes.begin(), m_Nodes.end(), NodeState::Absent);
-		m_Nodes[0] = NodeState::Free;
+		std::fill(m_FreeWords.begin(), m_FreeWords.end(), 0);
+		SetNode(0, 0, NodeState::Free);
 		m_FreeArea = static_cast<uint64_t>(m_AtlasSize) * m_AtlasSize;
+	}
+
+	void ShadowAtlasAllocator::SetNode(uint32_t level, uint32_t index, NodeState state)
+	{
+		m_Nodes[GetNodeIndex(level, index)] = state;
+		uint64_t& word = m_FreeWords[m_FreeWordStart[level] + index / 64];
+		const uint64_t bit = static_cast<uint64_t>(1) << (index % 64);
+		word = state == NodeState::Free ? (word | bit) : (word & ~bit);
+	}
+
+	uint32_t ShadowAtlasAllocator::FindFreeNode(uint32_t level) const
+	{
+		for (size_t word = m_FreeWordStart[level]; word < m_FreeWordStart[level + 1]; word++)
+		{
+			if (m_FreeWords[word] != 0)
+				return static_cast<uint32_t>((word - m_FreeWordStart[level]) * 64 + static_cast<size_t>(std::countr_zero(m_FreeWords[word])));
+		}
+		return ~0u;
 	}
 
 	uint32_t ShadowAtlasAllocator::GetLevelOfSize(uint32_t size) const
@@ -107,23 +135,20 @@ namespace Strata
 		// The first free block of the size, else of the next larger size, and so on (split down to the size).
 		for (uint32_t searchLevel = level + 1; searchLevel-- > 0;)
 		{
-			const uint32_t count = 1u << (2 * searchLevel);
-			for (uint32_t index = 0; index < count; index++)
+			const uint32_t index = FindFreeNode(searchLevel);
+			if (index == ~0u)
+				continue;
+			uint32_t node = index;
+			for (uint32_t splitLevel = searchLevel; splitLevel < level; splitLevel++)
 			{
-				if (m_Nodes[GetNodeIndex(searchLevel, index)] != NodeState::Free)
-					continue;
-				uint32_t node = index;
-				for (uint32_t splitLevel = searchLevel; splitLevel < level; splitLevel++)
-				{
-					m_Nodes[GetNodeIndex(splitLevel, node)] = NodeState::Split;
-					for (uint32_t child = 0; child < 4; child++)
-						m_Nodes[GetNodeIndex(splitLevel + 1, node * 4 + child)] = NodeState::Free;
-					node *= 4;
-				}
-				m_Nodes[GetNodeIndex(level, node)] = NodeState::Used;
-				m_FreeArea -= static_cast<uint64_t>(size) * size;
-				return GetTile(level, node);
+				SetNode(splitLevel, node, NodeState::Split);
+				for (uint32_t child = 0; child < 4; child++)
+					SetNode(splitLevel + 1, node * 4 + child, NodeState::Free);
+				node *= 4;
 			}
+			SetNode(level, node, NodeState::Used);
+			m_FreeArea -= static_cast<uint64_t>(size) * size;
+			return GetTile(level, node);
 		}
 		return {};
 	}
@@ -136,7 +161,7 @@ namespace Strata
 		uint32_t index = SpreadBits(tile.X / tile.Size) | (SpreadBits(tile.Y / tile.Size) << 1);
 		if (m_Nodes[GetNodeIndex(level, index)] != NodeState::Used)
 			return;
-		m_Nodes[GetNodeIndex(level, index)] = NodeState::Free;
+		SetNode(level, index, NodeState::Free);
 		m_FreeArea += static_cast<uint64_t>(tile.Size) * tile.Size;
 		// Four free quarters make a free block again.
 		for (uint32_t mergeLevel = level; mergeLevel > 0; mergeLevel--)
@@ -148,18 +173,20 @@ namespace Strata
 			if (!allFree)
 				break;
 			for (uint32_t child = 0; child < 4; child++)
-				m_Nodes[GetNodeIndex(mergeLevel, parent * 4 + child)] = NodeState::Absent;
-			m_Nodes[GetNodeIndex(mergeLevel - 1, parent)] = NodeState::Free;
+				SetNode(mergeLevel, parent * 4 + child, NodeState::Absent);
+			SetNode(mergeLevel - 1, parent, NodeState::Free);
 			index = parent;
 		}
 	}
 
-	size_t ShadowAtlasAllocator::FitTileSizes(std::span<uint32_t> sizes, std::span<const uint32_t> tileCounts, uint32_t atlasSize, uint32_t minTileSize)
+	size_t ShadowAtlasAllocator::FitTileSizes(std::span<uint32_t> sizes, std::span<const uint32_t> tileCounts, uint32_t atlasSize, uint32_t minTileSize,
+		uint64_t areaBudget)
 	{
 		const size_t count = std::min(sizes.size(), tileCounts.size());
 		const uint32_t atlas = FloorPowerOfTwo(atlasSize);
 		const uint32_t minimum = std::min(FloorPowerOfTwo(std::max(minTileSize, 1u)), atlas);
-		const uint64_t area = static_cast<uint64_t>(atlas) * atlas;
+		const uint64_t whole = static_cast<uint64_t>(atlas) * atlas;
+		const uint64_t area = areaBudget == 0 ? whole : std::min(areaBudget, whole);
 		uint64_t total = 0;
 		for (size_t entry = 0; entry < count; entry++)
 		{

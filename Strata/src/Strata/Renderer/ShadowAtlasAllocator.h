@@ -23,7 +23,8 @@ namespace Strata
 	// where they are until freed, so the shadows they hold can be kept from frame to frame. Allocation takes the first free
 	// block of the size in a fixed order, splitting a larger one only when no block of the size is free: the same requests
 	// give the same tiles. Allocating sizes in descending order into an empty atlas always succeeds while their areas add up to
-	// at most the atlas's (FitTileSizes makes them do).
+	// at most the atlas's (FitTileSizes makes them do). Each level keeps a bit per free node, so an allocation finds its block
+	// in a few words per level instead of walking the level's nodes.
 	class ShadowAtlasAllocator
 	{
 	public:
@@ -55,8 +56,10 @@ namespace Strata
 		// to more than the atlas's, sizes are halved one at a time in rounds from the least relevant entry toward the most
 		// relevant (entries at the minimum size are passed over), so the most relevant keep the most detail. Returns how many
 		// entries fit, from the first: all of them, or fewer when even at the minimum size they do not (the others' sizes are
-		// left as they are).
-		static size_t FitTileSizes(std::span<uint32_t> sizes, std::span<const uint32_t> tileCounts, uint32_t atlasSize, uint32_t minTileSize);
+		// left as they are). `areaBudget` is the texels they may take together (0: the whole atlas; SceneRenderer keeps an eighth
+		// free, so that tiles can change size while the shadows they hold stay until the new tiles are drawn).
+		static size_t FitTileSizes(std::span<uint32_t> sizes, std::span<const uint32_t> tileCounts, uint32_t atlasSize, uint32_t minTileSize,
+			uint64_t areaBudget = 0);
 	private:
 		enum class NodeState : uint8_t
 		{
@@ -69,6 +72,10 @@ namespace Strata
 		// The quadtree's nodes level by level (level 0: the whole atlas), each level's nodes in Morton order of their
 		// position, so that node i's children at the next level are 4i to 4i + 3.
 		size_t GetNodeIndex(uint32_t level, uint32_t index) const { return m_LevelStart[level] + index; }
+		// Sets a node's state and its free bit with it.
+		void SetNode(uint32_t level, uint32_t index, NodeState state);
+		// The first free node of a level in Morton order, or ~0u.
+		uint32_t FindFreeNode(uint32_t level) const;
 		uint32_t GetLevelOfSize(uint32_t size) const;
 		ShadowAtlasTile GetTile(uint32_t level, uint32_t index) const;
 	private:
@@ -77,6 +84,9 @@ namespace Strata
 		uint32_t m_Levels = 0;
 		std::vector<size_t> m_LevelStart;
 		std::vector<NodeState> m_Nodes;
+		// Per level (from m_FreeWordStart[level]), a bit per node, set while it is free.
+		std::vector<size_t> m_FreeWordStart;
+		std::vector<uint64_t> m_FreeWords;
 		uint64_t m_FreeArea = 0;
 	};
 
