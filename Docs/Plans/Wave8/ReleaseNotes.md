@@ -371,9 +371,9 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   reference by the walls before, within 0.03 now but at one point under the sphere's foot), and a post's contact shadow is
   2.0 cm wide instead of 3.3 cm.
 - Look-dev: the Cornell box with its panel made a light (`lookdev.cornell.rect`, `.rect.top`), a shop light over wet ground
-  (`lookdev.rect.wet`, `.wet.low`), a softbox over the polished, satin and glossy floors (`lookdev.rect.metal`) and a strip
-  over the metal sheet (`lookdev.rect.strip`). Perf entries `PerfGPU.Renderer.AreaLights8` and `.AreaShadows4`
-  (provisional).
+  (`lookdev.rect.wet`, `.wet.low`), three softboxes over the polished, satin and glossy floors (`lookdev.rect.metal`) and a
+  strip over the metal sheet (`lookdev.rect.strip`). Perf entries `PerfGPU.Renderer.AreaLights8` (a room under eight 2 x 1 m
+  rect lights at 4K High: 1.27 ms on the GPU) and `.AreaShadows4` (four of them casting shadows: 2.18 ms).
 
 ## Defaults that change
 

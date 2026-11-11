@@ -16,6 +16,7 @@
 #include <Strata/Renderer/Material.h>
 #include <Strata/Renderer/PostProcessData.h>
 #include <Strata/Renderer/RenderScene.h>
+#include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/TextureStreamer.h>
 
@@ -322,6 +323,81 @@ namespace
 
 TEST_SUITE("PerfGPU.Renderer")
 {
+	TEST_CASE("Render cost of a room under eight rect lights at 4K High, unshadowed and with four casting shadows")
+	{
+		// The spec's 7.3: a 20 x 20 m room, 3 m high, of matte walls under eight 2 x 1 m rect lights of 1,000 nits on its
+		// ceiling whose ranges cover it, seen whole from a corner at 3840 x 2160 and High. AreaLights8: no shadow, so every pixel pays the lights' shading alone (GPU.Opaque). AreaShadows4: eight 1 m
+		// boxes on the floor and four of the lights casting shadows (at most four rect lights hold one), their views cached once
+		// drawn, so the frame pays the shadows' masks (GPU.ScreenShadows) and the filter.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+		constexpr uint32_t c_Width4K = 3840;
+		constexpr uint32_t c_Height4K = 2160;
+		const bool measuresGPU = Perf::MeasuresGPU();
+		for (const bool shadowed : { false, true })
+		{
+			CAPTURE(shadowed);
+			Scene scene(shadowed ? "AreaShadows4" : "AreaLights8");
+			AddNeutralPostProcess(scene);
+			scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().AmbientColor = glm::vec3(0.0f);
+			MaterialProperties matte;
+			matte.BaseColor = glm::vec4(0.7f, 0.68f, 0.65f, 1.0f);
+			matte.Roughness = 0.8f;
+			const AssetHandle material = assets.AddMaterial(matte);
+			const auto addBox = [&](const glm::vec3& center, const glm::vec3& size)
+			{
+				AddMesh(scene, BuiltinAssets::CubeMesh, material, center, "Box").GetComponent<TransformComponent>().Scale = size;
+			};
+			addBox({ 0.0f, -0.1f, 0.0f }, { 20.0f, 0.2f, 20.0f });
+			addBox({ 0.0f, 3.1f, 0.0f }, { 20.0f, 0.2f, 20.0f });
+			addBox({ -10.1f, 1.5f, 0.0f }, { 0.2f, 3.0f, 20.0f });
+			addBox({ 10.1f, 1.5f, 0.0f }, { 0.2f, 3.0f, 20.0f });
+			addBox({ 0.0f, 1.5f, -10.1f }, { 20.0f, 3.0f, 0.2f });
+			addBox({ 0.0f, 1.5f, 10.1f }, { 20.0f, 3.0f, 0.2f });
+			const glm::quat facingDown = glm::quat_cast(glm::mat3(glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, 1.0f, 0.0f)));
+			for (int index = 0; index < 8; index++)
+			{
+				Entity light = scene.CreateEntity("Rect Light");
+				TransformComponent& transform = light.GetComponent<TransformComponent>();
+				transform.Translation = glm::vec3(-7.5f + 5.0f * static_cast<float>(index % 4), 2.99f, index < 4 ? -5.0f : 5.0f);
+				transform.Rotation = facingDown;
+				RectLightComponent rect;
+				rect.Width = 2.0f;
+				rect.Height = 1.0f;
+				rect.Intensity = 1000.0f;
+				rect.Range = 25.0f;
+				rect.CastShadows = shadowed && index % 2 == 0;
+				light.AddComponent<RectLightComponent>(rect);
+				if (shadowed)
+					addBox({ -7.5f + 5.0f * static_cast<float>(index % 4), 0.5f, index < 4 ? -3.0f : 3.0f }, glm::vec3(1.0f));
+			}
+			const SceneCamera camera = LookAt(glm::vec3(9.5f, 2.6f, 9.5f), glm::vec3(-2.0f, 0.5f, -2.0f), static_cast<float>(c_Width4K) / static_cast<float>(c_Height4K));
+			SceneRendererSpecification specification = Perf::MeasuredRendererSpecification();
+			specification.Quality = RendererQuality::GetPreset(RendererQualityPreset::High);
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_Width4K, c_Height4K);
+			const std::string key = shadowed ? "PerfGPU.Renderer.AreaShadows4" : "PerfGPU.Renderer.AreaLights8";
+			std::vector<std::string> keys = { key };
+			if (measuresGPU)
+				keys.push_back(key + "GPU");
+			Perf::CheckBudgetsConfirmed(keys, [&]
+			{
+				const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, camera,
+					shadowed ? "a room under eight rect lights, four shadowed, at 4K High" : "a room under eight rect lights at 4K High");
+				const SceneRendererStats& stats = renderer.GetStats();
+				CHECK(GetLightCounts(renderer).AreaLights == 8);
+				CHECK(stats.AreaShadowMasks == (shadowed ? 4u : 0u));
+				Perf::MetricValues values { { key, measurement.CPU.MedianMs } };
+				if (measuresGPU)
+					values.emplace(key + "GPU", Perf::MeasureGPU(measurement));
+				return values;
+			});
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Render cost of 100,000, 300,000 and 1,000,000 cubes and of 10,000 cubes with unique materials")
 	{
 		GPUContext gpu;
