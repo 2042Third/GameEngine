@@ -5306,9 +5306,16 @@ probe-field levels and local lights follow.
   relocate into the gap and the gap's light adds nothing; about 0.22, 0.04 and 0.01 by the opening's view factor). At Low
   the probes beside the car light the first 0.5 m as they light the open ground (0.97-0.99, with the gap's light or
   without), and the ground 0.5-1 m in keeps 0.016 from 4 m and 0.048 from 6 m (black without). What it leaves (the
-  release notes' known issues): the probes' own light ends in a hard line 0.25 m under the car's edge, and where a
+  release notes' known issues): the probes' own light ends in a hard line 0.25 m under the car's edge; where a
   point's voxel level ends the voxel doubles, and with it the steps and the gap g, so a gap that crosses a level's edge
-  shows it. `GlobalIlluminationSettings::GapLight` (true) turns the gap's light off: the tests compare with it.
+  shows it; and d is continuous only where the occupancy toward the camera falls through the threshold once. Where a
+  sample lies at the threshold and the voxels close again further on, the search jumps: just open, it ends there (at
+  the first sample with no depth at all, the opening's light whole); just closed, it marches on to an opening far away,
+  or finds none and keeps what the probes give. That is a crisp edge inside one voxel level, which interpolating d does
+  not remove (one fold of ThirdPerson's ground steps by 14-16 of 255 in the GI view since the gap's light came; whether
+  this jump is what draws that edge is not established). A search that weighs every opening on the way would be
+  continuous: another design. `GlobalIlluminationSettings::GapLight` (true) turns the gap's light off: the tests compare
+  with it.
   Only drawn surfaces: re-injection's points inside walls would take a wall's far side. A point no level holds, beyond a
   valid box a scroll left short, takes today's light; within 2 m of the field's edge it fades to today's light.
   `SceneLightingView::GlobalIllumination` (`gi`) shades white and returns the diffuse indirect light (the field inside,

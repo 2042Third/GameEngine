@@ -289,8 +289,12 @@ float4 SampleIrradianceField(SamplerState repeat, float3 position, float3 geomet
 	// twice, and a partly seen point darker with the gap's light than without it. Only drawn surfaces: re-injection's points
 	// inside walls must not take a wall's far side. The way leaves the closed voxels where their occupancy crosses
 	// ST_GI_GATHER_EXIT_OCCUPANCY between two samples half a voxel apart (interpolated: by whole steps the light fell in bands), so
-	// within a voxel level the light is continuous in the point and the camera. Where the point's level ends the voxel doubles,
-	// and with it the steps, the gap and the guard's samples: a gap that crosses a level's edge shows it. Nothing found within
+	// the depth is continuous in the point and the camera where the occupancy toward the camera falls through the threshold once.
+	// It is not where a sample lies at the threshold and the voxels close again further on: just open, the search ends there (at
+	// the first sample with no depth at all, the opening's light whole); just closed, it marches on to an opening far away, or
+	// finds none. That is a crisp edge inside one voxel level (the release notes' known issues); a search that weighs every
+	// opening on the way would be continuous and is another design. Where the point's level ends the voxel doubles, and with it
+	// the steps, the gap and the guard's samples: a gap that crosses a level's edge shows it. Nothing found within
 	// ST_GI_GATHER_EXIT_STEPS: what the probes give.
 	if (pushOut && u_GIField.VoxelDimensions.w > 0.0 && (total < minimum || total <= 0.0))
 	{
