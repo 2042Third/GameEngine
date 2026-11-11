@@ -508,14 +508,16 @@ TEST_SUITE("Core.EngineModules")
 	{
 		Journal journal;
 		constexpr std::chrono::milliseconds layerWork(5);
-		constexpr std::chrono::milliseconds wait(60);
+		// The wait is long beside the frame's other work: a loaded CI runner's Debug build spent 46 ms on a frame of 5 ms of
+		// layer work, which a 60 ms wait's bound (45 ms) could not tell from a counted wait.
+		constexpr std::chrono::milliseconds wait(400);
 		JournalApplication application(MakeSpecification({ MakeModule("A", journal, { .Wait = wait }) }), journal, layerWork);
 		application.Run();
 		REQUIRE(application.GetFrameCount() == 1);
 		const double workTime = application.GetLastFrameWorkTime();
 		CHECK(workTime >= std::chrono::duration<double>(layerWork).count());
-		// The 60 ms wait would make it at least that long.
-		CHECK(workTime < std::chrono::duration<double>(wait).count() * 0.75);
+		// The 400 ms wait would make it at least that long: twice the bound.
+		CHECK(workTime < std::chrono::duration<double>(wait).count() * 0.5);
 	}
 
 	TEST_CASE("Find<T> finds a module by its type's name")
