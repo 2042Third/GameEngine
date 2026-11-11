@@ -5,7 +5,9 @@
 
 // GPU culling, one thread per render proxy: the view's frustum and screen-size tests, or with ST_CULL_SHADOW
 // (registered as Scene/CullShadow.comp) the shadow cascades' boxes and sub-texel test and the local shadow views' (point and
-// spot lights: range, frustum and sub-texel tests, a batch of views per pass), then per instance its material
+// spot lights: range, frustum and sub-texel tests, a batch of views per pass; with ST_CULL_AREA_VIEWS too, registered as
+// Scene/CullShadowAreaViews.comp and run in frames with a rect light's view, those views leave light surfaces out), then per
+// instance its material
 // (transparent ones are the CPU's), its level of detail (ChooseLOD, Include/LODSelection.slang) and its bucket. The decisions are the
 // CPU path's (SceneRendererExtraction.cpp: CullView, FindShadowCasters, GatherDraws, GatherShadowDraws) on the same data.
 //
@@ -376,9 +378,12 @@ void CullLocalShadowViews(GPUProxy proxy, bool meshDrawable, GeometryEntry entry
 	for (uint index = 0u; index < count; index++)
 	{
 		CullLocalShadowView view = u_LocalShadowViews[first + index];
+#ifdef ST_CULL_AREA_VIEWS
 		// An area light's views (Parameters.w 1) leave the meshes that show its face out (SceneRenderer::FindLocalShadowCasters).
+		// Only in the area views' form: CullShadow.comp stays the shader scenes without rect lights always ran.
 		if (view.Parameters.w > 0.5 && (proxy.Flags & ST_PROXY_LIGHT_SURFACE) != 0u)
 			continue;
+#endif
 		float3 offset = clamp(view.RelativeLight.xyz, relativeMin, relativeMax) - view.RelativeLight.xyz;
 		if (dot(offset, offset) > view.Light.w * view.Light.w || !IsBoxInPlanes(relativeMin, relativeMax, view.Planes))
 			continue;

@@ -112,8 +112,9 @@ float4 TraceReflection(int2 pixel, int2 size)
 		return float4(0.0);
 	float3 color = u_History.SampleLevel(u_LinearClampSampler, previousUV, 0.0).rgb * u_Reflections.HistoryScale;
 	// A ray that met a light surface keeps its confidence and sends no light: the probes' and sky's specular are replaced by
-	// nothing there, and the area light's own highlight is the panel's reflection, once.
-	if (u_Surface.Load(int3(hitPixel, 0)).w < 0.0)
+	// nothing there, and the area light's own highlight is the panel's reflection, once. Every texel the bilinear fetch of the
+	// color blends counts: a hit beside the panel would otherwise take its light (a bright outline around its image).
+	if (any(u_Surface.GatherAlpha(u_LinearClampSampler, hitUV) < float4(0.0)))
 		color = float3(0.0);
 	float confidence = roughnessFade * GetHitConfidence(hitUV, hitPixel, ray) * min(u_Reflections.Intensity, 1.0);
 	return float4(SanitizeHDR(color) * confidence, confidence);

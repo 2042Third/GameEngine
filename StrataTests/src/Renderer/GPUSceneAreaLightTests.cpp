@@ -1308,6 +1308,8 @@ TEST_SUITE("GPU.SceneRenderer.AreaLights")
 		// L1: a tagged emissive panel 2 m over a polished metal floor, a one-sided light 1 mm under its face with its luminance, no
 		// sky: the panel's mirror image in the floor reads the same with screen-space reflections on as off (within 5%), on both
 		// tracers. Without the prepass's marker the reflections added the panel's image to the light's highlight: twice the light.
+		// So does its border: a ray that met the background beside the panel took the panel's light from the bilinear sample of its
+		// color while the marker was read at its hit pixel alone (a bright outline that TAA's jitter broke into dashes).
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
@@ -1315,9 +1317,19 @@ TEST_SUITE("GPU.SceneRenderer.AreaLights")
 		constexpr float c_Nits = 2000.0f;
 		// The panel and its mirror image both on screen (the reflections can only find what the screen shows).
 		const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.0f, 3.0f), glm::vec3(0.0f, 0.19f, -1.0f));
-		for (const ReflectionsQuality reflections : { ReflectionsQuality::Checkerboard, ReflectionsQuality::Spatial })
+		// Polished, and a little rougher (0.08), where the spatial tracer blends its blurred levels, whose texels reach further.
+		struct FloorCase
 		{
+			ReflectionsQuality Reflections;
+			float Roughness;
+		};
+		for (const FloorCase& floorCase : { FloorCase { ReflectionsQuality::Checkerboard, 0.02f }, FloorCase { ReflectionsQuality::Spatial, 0.02f },
+				 FloorCase { ReflectionsQuality::Spatial, 0.08f } })
+		{
+			const ReflectionsQuality reflections = floorCase.Reflections;
+			const float roughness = floorCase.Roughness;
 			CAPTURE(static_cast<int>(reflections));
+			CAPTURE(roughness);
 			const auto measure = [&](bool screenReflections)
 			{
 				Scene scene;
@@ -1330,7 +1342,7 @@ TEST_SUITE("GPU.SceneRenderer.AreaLights")
 				PlaneMaterial mirror;
 				mirror.Albedo = glm::vec3(0.9f);
 				mirror.Metallic = 1.0f;
-				mirror.Roughness = 0.02f;
+				mirror.Roughness = roughness;
 				AddPlane(scene, assets, mirror, 0.0f, 20.0f);
 				MaterialProperties emitter = DarkUnlit();
 				emitter.EmissiveColor = glm::vec3(1.0f);
@@ -1338,6 +1350,14 @@ TEST_SUITE("GPU.SceneRenderer.AreaLights")
 				Entity panel = AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(emitter), glm::vec3(0.0f, 2.025f, -1.0f), "Panel");
 				panel.GetComponent<TransformComponent>().Scale = glm::vec3(1.0f, 0.05f, 0.6f);
 				panel.AddComponent<LightSurfaceComponent>();
+				// A wall behind the panel that reflects nothing (black metal): rays that pass the panel's edge meet it beside the
+				// panel's silhouette, as a room's wall behind a ceiling panel.
+				MaterialProperties black;
+				black.BaseColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+				black.Metallic = 1.0f;
+				black.Roughness = 1.0f;
+				Entity wall = AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(black), glm::vec3(0.0f, 2.0f, -2.2f), "Wall");
+				wall.GetComponent<TransformComponent>().Scale = glm::vec3(10.0f, 4.0f, 0.1f);
 				AddRectLight(scene, glm::vec3(0.0f, 1.999f, -1.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), 1.0f, 0.6f, c_Nits, 20.0f);
 				SceneRendererSpecification specification = ExactSpecification();
 				specification.Quality.Reflections = reflections;
@@ -1350,35 +1370,66 @@ TEST_SUITE("GPU.SceneRenderer.AreaLights")
 					TAA::FinishFrame(gpu);
 				}
 				CHECK(renderer.GetStats().ScreenSpaceReflections == screenReflections);
-				// The middle half of the panel's mirror image (its face reflected in the floor's plane).
-				const glm::dvec2 low = ProjectToPixelCoordinates(camera, glm::dvec3(-0.25, -2.0, -1.15), c_ViewSize, c_ViewSize);
-				const glm::dvec2 high = ProjectToPixelCoordinates(camera, glm::dvec3(0.25, -2.0, -0.85), c_ViewSize, c_ViewSize);
-				const uint32_t x0 = static_cast<uint32_t>(std::ceil(std::min(low.x, high.x)));
-				const uint32_t x1 = static_cast<uint32_t>(std::floor(std::max(low.x, high.x)));
-				const uint32_t y0 = static_cast<uint32_t>(std::ceil(std::min(low.y, high.y)));
-				const uint32_t y1 = static_cast<uint32_t>(std::floor(std::max(low.y, high.y)));
-				REQUIRE(x1 > x0 + 4);
-				REQUIRE(y1 > y0 + 1);
-				REQUIRE(y1 < c_ViewSize);
-				double sum = 0.0;
-				uint32_t count = 0;
-				for (uint32_t y = y0; y <= y1; y++)
-				{
-					for (uint32_t x = x0; x <= x1; x++)
-					{
-						const glm::vec4 value = ReadHalfTexel(hdr, x, y);
-						sum += 0.2126 * value.r + 0.7152 * value.g + 0.0722 * value.b;
-						count++;
-					}
-				}
-				return sum / static_cast<double>(count);
+				return hdr;
 			};
-			const double without = measure(false);
-			const double with = measure(true);
-			MESSAGE(fmt::format("L1: the panel's mirror image reads {:.1f} nits with screen-space reflections, {:.1f} without ({:+.2f}%)", with, without,
-				100.0 * (with / without - 1.0)));
-			REQUIRE(without > 0.1 * c_Nits);
-			CHECK(std::abs(with / without - 1.0) <= 0.05);
+			const ReadbackImage without = measure(false);
+			const ReadbackImage with = measure(true);
+			const auto luminance = [](const ReadbackImage& image, uint32_t x, uint32_t y)
+			{
+				const glm::vec4 value = ReadHalfTexel(image, x, y);
+				return 0.2126 * value.r + 0.7152 * value.g + 0.0722 * value.b;
+			};
+			// The middle half of the panel's mirror image (its face reflected in the floor's plane).
+			const glm::dvec2 low = ProjectToPixelCoordinates(camera, glm::dvec3(-0.25, -2.0, -1.15), c_ViewSize, c_ViewSize);
+			const glm::dvec2 high = ProjectToPixelCoordinates(camera, glm::dvec3(0.25, -2.0, -0.85), c_ViewSize, c_ViewSize);
+			const uint32_t x0 = static_cast<uint32_t>(std::ceil(std::min(low.x, high.x)));
+			const uint32_t x1 = static_cast<uint32_t>(std::floor(std::max(low.x, high.x)));
+			const uint32_t y0 = static_cast<uint32_t>(std::ceil(std::min(low.y, high.y)));
+			const uint32_t y1 = static_cast<uint32_t>(std::floor(std::max(low.y, high.y)));
+			REQUIRE(x1 > x0 + 4);
+			REQUIRE(y1 > y0 + 1);
+			REQUIRE(y1 < c_ViewSize);
+			double sumWith = 0.0;
+			double sumWithout = 0.0;
+			for (uint32_t y = y0; y <= y1; y++)
+			{
+				for (uint32_t x = x0; x <= x1; x++)
+				{
+					sumWith += luminance(with, x, y);
+					sumWithout += luminance(without, x, y);
+				}
+			}
+			// The whole image and three pixels around it, pixel by pixel: a ray that met the background beside the panel could
+			// take the panel's light from the texels its color's fetches blend (a bright outline).
+			const glm::dvec2 edgeLow = ProjectToPixelCoordinates(camera, glm::dvec3(-0.5, -2.0, -1.3), c_ViewSize, c_ViewSize);
+			const glm::dvec2 edgeHigh = ProjectToPixelCoordinates(camera, glm::dvec3(0.5, -2.0, -0.7), c_ViewSize, c_ViewSize);
+			const int outerX0 = static_cast<int>(std::floor(std::min(edgeLow.x, edgeHigh.x))) - 3;
+			const int outerX1 = static_cast<int>(std::ceil(std::max(edgeLow.x, edgeHigh.x))) + 3;
+			const int outerY0 = static_cast<int>(std::floor(std::min(edgeLow.y, edgeHigh.y))) - 3;
+			const int outerY1 = static_cast<int>(std::ceil(std::max(edgeLow.y, edgeHigh.y))) + 3;
+			REQUIRE(outerX0 >= 0);
+			REQUIRE(outerY0 >= 0);
+			REQUIRE(outerX1 < static_cast<int>(c_ViewSize));
+			REQUIRE(outerY1 < static_cast<int>(c_ViewSize));
+			double largest = 0.0;
+			for (int y = outerY0; y <= outerY1; y++)
+			{
+				for (int x = outerX0; x <= outerX1; x++)
+				{
+					const double difference = luminance(with, static_cast<uint32_t>(x), static_cast<uint32_t>(y))
+						- luminance(without, static_cast<uint32_t>(x), static_cast<uint32_t>(y));
+					largest = std::max(largest, std::abs(difference));
+				}
+			}
+			const double imageWith = sumWith / static_cast<double>((x1 - x0 + 1) * (y1 - y0 + 1));
+			const double imageWithout = sumWithout / static_cast<double>((x1 - x0 + 1) * (y1 - y0 + 1));
+			MESSAGE(fmt::format("L1: the panel's mirror image reads {:.1f} nits with screen-space reflections, {:.1f} without ({:+.2f}%); around it "
+				"they differ by {:.2f} nits at most", imageWith, imageWithout, 100.0 * (imageWith / imageWithout - 1.0), largest));
+			REQUIRE(imageWithout > 0.1 * c_Nits);
+			CHECK(std::abs(imageWith / imageWithout - 1.0) <= 0.05);
+			// Measured 0.14 nits at most (the checkerboard tracer), 0 on the spatial one; with the marker read at the hit pixel alone
+			// 4.0 nits (0.02) and 27 nits (0.08) on the spatial one.
+			CHECK(largest <= 1.0);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

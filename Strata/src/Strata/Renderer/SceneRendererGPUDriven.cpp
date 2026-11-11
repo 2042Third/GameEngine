@@ -243,6 +243,7 @@ namespace Strata
 		};
 		m_CullViewPipeline = createPipeline("Scene/Cull.comp");
 		m_CullShadowPipeline = createPipeline("Scene/CullShadow.comp");
+		m_CullShadowAreaPipeline = createPipeline("Scene/CullShadowAreaViews.comp");
 		m_CullBuildPipeline = createPipeline("Scene/CullBuild.comp");
 		m_CullFeedbackPipeline = createPipeline("Scene/CullFeedback.comp");
 
@@ -303,7 +304,7 @@ namespace Strata
 		for (uint32_t index = 0; index < c_GPURecordCount; index++)
 			m_CounterReadbacks[index].Readback = CreateScope<BufferReadback>(m_Device, sizeof(RenderData::CullCounters), m_Specification.DebugName + ".CullCounterReadback");
 		const bool readbacks = std::all_of(m_CounterReadbacks.begin(), m_CounterReadbacks.end(), [](const CounterReadback& entry) { return entry.Readback->IsValid(); });
-		if (!m_CullViewPipeline || !m_CullShadowPipeline || !m_CullBuildPipeline || !m_CullFeedbackPipeline || !m_DepthPyramidPipeline || !m_DepthPyramidSampler
+		if (!m_CullViewPipeline || !m_CullShadowPipeline || !m_CullShadowAreaPipeline || !m_CullBuildPipeline || !m_CullFeedbackPipeline || !m_DepthPyramidPipeline || !m_DepthPyramidSampler
 			|| !m_ShadowPyramidPipeline || !m_DummyShadowPyramid || !created || !m_CullConstantBuffer || !m_CullLocalViewBuffer || !readbacks)
 		{
 			// The CPU path draws instead.
@@ -319,6 +320,7 @@ namespace Strata
 		m_CullBindingLayout = nullptr;
 		m_CullViewPipeline = nullptr;
 		m_CullShadowPipeline = nullptr;
+		m_CullShadowAreaPipeline = nullptr;
 		m_CullBuildPipeline = nullptr;
 		m_CullFeedbackPipeline = nullptr;
 		m_DepthPyramidLayout = nullptr;
@@ -667,6 +669,7 @@ namespace Strata
 			addBuckets(BucketKind::LocalView, view);
 		m_CullLocalSlots = {};
 		m_CullLocalViews.clear();
+		m_CullLocalAreaViews = false;
 		uint64_t localEntries = 0;
 		m_CullLocalStamps.resize(meshSlots, 0u);
 		const glm::dvec3 cameraPosition(camera.Position);
@@ -674,6 +677,7 @@ namespace Strata
 		{
 			const LocalShadowDrawView& view = m_LocalShadowViews[index];
 			const bool area = m_LocalShadowLights[view.Light].Type == RenderData::c_LightRect;
+			m_CullLocalAreaViews = m_CullLocalAreaViews || area;
 			if (++m_CullLocalStamp == 0)
 			{
 				std::fill(m_CullLocalStamps.begin(), m_CullLocalStamps.end(), 0u);
@@ -988,7 +992,7 @@ namespace Strata
 			Dispatch(commandList, constants.ProxyCount);
 			if (!shadows)
 				return;
-			state.pipeline = m_CullShadowPipeline;
+			state.pipeline = GetCullShadowPipeline();
 			commandList->setComputeState(state);
 			const uint32_t shadowMode = mode | localMode;
 			commandList->setPushConstants(&shadowMode, sizeof(shadowMode));
@@ -1465,6 +1469,13 @@ namespace Strata
 		return ((firstView & 0xFFFFu) << 8) | (viewCount << 24);
 	}
 
+	nvrhi::IComputePipeline* SceneRenderer::GetCullShadowPipeline() const
+	{
+		// Only the passes that cull local shadow views differ between the two forms; the cascades' second phase keeps
+		// CullShadow.comp.
+		return m_CullLocalAreaViews ? m_CullShadowAreaPipeline.Get() : m_CullShadowPipeline.Get();
+	}
+
 	void SceneRenderer::RunLocalShadowCulling(nvrhi::ICommandList* commandList, uint32_t firstView, uint32_t viewCount, bool lastBatch)
 	{
 		ST_PROFILE_FUNCTION();
@@ -1481,7 +1492,7 @@ namespace Strata
 		barrier();
 		const uint32_t viewMode = GetLocalShadowCullMode(firstView, viewCount) | c_CullModeLocal;
 		const uint32_t countMode = viewMode | c_CullModeCount;
-		state.pipeline = m_CullShadowPipeline;
+		state.pipeline = GetCullShadowPipeline();
 		commandList->setComputeState(state);
 		commandList->setPushConstants(&countMode, sizeof(countMode));
 		Dispatch(commandList, constants.ProxyCount);
@@ -1500,7 +1511,7 @@ namespace Strata
 		}
 		barrier();
 		const uint32_t writeMode = viewMode | c_CullModeWrite;
-		state.pipeline = m_CullShadowPipeline;
+		state.pipeline = GetCullShadowPipeline();
 		commandList->setComputeState(state);
 		commandList->setPushConstants(&writeMode, sizeof(writeMode));
 		Dispatch(commandList, constants.ProxyCount);

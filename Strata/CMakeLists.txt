@@ -198,6 +198,7 @@ strata_add_shaders(Strata_Renderer
 		"Scene/ShadowMesh.vert|Scene/LocalShadowMesh.vert|ST_LOCAL_SHADOW"
 		"Scene/ShadowMesh.vert|Scene/LocalShadowMeshSkinned.vert|ST_SKINNED,ST_LOCAL_SHADOW"
 		"Scene/Cull.comp|Scene/CullShadow.comp|ST_CULL_SHADOW"
+		"Scene/Cull.comp|Scene/CullShadowAreaViews.comp|ST_CULL_SHADOW,ST_CULL_AREA_VIEWS"
 		"Scene/HZBBuild.comp|Scene/HZBBuildArray.comp|ST_HZB_ARRAY"
 		"Scene/ShadowRanges.comp|Scene/ShadowRangesDownsample.comp|ST_SHADOW_RANGES_DOWNSAMPLE"
 		"Scene/LocalShadowRanges.comp|Scene/LocalShadowRangesDownsample.comp|ST_LOCAL_SHADOW_RANGES_DOWNSAMPLE"

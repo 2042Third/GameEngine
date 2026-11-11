@@ -187,6 +187,22 @@ float RefineCrossing(ScreenRay ray, MarchPoint low, MarchPoint high, int2 size)
 	return ValidateCrossing(low, high);
 }
 
+// Whether a texel the hit's color fetches blend shows a light surface (its metallic factor c_SurfaceLightMarker): the
+// full-resolution copy's bilinear footprint, and with `radius` (full-resolution pixels) the blurred level's, at its corners.
+bool IsNearLightSurface(float2 uv, float radius)
+{
+	float4 markers = u_Surface.GatherAlpha(u_LinearClampSampler, uv);
+	if (radius > 0.0)
+	{
+		float2 offset = radius / u_Frame.ViewportSize.xy;
+		markers = min(markers, u_Surface.GatherAlpha(u_LinearClampSampler, uv - offset));
+		markers = min(markers, u_Surface.GatherAlpha(u_LinearClampSampler, uv + offset));
+		markers = min(markers, u_Surface.GatherAlpha(u_LinearClampSampler, uv + float2(offset.x, -offset.y)));
+		markers = min(markers, u_Surface.GatherAlpha(u_LinearClampSampler, uv + float2(-offset.x, offset.y)));
+	}
+	return any(markers < float4(0.0));
+}
+
 float4 TraceReflection(int2 pixel, int2 size)
 {
 	float depth = u_Depth.Load(int3(pixel, 0)).r;
@@ -269,10 +285,13 @@ float4 TraceReflection(int2 pixel, int2 size)
 	float3 sharp = u_PreviousColor.SampleLevel(u_LinearClampSampler, previousUV, 0.0).rgb;
 	float colorLevel = surface.z * float(max(u_Reflections.ColorLevels, 1u) - 1u);
 	float3 blurred = u_PreviousColorLevels.SampleLevel(u_LinearClampSampler, previousUV, colorLevel).rgb;
-	float3 color = lerp(sharp, blurred, smoothstep(c_SharpRoughness, c_BlurredRoughness, surface.z)) * u_Reflections.HistoryScale;
+	float blurredWeight = smoothstep(c_SharpRoughness, c_BlurredRoughness, surface.z);
+	float3 color = lerp(sharp, blurred, blurredWeight) * u_Reflections.HistoryScale;
 	// A ray that met a light surface keeps its confidence and sends no light: the probes' and sky's specular are replaced by
-	// nothing there, and the area light's own highlight is the panel's reflection, once.
-	if (u_Surface.Load(int3(hitPixel, 0)).w < 0.0)
+	// nothing there, and the area light's own highlight is the panel's reflection, once. The texels the color's fetches blend
+	// count too (the blurred level's half-resolution texels reach 2^(level + 1) pixels): a hit beside the panel would otherwise
+	// take its light, a bright outline around its image.
+	if (IsNearLightSurface(hitUV, blurredWeight > 0.0 ? exp2(ceil(colorLevel) + 1.0) : 0.0))
 		color = float3(0.0);
 	float confidence = roughnessFade * GetHitConfidence(hitUV, hitPixel, ray) * min(u_Reflections.Intensity, 1.0);
 	return float4(SanitizeHDR(color) * confidence, confidence);

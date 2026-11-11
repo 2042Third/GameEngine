@@ -1931,6 +1931,8 @@ namespace Strata
 		void RunLocalShadowCulling(nvrhi::ICommandList* commandList, uint32_t firstView, uint32_t viewCount, bool lastBatch);
 		// The culling's mode bits of a batch of local shadow views (Scene/Cull.comp).
 		static uint32_t GetLocalShadowCullMode(uint32_t firstView, uint32_t viewCount);
+		// The shadow culling's pipeline of the frame: the area views' form when it has an area light's view.
+		nvrhi::IComputePipeline* GetCullShadowPipeline() const;
 		// Clears a view's tile (a quad at depth 0: the atlas's other tiles keep their shadows).
 		void ClearLocalShadowTile(nvrhi::ICommandList* commandList, const ShadowAtlasTile& tile);
 		// Clears the tiles of the views no receiver needs (m_LocalShadowClears), on either path before the views are drawn.
@@ -2730,6 +2732,9 @@ namespace Strata
 		nvrhi::BindingLayoutHandle m_CullBindingLayout;
 		nvrhi::ComputePipelineHandle m_CullViewPipeline;
 		nvrhi::ComputePipelineHandle m_CullShadowPipeline;
+		// Scene/CullShadowAreaViews.comp: CullShadow.comp that leaves light surfaces out of area lights' views, run instead of
+		// it in frames with such a view (m_CullLocalAreaViews), so a scene without rect lights runs the shader it always ran.
+		nvrhi::ComputePipelineHandle m_CullShadowAreaPipeline;
 		nvrhi::ComputePipelineHandle m_CullBuildPipeline;
 		nvrhi::BufferHandle m_CullConstantBuffer;
 		nvrhi::BufferHandle m_BucketTableBuffer;     // Per bucket: its dense index (RenderData::c_CullNoBucket)
@@ -2781,6 +2786,7 @@ namespace Strata
 		// the culling reads them, and per mesh slot the view it was counted for last.
 		std::array<std::array<uint32_t, 2>, RenderData::c_CullMaxLocalShadowViews> m_CullLocalSlots = {};
 		std::vector<RenderData::CullLocalShadowView> m_CullLocalViews;
+		bool m_CullLocalAreaViews = false; // Some of m_CullLocalViews are an area light's (their Parameters.w 1)
 		nvrhi::BufferHandle m_CullLocalViewBuffer;
 		std::vector<uint32_t> m_CullLocalStamps;
 		uint32_t m_CullLocalStamp = 0;
