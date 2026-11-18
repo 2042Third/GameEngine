@@ -507,6 +507,15 @@ namespace
 		return std::max(value.x, std::max(value.y, value.z));
 	}
 
+	// The largest change of a point's light from one frame to the next, over its light (its largest channel).
+	float GetLargestStep(const std::vector<glm::vec3>& before, const std::vector<glm::vec3>& after)
+	{
+		float largest = 0.0f;
+		for (size_t point = 0; point < before.size(); point++)
+			largest = std::max(largest, LargestComponent(glm::abs(after[point] - before[point])) / std::max(LargestComponent(before[point]), 1e-3f));
+		return largest;
+	}
+
 	// How red the points' light is: the sum of red over the sum of green (1 under the white sky alone).
 	float GetRedShare(const std::vector<glm::vec3>& values)
 	{
@@ -1620,7 +1629,10 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		// voxels until it rested, it took none; its static voxels, off the grid here, take 7.9%), and the points' light changes
 		// smoothly: the largest second difference over the frames, over the value, stays under 2% (the spec's flicker measure:
 		// 0.53%; whole voxels turning on gave the lab 15%, the box's plain share of each voxel 5.4% and 3.8% here: Docs/
-		// DeveloperGuide.md, "Global illumination").
+		// DeveloperGuide.md, "Global illumination"). That is the move once the voxels it left have faded (c_GIMoverFadeSeconds,
+		// the first 15 frames here, while the box crosses its first three voxels); from rest through the fade it stays under
+		// c_StartSecond (2.9%: its triangles' voxels give way to the box, which without the fade is one frame's step and a
+		// second difference of 15.8%).
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		const std::vector<RoomPoint> points = GetMoverPoints();
@@ -1644,8 +1656,9 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		REQUIRE(restingOcclusion > 0.03f * open);
 
 		MoverRender moving(false, &white, c_MoverStart);
-		moving.Settle(points);
+		// frames[index]: the box index steps into the move (0: at rest).
 		std::vector<std::vector<glm::vec3>> frames;
+		frames.push_back(moving.Settle(points));
 		float leastOcclusion = std::numeric_limits<float>::max();
 		for (uint32_t frame = 1; frame <= c_MoverFrames; frame++)
 		{
@@ -1654,13 +1667,17 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 			CHECK(moving.Renderer->GetStats().GIMovingProxies == 1);
 			leastOcclusion = std::min(leastOcclusion, open - SumLuminance(frames.back()));
 		}
-		const float movingOcclusion = open - SumLuminance(frames[c_Middle - 1]);
+		const float movingOcclusion = open - SumLuminance(frames[c_Middle]);
 		MESSAGE("moving through the same place it takes " << 100.0f * movingOcclusion / open << "%, at least " << 100.0f * leastOcclusion / open << "% in every frame");
 		CHECK(movingOcclusion >= 0.85f * reference);
 		CHECK(movingOcclusion <= 1.15f * reference);
 		CHECK(leastOcclusion >= 0.5f * restingOcclusion);
 
+		constexpr float c_StartSecond = 0.04f;
+		// The fade lasts c_GIMoverFadeSeconds from the frame of the first step.
+		const size_t fadeFrames = static_cast<size_t>(std::ceil(RenderData::c_GIMoverFadeSeconds / c_MoverFrameSeconds)) + 1;
 		float largest = 0.0f;
+		float largestStart = 0.0f;
 		double sum = 0.0;
 		uint32_t count = 0;
 		for (size_t frame = 1; frame + 1 < frames.size(); frame++)
@@ -1669,13 +1686,20 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 			{
 				const float value = Luminance(frames[frame][point]);
 				const float second = std::abs(Luminance(frames[frame + 1][point]) - 2.0f * value + Luminance(frames[frame - 1][point])) / std::max(value, 1e-3f);
+				if (frame <= fadeFrames)
+				{
+					largestStart = std::max(largestStart, second);
+					continue;
+				}
 				largest = std::max(largest, second);
 				sum += second;
 				count++;
 			}
 		}
-		MESSAGE("second difference over the value: largest " << 100.0f * largest << "%, mean " << 100.0 * sum / count << "%");
+		MESSAGE("second difference over the value: largest " << 100.0f * largest << "%, mean " << 100.0 * sum / count << "%; while the voxels it left fade, largest "
+			<< 100.0f * largestStart << "%");
 		CHECK(largest <= 0.02f);
+		CHECK(largestStart <= c_StartSecond);
 		moving.Renderer.reset();
 		CollectReleases();
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -1725,21 +1749,33 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 
 	TEST_CASE("A prop's light is in place the frame it stops")
 	{
-		// The red box in the sun slides and stops off the voxel grid: the frame of its last step already holds its shadow on the
-		// sky and its bounce, and no later frame steps by more than c_HandoverStep of a point's light: not the frames it waits in
-		// the dynamic layer (c_GIMoverRestSeconds by the renderer's clock, not frames: nothing changes in them), and not the one
-		// its triangles are voxelized in again, after which it is a fresh renderer's resting prop to the bit. That last step is
-		// what the two forms of the box differ by (12.8% at the worst point and channel; 46.5% with the layer taken out): off
-		// the grid its static voxels are whole ones, fatter than the box. The frame it starts is the other end of the same
-		// difference, where the box stood at rest: its static voxels leave and the box takes their place (c_StartStep: 26.5%
-		// here, 38% with whole voxels in the layer; the whole of its light left in that frame before).
+		// The red box in the sun rests, slides for longer than a fade lasts and stops off the voxel grid. The frame of its last
+		// step already holds its shadow on the sky and its bounce: within c_FormStep of a fresh renderer's resting prop (20.7%
+		// at the worst point and channel here; it depends on where on the grid the box stops), which is what the box's two forms
+		// differ by: its triangles' voxels are whole ones, fatter than the box with soft edges the dynamic layer holds, and a
+		// probe the box covers finds its way out of the one elsewhere than out of the other.
+		// Where one form takes the other's place, the frame it starts and the frame its triangles are voxelized again
+		// (c_GIMoverRestSeconds after its last step by the renderer's clock, not frames), the voxels fade over
+		// c_GIMoverFadeSeconds instead of changing in that frame, which stepped a point's light by 26.5% and 26.1% here (a
+		// second difference of 4.9% over the run):
+		// - the frame it starts changes nothing (c_StartStep), and the frames of the move step by at most c_MoveStep: 10.1% once,
+		//   12 frames in, where the sun's walk lets go of the voxels that leave (it passes voxels under c_GITouchOccupancy), and
+		//   at most 4.5% otherwise, as the frames after the fade do by the move itself (5.3%);
+		// - no frame after the last step changes a point's light by more than c_HandoverStep (4.3%: the steps left are probes
+		//   whose way out of the box changes and voxels changing kind, a few a frame);
+		// - the largest second difference of the points' light over the whole run stays under c_Second (3.1%; the spec's flicker
+		//   measure, 2% for a steady move, which "A moving prop occludes the ground beside it" holds).
+		// Faded, it is a fresh renderer's resting prop to the bit.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
-		constexpr float c_HandoverStep = 0.15f;
-		constexpr float c_StartStep = 0.3f;
+		constexpr float c_FormStep = 0.25f;
+		constexpr float c_StartStep = 0.01f;
+		constexpr float c_MoveStep = 0.12f;
+		constexpr float c_HandoverStep = 0.06f;
+		constexpr float c_Second = 0.04f;
 		const std::vector<RoomPoint> points = GetMoverPoints();
 		const glm::vec3 red(0.8f, 0.05f, 0.05f);
-		constexpr uint32_t c_Steps = 12;
+		constexpr uint32_t c_Steps = 22;
 		const float end = c_MoverStart + c_MoverStep * static_cast<float>(c_Steps);
 		std::vector<glm::vec3> expected;
 		{
@@ -1749,49 +1785,74 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		CollectReleases();
 
 		MoverRender moving(true, &red, c_MoverStart);
-		const std::vector<glm::vec3> rested = moving.Settle(points);
-		std::vector<glm::vec3> stopped;
+		std::vector<std::vector<glm::vec3>> frames;
+		frames.push_back(moving.Settle(points));
 		float largestStart = 0.0f;
+		float largestMoving = 0.0f;
 		for (uint32_t frame = 1; frame <= c_Steps; frame++)
 		{
 			moving.MoveTo(c_MoverStart + c_MoverStep * static_cast<float>(frame));
-			stopped = moving.Frame(points);
-			// The frame it starts: its static voxels leave and the box takes their place, a fifth of a voxel on.
-			for (size_t point = 0; point < points.size() && frame == 1; point++)
-				largestStart = std::max(largestStart, LargestComponent(glm::abs(stopped[point] - rested[point])) / std::max(LargestComponent(rested[point]), 1e-3f));
+			frames.push_back(moving.Frame(points));
+			const float step = GetLargestStep(frames[frames.size() - 2], frames.back());
+			if (frame == 1)
+			{
+				// The frame it starts: its triangles' voxels leave, and fade into the box that takes their place.
+				largestStart = step;
+				CHECK(moving.Renderer->GetStats().GIMoverFades > 0);
+			}
+			largestMoving = std::max(largestMoving, step);
 		}
-		MESSAGE("the frame it starts steps at most " << 100.0f * largestStart << "% from its resting light");
-		CHECK(largestStart <= c_StartStep);
+		const std::vector<glm::vec3> stopped = frames.back();
 		CHECK(moving.Renderer->GetStats().GIMovingProxies == 1);
+		CHECK(moving.Renderer->GetStats().GIMoverFades == 0);
 		float largestLater = 0.0f;
+		float largestDrift = 0.0f;
 		uint32_t restFrames = 0;
-		std::vector<glm::vec3> values;
-		// A second of the renderer's clock: four times the rest.
+		uint32_t fadeFrames = 0;
+		// A second of the renderer's clock: twice the rest and the fade.
 		for (uint32_t frame = 1; frame <= 60; frame++)
 		{
-			values = moving.Frame(points);
+			frames.push_back(moving.Frame(points));
 			if (moving.Renderer->GetStats().GIMovingProxies == 1)
 				restFrames = frame;
-			for (size_t point = 0; point < points.size(); point++)
-				largestLater = std::max(largestLater, LargestComponent(glm::abs(values[point] - stopped[point])) / std::max(LargestComponent(stopped[point]), 1e-3f));
+			fadeFrames += moving.Renderer->GetStats().GIMoverFades > 0 ? 1u : 0u;
+			largestLater = std::max(largestLater, GetLargestStep(frames[frames.size() - 2], frames.back()));
+			largestDrift = std::max(largestDrift, GetLargestStep(stopped, frames.back()));
 		}
 		CHECK(moving.Renderer->GetStats().GIMovingProxies == 0);
+		CHECK(moving.Renderer->GetStats().GIMoverBricks == 0);
 		float largestFresh = 0.0f;
 		float largestRested = 0.0f;
 		for (size_t point = 0; point < points.size(); point++)
 		{
 			const float scale = std::max(LargestComponent(expected[point]), 1e-3f);
 			largestFresh = std::max(largestFresh, LargestComponent(glm::abs(stopped[point] - expected[point])) / scale);
-			largestRested = std::max(largestRested, LargestComponent(glm::abs(values[point] - expected[point])) / scale);
+			largestRested = std::max(largestRested, LargestComponent(glm::abs(frames.back()[point] - expected[point])) / scale);
 		}
-		MESSAGE("the frame it stops is within " << 100.0f * largestFresh << "% of a fresh renderer's resting prop; later frames step at most " << 100.0f * largestLater
-			<< "% from it; it waited " << restFrames << " frames (" << static_cast<float>(restFrames) * c_MoverFrameSeconds << " s) in the dynamic layer; rested, within "
-			<< 100.0f * largestRested << "% of the fresh one");
-		CHECK(largestFresh <= c_HandoverStep);
+		float largestSecond = 0.0f;
+		for (size_t frame = 1; frame + 1 < frames.size(); frame++)
+		{
+			for (size_t point = 0; point < points.size(); point++)
+			{
+				const float value = Luminance(frames[frame][point]);
+				largestSecond = std::max(largestSecond, std::abs(Luminance(frames[frame + 1][point]) - 2.0f * value + Luminance(frames[frame - 1][point])) / std::max(value, 1e-3f));
+			}
+		}
+		MESSAGE("a frame steps at most " << 100.0f * largestStart << "% when it starts, " << 100.0f * largestMoving << "% while it moves and " << 100.0f * largestLater
+			<< "% after it stopped; second difference over the value at most " << 100.0f * largestSecond << "%");
+		MESSAGE("the frame it stops is within " << 100.0f * largestFresh << "% of a fresh renderer's resting prop; later frames drift at most " << 100.0f * largestDrift
+			<< "% from it; it waited " << restFrames << " frames (" << static_cast<float>(restFrames) * c_MoverFrameSeconds << " s) in the dynamic layer and faded for "
+			<< fadeFrames << "; faded, within " << 100.0f * largestRested << "% of the fresh one");
+		CHECK(largestStart <= c_StartStep);
+		CHECK(largestMoving <= c_MoveStep);
 		CHECK(largestLater <= c_HandoverStep);
+		CHECK(largestSecond <= c_Second);
+		CHECK(largestFresh <= c_FormStep);
 		CHECK(largestRested <= 1e-4f);
-		// The wait is the clock's: c_GIMoverRestSeconds at 60 frames a second, whatever the frame rate.
+		// The waits are the clock's: c_GIMoverRestSeconds and c_GIMoverFadeSeconds at 60 frames a second, whatever the frame rate.
 		CHECK(static_cast<float>(restFrames) * c_MoverFrameSeconds <= RenderData::c_GIMoverRestSeconds + c_MoverFrameSeconds);
+		CHECK(fadeFrames > 0);
+		CHECK(static_cast<float>(fadeFrames) * c_MoverFrameSeconds <= RenderData::c_GIMoverFadeSeconds + c_MoverFrameSeconds);
 		moving.Renderer.reset();
 		CollectReleases();
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -1800,7 +1861,8 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 	TEST_CASE("A resting prop makes no mover work, and one that moved and rested leaves a fresh renderer's voxels")
 	{
 		// The dynamic layer is empty while nothing moves: no brick, no pass, the same field every frame. What a mover's bricks
-		// held is put back as it was: once it rests, every level's textures and the field are a fresh renderer's, to the byte.
+		// held is put back as it was: once it has rested and its voxels have faded (three quarters of a second here for the
+		// half both take), every level's textures and the field are a fresh renderer's, to the byte.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		const std::vector<RoomPoint> points = GetMoverPoints();
@@ -1856,7 +1918,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 			bricks = std::max(bricks, moved.Renderer->GetStats().GIMoverBricks);
 		}
 		CHECK(bricks > 0);
-		for (uint32_t frame = 0; frame < 30; frame++)
+		for (uint32_t frame = 0; frame < 45; frame++)
 			moved.Frame(points);
 		CHECK(moved.Renderer->GetStats().GIMovingProxies == 0);
 		CHECK(moved.Renderer->GetStats().GIMoverBricks == 0);

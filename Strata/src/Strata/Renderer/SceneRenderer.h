@@ -697,6 +697,7 @@ namespace Strata
 		uint32_t GIWaitingProxies = 0;
 		uint32_t GIMovingProxies = 0;      // In the dynamic layer: moving, or resting for less than c_GIMoverRestSeconds
 		uint32_t GIMoverBricks = 0;        // Bricks of voxels the dynamic layer wrote this frame (0: none of its passes ran)
+		uint32_t GIMoverFades = 0;         // Of those: bricks fading, where a proxy started to move or rested within c_GIMoverFadeSeconds
 		uint32_t GIMoversLeftOut = 0;      // Moving proxies past the layer's boxes or bricks: in no voxel until they rest
 		uint32_t GIUnvoxelizedSubmeshes = 0;
 		uint32_t GISettleFrames = 0;

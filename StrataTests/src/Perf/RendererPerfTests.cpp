@@ -313,9 +313,10 @@ namespace
 		specification.Quality = RendererQuality::GetPreset(RendererQualityPreset::High);
 		SceneRenderer renderer(specification);
 		renderer.SetViewportSize(c_Width4K, c_Height4K);
-		// The renderer's clock: a twentieth of a second a frame, whatever the machine's, so the boxes rest within a block's warm-up.
+		// The renderer's clock: a fifteenth of a second a frame, whatever the machine's, so the boxes rest and the voxels around
+		// them fade (four frames each) within a block's warm-up.
 		SceneRenderOptions options;
-		options.AdaptationSeconds = 1.0f / 20.0f;
+		options.AdaptationSeconds = 1.0f / 15.0f;
 		std::array<std::vector<double>, 2> blocks;
 		std::array<uint32_t, 2> bricks = { 0, 0 };
 		std::string order;
@@ -339,7 +340,7 @@ namespace
 			});
 			CHECK(renderer.GetStats().GlobalIllumination);
 			CHECK_FALSE(renderer.GetStats().GlobalIlluminationPending);
-			// The measured frames of a block are all of its kind: the warm-up holds the boxes' start and their rest.
+			// The measured frames of a block are all of its kind: the warm-up holds the boxes' start, their rest and both fades.
 			CHECK(renderer.GetStats().GIMovingProxies == (moving ? 8u : 0u));
 			CHECK(renderer.GetStats().GIMoversLeftOut == 0);
 			CHECK((renderer.GetStats().GIMoverBricks > 0) == moving);

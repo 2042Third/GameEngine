@@ -665,6 +665,7 @@ namespace Strata
 		m_Stats.GIWaitingProxies = work.WaitingProxies;
 		m_Stats.GIMovingProxies = work.MovingProxies;
 		m_Stats.GIMoverBricks = static_cast<uint32_t>(work.MoverBricks.size());
+		m_Stats.GIMoverFades = work.MoverFades;
 		m_Stats.GIMoversLeftOut = work.MoversLeftOut;
 		m_Stats.GIUnvoxelizedSubmeshes = work.UnvoxelizedSubmeshes;
 		if (work.UnvoxelizedSubmeshes > 0 && !gi.UnvoxelizedLogged)
@@ -764,11 +765,12 @@ namespace Strata
 			commandList->writeBuffer(gi.Materials, materials.data(), materials.size_bytes());
 		}
 
-		// The dynamic layer of moving objects, around the voxelization: first the bricks it wrote last put back what they held
-		// (the voxelizer then writes the static voxels alone), afterwards this frame's bricks written again. No pass while
-		// nothing moves. A level's bricks are one dispatch, followed by a barrier: the level's bricks written after those put
+		// The dynamic layer of moving objects, around the voxelization: first the bricks whose fade starts take what they show
+		// (the layer of the frame before is still in the textures), then the bricks it wrote last put back what they held (the
+		// voxelizer then writes the static voxels alone), afterwards this frame's bricks written again. No pass while nothing
+		// moves or fades. A level's bricks are one dispatch, followed by a barrier: the level's bricks written after those put
 		// back go through the same binding set, between whose dispatches NVRHI places none of its own.
-		const auto dispatchMovers = [&](const std::vector<RenderData::VoxelMoverBrick>& bricks, uint32_t firstBrick, bool restore)
+		const auto dispatchMovers = [&](const std::vector<RenderData::VoxelMoverBrick>& bricks, uint32_t firstBrick, uint32_t mode)
 		{
 			nvrhi::ComputeState state;
 			state.pipeline = gi.MoverPipeline;
@@ -782,7 +784,7 @@ namespace Strata
 				parameters.Level = level;
 				parameters.FirstBrick = firstBrick + static_cast<uint32_t>(first);
 				parameters.BrickCount = static_cast<uint32_t>(end - first);
-				parameters.Restore = restore ? 1u : 0u;
+				parameters.Mode = mode;
 				state.bindings = { gi.MoverSets[level] };
 				commandList->setComputeState(state);
 				commandList->setPushConstants(&parameters, sizeof(parameters));
@@ -805,9 +807,11 @@ namespace Strata
 			commandList->writeBuffer(gi.MoverBricks, bricks.data(), bricks.size() * sizeof(RenderData::VoxelMoverBrick));
 			if (!frame.Movers.empty())
 				commandList->writeBuffer(gi.MoverBoxes, frame.Movers.data(), frame.Movers.size() * sizeof(RenderData::VoxelMover));
+			if (frame.MoverSnapshots > 0)
+				dispatchMovers(frame.MoverBricks, restoredBricks, RenderData::c_VoxelMoverPassSnapshot);
 			if (restoredBricks > 0)
 			{
-				dispatchMovers(gi.ComposedBricks, 0, true);
+				dispatchMovers(gi.ComposedBricks, 0, RenderData::c_VoxelMoverPassRestore);
 				gi.ComposedBricks.clear();
 			}
 		}
@@ -815,7 +819,7 @@ namespace Strata
 		{
 			if (frame.MoverBricks.empty())
 				return;
-			dispatchMovers(frame.MoverBricks, restoredBricks, false);
+			dispatchMovers(frame.MoverBricks, restoredBricks, RenderData::c_VoxelMoverPassCompose);
 			gi.ComposedBricks = frame.MoverBricks;
 		};
 		if (frame.Batches.empty())

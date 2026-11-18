@@ -351,9 +351,9 @@ fences.
   changes (the sun moves, an object is placed). The editor's captures and the project's picture wait for it.
 - **Moving objects** take part while they move: a crate pushed across a floor shades the floor beside it and tints it with
   its color in the same frame. While it moves the engine takes each of its parts as a box of its size with soft edges; a
-  quarter of a second after it stops, it rebuilds the object's exact shape, and the light around it can shift a little
-  then, as it can in the frame the object starts to move. Animated characters receive the bounce light but do not block
-  or bounce it yet.
+  quarter of a second after it stops, it rebuilds the object's exact shape and eases the light around it over to that
+  within another quarter of a second, as it does when the object starts to move. The light beside the object can
+  shift a little in those moments. Animated characters receive the bounce light but do not block or bounce it yet.
 - **Debug views** (the viewport's debug view chip): **GI** shows the bounce light on surfaces made white, **Open** the share
   of the sky each surface sees, **Voxels** the voxel copy of the scene (walls too thin in the error color) and **Probes**
   the probes, dead ones dark red.

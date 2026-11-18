@@ -78,10 +78,14 @@ namespace Strata
 		uint32_t MovingProxies = 0;
 		uint32_t MoversLeftOut = 0;
 		// The dynamic layer (GI/VoxelMovers.comp): the moving proxies' submeshes as oriented boxes, camera-relative, and the bricks
-		// of voxels they reach, by level; empty while nothing moves. MoversChanged: they differ from the frame before's.
+		// of voxels they reach or that fade, by level; empty while nothing moves or fades. MoversChanged: they differ from the
+		// frame before's. MoverFades: the bricks among them whose voxels fade (a proxy there started to move or rested within
+		// c_GIMoverFadeSeconds); MoverSnapshots: those of them whose fade starts this frame.
 		std::vector<RenderData::VoxelMover> Movers;
 		std::vector<RenderData::VoxelMoverBrick> MoverBricks;
 		bool MoversChanged = false;
+		uint32_t MoverFades = 0;
+		uint32_t MoverSnapshots = 0;
 		// Per region taken: submeshes beyond c_VoxelItemMaxSubmesh, and items beyond the frame's limits (a closed mesh missing
 		// any is voxelized open)
 		uint32_t UnvoxelizedSubmeshes = 0;
@@ -103,9 +107,10 @@ namespace Strata
 	// voxels were made with and their new bounds. A proxy placed anew is moving: its old bounds are queued once (its triangles
 	// leave the voxels) and its submeshes' oriented boxes are listed every frame for the dynamic layer, with the bricks of
 	// voxels they reach, until it has kept its place for c_GIMoverRestSeconds, when its bounds are queued once more (its
-	// triangles enter again) and it leaves the layer in the frame those regions are taken. It then takes regions in order (changes, slabs, then whole
-	// windows; level 0 first) while their triangles fit the frame's budget, at least one, and lists the work the GPU passes do
-	// for them. Main thread only; never per proxy of the scene but for changes and the regions it takes.
+	// triangles enter again) and it leaves the layer in the frame those regions are taken. Both times the voxels around it
+	// fade (c_GIMoverFadeSeconds) from what they showed to what they hold. It then takes regions in order (changes, slabs,
+	// then whole windows; level 0 first) while their triangles fit the frame's budget, at least one, and lists the work the
+	// GPU passes do for them. Main thread only; never per proxy of the scene but for changes and the regions it takes.
 	class VoxelClipmap
 	{
 	public:
@@ -205,8 +210,14 @@ namespace Strata
 		void FollowProxies(const RenderScene& renderScene, const IVoxelSceneSource& source, float stepSeconds);
 		// Whether a change region that holds part of the bounds still waits in a level's queue.
 		bool IsChangeQueued(const AABB& bounds) const;
-		// Lists the dynamic layer's boxes and bricks: the proxies that move and those that rested whose regions still wait.
-		void EmitMovers(const RenderScene& renderScene, const IVoxelSceneSource& source, const glm::dvec3& cameraPosition, VoxelFrame& outFrame);
+		// Lists the dynamic layer's boxes and bricks: the proxies that move and those that rested whose regions still wait, and
+		// the bricks that fade.
+		void EmitMovers(const RenderScene& renderScene, const IVoxelSceneSource& source, const glm::dvec3& cameraPosition, float stepSeconds, VoxelFrame& outFrame);
+		// Ages the fades, starts those of the frame's events (m_FadeBounds) and adds the fading bricks to the frame's
+		// (m_MoverKeys, which holds the movers').
+		void FollowFades(float stepSeconds, VoxelFrame& outFrame);
+		// A brick's place in the frame's list: its level and its index relative to the level's window's first brick.
+		uint64_t GetMoverKey(uint32_t level, const glm::i64vec3& brick) const;
 		void Rescan(const RenderScene& renderScene, const IVoxelSceneSource& source, bool queueWindows);
 
 		bool IsDrawable(const RenderScene& renderScene, uint32_t proxy) const;
@@ -236,6 +247,23 @@ namespace Strata
 		std::vector<uint32_t> m_Moving;  // Likewise for Moving
 		// Proxies that came to rest (Voxelized again) and stay in the dynamic layer until their regions are taken.
 		std::vector<uint32_t> m_Resting;
+		// A brick of a level whose voxels fade from what they showed in the frame before a proxy there started to move or rested
+		// (kept in a slot of the layer's backup, counted from its end: the frame's bricks keep theirs from its start) to what
+		// they hold.
+		struct MoverFade
+		{
+			uint32_t Level = 0;
+			glm::i64vec3 Brick{ 0 };  // In bricks of c_GIMoverBrickVoxels world voxels
+			glm::ivec3 Low{ 0 };      // The first and the last of its voxels that fade
+			glm::ivec3 High{ 0 };
+			uint32_t Slot = 0;
+			float Seconds = 0.0f;     // The clock's time since it began
+			bool Snapshot = false;    // It began this frame: the layer takes what its voxels show
+		};
+		std::vector<MoverFade> m_Fades;
+		std::vector<AABB> m_FadeBounds;      // The frame's events: the bounds of proxies that started to move (as they were) or rested
+		std::vector<VoxelBox> m_FadeValid;   // Per level, the valid voxels before the frame's regions were taken (what the textures held)
+		uint32_t m_MoverBrickCount = 0;      // The bricks of the frame before: their slots of the backup are put back after a fade's are taken
 		std::vector<uint64_t> m_MoverKeys;                        // The frame's bricks: level and brick index, sorted
 		std::vector<uint64_t> m_MoverProxyKeys;                   // One proxy's
 		std::vector<std::pair<uint64_t, uint32_t>> m_MoverReach;  // A brick's key and a box that reaches it

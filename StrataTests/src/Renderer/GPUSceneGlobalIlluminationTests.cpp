@@ -963,9 +963,9 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 
 	TEST_CASE("A moved object leaves no trace")
 	{
-		// A cube moved 1 m: its old voxels empty in the frame it moved and the dynamic layer holds it where it is;
-		// c_GIMoverRestSeconds of the renderer's clock later its triangles are in the voxels again, as a renderer made then
-		// holds it, and nothing of the layer is left.
+		// A cube moved 1 m: the dynamic layer holds it where it is from the frame it moved, and its old voxels fade out over
+		// c_GIMoverFadeSeconds of the renderer's clock; c_GIMoverRestSeconds after the move its triangles are in the voxels
+		// again, and once those have faded in, the voxels are what a renderer made then holds and nothing of the layer is left.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
@@ -986,8 +986,18 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		REQUIRE(RenderGIFrame(*renderer, scene, camera, options));
 		CHECK(renderer->GetStats().GIMovingProxies == 1);
 		CHECK(renderer->GetStats().GIMoverBricks > 0);
+		CHECK(renderer->GetStats().GIMoverFades > 0);
 		const VoxelLevel moving = ReadLevel(*renderer, 0);
-		CHECK(moving.GetMaterial(glm::i64vec3(10, 5, 20)).a == 0);
+		// What a row of voxels through the cube's old place holds together (255 each when solid).
+		const auto getOld = [](const VoxelLevel& level)
+		{
+			uint32_t sum = 0;
+			for (int64_t x = 6; x < 14; x++)
+				sum += level.GetMaterial(glm::i64vec3(x, 5, 20)).a;
+			return sum;
+		};
+		uint32_t old = getOld(moving);
+		CHECK(old == 8 * 255); // What they showed, the frame the fade begins
 		CHECK(moving.GetMaterial(glm::i64vec3(20, 5, 20)).a == 255);
 		// The layer's edge is soft: the voxel beyond the cube's face (x 2.5) holds a little, the next one nothing.
 		CHECK(moving.GetMaterial(glm::i64vec3(25, 5, 20)).a < 13);
@@ -996,9 +1006,20 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 		{
 			REQUIRE(RenderGIFrame(*renderer, scene, camera, options));
 			CHECK(renderer->GetStats().GIMovingProxies == 1);
+			// 0.4 and 0.8 of the fade's time: less of them is left each frame, and some still.
+			const uint32_t left = getOld(ReadLevel(*renderer, 0));
+			CHECK(left < old);
+			CHECK(left > 0);
+			old = left;
 		}
+		// The move's fade is over and the cube has rested: its triangles' voxels fade in around it.
 		REQUIRE(RenderGIFrame(*renderer, scene, camera, options));
 		CHECK(renderer->GetStats().GIMovingProxies == 0);
+		CHECK(renderer->GetStats().GIMoverFades > 0);
+		CHECK(ReadLevel(*renderer, 0).GetMaterial(glm::i64vec3(10, 5, 20)).a == 0);
+		CHECK(ReadLevel(*renderer, 0).GetMaterial(glm::i64vec3(20, 5, 20)).a == 255);
+		for (uint32_t frame = 0; frame < 3; frame++)
+			REQUIRE(RenderGIFrame(*renderer, scene, camera, options));
 		CHECK(renderer->GetStats().GIMoverBricks == 0);
 		CHECK(ReadLevel(*renderer, 0).GetMaterial(glm::i64vec3(20, 5, 20)).a == 255);
 		CHECK(CountDifferences(ReadLevels(*renderer), ReadFreshVoxels(scene, camera, camera)) == 0);

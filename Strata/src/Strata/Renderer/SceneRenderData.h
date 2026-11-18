@@ -693,7 +693,11 @@ namespace Strata
 		// A proxy placed anew is moving: out of the voxels its triangles made, in the dynamic layer (GI/VoxelMovers.comp) until it
 		// has kept its place for this long by the renderer's clock (never frames), when its triangles are voxelized again.
 		constexpr float c_GIMoverRestSeconds = 0.25f;
-		constexpr uint32_t c_GIMoverBrickVoxels = 8;     // The dynamic layer is written in bricks of 8^3 voxels, a group of threads each
+		// Its triangles' voxels and its box are two forms of it (whole voxels, a box with soft edges): where one takes the other's
+		// place, when it starts to move and when it has rested, the voxels fade from what they showed to what they hold over this
+		// long by the same clock, so the light around it never steps.
+		constexpr float c_GIMoverFadeSeconds = 0.25f;
+		constexpr uint32_t c_GIMoverBrickVoxels = 8;    // The dynamic layer is written in bricks of 8^3 voxels, a group of threads each
 		constexpr uint32_t c_GIMaxMoverBoxes = 64;       // Oriented boxes (a moving proxy's submeshes) a frame: a brick names them by two words of bits
 		constexpr float c_GIMaskedOccupancy = 0.15f;     // Guess: alpha-masked surfaces' occupancy
 		// Guess: the occupancy of voxels marked only because a face on their boundary faces into them (the lit layer in front of a
@@ -930,15 +934,31 @@ namespace Strata
 		};
 		static_assert(sizeof(VoxelMover) == 80);
 
-		// A brick of c_GIMoverBrickVoxels^3 voxels of a level that moving boxes reach: what the dynamic layer writes this frame
-		// and puts back the next.
+		// VoxelMoverBrick::Movers.z of a brick that fades (0: none): the slot of the backup that holds what its voxels showed when
+		// the fade began, plus one; the first and the last of its voxels that fade, three bits an axis; whether this frame takes
+		// what they show.
+		constexpr uint32_t c_VoxelMoverFadeSlotMask = 0x3FFu;
+		constexpr uint32_t c_VoxelMoverFadeLowShift = 10;
+		constexpr uint32_t c_VoxelMoverFadeHighShift = 19;
+		constexpr uint32_t c_VoxelMoverFadeSnapshot = 1u << 31;
+
+		// A brick of c_GIMoverBrickVoxels^3 voxels of a level that moving boxes reach or whose voxels fade: what the dynamic layer
+		// writes this frame and puts back the next.
 		struct VoxelMoverBrick
 		{
 			glm::ivec4 Local;  // xyz: its first voxel, relative to the level's window (voxels outside the window are skipped); w: its slot in the backup
 			glm::ivec4 Texel;  // xyz: that voxel's texel; w: the level
-			glm::uvec4 Movers; // xy: the frame's boxes that reach it, a bit each
+			// xy: the frame's boxes that reach it, a bit each; z: its fade (c_VoxelMoverFade*); w: how far its fade is, 0 to 1 of
+			// c_GIMoverFadeSeconds (a float's bits): what its fading voxels show goes from what they showed when it began to what
+			// they hold, each voxel in its own part of that time
+			glm::uvec4 Movers;
 		};
 		static_assert(sizeof(VoxelMoverBrick) == 48);
+
+		// VoxelMoverPassParameters::Mode
+		constexpr uint32_t c_VoxelMoverPassCompose = 0;  // Keep what the bricks hold and write the boxes and the fades
+		constexpr uint32_t c_VoxelMoverPassRestore = 1;  // Put back what the bricks held
+		constexpr uint32_t c_VoxelMoverPassSnapshot = 2; // Take what the bricks whose fade starts show
 
 		// The dynamic layer's push constants (b2; GI/VoxelMovers.comp).
 		struct VoxelMoverPassParameters
@@ -946,7 +966,7 @@ namespace Strata
 			uint32_t Level;
 			uint32_t FirstBrick;
 			uint32_t BrickCount;
-			uint32_t Restore;   // 1: put back what the bricks held; 0: keep it and write the boxes
+			uint32_t Mode;      // c_VoxelMoverPass*
 		};
 		static_assert(sizeof(VoxelMoverPassParameters) == 16);
 

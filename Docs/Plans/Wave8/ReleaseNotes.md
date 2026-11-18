@@ -365,6 +365,10 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - While an object moves, the engine takes each of its parts as a box of its size with soft edges; a quarter of a second
   after it stops (by the clock, at any frame rate), it rebuilds the object's exact shape. Scenes in which nothing moves
   are unchanged to the bit and pay nothing: no pass runs.
+- When an object starts to move and when its exact shape comes back, the light around it no longer changes in one
+  frame: the voxels around it fade from what they showed to what they hold within a quarter of a second. In the test
+  the frame a box starts changes nothing where it stepped a point's light beside it by 26.5%, and no frame after it
+  stopped changes one by more than 4.3% where one stepped 26.1% (Known issues: what is left).
 - Memory: 3.1 MiB more per view that runs global illumination at High (155.7 MiB), 1.5 MiB at Low (24.9 MiB). The
   Graphics Quality page's rows and the row's description say so.
 - Cost: nothing while nothing moves. Eight boxes of 0.5 m moving at once cost nothing the measurement can tell from the
@@ -645,12 +649,12 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   white box's from 27 (39). Until then a game's cut shows the light rising.
 - Moving objects: while an object moves, global illumination takes each of its parts as the box around it, with soft
   edges. A ball, a barrel or a hollow object therefore shades and bounces light as its bounds would until it rests. A
-  quarter of a second after it stops, its exact shape replaces the box in one frame, and the light beside it can step: by
-  up to 12.8% at 0.3 m from a 0.5 m box that stops off the voxel grid (its exact voxels are whole ones, larger than the
-  box: they read the ground beside it 19% under the box's own occlusion, the moving box within 3%), and by more for an
-  object that is no box. The frame an object starts to move steps the same way, its exact voxels giving way to the box:
-  by up to 26.5% in the same test, where the box starts. Before this, both steps were the object's whole light (47% in
-  the same test), the second one 30 frames late.
+  quarter of a second after it stops, its exact shape takes the box's place, and the light beside it changes by what
+  the two differ by: up to 26% at 0.3 m from a 0.5 m box that stops off the voxel grid (its exact voxels are whole ones,
+  larger than the box), and more for an object that is no box. The change is spread over another quarter of a second,
+  but not evenly: in the test single frames still step a point's light by up to 4.3% then, and by up to 10.1% once (4.5%
+  otherwise) in the quarter second after the box starts, when its exact voxels give way to the box. An object that moves
+  away fast leaves its old place's shade fading for that quarter second.
 - Moving objects: at most 64 parts and 512 bricks of voxels (256 at Low) move at once; what is past them (a pile of many
   bodies falling together, an object tens of meters large) is left out of the bounce light until it rests, as every
   moving object was before. Objects thinner than a voxel are dark while they move, as thin walls are.

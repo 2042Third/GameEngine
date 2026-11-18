@@ -5058,7 +5058,7 @@ probe-field levels and local lights follow.
 - **What enters:** indexed, active proxies of the Static arena (meshes of the Skinned arena are left out: characters
   neither occlude nor bounce light; they receive it), opaque and alpha-masked submeshes (transparent and transmissive
   ones are left out); `CastShadows` does not matter. A proxy placed anew is moving: its triangles leave the voxels (its
-  old voxels empty at once) and the dynamic layer holds it until it has rested (Moving objects, below). Open meshes take
+  old voxels fade out) and the dynamic layer holds it until it has rested (Moving objects, below). Open meshes take
   the coarsest level of detail whose error stays within half a voxel; closed meshes keep full
   detail. Materials reach the voxels as the CPU's means (`RenderData::GIMaterial`: the diffuse albedo
   `BaseColor * (1 - Metallic)` times the base color map's mean, the emission times the emissive map's mean,
@@ -5159,6 +5159,25 @@ probe-field levels and local lights follow.
   the sun starts beyond what the box itself absorbs), deeper ones are interior, and a box thinner than a voxel is
   two-sided (dark), as thin static walls are. A static voxel that holds a lit surface of its own below the box's occupancy
   (the layer in front of a floor's face) turns into the box's gradually.
+  **Where one form takes the other's place, the voxels fade** (`VoxelClipmap::FollowFades`, the shader's `BlendFade`). A
+  proxy's triangles' voxels and its box are two forms of it: whole voxels against a box with soft edges, and a probe the
+  object covers finds its way out of the one elsewhere than out of the other (20.7% of a point's light 0.3 m from the
+  test's box where it stops). The frame a proxy started and the frame its triangles came back each stepped the light
+  around it by that difference (26.5% and 26.1% in the test). In both frames the clipmap now starts a fade for the voxels
+  the proxy's bounds touch and one beyond (the box's soft edge), per level and brick, where the level was valid
+  (`VoxelFrame::MoverFades`). The pass, in a third mode run before anything is put back (the layer of the frame before is
+  still in the textures), takes what those bricks show into a slot of the backup, and for `c_GIMoverFadeSeconds` (0.25 s
+  of the movers' clock) writes a blend of that and what the voxels hold, today's share easing in. The occupancy is blended
+  in the marches' measure (`GetFadeMeasure`: what a sample absorbs, then the solid core; blended as stored, a voxel that
+  left stayed opaque while the one that came already was); the surface is blended where both are lit and face alike, and
+  otherwise turns from the one kind into the other at a share each voxel has of its own (`GetFadeTurn`: at one share for
+  all, an object's whole footprint turned in one frame). A brick that fades again starts over from what it shows, so a
+  proxy that moves on while its rest fades steps nothing. Fading bricks stay in the frame's list, without a box's bit,
+  until their time is over: `GIMoverBricks` returns to 0 a quarter of a second after the last box left the layer. The
+  slots are the backup's: the frame's bricks keep the first ones, by their order, and fades hold the last. Movers come
+  first (fades whose slots their bricks need end at once), a fade never takes a slot the bricks of the frame before still
+  hold, and an event that does not fit whole does not fade (it steps, as all did). A fade spreads the forms' difference
+  over its time in small steps, not evenly: What it cannot do, below.
   **A new input of what a mover is to the GI** (another shape than a box, an albedo per voxel, a flag) goes into
   `VoxelMover`, which `EmitMovers` hashes (`VoxelFrame::MoversChanged` keeps `GlobalIlluminationSettled` false while the
   layer changes); keeps the bricks a superset of the voxels the shader writes (`EmitMovers` mirrors the shader's reach);
@@ -5470,8 +5489,8 @@ probe-field levels and local lights follow.
   `GlobalIlluminationShaded` (the frame drew with the forward shaders that read the field),
   `GIVoxelizedTriangles`, `GIQueuedRegions`, `GIWaitingProxies`, `GIMovingProxies` (moving, or resting for less than
   `c_GIMoverRestSeconds`), `GIMoverBricks` (bricks the dynamic layer wrote: 0 when none of its passes ran),
-  `GIMoversLeftOut`, `GIUnvoxelizedSubmeshes`; a frame whose voxelization could not be recorded is degraded, pending
-  and not settled;
+  `GIMoverFades` (those of them that fade), `GIMoversLeftOut`, `GIUnvoxelizedSubmeshes`; a frame whose voxelization
+  could not be recorded is degraded, pending and not settled;
   `SceneRendererGPUStats`' `GITiles` and
   `GITileOverflow` (frames late). Tests and tools read a level's textures with `ReadGlobalIlluminationVoxels` (blocking).
 - **Tests:** `Renderer.GlobalIlluminationLayout`, `Renderer.VoxelClipmap` (a render scene with residency and assets a test
@@ -5514,15 +5533,18 @@ probe-field levels and local lights follow.
   illumination's bounces' cost at 3840x2160" (the gain 0 against 1 in one process). Moving objects:
   `GlobalIlluminationRoom`'s four cases of a box sliding a fifth of a voxel a frame over open ground (it takes the share
   of the points' sky the box itself hides within 15%, in every frame at least half of what it takes at rest, and their
-  light's largest second difference stays under 2%: 0.53%; a red box in the sun adds 0.75-1.25 of what it adds at rest to
-  their red; the frame it starts steps by at most 30% of a point's light (26.5%: its static voxels leave and the box takes
-  their place), the frame it stops holds its light, and no later frame steps by more than 15%, the handover to its static
-  voxels included, c_GIMoverRestSeconds later by the renderer's clock; a resting prop makes no brick, and one that moved
-  and rested leaves a fresh renderer's voxel textures and field to the byte), `GlobalIllumination`'s "A moved object
-  leaves no trace", `Renderer.VoxelClipmap`'s "A moving proxy is listed for the dynamic layer, and nothing is while
-  nothing moves", "A proxy that rested stays in the dynamic layer until its regions are taken" and "Movers past the
-  dynamic layer's bricks or boxes are left out", and `PerfGPU.Renderer`'s "Global illumination's moving objects' cost at
-  3840x2160".
+  light's largest second difference stays under 2% once the voxels it left have faded: 0.53%, and under 4% from rest
+  through that fade: 2.9%, for 15.8% without the fade; a red box in the sun adds 0.75-1.25 of what it adds at rest to
+  their red; the frame it starts changes nothing, the frames of its move step a point's light by at most 12% (10.1% in
+  one frame of the fade, at most 4.5% in the others, as the move itself does: 5.3%), the frame it stops holds its light,
+  and no later frame steps by more than 6% (4.3%), the handover to its static voxels included, c_GIMoverRestSeconds
+  later by the renderer's clock, where without the fade one frame stepped 26.1%; a resting prop makes no brick, and one
+  that moved, rested and faded leaves a fresh renderer's voxel textures and field to the byte), `GlobalIllumination`'s "A
+  moved object leaves no trace", `Renderer.VoxelClipmap`'s "A moving proxy is listed for the dynamic layer, and nothing
+  is while nothing moves", "A proxy that rested stays in the dynamic layer until its regions are taken", "Movers past the
+  dynamic layer's bricks or boxes are left out", "Where a proxy starts to move or rests, the bricks around it fade by the
+  clock" and "Movers come before fades in the dynamic layer's slots", and `PerfGPU.Renderer`'s "Global illumination's
+  moving objects' cost at 3840x2160".
 - **What it cannot do** (so far): the field resolves no more than its probes, 0.5 m apart at High and 1 m at Low. In the
   Cornell box at High a row of small hard-edged black notches (the voxels' edges) remains where the sphere meets the floor,
   with soft lighter streaks at its left, and the floor in the gap between the tall box's back-left corner and the red wall
@@ -5546,11 +5568,16 @@ probe-field levels and local lights follow.
   (dark from both sides), thin props blur into
   blobs of whole voxels, characters are not in the voxels (they receive the field; they neither occlude nor bounce light),
   moving objects are in them as their submeshes' bounds (oriented boxes with soft edges: a ball or a hollow shape shades
-  and bounces as its bounds do while it moves, and a quarter of a second after a mover stops its triangles' voxels replace
-  the box in one frame, so the light beside it steps: 12.8% at the worst of the test's points for a box off the voxel
-  grid, whose static voxels are whole ones, and more for a mesh that is no box; the frame a mover starts steps the same
-  way, its static voxels giving way to the box: 26.5% where the test's box starts; a fade by time between the two forms
-  is the next step; movers past 64 boxes or the layer's bricks
+  and bounces as its bounds do while it moves. A quarter of a second after a mover stops, its triangles' voxels take
+  the box's place, and the light beside it changes by what the two forms differ by: up to 26% of a point's light 0.3 m
+  from the test's box, whose static voxels are whole ones, and more for a mesh that is no box. The fade spreads that over
+  another quarter of a second, but not evenly: the test's frames step by up to 4.3% then, and by up to 10.1% in one frame
+  of the fade after a start (the others 4.5%), with second differences of 3.1%, above the 2% of the flicker measure.
+  What is left are single events a blend of voxels cannot divide: a probe the object covers changes its way out (the
+  relocation takes the lowest of some occupancies), the sun's walk lets go of voxels under `c_GITouchOccupancy` at once,
+  and a voxel is lit or not. A fast object leaves its old place fading for that quarter second, and one that is set down
+  elsewhere fades in there where its old place's voxels reach. Making the two forms alike (a box that grows into its
+  voxels' shape before it rests) is the next step; movers past 64 boxes or the layer's bricks
   are in no voxel until they rest), textured albedo and emission
   count by their maps' means (models colored from one shared palette map, as the ThirdPerson sample's Kenney models are,
   take the palette's mean everywhere: one mauve for grass, wood and rock), double-sided materials' voxels have no facing
