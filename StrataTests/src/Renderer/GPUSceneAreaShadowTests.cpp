@@ -588,23 +588,28 @@ TEST_SUITE("GPU.SceneRenderer.AreaShadows")
 
 	TEST_CASE("A soft shadow crosses the seam between two of the light's cube faces without a step")
 	{
-		// S4: a 1.5 m light 2 m up, turned 45 degrees about its axis, and a bar 1 m up along x whose wide penumbra (about as wide as
-		// the filter reaches) runs across the floor line x = 2 m, where the -Y view hands over to the +X view. Along rows inside the
-		// penumbra the rendered visibility's difference from the reference is no larger at the seam than where the -Y view's kernel
-		// lies wholly inside its tile, and so is its step between neighboring pixels: the views' guard band holds what the kernel
-		// reaches across the seam.
+		// S4: a 1.5 m light 2 m up, turned 45 degrees about its axis, and a bar 1 m up along z at x = 1.15 m, just beyond the
+		// line where the -Y view hands over to the +X view: the bar lies in the +X view, and its wide penumbra runs across the floor
+		// line x = 2 m, the seam, so the -Y view's receivers beside the seam see it only through what their kernels reach beyond
+		// their face. Along rows through the penumbra the rendered visibility's step between neighboring pixels at the seam is no
+		// larger than its steps beside it (the penumbra's own slope), and its difference from the reference no larger than beside
+		// it: the views' guard band holds what the kernel reaches across the seam. Measured: steps 0.0061 at the seam, 0.0134
+		// beside it; without the area guard band (the normal bias's alone) the -Y side reads fully lit and steps 0.18 at the seam.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
 		constexpr uint32_t c_Size = 512;
+		constexpr uint32_t c_SeamPixels = 3;    // Steps this close to the seam are the seam's
+		constexpr uint32_t c_BesideFirst = 10;  // Beside it: from here...
+		constexpr uint32_t c_BesideLast = 60;   // ...to here, in the penumbra (below 0.98, above 0.02)
 		AreaShadowScene scene;
 		BuildAreaShadowScene(scene, assets, glm::vec3(0.0f, 2.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::normalize(glm::vec3(1.0f, 0.0f, 1.0f)), 1.5f, 1.5f);
-		AddBox(scene, Box { glm::vec3(2.0f, 1.0f, 0.0f), glm::vec3(4.0f, 0.05f, 0.3f) }, "Bar");
+		AddBox(scene, Box { glm::vec3(1.15f, 1.0f, 0.5f), glm::vec3(0.1f, 0.05f, 6.0f) }, "Bar");
 		SceneRenderer shadowed(AreaShadowSpecification());
 		SceneRenderer unshadowed(AreaShadowSpecification());
 		shadowed.SetViewportSize(c_Size, c_Size);
 		unshadowed.SetViewportSize(c_Size, c_Size);
-		const SceneCamera camera = TopDown(glm::vec3(1.6f, 0.0f, 0.6f), 2.4f);
+		const SceneCamera camera = TopDown(glm::vec3(2.0f, 0.0f, 0.5f), 2.4f);
 		const VisibilityImage image = RenderVisibility(shadowed, unshadowed, scene, camera);
 		const AreaLights::Record light = GetLightRecord(scene.Light);
 		double seamError = 0.0;
@@ -612,33 +617,34 @@ TEST_SUITE("GPU.SceneRenderer.AreaShadows")
 		double seamStep = 0.0;
 		double besideStep = 0.0;
 		int rows = 0;
+		int besidePixels = 0;
 		for (const float z : { 0.35f, 0.5f, 0.65f })
 		{
-			const uint32_t row = ProjectToPixel(camera, glm::vec3(2.0f, 0.0f, z), c_Size).y;
-			const uint32_t seam = ProjectToPixel(camera, glm::vec3(2.0f, 0.0f, z), c_Size).x;
-			// Beside it: where the -Y view's kernel lies wholly in its tile (x from 0.6 to 1.2 m).
-			const uint32_t besideFirst = ProjectToPixel(camera, glm::vec3(0.6f, 0.0f, z), c_Size).x;
-			const uint32_t besideLast = ProjectToPixel(camera, glm::vec3(1.2f, 0.0f, z), c_Size).x;
-			if (row >= c_Size || seam + 8 >= c_Size || besideFirst >= besideLast)
+			const glm::uvec2 seam = ProjectToPixel(camera, glm::vec3(2.0f, 0.0f, z), c_Size);
+			if (seam.y >= c_Size || seam.x < c_BesideLast || seam.x + c_BesideLast + 1 >= c_Size)
 				continue;
 			rows++;
-			for (uint32_t x = besideFirst; x < seam + 6; x++)
+			for (uint32_t x = seam.x - c_BesideLast; x <= seam.x + c_BesideLast; x++)
 			{
-				if (x > besideLast && x + 6 < seam)
+				const uint32_t distance = x >= seam.x ? x - seam.x : seam.x - x;
+				const bool atSeam = distance <= c_SeamPixels;
+				const double value = image.At(x, seam.y);
+				const double next = image.At(x + 1, seam.y);
+				if (!atSeam && (distance < c_BesideFirst || value < 0.02 || value > 0.98 || next < 0.02 || next > 0.98))
 					continue;
-				const std::optional<glm::vec3> point = FindFloorPoint(camera, x, row, c_Size, c_Size);
+				const std::optional<glm::vec3> point = FindFloorPoint(camera, x, seam.y, c_Size, c_Size);
 				REQUIRE(point);
-				const double value = image.At(x, row);
 				const double error = std::abs(value - AreaShadowReference(glm::dvec3(*point), glm::dvec3(0.0, 1.0, 0.0), light, scene.Boxes, 48));
-				const double step = std::abs(static_cast<double>(image.At(x + 1, row)) - value);
-				const bool atSeam = x + 4 >= seam && x <= seam + 4;
+				const double step = std::abs(next - value);
 				(atSeam ? seamError : besideError) = std::max(atSeam ? seamError : besideError, error);
 				(atSeam ? seamStep : besideStep) = std::max(atSeam ? seamStep : besideStep, step);
+				besidePixels += atSeam ? 0 : 1;
 			}
 		}
-		MESSAGE(fmt::format("S4: at the seam the largest difference from the reference {:.4f} and step {:.4f}, beside it {:.4f} and {:.4f} ({} rows)", seamError,
-			seamStep, besideError, besideStep, rows));
+		MESSAGE(fmt::format("S4: at the seam the largest difference from the reference {:.4f} and step {:.4f}, beside it {:.4f} and {:.4f} ({} rows, {} pixels "
+			"beside)", seamError, seamStep, besideError, besideStep, rows, besidePixels));
 		CHECK(rows == 3);
+		CHECK(besidePixels > 3 * 40);
 		CHECK(seamError <= 1.5 * besideError);
 		CHECK(seamStep <= 1.5 * besideStep);
 		CHECK(gpu.GetNewErrorCount() == 0);

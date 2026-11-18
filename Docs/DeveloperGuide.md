@@ -4771,7 +4771,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   views. A turn that makes such a face needed again draws it first, and until then it reads unshadowed from its cleared tile
   while the light stays complete (its fade is not restarted). The guard band holds the area filter's reach,
   `RenderData::c_AreaShadowReach` (an eighth of the tile) plus the normal bias's, so a rect light's tile has about a quarter
-  fewer texels per degree than a point light's of the same size. At most `RenderData::c_MaxAreaShadowMasks` (4) rect lights
+  fewer texels per degree than a point light's of the same size. Without it the taps clamp to their own face: a blocker just
+  beyond a seam leaves the receivers before it fully lit (S4 of `GPU.SceneRenderer.AreaShadows`: a 0.18 step at the seam,
+  0.006 with the band). At most `RenderData::c_MaxAreaShadowMasks` (4) rect lights
   hold a shadow at once (each takes a layer of the area shadow masks while it does, fading out included; `RankLocalShadowLights`):
   one holding a shadow keeps it while it ranks among the first four rect lights in view, else it fades out; a new one takes a
   place only when one is free. So no light ever switches filter, and a fifth waits. Their filter, depth ranges and masks:
