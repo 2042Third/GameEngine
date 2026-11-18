@@ -2149,7 +2149,12 @@ Building and loading scripts:
   call of the function it was inlined into), `Stack` the frames; `Symbolized` says the job
   finished (`ScriptModule::GetFault` merges its result). `script.status`, the Console (a click opens the line), the
   Problems panel and the play-stop log show them. Script modules write a PDB in every configuration
-  (`strata_add_script_module`).
+  (`strata_add_script_module`), and GCC and Clang compile them with `-g` in every configuration too: the editor builds
+  scripts in its own configuration (a released editor in Release; Dist takes Release's flags), and a debugger binds a
+  breakpoint in a script only where the module has debug information (DWARF in the ELF module; on macOS the module's
+  debug map names the objects that hold it). `Scripting.Module` reads the built test module for it without a debugger
+  (`Tests::FindModuleDebugInformation`: a CodeView record and its PDB, `.debug_info`, a `__DWARF` segment or `N_OSO`
+  stabs).
 - Contained: access violations, division by zero, stack overflow, C++ exceptions escaping module code and, on Windows,
   `abort()` (also from a failed `assert()` and from `std::terminate`: modules turn it into
   `ST_SCRIPT_ABORT_EXCEPTION_CODE` through a SIGABRT handler `ScriptModuleEntry.cpp` installs in their static C

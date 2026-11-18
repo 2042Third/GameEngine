@@ -432,6 +432,9 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   screenshots that compare across machines; `StrataCLI launch --window-size` passes it on.
 - Fixed: a program (the editor, the runtime, an exported game) whose frame an exception left logged a critical line,
   ended in order and exited with code 0, so a script or CI read success; it now exits with code 1.
+- Fixed: script modules built with GCC or Clang (Linux, macOS) carried no debug information in Release and Dist, the
+  configurations a released editor builds scripts in, so breakpoints in scripts did not bind; they are compiled with `-g`
+  in every configuration, as MSVC's modules always had their PDB.
 
 ## Defaults that change
 
