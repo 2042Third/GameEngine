@@ -897,7 +897,7 @@ TEST_SUITE("GPU.SceneRenderer.AreaShadows")
 		// A renderer's first frame has no time to fade by: a rect light's views are drawn while its shadow's strength is still 0,
 		// so no area shadow mask exists yet. Their depth ranges and back faces must be made all the same: built later, the
 		// filter classified the receivers from ranges that were never filled. Once the fade is over the frame equals one from a
-		// renderer that shows the shadow at once.
+		// renderer that shows the shadow at once. On both draw paths: the GPU-driven one draws the views' back faces itself.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
@@ -906,29 +906,35 @@ TEST_SUITE("GPU.SceneRenderer.AreaShadows")
 		AddCornellLight(scene);
 		constexpr uint32_t c_Size = 256;
 		const SceneCamera camera = CornellCamera(1.0f);
-		SceneRenderer immediate(AreaShadowSpecification(GPUDrivenMode::Off));
-		immediate.SetViewportSize(c_Size, c_Size);
-		const ReadbackImage reference = RenderOutput(immediate, scene, camera);
-		REQUIRE(immediate.GetStats().AreaShadowMasks == 1);
-		SceneRenderer fading(AreaShadowSpecification(GPUDrivenMode::Off, true));
-		fading.SetViewportSize(c_Size, c_Size);
-		SceneRenderOptions first;
-		first.AdaptationSeconds = 0.0f;
-		REQUIRE(fading.Render(scene, camera, nullptr, first));
-		CHECK(fading.GetStats().AreaShadowMasks == 0);
-		CHECK(fading.GetStats().LocalShadowViewsDrawn > 0);
-		ReadbackImage frame;
-		bool settled = false;
-		for (int attempt = 0; attempt < 60 && !settled; attempt++)
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
 		{
-			frame = RenderOutput(fading, scene, camera);
-			const SceneRendererStats& stats = fading.GetStats();
-			settled = stats.AreaShadowMasks == 1 && stats.LocalShadowFadingIn == 0 && stats.LocalShadowViewsPending == 0;
+			if (mode == GPUDrivenMode::Auto && !DeviceDrawsGPUDriven())
+				continue;
+			CAPTURE(static_cast<int>(mode));
+			SceneRenderer immediate(AreaShadowSpecification(mode));
+			immediate.SetViewportSize(c_Size, c_Size);
+			const ReadbackImage reference = RenderOutput(immediate, scene, camera);
+			REQUIRE(immediate.GetStats().AreaShadowMasks == 1);
+			SceneRenderer fading(AreaShadowSpecification(mode, true));
+			fading.SetViewportSize(c_Size, c_Size);
+			SceneRenderOptions first;
+			first.AdaptationSeconds = 0.0f;
+			REQUIRE(fading.Render(scene, camera, nullptr, first));
+			CHECK(fading.GetStats().AreaShadowMasks == 0);
+			CHECK(fading.GetStats().LocalShadowViewsDrawn > 0);
+			ReadbackImage frame;
+			bool settled = false;
+			for (int attempt = 0; attempt < 60 && !settled; attempt++)
+			{
+				frame = RenderOutput(fading, scene, camera);
+				const SceneRendererStats& stats = fading.GetStats();
+				settled = stats.AreaShadowMasks == 1 && stats.LocalShadowFadingIn == 0 && stats.LocalShadowViewsPending == 0;
+			}
+			REQUIRE(settled);
+			MESSAGE("A rect light's shadow faded in from a first frame without a fade step: " << MaxDifference(reference, frame)
+				<< " codes from the shadow shown at once");
+			CHECK(MaxDifference(reference, frame) <= 1);
 		}
-		REQUIRE(settled);
-		MESSAGE("A rect light's shadow faded in from a first frame without a fade step: " << MaxDifference(reference, frame)
-			<< " codes from the shadow shown at once");
-		CHECK(MaxDifference(reference, frame) <= 1);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
