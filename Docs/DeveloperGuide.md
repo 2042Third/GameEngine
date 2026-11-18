@@ -5133,7 +5133,8 @@ probe-field levels and local lights follow.
   **oriented box**: the submesh's bounds under the proxy's world transform (`RenderData::VoxelMover`, camera-relative, with
   the material's mean albedo and emission). Boxes, because a box needs no triangle and no winding: a mover costs the same
   whatever its mesh, static proxies' triangles are dispatched for it only in those two regions, at its start and its rest
-  (every voxelized proxy's triangles there, as before), never while it moves, and crates, doors and platforms are exact;
+  (every voxelized proxy's triangles there, as before, in the frames that take those regions), never for its motion,
+  and crates, doors and platforms are exact;
   round and hollow meshes are too large (What it cannot do). Each frame the clipmap lists the boxes (at most
   `c_GIMaxMoverBoxes`, 64) and the **bricks** of 8 x 8 x 8 voxels they reach in every level (`RenderData::VoxelMoverBrick`,
   at multiples of 8 voxels of the world, so a mover's bricks stay while windows scroll; at most
