@@ -372,8 +372,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - Memory: 3.1 MiB more per view that runs global illumination at High (155.7 MiB), 1.5 MiB at Low (24.9 MiB). The
   Graphics Quality page's rows and the row's description say so.
 - Cost: nothing while nothing moves. Eight boxes of 0.5 m moving at once cost nothing the measurement can tell from the
-  stage's own spread: `GPU.RadianceCascades` read 4.22, 4.28 and 4.21 ms with them moving against 4.21, 4.25 and 4.15 ms
-  at rest in three runs at 3840 x 2160 at High in the sun room (+0.01, +0.03 and +0.06 ms; at most 0.2 ms was the goal).
+  stage's own spread: `GPU.RadianceCascades` read 4.22, 4.21 and 4.24 ms with them moving against 4.20, 4.23 and 4.20 ms
+  at rest in three runs at 3840 x 2160 at High in the sun room (+0.02, -0.01 and +0.04 ms; at most 0.2 ms was the goal).
 - The editor's `viewport.capture` and `editor.perf`: `movingProxies` counts objects that move or stopped less than a
   quarter of a second ago.
 

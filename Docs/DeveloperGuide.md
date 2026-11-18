@@ -5186,10 +5186,11 @@ probe-field levels and local lights follow.
   the reference). The layer shapes its values to the marches' rules (the gain, the lead-in's threshold, the guard's core):
   a change to how voxels are read changes the still scenes' bits.
   Cost: nothing while nothing moves. Eight boxes of 0.5 m sliding up to 3 cm a frame in the sun room at 3840 x 2160 at
-  High (61 bricks): `GPU.RadianceCascades` read 4.22, 4.28 and 4.21 ms against 4.21, 4.25 and 4.15 ms with them at rest
-  in three runs under PerfLock (+0.01, +0.03 and +0.06 ms: less than the blocks' own spread of 0.4 ms lets one tell;
+  High (61 bricks): `GPU.RadianceCascades` read 4.22, 4.21 and 4.24 ms against 4.20, 4.23 and 4.20 ms with them at rest
+  in three runs under PerfLock (+0.02, -0.01 and +0.04 ms: less than the blocks' own spread of 0.3 ms lets one tell;
   `PerfGPU.Renderer`'s "Global illumination's moving objects' cost at 3840x2160": one renderer, interleaved blocks,
-  medians; at most 0.2 ms was the goal). Skinned characters are not in the layer (5c of the spec): they receive the
+  medians; at most 0.2 ms was the goal). The blocks hold the steady move: a fade's bricks cost their share of the same
+  pass for a quarter of a second, and the frame it starts one more dispatch a level; neither is measured apart. Skinned characters are not in the layer (5c of the spec): they receive the
   field and neither occlude nor bounce.
 - **The light** (`GPU.RadianceCascades` after the voxels, every frame; `Include/GIProbes.slang`): `GI/VoxelInject` lights
   every surface voxel of every level (albedo times the sun's illuminance on its normal times a walk toward the sun through
