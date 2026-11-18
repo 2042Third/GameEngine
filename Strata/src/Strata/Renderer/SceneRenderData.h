@@ -659,7 +659,7 @@ namespace Strata
 			uint32_t View;             // SceneLightingView
 			float InversePreExposure;  // 1 / the frame's pre-exposure (TemporalParams.y): the HDR target holds luminance times it
 			float LuminanceFirstEV100; // The luminance view's first band's lower edge
-			uint32_t Padding0;
+			uint32_t ClusterCapacity;  // The lights a cluster lists at most (FrameConstants::ClusterGrid.w): the clusters view's counts
 			uint32_t LuminanceColors[c_LightingViewLuminanceColors]; // RGBA8, sRGB, packed (red in the low byte)
 			uint32_t AlbedoLow;
 			uint32_t AlbedoHigh;

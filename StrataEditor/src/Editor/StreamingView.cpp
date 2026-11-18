@@ -50,6 +50,9 @@ namespace Strata
 			case ViewportDebugView::GlobalIllumination: return "gi";
 			case ViewportDebugView::OpenShare: return "open";
 			case ViewportDebugView::Probes:    return "probes";
+			case ViewportDebugView::Specular:  return "specular";
+			case ViewportDebugView::Diffuse:   return "diffuse";
+			case ViewportDebugView::Clusters:  return "clusters";
 			case ViewportDebugView::None:      break;
 		}
 		return "none";
@@ -60,7 +63,8 @@ namespace Strata
 		for (ViewportDebugView view : { ViewportDebugView::None, ViewportDebugView::Streaming, ViewportDebugView::LOD, ViewportDebugView::Mip,
 			ViewportDebugView::Motion, ViewportDebugView::Shadows, ViewportDebugView::Lighting, ViewportDebugView::AmbientOcclusion,
 			ViewportDebugView::Indirect, ViewportDebugView::Luminance, ViewportDebugView::Albedo, ViewportDebugView::Voxels,
-			ViewportDebugView::GlobalIllumination, ViewportDebugView::OpenShare, ViewportDebugView::Probes })
+			ViewportDebugView::GlobalIllumination, ViewportDebugView::OpenShare, ViewportDebugView::Probes, ViewportDebugView::Specular,
+			ViewportDebugView::Diffuse, ViewportDebugView::Clusters })
 		{
 			if (name == ViewportDebugViewToString(view))
 				return view;
@@ -81,6 +85,9 @@ namespace Strata
 			case ViewportDebugView::GlobalIllumination: return SceneLightingView::GlobalIllumination;
 			case ViewportDebugView::OpenShare:        return SceneLightingView::OpenShare;
 			case ViewportDebugView::Probes:           return SceneLightingView::Probes;
+			case ViewportDebugView::Specular:         return SceneLightingView::Specular;
+			case ViewportDebugView::Diffuse:          return SceneLightingView::Diffuse;
+			case ViewportDebugView::Clusters:         return SceneLightingView::Clusters;
 			case ViewportDebugView::None:
 			case ViewportDebugView::Streaming:
 			case ViewportDebugView::LOD:
@@ -96,6 +103,17 @@ namespace Strata
 		if (errorPixels > 0.0f)
 			return fmt::format("LOD {}{} ({:.2f} px)", level, last ? "+" : "", errorPixels);
 		return fmt::format("LOD {}{}", level, last ? "+" : "");
+	}
+
+	std::string GetClusterLegendName(size_t band, size_t bands)
+	{
+		if (band == 0)
+			return "No lights";
+		const uint64_t lower = uint64_t(1) << (band - 1);
+		if (band + 1 >= bands)
+			return fmt::format("{}+ lights", lower);
+		const uint64_t upper = (uint64_t(1) << band) - 1;
+		return lower == upper ? std::string("1 light") : fmt::format("{}-{} lights", lower, upper);
 	}
 
 	std::string GetLuminanceLegendName(size_t band, size_t bands, float firstEV100)
@@ -142,6 +160,8 @@ namespace Strata
 			note += fmt::format(", AO median {:.2f}", stats->ValueMedian);
 		else if (view == ViewportDebugView::OpenShare && std::isfinite(stats->ValueMedian))
 			note += fmt::format(", open median {:.2f}", stats->ValueMedian);
+		else if (view == ViewportDebugView::Clusters)
+			return std::isfinite(stats->ValueMedian) ? fmt::format("Median {:.1f}% of a cluster's capacity", stats->ValueMedian * 100.0f) : std::string("No lights in view");
 		else if (view != ViewportDebugView::AmbientOcclusion && view != ViewportDebugView::OpenShare && view != ViewportDebugView::Albedo
 			&& std::isfinite(stats->SurfaceEV100.y))
 			note += fmt::format(", EV100 median {:.1f}", stats->SurfaceEV100.y);

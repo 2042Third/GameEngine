@@ -72,7 +72,8 @@ namespace Strata
 
 	bool SceneRenderer::IsLightingValueView(SceneLightingView view)
 	{
-		return view == SceneLightingView::AmbientOcclusion || view == SceneLightingView::Albedo || view == SceneLightingView::OpenShare;
+		return view == SceneLightingView::AmbientOcclusion || view == SceneLightingView::Albedo || view == SceneLightingView::OpenShare
+			|| view == SceneLightingView::Clusters;
 	}
 
 	void SceneRenderer::BeginLightingViewFrame(SceneLightingView view)
@@ -203,6 +204,7 @@ namespace Strata
 		parameters.View = static_cast<uint32_t>(view);
 		parameters.InversePreExposure = 1.0f / m_PreExposure;
 		parameters.LuminanceFirstEV100 = std::isfinite(options.LightingColors.LuminanceFirstEV100) ? options.LightingColors.LuminanceFirstEV100 : 0.0f;
+		parameters.ClusterCapacity = frame.ClusterGrid.w;
 		for (uint32_t index = 0; index < RenderData::c_LightingViewLuminanceColors; index++)
 			parameters.LuminanceColors[index] = PackDisplayColor(options.LightingColors.Luminance[index]);
 		parameters.AlbedoLow = PackDisplayColor(options.LightingColors.AlbedoLow);

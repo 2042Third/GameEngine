@@ -36,6 +36,13 @@ void st_Main()
 	{
 		color = LinearToSRGB(float3(clamp(hdr.r, 0.0, 1.0)));
 	}
+	else if (u_LightingView.View == ST_LIGHTING_VIEW_CLUSTERS)
+	{
+		// The cluster's lights as bands of the luminance view's colors: none, 1, 2-3, 4-7, ... (powers of two).
+		uint lights = uint(round(clamp(hdr.r, 0.0, 1.0) * float(u_LightingView.ClusterCapacity)));
+		int band = lights == 0u ? 0 : min(1 + int(firstbithigh(lights)), ST_LIGHTING_VIEW_LUMINANCE_COLORS - 1);
+		color = GetLuminanceBandColor(band);
+	}
 	else
 	{
 		color = LinearToSRGB(clamp(hdr, float3(0.0), float3(1.0)));

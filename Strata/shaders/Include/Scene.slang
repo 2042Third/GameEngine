@@ -40,6 +40,9 @@
 // 6 (the GI's voxels) and 9 (its probes) draw over the image; the forward pass shades them as the lit image.
 #define ST_LIGHTING_VIEW_GLOBAL_ILLUMINATION 7u // The GI's diffuse light on white (the field, today's beyond it)
 #define ST_LIGHTING_VIEW_OPEN_SHARE        8u // The share of the sky a surface sees through the world, unexposed
+#define ST_LIGHTING_VIEW_SPECULAR          10u // Specular light only (the lights' highlights, image light's reflections)
+#define ST_LIGHTING_VIEW_DIFFUSE           11u // Diffuse light only (the lights' and image light's)
+#define ST_LIGHTING_VIEW_CLUSTERS          12u // The lights listed in the pixel's cluster, as a share of its capacity, unexposed
 
 #define ST_SAMPLER_COUNT 6
 

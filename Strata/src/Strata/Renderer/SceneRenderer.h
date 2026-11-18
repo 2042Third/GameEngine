@@ -349,7 +349,10 @@ namespace Strata
 		Voxels,           // Global illumination's voxels as the GI sees the scene, lit (GI/VoxelView.frag over the lit image)
 		GlobalIllumination, // Global illumination's diffuse light on white surfaces (the field, today's light beyond it), through the scene's exposure
 		OpenShare,        // The cosine-weighted share of the sky each surface sees through the world, as gray (1 beyond the field)
-		Probes            // Global illumination's first cascade of probes over the lit image (GI/ProbeView.frag): live ones lit, dead ones red
+		Probes,           // Global illumination's first cascade of probes over the lit image (GI/ProbeView.frag): live ones lit, dead ones red
+		Specular,         // Only the specular light (the lights' highlights, image light's reflections), through the scene's exposure
+		Diffuse,          // Only the diffuse light (the lights' and image light's, global illumination's field), through the scene's exposure
+		Clusters          // The lights the pixel's light cluster lists (what its shading walks), as bands of counts
 	};
 
 	// Display colors of the lighting views that show values (sRGB; alpha unused). Not saved: the editor sets them from its theme.

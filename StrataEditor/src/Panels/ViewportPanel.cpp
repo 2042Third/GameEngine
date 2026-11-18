@@ -640,11 +640,18 @@ namespace Strata
 			label = "Open";
 		else if (settings.DebugView == ViewportDebugView::Probes)
 			label = "Probes";
+		else if (settings.DebugView == ViewportDebugView::Specular)
+			label = "Specular";
+		else if (settings.DebugView == ViewportDebugView::Diffuse)
+			label = "Diffuse";
+		else if (settings.DebugView == ViewportDebugView::Clusters)
+			label = "Clusters";
 		if (UI::ToggleChip("Viewport.DebugView", Icons::Layers, label, &clicked,
 			"Debug views: color the scene by streaming state (meshes, materials and textures still loading or failed), by the level of detail "
 			"meshes are drawn at, by the mip levels textures lack against what the view needs, by how each pixel moved since the previous frame, "
 			"or by how many screen pixels a texel of the sun's shadow cascades spans; or show its light: surfaces shaded white, ambient "
-			"occlusion, indirect light alone, luminance in EV100 bands, or albedo; or the GI's voxels, light, sky share and probes"))
+			"occlusion, indirect light alone, luminance in EV100 bands, or albedo; or the GI's voxels, light, sky share and probes; or the "
+			"specular or diffuse light alone, or the lights each pixel's light cluster lists"))
 		{
 			ImGui::OpenPopup("DebugView");
 		}
@@ -665,7 +672,10 @@ namespace Strata
 			{ ViewportDebugView::Voxels, "Voxels: the scene as the GI sees it" },
 			{ ViewportDebugView::GlobalIllumination, "GI: indirect light on white" },
 			{ ViewportDebugView::OpenShare, "Open: the share of sky each surface sees" },
-			{ ViewportDebugView::Probes, "Probes: the GI's probes, dead ones red" }
+			{ ViewportDebugView::Probes, "Probes: the GI's probes, dead ones red" },
+			{ ViewportDebugView::Specular, "Specular: highlights and reflections only" },
+			{ ViewportDebugView::Diffuse, "Diffuse: diffuse light only" },
+			{ ViewportDebugView::Clusters, "Clusters: lights per light cluster" }
 		};
 		for (const auto& [view, name] : views)
 		{
@@ -787,6 +797,12 @@ namespace Strata
 		else if (settings.DebugView == ViewportDebugView::Voxels)
 		{
 			lines.push_back({ toColor(lightingColors.TwoSided), "Two-sided: no bounce", std::string() });
+		}
+		else if (settings.DebugView == ViewportDebugView::Clusters)
+		{
+			// The bands of Overlay/LightingView.frag: none, then one per power of two (the last takes what lies beyond).
+			for (size_t band = lightingColors.Luminance.size(); band-- > 0;)
+				lines.push_back({ toColor(lightingColors.Luminance[band]), GetClusterLegendName(band, lightingColors.Luminance.size()), std::string() });
 		}
 		std::string note;
 		if (settings.DebugView == ViewportDebugView::Streaming && stats.PlaceholderBoxes > 0)

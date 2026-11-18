@@ -43,7 +43,12 @@ namespace Strata
 		Voxels,
 		GlobalIllumination,
 		OpenShare,
-		Probes
+		Probes,
+		// The light split by kind (SceneLightingView::Specular, Diffuse), and the lights each pixel's light cluster lists
+		// (SceneLightingView::Clusters).
+		Specular,
+		Diffuse,
+		Clusters
 	};
 
 	// The lighting view a debug view shows (SceneLightingView::None for the others).
@@ -111,6 +116,9 @@ namespace Strata
 	// The luminance view's legend name of band `band` of `bands`, each one EV100 wide from the floor of `firstEV100`
 	// (LightingViewColors): "EV 9"; the first takes what lies below ("EV <6"), the last what lies above ("EV 16+").
 	std::string GetLuminanceLegendName(size_t band, size_t bands, float firstEV100);
+	// The name of a band of the clusters view (Overlay/LightingView.frag): "No lights", "1 light", "2-3 lights", ..., the last
+	// "1024+ lights" (bands of the luminance view's colors).
+	std::string GetClusterLegendName(size_t band, size_t bands);
 
 	// The note under a lighting view's legend: the sun to sky ratio on flat ground and, for the occlusion and open views, their
 	// value's median or, for the light views (not the albedo), the surfaces' EV100 median; "Measuring..." until statistics arrived.

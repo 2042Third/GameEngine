@@ -13,5 +13,11 @@
 			"SpatialReflectionResolve": false, "GlobalIlluminationBounceGain": 0, "FXAASubpixel": 0.75 } },
 		"expect": { "/complete": { "equals": true }, "/renderer/SpecularEnergyCompensation": { "equals": false }, "/renderer/FXAASubpixel": { "equals": 0.75 } } },
 	{ "command": "viewport.capture", "parameters": { "camera": "scene", "width": 320, "height": 180 },
-		"expect": { "/complete": { "equals": true }, "/renderer": { "equals": {} } } }
+		"expect": { "/complete": { "equals": true }, "/renderer": { "equals": {} } } },
+	{ "command": "viewport.capture", "parameters": { "camera": "scene", "width": 320, "height": 180, "debugView": "specular",
+		"path": "@STRATA_FEATURE_CAPTURE_DIR@/Specular.png" }, "expect": { "/complete": { "equals": true }, "/debugView/view": { "equals": "specular" } } },
+	{ "command": "viewport.capture", "parameters": { "camera": "scene", "width": 320, "height": 180, "debugView": "diffuse",
+		"path": "@STRATA_FEATURE_CAPTURE_DIR@/Diffuse.png" }, "expect": { "/complete": { "equals": true }, "/debugView/view": { "equals": "diffuse" } } },
+	{ "command": "viewport.capture", "parameters": { "camera": "scene", "width": 320, "height": 180, "debugView": "clusters",
+		"path": "@STRATA_FEATURE_CAPTURE_DIR@/Clusters.png" }, "expect": { "/complete": { "equals": true }, "/debugView/view": { "equals": "clusters" } } }
 ]

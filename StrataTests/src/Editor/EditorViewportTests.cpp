@@ -700,7 +700,8 @@ TEST_SUITE("Editor.Viewport")
 			const std::pair<const char*, ViewportDebugView> lightingViews[] = { { "lighting", ViewportDebugView::Lighting },
 				{ "ao", ViewportDebugView::AmbientOcclusion }, { "indirect", ViewportDebugView::Indirect }, { "luminance", ViewportDebugView::Luminance },
 				{ "albedo", ViewportDebugView::Albedo }, { "voxels", ViewportDebugView::Voxels }, { "gi", ViewportDebugView::GlobalIllumination },
-				{ "open", ViewportDebugView::OpenShare }, { "probes", ViewportDebugView::Probes } };
+				{ "open", ViewportDebugView::OpenShare }, { "probes", ViewportDebugView::Probes }, { "specular", ViewportDebugView::Specular },
+				{ "diffuse", ViewportDebugView::Diffuse }, { "clusters", ViewportDebugView::Clusters } };
 			for (const auto& [name, view] : lightingViews)
 			{
 				CAPTURE(name);
@@ -798,6 +799,12 @@ TEST_SUITE("Editor.Viewport")
 		stats.SunToSkyRatio = 0.0f;
 		stats.SurfaceEV100 = glm::vec3(std::numeric_limits<float>::quiet_NaN());
 		CHECK(GetLightingLegendNote(ViewportDebugView::Indirect, stats) == "Sun : sky -");
+		// The clusters view's bands: none, then one per power of two, the last open.
+		CHECK(GetClusterLegendName(0, 12) == "No lights");
+		CHECK(GetClusterLegendName(1, 12) == "1 light");
+		CHECK(GetClusterLegendName(2, 12) == "2-3 lights");
+		CHECK(GetClusterLegendName(3, 12) == "4-7 lights");
+		CHECK(GetClusterLegendName(11, 12) == "1024+ lights");
 
 		// The voxels view's note: the clipmap's levels, their voxel sizes and how many hold valid voxels.
 		CHECK(GetVoxelLegendNote(nullptr) == "No GI");

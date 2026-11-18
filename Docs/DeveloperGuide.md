@@ -4987,7 +4987,15 @@ lights, Post Process and the sky), and never a resolution below the output's.
   drops emission, **AmbientOcclusion** returns the occlusion that darkens indirect light (material times screen, before
   multi-bounce), **Albedo** writes the base color; the last two are *value views*: written without the pre-exposure (a
   sunlit scene's 2^-19 would make an albedo of 0.03 subnormal in half floats), without fog and what glass transmits.
-  **Luminance** keeps the lit image. Lighting and Indirect go through exposure and tone mapping as the image does; for the
+  **Luminance** keeps the lit image. **Specular** and **Diffuse** keep one kind of light: the lights' highlights and image
+  light's reflections (the coat's included), or the lights' and image light's diffuse light (global illumination's field
+  included), without emission, fog, aerial perspective or what glass transmits (`IsLightKindView`); frames without them shade
+  with the old expressions to the bit, as branches on the uniform view select whole expressions, never weights multiplied
+  in (a multiply would let the compiler fuse differently). **Clusters** is a value view: the lights the pixel's light
+  cluster lists (what its shading walks, lit surfaces or not), written as a share of the cluster's capacity
+  (`ClusterGrid.w`, the overlay's `ClusterCapacity`), drawn by the overlay as bands of the luminance view's colors (none, 1,
+  2-3, 4-7, ...; `GetClusterLegendName`), so its statistics' `value` reads shares of the capacity. Lighting, Indirect,
+  Specular and Diffuse go through exposure and tone mapping as the image does; for the
   value views and Luminance, `Overlay/LightingView.frag` replaces the finished image, first among the overlays (the motion
   view is skipped with one), from the frame's own HDR target (never the temporal history, which would blend values of
   earlier frames): occlusion as gray, albedo with luminances below `c_AlbedoLow` (0.03) mixed 0.7 toward the low mark and

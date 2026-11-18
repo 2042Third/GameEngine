@@ -1863,6 +1863,68 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("viewport.capture shows the specular, diffuse and clusters views, alike on the GPU-driven and the CPU path")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		const auto capture = [&](const char* view, bool cpu = false, nlohmann::json* outResult = nullptr)
+		{
+			nlohmann::json parameters = { { "width", 96 }, { "height", 64 }, { "overlays", false }, { "debugView", view } };
+			if (cpu)
+				parameters["renderer"] = { { "GPUDriven", false } };
+			return harness.Capture(parameters, outResult);
+		};
+		// The views of one kind of light: no pixel brighter than the lit image's, and the two differ.
+		const DecodedImage lit = capture("none");
+		nlohmann::json result;
+		const DecodedImage specular = capture("specular", false, &result);
+		CHECK(result["debugView"]["view"] == "specular");
+		CHECK(result["debugView"]["lightingPending"] == false);
+		const DecodedImage diffuse = capture("diffuse", false, &result);
+		CHECK(result["debugView"]["view"] == "diffuse");
+		CHECK(specular.Pixels != diffuse.Pixels);
+		int brighter = 0;
+		for (int y = 0; y < lit.Height; y++)
+		{
+			for (int x = 0; x < lit.Width; x++)
+			{
+				brighter += glm::any(glm::greaterThan(specular.At(x, y), lit.At(x, y) + glm::ivec4(2))) ? 1 : 0;
+				brighter += glm::any(glm::greaterThan(diffuse.At(x, y), lit.At(x, y) + glm::ivec4(2))) ? 1 : 0;
+			}
+		}
+		CHECK(brighter == 0);
+		CHECK(harness.CountDifferences(capture("specular", true), specular) == 0);
+		CHECK(harness.CountDifferences(capture("diffuse", true), diffuse) == 0);
+
+		// The clusters: without point or spot lights every surface lists none; a lamp beside the cube puts it in the clusters
+		// it reaches. The bands are the luminance view's colors.
+		const LightingViewColors& colors = harness.Context.GetViewport().GetSettings().DebugColors.Lighting;
+		const auto code = [](const glm::vec4& color) { return glm::ivec3(glm::round(glm::clamp(glm::vec3(color), 0.0f, 1.0f) * 255.0f)); };
+		const auto countColor = [](const DecodedImage& image, const glm::ivec3& color)
+		{
+			int pixels = 0;
+			for (int y = 0; y < image.Height; y++)
+			{
+				for (int x = 0; x < image.Width; x++)
+					pixels += glm::ivec3(image.At(x, y)) == color ? 1 : 0;
+			}
+			return pixels;
+		};
+		const DecodedImage unlit = capture("clusters", false, &result);
+		CHECK(result["debugView"]["view"] == "clusters");
+		CHECK(countColor(unlit, code(colors.Luminance[0])) > 0);
+		CHECK(countColor(unlit, code(colors.Luminance[1])) == 0);
+		harness.Run("entity.create", { { "name", "Lamp" }, { "components", { { "PointLight", { { "Range", 3.0 } } },
+			{ "Transform", { { "Translation", { 0.8, 0.0, 1.2 } } } } } } });
+		const DecodedImage clusters = capture("clusters", false, &result);
+		CHECK(countColor(clusters, code(colors.Luminance[1])) > 0);
+		CHECK(result["debugView"]["lighting"]["value"]["median"].get<double>() >= 0.0);
+		CHECK(harness.CountDifferences(capture("clusters", true), clusters) == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A capture of a scene with sixteen shadowed point lights shows every light's shadow in its first complete frame")
 	{
 		Tests::GPUContext gpu;
