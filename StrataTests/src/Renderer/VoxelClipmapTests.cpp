@@ -12,6 +12,7 @@
 #include <glm/glm.hpp>
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <map>
 #include <set>
@@ -602,42 +603,73 @@ TEST_SUITE("Renderer.VoxelClipmap")
 		// whole while the slots hold it, the fades' slots never reach into the frame's bricks' own, and where the movers' bricks
 		// need the slots, fades end: no mover is left out before the movers alone fill the layer.
 		Fixture fixture;
-		std::vector<Entity> cubes;
-		for (uint32_t index = 0; index < 72; index++)
+		const auto getPosition = [](size_t index)
 		{
-			cubes.push_back(fixture.Add(glm::vec3(-5.0f + 2.0f * static_cast<float>(index % 6), 0.5f + 2.0f * static_cast<float>(index / 36),
-				-5.0f + 2.0f * static_cast<float>((index / 6) % 6))));
-		}
+			return glm::vec3(-5.0f + 2.0f * static_cast<float>(index % 6), 0.5f + 2.0f * static_cast<float>(index / 36), -5.0f + 2.0f * static_cast<float>((index / 6) % 6));
+		};
+		// The bricks the frame's boxes reach, by level and first texel (one camera: the same windows in every fixture).
+		const auto getMoverBricks = [](const VoxelFrame& frame)
+		{
+			std::set<std::array<int32_t, 4>> bricks;
+			for (const RenderData::VoxelMoverBrick& brick : frame.MoverBricks)
+			{
+				if ((brick.Movers.x | brick.Movers.y) != 0)
+					bricks.insert({ brick.Texel.w, brick.Texel.x, brick.Texel.y, brick.Texel.z });
+			}
+			return bricks;
+		};
+		std::vector<Entity> cubes;
+		for (size_t index = 0; index < 72; index++)
+			cubes.push_back(fixture.Add(getPosition(index)));
 		fixture.Build();
 		const GlobalIlluminationLayout& layout = fixture.Clipmap.GetLayout();
 		uint32_t peakFades = 0;
 		uint32_t lastFades = 0;
-		uint32_t moverBricks = 0;
 		size_t bricksBefore = 0;
-		bool leftOut = false;
-		for (Entity cube : cubes)
+		size_t leftOut = cubes.size();
+		for (size_t index = 0; index < cubes.size() && leftOut == cubes.size(); index++)
 		{
-			cube.GetComponent<TransformComponent>().Translation.y += 0.01f;
-			cube.MarkModified<TransformComponent>();
+			cubes[index].GetComponent<TransformComponent>().Translation.y += 0.01f;
+			cubes[index].MarkModified<TransformComponent>();
 			fixture.Build();
 			CHECK(fixture.Frame.MoverBricks.size() <= layout.MoverBricks);
 			lastFades = CheckFades(fixture.Frame, layout, 0, bricksBefore).Fades;
 			bricksBefore = fixture.Frame.MoverBricks.size();
-			moverBricks = 0;
-			for (const RenderData::VoxelMoverBrick& brick : fixture.Frame.MoverBricks)
-				moverBricks += (brick.Movers.x | brick.Movers.y) != 0 ? 1u : 0u;
 			if (fixture.Frame.MoversLeftOut > 0)
-			{
-				leftOut = true;
-				break;
-			}
-			peakFades = std::max(peakFades, lastFades);
+				leftOut = index;
+			else
+				peakFades = std::max(peakFades, lastFades);
 		}
-		// A cube of 1 m reaches 51 bricks at most: the one left out found fewer free, whatever faded.
-		CHECK(leftOut);
-		CHECK(moverBricks + 51 > layout.MoverBricks);
+		REQUIRE(leftOut < cubes.size());
+		const std::set<std::array<int32_t, 4>> moverBricks = getMoverBricks(fixture.Frame);
+
+		// The cube the layer left out (the movers enter by proxy, not by when they started): the one whose bricks, as it reaches
+		// them moving alone, the frame's movers do not all hold. It needed more of them than were free of movers, whatever
+		// faded: a fade never keeps a slot a mover's brick needs.
+		size_t missing = 0;
+		size_t needed = 0;
+		for (size_t index = 0; index <= leftOut; index++)
+		{
+			Fixture alone;
+			Entity cube = alone.Add(getPosition(index));
+			alone.Build();
+			cube.GetComponent<TransformComponent>().Translation.y += 0.01f;
+			cube.MarkModified<TransformComponent>();
+			alone.Build();
+			REQUIRE(alone.Frame.MoversLeftOut == 0);
+			size_t absent = 0;
+			for (const std::array<int32_t, 4>& brick : getMoverBricks(alone.Frame))
+				absent += moverBricks.count(brick) == 0 ? 1u : 0u;
+			if (absent > 0)
+			{
+				missing++;
+				needed = absent;
+			}
+		}
+		CHECK(missing == 1);
+		CHECK(moverBricks.size() + needed > layout.MoverBricks);
 		CHECK(peakFades > lastFades);
-		CHECK(moverBricks + lastFades <= layout.MoverBricks);
+		CHECK(moverBricks.size() + lastFades <= layout.MoverBricks);
 	}
 
 	TEST_CASE("A proxy that rested stays in the dynamic layer until its regions are taken")
