@@ -643,11 +643,15 @@ TEST_SUITE("Renderer.VoxelClipmap")
 		REQUIRE(leftOut < cubes.size());
 		const std::set<std::array<int32_t, 4>> moverBricks = getMoverBricks(fixture.Frame);
 
-		// The cube the layer left out (the movers enter by proxy, not by when they started): the one whose bricks, as it reaches
-		// them moving alone, the frame's movers do not all hold. It needed more of them than were free of movers, whatever
+		// The cube the layer left out: the one whose bricks, as it reaches them moving alone, the frame's movers do not all
+		// hold. The movers enter by proxy, not by when they started, and those after one that does not fit still enter, so
+		// the frame's bricks are not what the layer held when that cube was judged (with them in the bound, a fade that
+		// kept slots could leave an earlier cube out and let later ones fill the room: the bound still held). What it held
+		// is what the moved cubes with lower proxies reach, each moving alone. Beside those the cube did not fit, whatever
 		// faded: a fade never keeps a slot a mover's brick needs.
+		std::vector<std::set<std::array<int32_t, 4>>> reached;
 		size_t missing = 0;
-		size_t needed = 0;
+		size_t missingCube = 0;
 		for (size_t index = 0; index <= leftOut; index++)
 		{
 			Fixture alone;
@@ -657,17 +661,29 @@ TEST_SUITE("Renderer.VoxelClipmap")
 			cube.MarkModified<TransformComponent>();
 			alone.Build();
 			REQUIRE(alone.Frame.MoversLeftOut == 0);
-			size_t absent = 0;
-			for (const std::array<int32_t, 4>& brick : getMoverBricks(alone.Frame))
-				absent += moverBricks.count(brick) == 0 ? 1u : 0u;
-			if (absent > 0)
+			reached.push_back(getMoverBricks(alone.Frame));
+			const bool absent = std::any_of(reached.back().begin(), reached.back().end(), [&](const std::array<int32_t, 4>& brick) { return moverBricks.count(brick) == 0; });
+			if (absent)
 			{
 				missing++;
-				needed = absent;
+				missingCube = index;
 			}
 		}
-		CHECK(missing == 1);
-		CHECK(moverBricks.size() + needed > layout.MoverBricks);
+		REQUIRE(missing == 1);
+		const RenderScene& render = RenderScene::Get(fixture.SceneData);
+		const uint32_t missingProxy = render.FindProxy(cubes[missingCube]);
+		REQUIRE(missingProxy != RenderScene::c_InvalidIndex);
+		std::set<std::array<int32_t, 4>> held;
+		for (size_t index = 0; index <= leftOut; index++)
+		{
+			if (render.FindProxy(cubes[index]) < missingProxy)
+				held.insert(reached[index].begin(), reached[index].end());
+		}
+		size_t needed = 0;
+		for (const std::array<int32_t, 4>& brick : reached[missingCube])
+			needed += held.count(brick) == 0 ? 1u : 0u;
+		INFO("cube " << missingCube << " of " << leftOut + 1 << " moved was left out: the movers before it hold " << held.size() << " bricks, it needs " << needed << " more");
+		CHECK(held.size() + needed > layout.MoverBricks);
 		CHECK(peakFades > lastFades);
 		CHECK(moverBricks.size() + lastFades <= layout.MoverBricks);
 	}
