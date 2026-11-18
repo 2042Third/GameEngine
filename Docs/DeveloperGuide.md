@@ -297,8 +297,8 @@ on an Apple M2 Max with MoltenVK 1.4.2 (Homebrew), where every test of the `gpu`
   min/max samplers.
 - **Tight limits**: 31 storage buffers per shader stage and 32 KiB of compute shared memory, and 16 samplers per stage.
   The scene set uses 13 storage buffers (the reflection probes' and the lights' shapes among them), 9 samplers and the
-  scene-color copy, the rect lights' table, the local shadow atlas's depth ranges and the area shadow masks as more sampled
-  images (SRV 19, 55, 57, 58), the GPU culling's layout 23
+  scene-color copy, the rect lights' table, the local shadow atlas's depth ranges, the area shadow masks and the rect lights'
+  back faces as more sampled images (SRV 19, 55, 57, 58, 59), the GPU culling's layout 23
   storage buffers (the local shadow views' among them): a new binding counts against these.
 - **Bindless tables**: the descriptor set support query rejects any set beyond `maxPerSetDescriptors` (1,212), also
   update-after-bind sets within the update-after-bind limits (a million sampled images), and MoltenVK samples every slot
