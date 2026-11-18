@@ -16,6 +16,7 @@
 #include <Strata/World/WorldStreamingSystem.h>
 
 #include <algorithm>
+#include <cmath>
 #include <unordered_set>
 
 namespace Strata
@@ -140,7 +141,158 @@ namespace Strata
 		return view.FromScene ? game : ResolveViewportQuality(setting);
 	}
 
-	ViewportRenderer::ViewportRenderer(const std::string& debugName, bool fades)
+	namespace
+	{
+
+		struct BoolSwitch
+		{
+			const char* Name;
+			std::optional<bool> CaptureRendererSwitches::* Member;
+			const char* Description;
+		};
+
+		constexpr BoolSwitch c_BoolSwitches[] = {
+			{ "FadeLevelsOfDetail", &CaptureRendererSwitches::FadeLevelsOfDetail, "Levels of detail cross-fade over a few frames instead of switching (captures: off)" },
+			{ "GPUDriven", &CaptureRendererSwitches::GPUDriven, "The GPU-driven path where the device has it (true, the default) or the CPU path (false)" },
+			{ "BatchAcrossMaterials", &CaptureRendererSwitches::BatchAcrossMaterials, "Instances of a mesh share draws whatever their materials (false: the CPU path splits them by material)" },
+			{ "TextureStreaming", &CaptureRendererSwitches::TextureStreaming, "Textures stream at the levels the screen needs (false: every texture drawn is made resident whole)" },
+			{ "SpecularAntiAliasing", &CaptureRendererSwitches::SpecularAntiAliasing, "Specular lobes widen by how much the shading normal changes across a pixel" },
+			{ "VisibilityFeedback", &CaptureRendererSwitches::VisibilityFeedback, "GPU-driven frames take their asset requests from the GPU's visibility feedback" },
+			{ "OcclusionCulling", &CaptureRendererSwitches::OcclusionCulling, "GPU-driven frames leave out what lies behind what the view draws" },
+			{ "DitherOutput", &CaptureRendererSwitches::DitherOutput, "The 8-bit output is dithered (false shows the banding of gradients)" },
+			{ "SpecularEnergyCompensation", &CaptureRendererSwitches::SpecularEnergyCompensation, "Specular light is compensated for multiple scattering "
+				"(false: the single-scattering lobe, darker on rough surfaces)" },
+			{ "HorizonFade", &CaptureRendererSwitches::HorizonFade, "Reflections a normal map turns into the surface fade out" },
+			{ "SpatialReflectionResolve", &CaptureRendererSwitches::SpatialReflectionResolve, "Spatial screen-space reflections are resolved over 5x5 pixels "
+				"(false: each pixel's traced reflection as the march found it)" } };
+
+	}
+
+	bool CaptureRendererSwitches::operator==(const CaptureRendererSwitches& other) const
+	{
+		for (const BoolSwitch& entry : c_BoolSwitches)
+		{
+			if (this->*entry.Member != other.*entry.Member)
+				return false;
+		}
+		return GlobalIlluminationBounceGain == other.GlobalIlluminationBounceGain && FXAASubpixel == other.FXAASubpixel;
+	}
+
+	bool CaptureRendererSwitches::IsSet() const
+	{
+		return *this != CaptureRendererSwitches {};
+	}
+
+	void CaptureRendererSwitches::Apply(SceneRendererSpecification& specification) const
+	{
+		if (FadeLevelsOfDetail)
+			specification.FadeLevelsOfDetail = *FadeLevelsOfDetail;
+		if (GPUDriven)
+			specification.GPUDriven = *GPUDriven ? GPUDrivenMode::Auto : GPUDrivenMode::Off;
+		if (BatchAcrossMaterials)
+			specification.BatchAcrossMaterials = *BatchAcrossMaterials;
+		if (TextureStreaming)
+			specification.TextureStreaming = *TextureStreaming;
+		if (SpecularAntiAliasing)
+			specification.SpecularAntiAliasing = *SpecularAntiAliasing;
+		if (VisibilityFeedback)
+			specification.VisibilityFeedback = *VisibilityFeedback;
+		if (OcclusionCulling)
+			specification.OcclusionCulling = *OcclusionCulling;
+		if (DitherOutput)
+			specification.DitherOutput = *DitherOutput;
+		if (SpecularEnergyCompensation)
+			specification.SpecularEnergyCompensation = *SpecularEnergyCompensation;
+		if (HorizonFade)
+			specification.HorizonFade = *HorizonFade;
+		if (SpatialReflectionResolve)
+			specification.SpatialReflectionResolve = *SpatialReflectionResolve;
+		if (GlobalIlluminationBounceGain)
+			specification.GlobalIllumination.BounceGain = *GlobalIlluminationBounceGain;
+		if (FXAASubpixel)
+			specification.FXAASubpixel = *FXAASubpixel;
+	}
+
+	nlohmann::json CaptureRendererSwitches::ToJson() const
+	{
+		nlohmann::json result = nlohmann::json::object();
+		for (const BoolSwitch& entry : c_BoolSwitches)
+		{
+			if (const std::optional<bool>& value = this->*entry.Member)
+				result[entry.Name] = *value;
+		}
+		if (GlobalIlluminationBounceGain)
+			result["GlobalIlluminationBounceGain"] = *GlobalIlluminationBounceGain;
+		if (FXAASubpixel)
+			result["FXAASubpixel"] = *FXAASubpixel;
+		return result;
+	}
+
+	std::optional<CaptureRendererSwitches> CaptureRendererSwitches::FromJson(const nlohmann::json& value, std::string* outError)
+	{
+		const auto fail = [outError](std::string reason) -> std::optional<CaptureRendererSwitches>
+		{
+			if (outError)
+				*outError = std::move(reason);
+			return std::nullopt;
+		};
+		if (!value.is_object())
+			return fail("must be an object of switches, e.g. {\"SpecularAntiAliasing\": false}");
+		CaptureRendererSwitches switches;
+		for (auto it = value.begin(); it != value.end(); ++it)
+		{
+			const std::string& name = it.key();
+			const nlohmann::json& setting = it.value();
+			const BoolSwitch* known = nullptr;
+			for (const BoolSwitch& entry : c_BoolSwitches)
+			{
+				if (name == entry.Name)
+					known = &entry;
+			}
+			if (known)
+			{
+				if (!setting.is_boolean())
+					return fail(fmt::format("'{}' must be true or false", name));
+				switches.*(known->Member) = setting.get<bool>();
+			}
+			else if (name == "GlobalIlluminationBounceGain")
+			{
+				const double gain = setting.is_number() ? setting.get<double>() : std::nan("");
+				if (!std::isfinite(gain) || gain < 0.0 || gain > 1.0)
+					return fail("'GlobalIlluminationBounceGain' must be a number from 0 (one bounce) to 1");
+				switches.GlobalIlluminationBounceGain = static_cast<float>(gain);
+			}
+			else if (name == "FXAASubpixel")
+			{
+				const double amount = setting.is_number() ? setting.get<double>() : std::nan("");
+				if (amount != SceneRendererSpecification::c_DefaultFXAASubpixel && amount != SceneRendererSpecification::c_WideFXAASubpixel)
+					return fail("'FXAASubpixel' must be 0.25 or 0.75");
+				switches.FXAASubpixel = static_cast<float>(amount);
+			}
+			else
+			{
+				std::string names;
+				for (const BoolSwitch& entry : c_BoolSwitches)
+					names += fmt::format("{}, ", entry.Name);
+				return fail(fmt::format("has no switch '{}' (switches: {}GlobalIlluminationBounceGain, FXAASubpixel)", name, names));
+			}
+		}
+		return switches;
+	}
+
+	nlohmann::json CaptureRendererSwitches::GetSchema(std::string description)
+	{
+		nlohmann::json properties = nlohmann::json::object();
+		for (const BoolSwitch& entry : c_BoolSwitches)
+			properties[entry.Name] = { { "type", "boolean" }, { "description", entry.Description } };
+		properties["GlobalIlluminationBounceGain"] = { { "type", "number" }, { "minimum", 0.0 }, { "maximum", 1.0 },
+			{ "description", "The share of last frame's light global illumination bounces again (1, the default; 0: one bounce)" } };
+		properties["FXAASubpixel"] = { { "type", "number" }, { "enum", { SceneRendererSpecification::c_DefaultFXAASubpixel, SceneRendererSpecification::c_WideFXAASubpixel } },
+			{ "description", "FXAA's sub-pixel aliasing removal: 0.25 (the default) or 0.75" } };
+		return { { "type", "object" }, { "properties", std::move(properties) }, { "additionalProperties", false }, { "description", std::move(description) } };
+	}
+
+	ViewportRenderer::ViewportRenderer(const std::string& debugName, bool fades, const CaptureRendererSwitches& switches)
 		: m_SingleImages(!fades)
 	{
 		SceneRendererSpecification specification;
@@ -156,6 +308,7 @@ namespace Strata
 			specification.GlobalIllumination.VoxelizeTrianglesPerFrame = 0;
 			specification.GlobalIllumination.VoxelizeTrianglesOnCut = 0;
 		}
+		switches.Apply(specification);
 		m_Renderer = CreateScope<SceneRenderer>(specification);
 	}
 
@@ -286,6 +439,10 @@ namespace Strata
 		options.ShadowViewColors = settings.DebugColors.ShadowRatio;
 		options.LightingView = GetLightingView(settings.DebugView);
 		options.LightingColors = settings.DebugColors.Lighting;
+		options.ShowWireframe = settings.DebugView == ViewportDebugView::Wireframe;
+		options.WireframeColor = settings.DebugColors.Wireframe;
+		options.ShowCulled = settings.DebugView == ViewportDebugView::Culled;
+		options.CulledColors = settings.DebugColors.Culled;
 		if (!m_DebugDraw.IsEmpty())
 			options.DebugShapes = &m_DebugDraw;
 

@@ -109,8 +109,14 @@ namespace Strata
 			// scene's GI intensity (0 to 4); w: the alpha^2 the directional light's disk adds to its highlight's lobe
 			// (GetSunLobeAlpha2; 0 without a directional light).
 			glm::vec4 ReflectionParams;
+			// x: what a capture turned off (c_Capture* bits: SceneRendererSpecification's SpecularEnergyCompensation and
+			// HorizonFade); 0 in every other frame
+			glm::uvec4 CaptureSwitches;
 		};
-		static_assert(sizeof(FrameConstants) == 8 * 64 + 27 * 16);
+		static_assert(sizeof(FrameConstants) == 8 * 64 + 28 * 16);
+		// FrameConstants::CaptureSwitches.x (Include/Scene.slang's ST_CAPTURE_*).
+		constexpr uint32_t c_CaptureNoSpecularEnergy = 1u;
+		constexpr uint32_t c_CaptureNoHorizonFade = 2u;
 
 		// The alpha^2 the forward pass adds to a directional light's specular lobe for its disk (ReflectionParams.w): a disk of
 		// angular diameter `degrees` spans the half maximum of a GGX lobe of alpha tan(radius) / c_LobeHalfMaximum (the reflected
@@ -653,7 +659,7 @@ namespace Strata
 			uint32_t View;             // SceneLightingView
 			float InversePreExposure;  // 1 / the frame's pre-exposure (TemporalParams.y): the HDR target holds luminance times it
 			float LuminanceFirstEV100; // The luminance view's first band's lower edge
-			uint32_t Padding0;
+			uint32_t ClusterCapacity;  // The lights a cluster lists at most (FrameConstants::ClusterGrid.w): the clusters view's counts
 			uint32_t LuminanceColors[c_LightingViewLuminanceColors]; // RGBA8, sRGB, packed (red in the low byte)
 			uint32_t AlbedoLow;
 			uint32_t AlbedoHigh;

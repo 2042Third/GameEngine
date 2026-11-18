@@ -30,7 +30,7 @@ struct LightingViewParameters
 	uint View;
 	float InversePreExposure;
 	float LuminanceFirstEV100;
-	uint Padding0;
+	uint ClusterCapacity; // The lights a cluster lists at most (FrameConstants::ClusterGrid.w): the clusters view's shares as counts
 	uint4 LuminanceColors[3]; // Twelve RGBA8 colors, four per vector
 	uint AlbedoLow;
 	uint AlbedoHigh;

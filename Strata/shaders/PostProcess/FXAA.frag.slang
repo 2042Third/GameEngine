@@ -34,7 +34,12 @@ static const float c_EdgeThreshold = 0.125;     // Minimum local contrast, relat
 static const float c_EdgeThresholdMin = 0.0312; // Minimum absolute contrast (keeps dark noise untouched)
 // Amount of sub-pixel aliasing removal: 0.75 cost 19-22% of the texture detail of an image without anti-aliasing, 0.375
 // still 15% (PhysicsPlayground's tiled floor at 3840x2160).
+#ifdef ST_FXAA_WIDE_SUBPIXEL
+// The editor's captures that show what more sub-pixel removal does (SceneRendererSpecification::FXAASubpixel).
+static const float c_Subpixel = 0.75;
+#else
 static const float c_Subpixel = 0.25;
+#endif
 static const int c_SearchSteps = 12;
 static const float c_StepSizes[c_SearchSteps] = { 1.0, 1.0, 1.0, 1.0, 1.0, 1.5, 2.0, 2.0, 2.0, 2.0, 4.0, 8.0 };
 

@@ -9,16 +9,28 @@
 #include "UI/ItemProbe.h"
 #include "UI/RecoveryDialog.h"
 
+#include <Strata/Core/Base64.h>
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/ImageReader.h>
 #include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Scene/Components.h>
 
+#include <imgui.h>
+#include <imgui_internal.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
+#include <thread>
+#include <vector>
 
 // Contracts of the editor's commands that agents rely on: values out of a property's range are refused rather than changed,
 // and the editor window's dialogs open on request (editor.showDialog).
@@ -175,7 +187,260 @@ TEST_SUITE("Editor.UI.Dialogs")
 			REQUIRE(command);
 			CHECK(command->Kind == EditorCommandKind::Session);
 			CHECK(command->Results == EditorCommandResults::Content);
+			CHECK_FALSE(command->MayDefer);
 		}
+		// A picture of the window changes nothing, and answers frames later.
+		const EditorCommand* screenshot = editor.Layer->GetCommands().Find("editor.screenshot");
+		REQUIRE(screenshot);
+		CHECK(screenshot->Kind == EditorCommandKind::Query);
+		CHECK(screenshot->Results == EditorCommandResults::Content);
+		CHECK(screenshot->MayDefer);
+	}
+
+	TEST_CASE("editor.screenshot of a panel is refused while the launcher shows, the whole window is not")
+	{
+		// No project: the editor shows its launcher, which has no panels.
+		HarnessEditor editor;
+		editor.Frames(2);
+		REQUIRE_FALSE(editor.Context().HasProject());
+		editor.Host->Window = true;
+		editor.Frames(1);
+		const EditorCommandResult panel = editor.Layer->GetCommands().Execute(editor.Context(), "editor.screenshot", { { "panel", "Inspector" } });
+		CHECK(panel.ErrorKind == EditorCommandError::Failed);
+		CHECK(panel.Error.find("shows its launcher") != std::string::npos);
+		CHECK(editor.Host->WindowReadbacks.empty());
+		auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+		editor.Layer->GetCommandRunner().Run(editor.Context(), editor.Layer->GetCommands(), "editor.screenshot", nlohmann::json::object(),
+			[completed](const EditorCommandResult& result) { *completed = result; });
+		REQUIRE(editor.FramesUntil([&]() { return completed->has_value(); }));
+		INFO((*completed)->Error);
+		CHECK((*completed)->Success);
+		CHECK(editor.Host->WindowReadbacks.size() == 1);
+	}
+
+	TEST_CASE("editor.screenshot reads back the window or a panel as a later frame drew it, and fails without side effects")
+	{
+		HarnessEditor editor({}, WithFeatureProject("Screenshot"));
+		editor.Frames(2);
+		REQUIRE(editor.Context().HasProject());
+		const std::filesystem::path directory = CreateTemporaryDirectory("ScreenshotFiles");
+		const auto execute = [&](const nlohmann::json& parameters)
+		{
+			return editor.Layer->GetCommands().Execute(editor.Context(), "editor.screenshot", parameters);
+		};
+		// Through the runner, frames until it answered.
+		const auto run = [&](const nlohmann::json& parameters)
+		{
+			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+			editor.Layer->GetCommandRunner().Run(editor.Context(), editor.Layer->GetCommands(), "editor.screenshot", parameters,
+				[completed](const EditorCommandResult& result) { *completed = result; });
+			REQUIRE(editor.FramesUntil([&]() { return completed->has_value(); }));
+			return **completed;
+		};
+
+		// The host's window is set after the layer attached (a window would start native file dialogs).
+		CHECK(execute(nlohmann::json::object()).ErrorKind == EditorCommandError::Failed);
+		editor.Host->Window = true;
+		editor.Frames(1);
+		// What cannot be done changes nothing and asks for no readback.
+		CHECK(execute({ { "panel", "Nope" } }).ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(execute({ { "path", FileSystem::ToUTF8(directory / "Shot.txt") } }).ErrorKind == EditorCommandError::InvalidParameters);
+		REQUIRE(FileSystem::WriteText(directory / "Existing.png", "kept"));
+		CHECK(execute({ { "path", FileSystem::ToUTF8(directory / "Existing.png") } }).ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(*FileSystem::ReadText(directory / "Existing.png") == "kept");
+		editor.Layer->GetPanels().SetOpen(EditorPanels::c_Performance, false);
+		const EditorCommandResult closed = execute({ { "panel", "Performance" } });
+		CHECK(closed.ErrorKind == EditorCommandError::Failed);
+		CHECK(closed.Error.find("is not open") != std::string::npos);
+		CHECK(editor.Host->WindowReadbacks.empty());
+
+		// The whole window: read back at the end of the second frame's UI, then encoded and saved on job threads.
+		const std::filesystem::path windowFile = directory / "Shots" / "Window.png";
+		const uint64_t before = editor.Host->FrameCount;
+		const EditorCommandResult whole = run({ { "path", FileSystem::ToUTF8(windowFile) } });
+		REQUIRE_MESSAGE(whole.Success, whole.Error);
+		REQUIRE(editor.Host->WindowReadbacks.size() == 1);
+		CHECK(editor.Host->WindowReadbacks[0] == glm::uvec4(0));
+		CHECK(editor.Host->FrameCount - before >= 2);
+		CHECK(whole.Value["width"] == 1600);
+		CHECK(whole.Value["height"] == 900);
+		CHECK(whole.Value["panel"].is_null());
+		CHECK(FileSystem::FromUTF8(whole.Value["path"].get<std::string>()) == windowFile);
+		const std::optional<std::vector<uint8_t>> saved = FileSystem::ReadBytes(windowFile);
+		REQUIRE(saved);
+		CHECK(*Base64::Decode(whole.Value["Image"]["Data"].get<std::string>()) == *saved);
+		const std::optional<ReadbackImage> decoded = ImageReader::DecodeRGBA8(*saved);
+		REQUIRE(decoded);
+		CHECK(decoded->Width == 1600);
+		CHECK(decoded->Height == 900);
+		CHECK(decoded->Pixels[0] == 40);
+		CHECK(decoded->Pixels[1] == 90);
+		CHECK(decoded->Pixels[2] == 160);
+
+		// A panel ("Scene" names the Scene view): its window's rectangle as the frame that was read back drew it.
+		editor.Run("editor.showPanel", { { "panel", "Inspector" } });
+		const EditorCommandResult inspector = run({ { "panel", "Inspector" } });
+		REQUIRE_MESSAGE(inspector.Success, inspector.Error);
+		const std::optional<EditorPanelRegistry::WindowRect> rect = editor.Layer->GetPanels().GetShownWindowRect(EditorPanels::c_Inspector);
+		REQUIRE(rect);
+		const glm::uvec4 region = editor.Host->WindowReadbacks.back();
+		CHECK(region.x == static_cast<uint32_t>(std::floor(rect->Min.x)));
+		CHECK(region.y == static_cast<uint32_t>(std::floor(rect->Min.y)));
+		CHECK(region.z == static_cast<uint32_t>(std::ceil(rect->Max.x)) - region.x);
+		CHECK(region.w == static_cast<uint32_t>(std::ceil(rect->Max.y)) - region.y);
+		CHECK(inspector.Value["panel"] == "Inspector");
+		CHECK(inspector.Value["width"] == region.z);
+		CHECK(inspector.Value["height"] == region.w);
+		CHECK(inspector.Value["region"]["x"] == region.x);
+		CHECK(inspector.Value["region"]["y"] == region.y);
+		CHECK_FALSE(inspector.Value.contains("path"));
+		const EditorCommandResult scene = run({ { "panel", "Scene" } });
+		REQUIRE_MESSAGE(scene.Success, scene.Error);
+		CHECK(scene.Value["panel"] == EditorPanels::c_Viewport);
+
+		// A panel behind another tab of its dock node is not shown: the picture fails, naming the way to show it.
+		editor.Run("editor.showPanel", { { "panel", "AssetInspector" } });
+		editor.Frames(6);
+		REQUIRE_FALSE(editor.Layer->GetPanels().GetShownWindowRect(EditorPanels::c_Inspector).has_value());
+		const size_t readbacks = editor.Host->WindowReadbacks.size();
+		const EditorCommandResult hidden = run({ { "panel", "Inspector" } });
+		CHECK_FALSE(hidden.Success);
+		CHECK(hidden.Error.find("not shown") != std::string::npos);
+		CHECK(editor.Host->WindowReadbacks.size() == readbacks);
+
+		// A panel closed after the command, before its picture was taken: the picture fails, and nothing is read back or written.
+		editor.Run("editor.showPanel", { { "panel", "Inspector" } });
+		editor.Frames(2);
+		{
+			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+			editor.Layer->GetCommandRunner().Run(editor.Context(), editor.Layer->GetCommands(), "editor.screenshot",
+				{ { "panel", "Inspector" }, { "path", FileSystem::ToUTF8(directory / "Closed.png") } },
+				[completed](const EditorCommandResult& result) { *completed = result; });
+			REQUIRE_FALSE(completed->has_value());
+			editor.Layer->GetPanels().SetOpen(EditorPanels::c_Inspector, false);
+			const size_t readbacksBefore = editor.Host->WindowReadbacks.size();
+			REQUIRE(editor.FramesUntil([&]() { return completed->has_value(); }));
+			CHECK_FALSE((*completed)->Success);
+			CHECK((*completed)->Error.find("was closed before its picture was taken") != std::string::npos);
+			CHECK(editor.Host->WindowReadbacks.size() == readbacksBefore);
+			CHECK_FALSE(FileSystem::Exists(directory / "Closed.png"));
+			editor.Layer->GetPanels().SetOpen(EditorPanels::c_Inspector, true);
+		}
+
+		// A readback that fails fails the command, and nothing is written.
+		editor.Host->ReadbackError = "the device was lost";
+		const EditorCommandResult failed = run({ { "path", FileSystem::ToUTF8(directory / "Failed.png") } });
+		CHECK_FALSE(failed.Success);
+		CHECK(failed.Error.find("the device was lost") != std::string::npos);
+		CHECK_FALSE(FileSystem::Exists(directory / "Failed.png"));
+	}
+
+	TEST_CASE("editor.screenshot takes a frame laid out as the one before, also as the first command of an editor that just started")
+	{
+		// Where every window and every tab of a visible tab bar was in the frame just drawn: BeginTabBar's tab bars and the
+		// dock nodes' (each node owns its own), with how far each is scrolled.
+		size_t mostDockTabBars = 0;
+		const auto layoutOf = [&mostDockTabBars]()
+		{
+			ImGuiContext& imgui = *ImGui::GetCurrentContext();
+			std::vector<double> layout;
+			for (const ImGuiWindow* window : imgui.Windows)
+			{
+				if (window->Active)
+					layout.insert(layout.end(), { double(window->ID), window->Hidden ? 1.0 : 0.0, window->Pos.x, window->Pos.y, window->Size.x, window->Size.y });
+			}
+			std::vector<const ImGuiTabBar*> tabBars;
+			for (int index = 0; index < imgui.TabBars.GetMapSize(); index++)
+				tabBars.push_back(imgui.TabBars.TryGetMapData(index));
+			size_t dockTabBars = 0;
+			for (const ImGuiStoragePair& entry : imgui.DockContext.Nodes.Data)
+			{
+				const ImGuiDockNode* node = static_cast<const ImGuiDockNode*>(entry.val_p);
+				if (node && node->TabBar && node->TabBar->CurrFrameVisible == imgui.FrameCount)
+					dockTabBars++;
+				tabBars.push_back(node ? node->TabBar : nullptr);
+			}
+			mostDockTabBars = std::max(mostDockTabBars, dockTabBars);
+			for (const ImGuiTabBar* tabBar : tabBars)
+			{
+				if (!tabBar || tabBar->CurrFrameVisible != imgui.FrameCount)
+					continue;
+				layout.push_back(tabBar->ScrollingAnim);
+				for (const ImGuiTabItem& tab : tabBar->Tabs)
+					layout.insert(layout.end(), { double(tab.ID), tab.Offset, tab.Width });
+			}
+			return layout;
+		};
+		const auto frameOnce = [](HarnessEditor& editor, const std::function<void()>& before)
+		{
+			editor.Host->Time += ImGuiHarness::c_DeltaTime;
+			editor.Layer->OnUpdate(Timestep(ImGuiHarness::c_DeltaTime));
+			editor.Harness.Frame([&]()
+			{
+				before();
+				editor.Layer->OnImGuiRender();
+			});
+			editor.Host->FrameCount++;
+			// Encoding runs on job threads.
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		};
+
+		HarnessEditor editor({}, WithFeatureProject("ScreenshotSettle"));
+		editor.Host->Window = true;
+		// As a command script's first command, before the editor drew its first frame (its dock space, windows and tabs lay out
+		// over the first frames).
+		auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+		editor.Layer->GetCommandRunner().Run(editor.Context(), editor.Layer->GetCommands(), "editor.screenshot", nlohmann::json::object(),
+			[completed](const EditorCommandResult& result) { *completed = result; });
+		std::vector<std::vector<double>> layouts;
+		std::optional<size_t> readFrame;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		while (!completed->has_value() && std::chrono::steady_clock::now() < deadline)
+		{
+			frameOnce(editor, []() {});
+			layouts.push_back(layoutOf());
+			if (!readFrame && !editor.Host->WindowReadbacks.empty())
+				readFrame = layouts.size() - 1;
+		}
+		REQUIRE(completed->has_value());
+		INFO((*completed)->Error);
+		REQUIRE((*completed)->Success);
+		REQUIRE(readFrame.has_value());
+		REQUIRE(*readFrame >= 1);
+		// The editor's dock space shows tab bars of its own: they are among what held still.
+		CHECK(mostDockTabBars > 0);
+		CHECK(layouts[*readFrame] == layouts[*readFrame - 1]);
+		CHECK((*completed)->Value["settled"] == true);
+
+		// A window that grows in every frame never holds still: the picture is taken after the longest wait, and says so.
+		completed->reset();
+		const size_t readbacks = editor.Host->WindowReadbacks.size();
+		const uint64_t started = editor.Host->FrameCount;
+		std::optional<uint64_t> readAt;
+		float growth = 0.0f;
+		editor.Layer->GetCommandRunner().Run(editor.Context(), editor.Layer->GetCommands(), "editor.screenshot", nlohmann::json::object(),
+			[completed](const EditorCommandResult& result) { *completed = result; });
+		const auto growingDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		while (!completed->has_value() && std::chrono::steady_clock::now() < growingDeadline)
+		{
+			frameOnce(editor, [&growth]()
+			{
+				growth += 1.0f;
+				ImGui::SetNextWindowPos(ImVec2(40.0f, 40.0f));
+				ImGui::SetNextWindowSize(ImVec2(200.0f + growth, 120.0f));
+				ImGui::Begin("Growing", nullptr, ImGuiWindowFlags_NoDocking);
+				ImGui::TextUnformatted("Grows");
+				ImGui::End();
+			});
+			if (!readAt && editor.Host->WindowReadbacks.size() > readbacks)
+				readAt = editor.Host->FrameCount;
+		}
+		REQUIRE(completed->has_value());
+		INFO((*completed)->Error);
+		REQUIRE((*completed)->Success);
+		CHECK((*completed)->Value["settled"] == false);
+		REQUIRE(readAt.has_value());
+		CHECK(*readAt - started >= 30);
 	}
 
 	TEST_CASE("editor.showDialog opens the project dialogs and the export dialog of an open project")

@@ -321,12 +321,17 @@ Windows, so that no console window opens with them; `StrataCLI` and `StrataTests
 `CreateApplication` in `Engine/ApplicationLaunch.h`: `ProgramRun` in `Core/Platform.h`) and calls `Platform::ConnectStandardStreams` with it: pipes and
 files their callers pass are kept, so tests and tools read their output and exit codes as before. A *Console* run
 (output is the point: `--version`, `--help`, usage errors, headless and scripted runs: the editor's `--headless`,
-`--no-gpu`, `--frames`, `--commands`, `--quit-after-commands`, the runtime's `--headless`, `--frames`, `--seconds` and
-option mistakes) prints into the terminal that started it; an *Interactive* run (a person's window) leaves that terminal alone,
-so its Ctrl+C or closing it does not end the program and the log does not run into the shell's prompt. Then
-`Platform::InstallInterruptHandler` turns Ctrl+C, Ctrl+Break and the console closing (Windows) or SIGINT and SIGTERM
-(POSIX) into an orderly quit through the main loop (`Platform::IsInterruptRequested`; exit code
-`Application::c_InterruptedExitCode`, 130, unless the run had failed); a second request ends the process at once. Fatal
+`--no-gpu`, `--frames`, `--commands`, `--quit-after-commands` and `--window-size` (pictures for tools: `StrataCLI launch`
+discards the output, so a dialog would wait for a person while the CLI waits for the session), the runtime's
+`--headless`, `--frames`, `--seconds` and option mistakes) prints into the terminal that started it; an *Interactive*
+run (a person's window) leaves that terminal alone, so its Ctrl+C or closing it does not end the program and the log
+does not run into the shell's prompt. Then `Platform::InstallInterruptHandler` turns Ctrl+C, Ctrl+Break and the
+console closing (Windows) or SIGINT and SIGTERM (POSIX) into an orderly quit through the main loop (`Platform::IsInterruptRequested`; exit code
+`Application::c_InterruptedExitCode`, 130, unless the run had failed); a second request ends the process at once. An
+exception that leaves a frame (engine code does not throw: third-party code, a driver's failure inside NVRHI) is caught by
+the main loop, logged as critical ("Unhandled exception in the main loop") and ends the run in order with
+`Application::c_UnhandledExceptionExitCode`, 1, unless the run had failed before (`Core.Application` checks it through a
+helper process that ends as `Engine/EntryPoint.h` does). Fatal
 startup failures go through `Application::ReportFatalError` (no window, no graphics device, no game to run, a game that cannot
 start): logged, and for an Interactive run whose stderr nobody reads (`Platform::ShouldShowErrorDialogs`: started from
 the desktop, from a terminal it left alone, or with its output sent to the null device) also shown in a native dialog
@@ -853,6 +858,11 @@ exercised by it.
     long an export takes. A new editor command a game relies on gets a step there.
     `StrataRuntime.FeatureTestQuality` (labels `feature` and `gpu`) runs the exported game in a window with
     `--quality low`: its scripts must read the preset as the command line's and say so.
+    `StrataEditor.FeatureCaptures` (labels `feature` and `gpu`) takes the editor's pictures by command in a window of a fixed
+    size (`--window-size 1280x720`, its own layout file and its own copy of the project,
+    `Editor/FeatureCaptureCommands.json.in`): `editor.screenshot` of the window and of the Inspector, and `viewport.capture`
+    through the scene's camera, which must be `complete`; `StrataTests --strata-test-helper=check-image` checks the pictures.
+    A new capture command, switch or debug view gets a step there.
 - **The feature test enforces coverage.** It fails when:
   - a registered component is missing from the feature scene, or a property has its default value on every entity
     with the component (new properties need a non-default value there, which also proves that they serialize);
@@ -2145,7 +2155,12 @@ Building and loading scripts:
   call of the function it was inlined into), `Stack` the frames; `Symbolized` says the job
   finished (`ScriptModule::GetFault` merges its result). `script.status`, the Console (a click opens the line), the
   Problems panel and the play-stop log show them. Script modules write a PDB in every configuration
-  (`strata_add_script_module`).
+  (`strata_add_script_module`), and GCC and Clang compile them with `-g` in every configuration too: the editor builds
+  scripts in its own configuration (a released editor in Release; Dist takes Release's flags), and a debugger binds a
+  breakpoint in a script only where the module has debug information (DWARF in the ELF module; on macOS the module's
+  debug map names the objects that hold it). `Scripting.Module` reads the built test module for it without a debugger
+  (`Tests::FindModuleDebugInformation`: a CodeView record and its PDB, `.debug_info`, a `__DWARF` segment or `N_OSO`
+  stabs).
 - Contained: access violations, division by zero, stack overflow, C++ exceptions escaping module code and, on Windows,
   `abort()` (also from a failed `assert()` and from `std::terminate`: modules turn it into
   `ST_SCRIPT_ABORT_EXCEPTION_CODE` through a SIGABRT handler `ScriptModuleEntry.cpp` installs in their static C
@@ -2830,7 +2845,28 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     root or its asset folders; `search`: the Hierarchy's search text, as if typed, e.g. a world's `l:Props`;
     `UI::SearchField`'s `reload` makes a field being typed in show it); it fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
     stays open through a layout reset and the saved open states read at the first frame, and is asked for again until its
-    tab shows; while a modal dialog waits for the person it opens behind it (focusing it would close the dialog). Glyphs a font lacks show as its fallback glyph: draw color swatches as rectangles (the monospaced font has no
+    tab shows; while a modal dialog waits for the person it opens behind it (focusing it would close the dialog).
+    `editor.screenshot {path?, overwrite?, panel?}`, the window's third command, takes a picture of the window as the person
+    sees it, UI and all, or of one docked panel's window (named as `editor.showPanel` names them), as a PNG (`{Image, width,
+    height, panel, region: {x, y, width, height}, settled, path?}`; `path` through `CommandUtils::ResolveOutputPath`). It is
+    an `EditorHost` service: `StrataEditorCore` never reaches the UI. The command's poll waits `c_ScreenshotSettleFrames` (2)
+    so the commands before it took effect, then arms the capture. At the end of each later frame's UI
+    (`EditorLayer::ReadBackScreenshots`) it compares where ImGui put the windows and the tabs of the tab bars shown, and how
+    far each tab bar is scrolled, with the frame before (`HashWindowLayout`; a dock node owns its tab bar apart from
+    `BeginTabBar`'s, `ImGuiContext::TabBars`, so it walks both): ImGui lays out what appeared, resized or docked over a frame or more, and an editor
+    that just started (a script's first command) shows its tabs' titles cut in its first frames. The first frame that lays
+    out as the one before is read back (`settled` true), or the one `c_ScreenshotMaxSettleFrames` (30) frames in (`settled`
+    false). What is still loading (the scene's assets, thumbnails) shows as the person sees it: scripts wait (`editor.wait`)
+    before pictures right after the start. Then the panel's rectangle as this frame drew it (`GetShownWindowRect`, times
+    `DisplayFramebufferScale`; a panel brought to the front gets `c_ScreenshotShowFrames` to show) goes to
+    `EditorHost::RequestWindowReadback`, which `GraphicsModule::RequestBackBufferReadback` answers: a `TextureReadback` of
+    the back buffer submitted at the end of that frame, after the UI is drawn, polled at the start of later frames, so no
+    frame stalls (`--screenshot`'s `RequestScreenshot` blocks its last frame). The picture is encoded and saved on job
+    threads (`CommandUtils::SubmitEncodePNG`, `SubmitSavePNG`, which `viewport.capture` uses too). It fails without side
+    effects for an unknown panel, a closed one, one another tab covers, a panel while the launcher shows, an existing file
+    without `overwrite` and a run without a window; the window's size is the person's, or `--window-size`'s, and the UI's
+    scale the display's, or `--ui-scale`'s: pictures that compare across machines need both (`StrataCLI launch` takes both).
+    Glyphs a font lacks show as its fallback glyph: draw color swatches as rectangles (the monospaced font has no
     icons), and check panels with `ImGuiHarness::CountFallbackGlyphs`.
 
 ### Changes go through commands
@@ -3239,9 +3275,21 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   anything starts (no log file, window or session); an argument the editor does not know, or an option without its value,
   exits 3 with the usage, and so does a value an option does not take (`--frames abc`, `--frames 0`: `CheckValues`; the
   table of arguments is `c_Arguments` in `EditorApplication.cpp`: add new ones there; the runtime's is in
-  `RuntimeApplication.cpp`, and both check and print theirs through `Core/CommandLineOptions`). `--ui-scale <factor>` draws the
+  `RuntimeApplication.cpp`, and both check and print theirs through `Core/CommandLineOptions`). `--window-size
+  <width>x<height>` opens a window of exactly that many pixels, whatever the display's scale, instead of a maximized one
+  (screenshots of a fixed size; it needs a window, so `--headless` and `--no-gpu` refuse it, and `StrataCLI launch
+  --window-size` passes it on). It takes no window smaller than 640x360 (`c_MinWindowWidth`, `c_MinWindowHeight`: the
+  size the panels are laid out for; Windows widens a window narrower than its title bar anyway), and a window the system
+  made another size ends the start with exit code 1 and both sizes (`HasRequestedPixels`): Windows shrinks one larger
+  than the display, and a display whose screen coordinates are more than a pixel makes only the sizes its scale steps
+  through (a Retina display's 2: even ones; `MatchWindowPixels` tells the two apart, and the message then names the
+  nearest size the scale makes), logged and never in a dialog (a run with `--window-size` is a Console run):
+  `StrataCLI launch` then fails at once, naming the editor's exit code (`LaunchEditor`). Only the start is checked: the
+  window stays resizable, so a person, a snap or a window manager can change its size later (`editor.screenshot`'s
+  `width` and `height` say what a picture got). `--ui-scale <factor>` draws the
   UI at a fixed scale instead of the display's and the person's preference (e.g. 1 to check it at 100% on a 150%
-  display), `--layout <file>` keeps
+  display; `StrataCLI launch --ui-scale` passes it on); with `--window-size` it gives pictures of the editor that compare
+  across machines. `--layout <file>` keeps
   the panel layout in that file instead of the user's (`<user data>/Strata/EditorLayout.ini`), and `--imgui-demo` offers
   ImGui's demo window (Help menu) for UI work.
   Without `--frames`, a headless editor runs until `editor.quit` (which, like the other commands that replace the scene,
@@ -3587,7 +3635,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   snapping). A toolbar strip above the image holds the chips, so none ever covers the image (the game's HUD, its
   canvases): the camera settings, the overlay toggles (grid, outline, gizmos, stats), the editor-view settings (preview
   lighting, game UI) and the debug view (named after the view, "Lit" without one, and lit while one colors the image; a
-  click offers Lit, Streaming, LOD and Mip) from its left, the agent chip at its right (a strip narrower than the chips
+  click offers every view of `ViewportDebugView`) from its left, the agent chip at its right (a strip narrower than the chips
   with their labels draws the last ones as icons, labels in their tooltips, and one too narrow even for the icons puts the
   chips that pass its width on rows under the first, the toolbar growing by those rows: `UI::ChipStrip`, so every chip
   stays in reach); clicking a chip does not focus the panel; "Game camera" (F8, `ViewportSettings::PilotGameCamera`)
@@ -3635,7 +3683,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   fov?, overlays?, debugView?: "none" | "streaming" | "lod" | "mip" | "motion" | "shadows" | "lighting" | "ao" | "indirect" |
   "luminance" | "albedo" | "voxels" | "gi" | "open" | "probes" (global illumination's voxels, its bounce light on white
   surfaces, the share of the sky surfaces see and its probes, with `debugView.globalIllumination` and a wait for the
-  voxels to settle: [Global illumination](#global-illumination)), quality?: "project" | "low" | "medium" |
+  voxels to settle: [Global illumination](#global-illumination)) | "specular" | "diffuse" | "clusters" | "culled" |
+  "wireframe" (boxes of what culling left out, the edges of what was drawn: "Rendering"), quality?: "project" | "low" | "medium" |
   "high" | "ultra", waitForAssets?, path?, overwrite?}` renders on the
   next frame (again on the following frames, up to `c_MaxCaptureTextFrames`, while glyphs of the scene's text are still
   being rasterized, so text is never half drawn, up to `c_MaxCaptureExposureFrames` until its pre-exposure settled (the
@@ -3659,7 +3708,15 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   "screenSpaceTexts", "hiddenScreenSpaceTexts", "ui": {"canvases",
   "hiddenCanvases", "elements", "drawCalls", "pendingGlyphs"}, "debugView":
   {"view", "tintedEntities", "pendingEntities", "failedEntities", "placeholderBoxes", "entitiesPerLOD",
-  "entitiesPerMipShortfall", "shadows"?, "lighting"?, "lightingPending"?}, "notice"?, "path"?}` (the mip view counts entities
+  "entitiesPerMipShortfall", "shadows"?, "lighting"?, "lightingPending"?}, "renderStats", "screenSpaceReflectionsPending",
+  "notice"?, "path"?, "incomplete", "complete"}` (every wait is bounded in frames and the command succeeds when a bound runs
+  out, so `incomplete` lists, as JSON pointers into the result, the fields that say what the picture lacks:
+  `ListIncompleteCapture`'s `/pendingAssets`, `/texturesBelowWanted`, `/stalePoses`, `/pendingTextGlyphs`,
+  `/ui/pendingGlyphs`, `/localShadowViewsPending`, `/reflectionProbesPending`, `/renderStats/deferredInstanceBytes`,
+  `/preExposureSettled`, `/globalIlluminationSettled`, `/previewLighting` (lit by the editor's preview, not the scene),
+  `/temporalFrames` (under TAA, fewer than 8), `/screenSpaceReflectionsPending`, `/debugView/shadows/complete`,
+  `/debugView/lightingPending` and `/notice` (another camera than the one asked for), and `complete` is true when it is
+  empty; the mip view counts entities
   with textures by the mip levels their worst texture lacks: none, 1, 2, 3 or more or still loading; the motion view colors
   pixels by their motion since the capture renderer's previous frame, so it renders a second frame, and a still scene shows
   none; the shadows view colors every receiver by screen pixels per shadow texel and adds `shadows: {complete, shadowMapSize,
@@ -3674,8 +3731,24 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   they arrived (`lighting` null and `lightingPending` true if they did not within the same polls); it defaults to the
   viewport's size, camera, overlays and debug view and fails without a GPU. `position`, `target` and `fov` render through a camera of the capture's own (a copy
   of the editor camera with those changes; `camera.get` is unchanged, the result's camera is `"custom"`), so agents look
-  around without moving the person's view. **Live captures** (`viewport.capture {live: true, camera, atFixedStep?,
-  frames?, path?}`) render nothing: they read back what the Scene view (`"editor"`) or the Game view (`"scene"`) presented, its
+  around without moving the person's view. **Renderer switches** (`viewport.capture {renderer: {...}}`,
+  `CaptureRendererSwitches` in `ViewportRenderer.h`) turn techniques on or off for one picture, to show what they do:
+  `SceneRendererSpecification`'s `FadeLevelsOfDetail`, `GPUDriven` (false: the CPU path), `BatchAcrossMaterials`,
+  `TextureStreaming`, `SpecularAntiAliasing`, `VisibilityFeedback`, `OcclusionCulling`, `DitherOutput`, and the capture-only
+  fields `SpecularEnergyCompensation`, `HorizonFade`, `SpatialReflectionResolve` (false: the forward pass reads each pixel's
+  traced reflection, copied over the resolved target), `GlobalIlluminationBounceGain` (`GlobalIlluminationSettings::
+  BounceGain`, 0 is one bounce) and `FXAASubpixel` (0.25 or 0.75: `PostProcess/FXAAWideSubpixel.frag`, a variant, so the
+  default's shader is unchanged). A capture with any renders through a renderer of its own
+  (`EditorViewport::GetSwitchedCaptureRenderer`: the capture renderer's specification with the switches over it, kept for
+  the next capture with the same switches, its targets released after each picture; the capture holds it until it
+  finished), so no view, other capture or game frame changes (`GPU.Editor.Viewport` checks the Scene view's frames and a
+  capture without switches against those before, to the bit; the switches' waits are a capture's like any other's: a
+  texture made resident whole without `TextureStreaming` stays resident as a capture's levels do). The result's `renderer`
+  echoes the switches set; live captures refuse them. A capture's exposure is metered from its own frames, so under
+  automatic exposure a switch that changes how much light there is (energy compensation, the bounces) re-exposes the whole
+  picture: pairs that show what a technique does are taken with a fixed exposure (`PostProcess` `AutoExposure` off), and
+  `renderStats.exposure` says what automatic exposure metered. **Live captures** (`viewport.capture {live: true, camera,
+  atFixedStep?, frames?, path?}`) render nothing: they read back what the Scene view (`"editor"`) or the Game view (`"scene"`) presented, its
   temporal history as it is, to see motion as it plays (trails, smearing, crawling). Every command poll runs before the
   views render in its frame, so a poll reads back the frame the view rendered in the previous one before it renders
   again; `ViewportRenderer::GetRenderStamp` pairs each render with the play session and the fixed steps it showed.
@@ -3988,6 +4061,7 @@ mechanical, so a lighting bug in code nobody changed may be a conversion slip (i
   the ambient occlusion (GTAO and its denoiser, their resources and targets), `SceneRendererLightingView.cpp` the lighting
   debug views, `SceneRendererGlass.cpp`, `SceneRendererScreenShadows.cpp` the sun's screen-space shadow mask (its
   evaluation, contact shadows and blur), `SceneRendererShadowView.cpp` the shadows debug view,
+  `SceneRendererGeometryViews.cpp` the wireframe and culled debug views,
   `SceneRendererScreenReflections.cpp`, `SceneRendererReflectionProbes.cpp`, `SceneRendererAtmosphere.cpp`,
   `SceneRendererLocalShadows.cpp`, `SceneRendererExtraction.cpp` and `SceneRendererGPUDriven.cpp`. Their members stay
   declared in `SceneRenderer.h`, grouped under a comment naming their file. A feature's new pass goes into its file
@@ -4749,6 +4823,28 @@ lights, Post Process and the sky), and never a resolution below the output's.
   frames that show the view: its pipelines and buffers are made by the first such frame, its binding sets (which name the
   depth) are released with the targets, its counts' buffer and the ring of `c_GPURecordCount` readbacks stay with the
   renderer, so a capture's counts survive the release of its targets.
+- **The wireframe and culled debug views** (`SceneRenderOptions::ShowWireframe`, `ShowCulled`; the editor's `debugView:
+  "wireframe"`, `"culled"`; `SceneRendererGeometryViews.cpp`) show what the frame drew and what it left out, drawn into the
+  output texture in `GPU.Overlays` with the overlays' frame constants, after the tints and under the other overlays. The
+  wireframe replays the frame's own draws with `Pass::Wireframe` scene pipelines (non-solid fill, the batch's culling and
+  winding, so mirrored instances keep theirs, depth tested against the frame's depth with `SetJitteredDepthBias`, blended in
+  `WireframeColor`): the GPU-driven path's view buckets with the arguments its culling wrote (`DrawGPUView`), or the CPU's
+  opaque batches, then the transparent batches both paths draw on the CPU; the mesh vertex shaders (skinned ones for skinned
+  instances) and `Scene/Wireframe.frag`, which tests the level-of-detail fade's mask as the prepass does and reads no
+  texture. The replay leaves `DrawCommands` as the frame counted them. It needs the device's non-solid fill mode
+  (`GraphicsDeviceInfo::SupportsWireframe`): without it the frame reports why and draws no lines. The culled view boxes the
+  mesh renderers in the frustum that culling left out, over everything (no depth test): by their size (`CulledColors[0]`,
+  boxes grown to `RenderData::c_CulledViewMinPixels` across their diagonal, a cube's edges about 3.5 pixels) and, on the
+  GPU-driven path, by occlusion (`[1]`: hidden now and not drawn by the first phase; `renderStats.occludedProxies` counts
+  every proxy the second phase found hidden, so while the camera moves it includes the ones the first phase drew once
+  more because the previous frame saw them, boxed from the next frame). Each path records them where it decides, so the
+  boxes are its decisions, not a second guess: the CPU's extraction into `m_CulledProxies` (uploaded at the overlay),
+  `Scene/Cull.comp`'s counting passes into `u_CulledViewList` with `u_CulledViewArguments` as the draw's indirect arguments (`CullConstants::CulledView`; the cull
+  layout binds both every frame, one entry long while the view is off, and the branch is uniform). An entry is the proxy's
+  index and the reason above `c_CulledReasonShift`; `Overlay/CulledView.vert` draws a box per entry from the scene copy's
+  proxy records, one draw per reason so crossing lines of two colors do not depend on the GPU's recording order. Frames
+  without the views record nothing of them; their resources are made by the first frame that shows one, apart from the
+  GPU path's two one-entry buffers the cull layout binds.
 - `SceneRenderer::GetShadowViewStats()` (`ShadowViewStats`, `Strata/Renderer/ShadowView.h`) is the newest frame whose counts
   came back (2-3 frames late, never waited for: `Render` resolves them at its start, `ResolveShadowViewStats` for tools
   that wait without rendering, as `viewport.capture` does beside `ResolveGPUStats`): per cascade its layout (the frame's
@@ -4857,7 +4953,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   (`SurfaceData::SpecularEnergy`, `ClearcoatData::SpecularEnergy` for the coat's lobe of F0 0.04) is computed once per pixel
   from the table fetch the surface setup of `ShadeLitSurface` makes, and multiplies direct light's specular term
   (`EvaluateLightWeighted`, `EvaluateClearcoat`), image light's split sum (`IndirectInputs::SpecularColor`), the coat's
-  reflectance, and what glass reflects in `TransmitLight` (what passes through is what it does not reflect). Image light's
+  reflectance, and what glass reflects in `TransmitLight` (what passes through is what it does not reflect); the forward pass
+  reads it through `GetFrameSpecularEnergy`, as `GetHorizonFade` through `GetFrameHorizonFade`, which return 1 where a
+  capture turned them off (`SceneRendererSpecification::SpecularEnergyCompensation`, `HorizonFade`: the bits of
+  `FrameConstants::CaptureSwitches`, 0 in every other frame, a uniform branch). Image light's
   diffuse keeps `1 - SpecularColor` (diffuse gets what specular leaves); direct light's keeps `1 - F`, as the compensation
   adds under 0.5% to a dielectric's reflection. A white metal in a white furnace reflects the whole sky at every roughness
   (0.31 of it at roughness 1 before; `GPU.SceneRenderer.Lighting`'s furnace cases): check every shading change with them,
@@ -4932,7 +5031,16 @@ lights, Post Process and the sky), and never a resolution below the output's.
   drops emission, **AmbientOcclusion** returns the occlusion that darkens indirect light (material times screen, before
   multi-bounce), **Albedo** writes the base color; the last two are *value views*: written without the pre-exposure (a
   sunlit scene's 2^-19 would make an albedo of 0.03 subnormal in half floats), without fog and what glass transmits.
-  **Luminance** keeps the lit image. Lighting and Indirect go through exposure and tone mapping as the image does; for the
+  **Luminance** keeps the lit image. **Specular** and **Diffuse** keep one kind of light: the lights' highlights and image
+  light's reflections (the coat's included), or the lights' and image light's diffuse light (global illumination's field
+  included), without emission, fog, aerial perspective or what glass transmits (`IsLightKindView`); frames without them shade
+  with the old expressions to the bit, as branches on the uniform view select whole expressions, never weights multiplied
+  in (a multiply would let the compiler fuse differently). **Clusters** is a value view: the lights the pixel's light
+  cluster lists (what its shading walks, lit surfaces or not), written as a share of the cluster's capacity
+  (`ClusterGrid.w`, the overlay's `ClusterCapacity`), drawn by the overlay as bands of the luminance view's colors (none, 1,
+  2-3, 4-7, ...; the counts stop at the capacity, so the legend lists the bands up to a full cluster's:
+  `GetClusterLegendBands`, `GetClusterLegendName`), so its statistics' `value` reads shares of the capacity. Lighting, Indirect,
+  Specular and Diffuse go through exposure and tone mapping as the image does; for the
   value views and Luminance, `Overlay/LightingView.frag` replaces the finished image, first among the overlays (the motion
   view is skipped with one), from the frame's own HDR target (never the temporal history, which would blend values of
   earlier frames): occlusion as gray, albedo with luminances below `c_AlbedoLow` (0.03) mixed 0.7 toward the low mark and
@@ -6791,8 +6899,8 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   strata_describe)" when cut) and property descriptions cut to their first sentence (100 characters); types, enums,
   ranges and `required` stay (`McpToolsets::MakeCompactToolDefinition`). So the first sentence of a command's
   description says what it does, and a property's first sentence what it is. The default list stays at most 32 tools
-  and 30 KiB of `tools/list` JSON (`CLI.McpToolsets`). It is at the tool limit: 27 core commands and 5 generic tools, about 18.6 KB; every command
-  is about 99 KB of definitions (151 commands; `CLI.McpToolsets` prints the figure). A command added to `core` takes the place
+  and 30 KiB of `tools/list` JSON (`CLI.McpToolsets`). It is at the tool limit: 27 core commands and 5 generic tools, about 21.8 KB; every command
+  is about 101 KB of definitions (152 commands; `CLI.McpToolsets` prints the figure). A command added to `core` takes the place
   of another.
 
 ### Other methods and tests

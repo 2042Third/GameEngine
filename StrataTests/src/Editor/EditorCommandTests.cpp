@@ -226,7 +226,29 @@ TEST_SUITE("Editor.Commands")
 			CHECK(command["parameters"]["type"] == "object");
 			const std::string name = command["name"].get<std::string>();
 			CHECK(name.find('.') != std::string::npos);
+			// How it runs: whether it may answer frames later, waits for the asset scan, and what its results come from.
+			const EditorCommand* registered = harness.Commands.Find(name);
+			REQUIRE(registered);
+			CHECK(command["mayDefer"] == registered->MayDefer);
+			CHECK(command["waitsForAssets"] == EditorCommandRegistry::WaitsForAssetScan(*registered));
+			CHECK(command["results"] == (registered->Results == EditorCommandResults::Session ? "session" : "content"));
 		}
+		const auto find = [&listing](std::string_view name)
+		{
+			for (const nlohmann::json& command : listing["commands"])
+			{
+				if (command["name"] == name)
+					return command;
+			}
+			return nlohmann::json();
+		};
+		CHECK(find("viewport.capture")["mayDefer"] == true);
+		CHECK(find("entity.get")["mayDefer"] == false);
+		CHECK(find("asset.list")["waitsForAssets"] == true);
+		CHECK(find("entity.create")["waitsForAssets"] == true);
+		CHECK(find("editor.status")["waitsForAssets"] == false);
+		CHECK(find("editor.status")["results"] == "session");
+		CHECK(find("entity.find")["results"] == "content");
 
 		CHECK(harness.Error("does.not.exist").find("Unknown command") != std::string::npos);
 		CHECK_FALSE(harness.Commands.Execute(harness.Context, "scene.info", nlohmann::json::array()).Success);

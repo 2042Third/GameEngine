@@ -54,6 +54,11 @@ namespace Strata
 
 	}
 
+	std::string AssetImporter::GetName() const
+	{
+		return AssetTypeToString(GetType());
+	}
+
 	nlohmann::json AssetImporter::GetDefaultSettings(const std::filesystem::path&) const
 	{
 		return nlohmann::json::object();

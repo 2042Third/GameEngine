@@ -387,7 +387,7 @@ fences.
 
 ## Debug views
 
-The **debug view** chip on the viewport's toolbar has five views that show the scene's light instead of its image, each
+The **debug view** chip on the viewport's toolbar has views that show the scene's light instead of its image, each
 with a legend:
 
 - **Lighting**: every surface white, lit as the scene lights it. Shadows, the sky's color and how bright the sun is
@@ -400,6 +400,12 @@ with a legend:
 - **Albedo**: the materials' base colors. Real materials lie between about 0.03 (charcoal, fresh asphalt) and 0.85 (fresh
   snow): darker ones are marked blue, brighter ones striped red, with their share of the image in the legend. Colors
   outside that range make lighting look wrong however it is set up.
+- **Specular** and **Diffuse**: only the light surfaces reflect as highlights and reflections, or only the light they
+  scatter, without emission, fog and the light glass lets through. They show which kind of light a look comes from; they
+  do not add up to the picture: the sky shows in both, and automatic exposure meters each view on its own.
+- **Clusters**: how many point and spot lights each pixel's light cluster lists, in bands (none, 1, 2-3, 4-7, ..., up to
+  a full cluster, 256 lights unless the renderer lists more): every pixel's shading walks its cluster's list, so crowded
+  bands are where many lights cost the most.
 
 Every view's legend names the **sun to sky ratio** on flat ground: how much more light a horizontal surface in the sun gets
 than one in the shade. A clear day gives 6 to 10, a hazy one 3 to 5, golden hour about 1 to 2, an overcast day below 0.3.

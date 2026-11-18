@@ -40,6 +40,9 @@
 // 6 (the GI's voxels) and 9 (its probes) draw over the image; the forward pass shades them as the lit image.
 #define ST_LIGHTING_VIEW_GLOBAL_ILLUMINATION 7u // The GI's diffuse light on white (the field, today's beyond it)
 #define ST_LIGHTING_VIEW_OPEN_SHARE        8u // The share of the sky a surface sees through the world, unexposed
+#define ST_LIGHTING_VIEW_SPECULAR          10u // Specular light only (the lights' highlights, image light's reflections)
+#define ST_LIGHTING_VIEW_DIFFUSE           11u // Diffuse light only (the lights' and image light's)
+#define ST_LIGHTING_VIEW_CLUSTERS          12u // The lights listed in the pixel's cluster, as a share of its capacity, unexposed
 
 #define ST_SAMPLER_COUNT 6
 
@@ -116,7 +119,12 @@ struct FrameConstants
 	// the scene's GI intensity; w: the alpha^2 the directional light's disk adds to its highlight's lobe
 	// (RenderData::GetSunLobeAlpha2; Include/PBR.slang).
 	float4 ReflectionParams;
+	// x: what a capture turned off (ST_CAPTURE_*: SceneRendererSpecification's SpecularEnergyCompensation and HorizonFade); 0 in
+	// every other frame
+	uint4 CaptureSwitches;
 };
+#define ST_CAPTURE_NO_SPECULAR_ENERGY 1u
+#define ST_CAPTURE_NO_HORIZON_FADE    2u
 
 ConstantBuffer<FrameConstants> u_Frame : register(b0);
 

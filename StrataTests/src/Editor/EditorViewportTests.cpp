@@ -8,6 +8,7 @@
 #include "Editor/EditorViewport.h"
 #include "Editor/SceneBounds.h"
 #include "Editor/StreamingView.h"
+#include "Editor/ViewportRenderer.h"
 #include "TestHelpers.h"
 
 #include <Strata/Animation/AnimationPreview.h>
@@ -24,8 +25,11 @@
 #include <Strata/Scene/SceneSerializer.h>
 
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <optional>
+#include <string>
+#include <utility>
 
 using namespace Strata;
 
@@ -75,6 +79,45 @@ namespace
 		entity.GetComponent<TransformComponent>().Translation = translation;
 		entity.GetComponent<TransformComponent>().Scale = scale;
 		return entity;
+	}
+
+	// The fields of a renderer's specification that a capture's renderer switches set (CaptureRendererSwitches::Apply).
+	struct SwitchedFields
+	{
+		bool FadeLevelsOfDetail = false;
+		GPUDrivenMode GPUDriven = GPUDrivenMode::Off;
+		bool BatchAcrossMaterials = false;
+		bool TextureStreaming = false;
+		bool SpecularAntiAliasing = false;
+		bool VisibilityFeedback = false;
+		bool OcclusionCulling = false;
+		bool DitherOutput = false;
+		bool SpecularEnergyCompensation = false;
+		bool HorizonFade = false;
+		bool SpatialReflectionResolve = false;
+		float BounceGain = 0.0f;
+		float FXAASubpixel = 0.0f;
+
+		bool operator==(const SwitchedFields&) const = default;
+	};
+
+	SwitchedFields ReadSwitchedFields(const SceneRendererSpecification& specification)
+	{
+		SwitchedFields fields;
+		fields.FadeLevelsOfDetail = specification.FadeLevelsOfDetail;
+		fields.GPUDriven = specification.GPUDriven;
+		fields.BatchAcrossMaterials = specification.BatchAcrossMaterials;
+		fields.TextureStreaming = specification.TextureStreaming;
+		fields.SpecularAntiAliasing = specification.SpecularAntiAliasing;
+		fields.VisibilityFeedback = specification.VisibilityFeedback;
+		fields.OcclusionCulling = specification.OcclusionCulling;
+		fields.DitherOutput = specification.DitherOutput;
+		fields.SpecularEnergyCompensation = specification.SpecularEnergyCompensation;
+		fields.HorizonFade = specification.HorizonFade;
+		fields.SpatialReflectionResolve = specification.SpatialReflectionResolve;
+		fields.BounceGain = specification.GlobalIllumination.BounceGain;
+		fields.FXAASubpixel = specification.FXAASubpixel;
+		return fields;
 	}
 
 }
@@ -229,6 +272,126 @@ TEST_SUITE("Editor.Viewport")
 		CHECK(harness.Error("viewport.capture", { { "path", "Capture.png" } }).find("no project is open") != std::string::npos);
 		CHECK(harness.Error("viewport.capture", { { "overwrite", 1 } }).find("'overwrite'") != std::string::npos);
 		CHECK(harness.Error("viewport.capture", { { "overlays", "yes" } }).find("'overlays'") != std::string::npos);
+	}
+
+	TEST_CASE("A capture's incomplete list names each wait that ran out, and nothing for a settled picture")
+	{
+		// The fields of a settled capture's result and its frame's statistics.
+		const nlohmann::json settled = { { "pendingAssets", 0 }, { "texturesBelowWanted", 0 }, { "stalePoses", 0 }, { "pendingTextGlyphs", 0 },
+			{ "ui", { { "pendingGlyphs", 0 } } }, { "localShadowViewsPending", 0 }, { "reflectionProbesPending", 0 },
+			{ "renderStats", { { "deferredInstanceBytes", 0 } } }, { "previewLighting", false }, { "debugView", nlohmann::json::object() } };
+		SceneRendererStats settledStats;
+		settledStats.PreExposureSettled = true;
+		settledStats.GlobalIlluminationSettled = true;
+		settledStats.TemporalAntiAliasing = false;
+		settledStats.TemporalFrames = 0;
+		settledStats.ScreenSpaceReflectionsPending = false;
+		CHECK(ListIncompleteCapture(settled, settledStats) == nlohmann::json::array());
+
+		using Change = std::function<void(nlohmann::json& result, SceneRendererStats& stats)>;
+		const std::pair<const char*, Change> cases[] = {
+			{ "/pendingAssets", [](nlohmann::json& result, SceneRendererStats&) { result["pendingAssets"] = 2; } },
+			{ "/texturesBelowWanted", [](nlohmann::json& result, SceneRendererStats&) { result["texturesBelowWanted"] = 1; } },
+			{ "/stalePoses", [](nlohmann::json& result, SceneRendererStats&) { result["stalePoses"] = 1; } },
+			{ "/pendingTextGlyphs", [](nlohmann::json& result, SceneRendererStats&) { result["pendingTextGlyphs"] = 3; } },
+			{ "/ui/pendingGlyphs", [](nlohmann::json& result, SceneRendererStats&) { result["ui"]["pendingGlyphs"] = 1; } },
+			{ "/localShadowViewsPending", [](nlohmann::json& result, SceneRendererStats&) { result["localShadowViewsPending"] = 1; } },
+			{ "/reflectionProbesPending", [](nlohmann::json& result, SceneRendererStats&) { result["reflectionProbesPending"] = 1; } },
+			{ "/renderStats/deferredInstanceBytes", [](nlohmann::json& result, SceneRendererStats&) { result["renderStats"]["deferredInstanceBytes"] = 64; } },
+			{ "/preExposureSettled", [](nlohmann::json&, SceneRendererStats& stats) { stats.PreExposureSettled = false; } },
+			{ "/globalIlluminationSettled", [](nlohmann::json&, SceneRendererStats& stats) { stats.GlobalIlluminationSettled = false; } },
+			{ "/previewLighting", [](nlohmann::json& result, SceneRendererStats&) { result["previewLighting"] = true; } },
+			{ "/temporalFrames", [](nlohmann::json&, SceneRendererStats& stats)
+				{
+					stats.TemporalAntiAliasing = true;
+					stats.TemporalFrames = c_TemporalSettleFrames - 1;
+				} },
+			{ "/screenSpaceReflectionsPending", [](nlohmann::json&, SceneRendererStats& stats) { stats.ScreenSpaceReflectionsPending = true; } },
+			{ "/debugView/shadows/complete", [](nlohmann::json& result, SceneRendererStats&) { result["debugView"] = { { "shadows", { { "complete", false } } } }; } },
+			{ "/debugView/lightingPending", [](nlohmann::json& result, SceneRendererStats&) { result["debugView"] = { { "lightingPending", true } }; } },
+			{ "/notice", [](nlohmann::json& result, SceneRendererStats&) { result["notice"] = "The scene has no camera: the editor camera's view"; } } };
+		for (const auto& entry : cases)
+		{
+			const std::string pointer = entry.first;
+			CAPTURE(pointer);
+			nlohmann::json result = settled;
+			SceneRendererStats stats = settledStats;
+			entry.second(result, stats);
+			CHECK(ListIncompleteCapture(result, stats) == nlohmann::json::array({ pointer }));
+		}
+
+		// The temporal history counts only under TAA, until its frames settled; the views' fields only when they say so.
+		SceneRendererStats temporal = settledStats;
+		temporal.TemporalAntiAliasing = true;
+		temporal.TemporalFrames = c_TemporalSettleFrames;
+		CHECK(ListIncompleteCapture(settled, temporal) == nlohmann::json::array());
+		temporal.TemporalAntiAliasing = false;
+		temporal.TemporalFrames = 1;
+		CHECK(ListIncompleteCapture(settled, temporal) == nlohmann::json::array());
+		nlohmann::json views = settled;
+		views["debugView"] = { { "shadows", { { "complete", true } } }, { "lightingPending", false } };
+		CHECK(ListIncompleteCapture(views, settledStats) == nlohmann::json::array());
+		// Several at once, each named.
+		nlohmann::json several = settled;
+		several["pendingAssets"] = 1;
+		several["notice"] = "No camera";
+		SceneRendererStats unsettled = settledStats;
+		unsettled.PreExposureSettled = false;
+		CHECK(ListIncompleteCapture(several, unsettled) == nlohmann::json { "/pendingAssets", "/preExposureSettled", "/notice" });
+	}
+
+	TEST_CASE("Each renderer switch of a capture sets its own field of the renderer's specification and no other")
+	{
+		// Applied over a specification of the defaults: what the switch should change there.
+		using Fields = SwitchedFields;
+		const auto read = ReadSwitchedFields;
+		const SceneRendererSpecification defaults;
+		const Fields base = read(defaults);
+		const std::pair<nlohmann::json, std::function<void(Fields&)>> cases[] = {
+			{ { { "FadeLevelsOfDetail", !defaults.FadeLevelsOfDetail } }, [](Fields& fields) { fields.FadeLevelsOfDetail = !fields.FadeLevelsOfDetail; } },
+			{ { { "GPUDriven", false } }, [](Fields& fields) { fields.GPUDriven = GPUDrivenMode::Off; } },
+			{ { { "BatchAcrossMaterials", !defaults.BatchAcrossMaterials } }, [](Fields& fields) { fields.BatchAcrossMaterials = !fields.BatchAcrossMaterials; } },
+			{ { { "TextureStreaming", !defaults.TextureStreaming } }, [](Fields& fields) { fields.TextureStreaming = !fields.TextureStreaming; } },
+			{ { { "SpecularAntiAliasing", !defaults.SpecularAntiAliasing } }, [](Fields& fields) { fields.SpecularAntiAliasing = !fields.SpecularAntiAliasing; } },
+			{ { { "VisibilityFeedback", !defaults.VisibilityFeedback } }, [](Fields& fields) { fields.VisibilityFeedback = !fields.VisibilityFeedback; } },
+			{ { { "OcclusionCulling", !defaults.OcclusionCulling } }, [](Fields& fields) { fields.OcclusionCulling = !fields.OcclusionCulling; } },
+			{ { { "DitherOutput", !defaults.DitherOutput } }, [](Fields& fields) { fields.DitherOutput = !fields.DitherOutput; } },
+			{ { { "SpecularEnergyCompensation", !defaults.SpecularEnergyCompensation } },
+				[](Fields& fields) { fields.SpecularEnergyCompensation = !fields.SpecularEnergyCompensation; } },
+			{ { { "HorizonFade", !defaults.HorizonFade } }, [](Fields& fields) { fields.HorizonFade = !fields.HorizonFade; } },
+			{ { { "SpatialReflectionResolve", !defaults.SpatialReflectionResolve } },
+				[](Fields& fields) { fields.SpatialReflectionResolve = !fields.SpatialReflectionResolve; } },
+			{ { { "GlobalIlluminationBounceGain", 0.25 } }, [](Fields& fields) { fields.BounceGain = 0.25f; } },
+			{ { { "FXAASubpixel", SceneRendererSpecification::c_WideFXAASubpixel } },
+				[](Fields& fields) { fields.FXAASubpixel = SceneRendererSpecification::c_WideFXAASubpixel; } } };
+		for (const auto& entry : cases)
+		{
+			const std::string text = entry.first.dump();
+			CAPTURE(text);
+			std::string error;
+			const std::optional<CaptureRendererSwitches> switches = CaptureRendererSwitches::FromJson(entry.first, &error);
+			REQUIRE_MESSAGE(switches.has_value(), error);
+			CHECK(switches->IsSet());
+			CHECK(switches->ToJson() == entry.first);
+			SceneRendererSpecification specification = defaults;
+			switches->Apply(specification);
+			Fields expected = base;
+			entry.second(expected);
+			REQUIRE(expected != base);
+			CHECK(read(specification) == expected);
+		}
+		// GPUDriven true is the GPU-driven path where the device has it, also over a specification on the CPU path.
+		SceneRendererSpecification cpuPath = defaults;
+		cpuPath.GPUDriven = GPUDrivenMode::Off;
+		CaptureRendererSwitches gpuDriven;
+		gpuDriven.GPUDriven = true;
+		gpuDriven.Apply(cpuPath);
+		CHECK(cpuPath.GPUDriven == GPUDrivenMode::Auto);
+		// No switch changes nothing.
+		SceneRendererSpecification untouched = defaults;
+		CaptureRendererSwitches {}.Apply(untouched);
+		CHECK(read(untouched) == base);
+		CHECK_FALSE(CaptureRendererSwitches {}.IsSet());
 	}
 
 	TEST_CASE("Output paths resolve against the project and never replace files by accident")
@@ -700,7 +863,8 @@ TEST_SUITE("Editor.Viewport")
 			const std::pair<const char*, ViewportDebugView> lightingViews[] = { { "lighting", ViewportDebugView::Lighting },
 				{ "ao", ViewportDebugView::AmbientOcclusion }, { "indirect", ViewportDebugView::Indirect }, { "luminance", ViewportDebugView::Luminance },
 				{ "albedo", ViewportDebugView::Albedo }, { "voxels", ViewportDebugView::Voxels }, { "gi", ViewportDebugView::GlobalIllumination },
-				{ "open", ViewportDebugView::OpenShare }, { "probes", ViewportDebugView::Probes } };
+				{ "open", ViewportDebugView::OpenShare }, { "probes", ViewportDebugView::Probes }, { "specular", ViewportDebugView::Specular },
+				{ "diffuse", ViewportDebugView::Diffuse }, { "clusters", ViewportDebugView::Clusters } };
 			for (const auto& [name, view] : lightingViews)
 			{
 				CAPTURE(name);
@@ -709,6 +873,19 @@ TEST_SUITE("Editor.Viewport")
 				CHECK(GetLightingView(view) != SceneLightingView::None);
 				CHECK(harness.Context.GetViewport().GetSettings().ToJson()["DebugView"] == name);
 			}
+			// The views of what is drawn and left out, which are no lighting views; "wire" is refused.
+			const std::pair<const char*, ViewportDebugView> geometryViews[] = { { "culled", ViewportDebugView::Culled },
+				{ "wireframe", ViewportDebugView::Wireframe } };
+			for (const auto& [name, view] : geometryViews)
+			{
+				CAPTURE(name);
+				CHECK(harness.Run("viewport.setSettings", { { "debugView", name } })["debugView"] == name);
+				CHECK(harness.Context.GetViewport().GetSettings().DebugView == view);
+				CHECK(GetLightingView(view) == SceneLightingView::None);
+				CHECK(ViewportDebugViewFromString(name) == view);
+				CHECK(harness.Context.GetViewport().GetSettings().ToJson()["DebugView"] == name);
+			}
+			CHECK(harness.Error("viewport.setSettings", { { "debugView", "wire" } }).find("'debugView'") != std::string::npos);
 			CHECK(harness.Error("viewport.setSettings", { { "debugView", "lit" } }).find("'debugView'") != std::string::npos);
 			settings = harness.Run("viewport.setSettings", { { "debugView", "streaming" } });
 			CHECK(harness.Run("viewport.getSettings") == settings);
@@ -798,6 +975,25 @@ TEST_SUITE("Editor.Viewport")
 		stats.SunToSkyRatio = 0.0f;
 		stats.SurfaceEV100 = glm::vec3(std::numeric_limits<float>::quiet_NaN());
 		CHECK(GetLightingLegendNote(ViewportDebugView::Indirect, stats) == "Sun : sky -");
+		// The clusters view's bands: none, then one per power of two, up to the one holding the capacity (the counts stop there).
+		CHECK(GetClusterLegendBands(12, 256) == 10);
+		CHECK(GetClusterLegendName(0, 12, 256) == "No lights");
+		CHECK(GetClusterLegendName(1, 12, 256) == "1 light");
+		CHECK(GetClusterLegendName(2, 12, 256) == "2-3 lights");
+		CHECK(GetClusterLegendName(3, 12, 256) == "4-7 lights");
+		CHECK(GetClusterLegendName(8, 12, 256) == "128-255 lights");
+		CHECK(GetClusterLegendName(9, 12, 256) == "256 lights (full)");
+		// A capacity between powers of two shares the last band; the largest (1024) fills the last color's band.
+		CHECK(GetClusterLegendBands(12, 300) == 10);
+		CHECK(GetClusterLegendName(9, 12, 300) == "256-300 lights (full at 300)");
+		CHECK(GetClusterLegendBands(12, 1024) == 12);
+		CHECK(GetClusterLegendName(10, 12, 1024) == "512-1023 lights");
+		CHECK(GetClusterLegendName(11, 12, 1024) == "1024 lights (full)");
+		CHECK(GetClusterLegendBands(12, 1) == 2);
+		CHECK(GetClusterLegendName(1, 12, 1) == "1 light (full)");
+		// Fewer colors than bands: the last color takes what lies beyond.
+		CHECK(GetClusterLegendBands(4, 256) == 4);
+		CHECK(GetClusterLegendName(3, 4, 256) == "4-256 lights (full at 256)");
 
 		// The voxels view's note: the clipmap's levels, their voxel sizes and how many hold valid voxels.
 		CHECK(GetVoxelLegendNote(nullptr) == "No GI");

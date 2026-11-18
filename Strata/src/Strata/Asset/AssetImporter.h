@@ -98,6 +98,8 @@ namespace Strata
 		virtual ~AssetImporter() = default;
 
 		virtual AssetType GetType() const = 0;
+		// What tools call the importer (asset.types): its asset type's name unless it says otherwise ("glTF", "Native").
+		virtual std::string GetName() const;
 		virtual std::vector<std::string> GetExtensions() const = 0; // Lower case, with the dot (".png")
 		// Increment whenever the output format changes; stale cached imports are then redone automatically.
 		virtual uint32_t GetVersion() const = 0;

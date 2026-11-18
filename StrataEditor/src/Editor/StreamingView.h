@@ -43,14 +43,23 @@ namespace Strata
 		Voxels,
 		GlobalIllumination,
 		OpenShare,
-		Probes
+		Probes,
+		// The light split by kind (SceneLightingView::Specular, Diffuse), and the lights each pixel's light cluster lists
+		// (SceneLightingView::Clusters).
+		Specular,
+		Diffuse,
+		Clusters,
+		// What the frame's culling left out, as boxes (SceneRenderOptions::ShowCulled), and the edges of the triangles it drew
+		// (SceneRenderOptions::ShowWireframe).
+		Culled,
+		Wireframe
 	};
 
 	// The lighting view a debug view shows (SceneLightingView::None for the others).
 	SceneLightingView GetLightingView(ViewportDebugView view);
 
-	// "none", "streaming", "lod", "mip", "motion", "shadows", "lighting", "ao", "indirect", "luminance", "albedo" (the names commands
-	// and the saved viewport state use).
+	// "none", "streaming", "lod", "mip", "motion", "shadows", "lighting", "ao", "indirect", "luminance", "albedo", "voxels", "gi",
+	// "open", "probes", "specular", "diffuse", "clusters", "culled", "wireframe" (the names commands and the saved viewport state use).
 	const char* ViewportDebugViewToString(ViewportDebugView view);
 	std::optional<ViewportDebugView> ViewportDebugViewFromString(std::string_view name);
 
@@ -84,6 +93,10 @@ namespace Strata
 			{ 0.90f, 0.33f, 0.29f, 1.0f } } };
 		// The lighting views' luminance bands, albedo marks and background (SceneRenderOptions::LightingColors).
 		LightingViewColors Lighting;
+		// The wireframe view's lines (alpha their opacity) and the culled view's boxes: culled by their size, and by occlusion
+		// (SceneRenderOptions::WireframeColor, CulledColors; the text's light, Sulfur and Cinnabar).
+		glm::vec4 Wireframe = { 0.93f, 0.92f, 0.89f, 0.8f };
+		std::array<glm::vec4, 2> Culled = { { { 0.91f, 0.76f, 0.30f, 1.0f }, { 0.90f, 0.33f, 0.29f, 1.0f } } };
 	};
 
 	// What a debug view found in the last Build, among the entities in the camera's view.
@@ -111,6 +124,13 @@ namespace Strata
 	// The luminance view's legend name of band `band` of `bands`, each one EV100 wide from the floor of `firstEV100`
 	// (LightingViewColors): "EV 9"; the first takes what lies below ("EV <6"), the last what lies above ("EV 16+").
 	std::string GetLuminanceLegendName(size_t band, size_t bands, float firstEV100);
+	// The clusters view's bands (Overlay/LightingView.frag, in the luminance view's `bands` colors): none, 1, 2-3, 4-7, ...,
+	// the last color taking what lies beyond. A cluster lists at most `capacity` lights (SceneRendererSpecification::
+	// MaxLightsPerCluster, the frame's ClusterGrid.w), so only the bands up to the one holding the capacity can show: how many
+	// those are, and each one's name, "No lights", "1 light", "2-3 lights", ..., the last "256 lights (full)" or
+	// "256-300 lights (full at 300)".
+	size_t GetClusterLegendBands(size_t bands, uint32_t capacity);
+	std::string GetClusterLegendName(size_t band, size_t bands, uint32_t capacity);
 
 	// The note under a lighting view's legend: the sun to sky ratio on flat ground and, for the occlusion and open views, their
 	// value's median or, for the light views (not the albedo), the surfaces' EV100 median; "Measuring..." until statistics arrived.

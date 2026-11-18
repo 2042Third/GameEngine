@@ -87,6 +87,7 @@ strata_add_shaders(Strata_Renderer
 		Scene/Mesh.vert
 		Scene/DepthPrepass.frag
 		Scene/Forward.frag
+		Scene/Wireframe.frag
 		Scene/Skybox.frag
 		Scene/ShadowMesh.vert
 		Scene/ShadowMask.frag
@@ -167,6 +168,7 @@ strata_add_shaders(Strata_Renderer
 		Overlay/LightingView.frag
 		Overlay/DebugLine.vert
 		Overlay/DebugLine.frag
+		Overlay/CulledView.vert
 		Overlay/Text.vert
 		Overlay/Text.frag
 		GameUI/UIQuad.vert
@@ -203,6 +205,7 @@ strata_add_shaders(Strata_Renderer
 		"Scene/Skybox.frag|Scene/SkyboxAtmosphere.frag|ST_ATMOSPHERE"
 		"Effects/AODenoise.comp|Effects/AODenoiseHalf.comp|ST_AO_HALF"
 		"Effects/SceneColorCopy.comp|Effects/SceneColorCopyFallback.comp|ST_SCENE_COLOR_FALLBACK"
+		"PostProcess/FXAA.frag|PostProcess/FXAAWideSubpixel.frag|ST_FXAA_WIDE_SUBPIXEL"
 	# The depth prepass's EQUAL test needs the forward pass's positions bit-identical (Scene/Mesh.vert).
 	INVARIANT_POSITION
 		Scene/Mesh.vert)

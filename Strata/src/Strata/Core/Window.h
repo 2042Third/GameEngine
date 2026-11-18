@@ -71,6 +71,19 @@ namespace Strata
 		std::string AppId;
 	};
 
+	// How the framebuffer of a window made with WindowSpecification::SizeInPixels compares with the pixels asked for.
+	enum class WindowPixelsMatch : uint8_t
+	{
+		Exact = 0,
+		// The nearest size the display's scale makes: windows have whole screen coordinates, so where one is more than a
+		// pixel (2 on a Retina display) only some sizes exist (even ones there), and the window got the nearest.
+		NearestOfScale,
+		Other // Another size: the system shrank the window to fit the display, or resized it
+	};
+
+	// requested and framebuffer in pixels, windowSize in screen coordinates (Window::GetWidth and GetHeight).
+	WindowPixelsMatch MatchWindowPixels(const glm::uvec2& requested, const glm::uvec2& framebuffer, const glm::uvec2& windowSize);
+
 	// Platform window. The graphics device owns the swapchain and presents through the window's VulkanPresentation. The
 	// size (GetWidth, GetHeight, in screen coordinates) and SetCursorMode come from InputWindow, the part Input uses.
 	class Window : public InputWindow

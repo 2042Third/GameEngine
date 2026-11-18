@@ -19,7 +19,8 @@ groupshared uint s_Counts[4];
 
 bool IsValueView(uint view)
 {
-	return view == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION || view == ST_LIGHTING_VIEW_ALBEDO || view == ST_LIGHTING_VIEW_OPEN_SHARE;
+	return view == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION || view == ST_LIGHTING_VIEW_ALBEDO || view == ST_LIGHTING_VIEW_OPEN_SHARE
+		|| view == ST_LIGHTING_VIEW_CLUSTERS;
 }
 
 void st_Main()

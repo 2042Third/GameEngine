@@ -7,13 +7,38 @@
 #include <Strata/Core/Layer.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Events/Event.h>
+#include <Strata/Renderer/Renderer.h>
 
 #include <imgui_internal.h>
 
+#include <algorithm>
 #include <vector>
 
 namespace Strata::Tests
 {
+
+	void FakeEditorHost::RequestWindowReadback(const glm::uvec4& region, WindowReadbackCallback callback)
+	{
+		m_State->WindowReadbacks.push_back(region);
+		if (!m_State->ReadbackError.empty())
+		{
+			callback(ReadbackImage(), m_State->ReadbackError);
+			return;
+		}
+		// As TextureReadbackRegion reads: a zero width or height reaches the window's edge.
+		ReadbackImage image;
+		image.Width = region.z > 0 ? region.z : m_State->WindowPixels.x - std::min(region.x, m_State->WindowPixels.x);
+		image.Height = region.w > 0 ? region.w : m_State->WindowPixels.y - std::min(region.y, m_State->WindowPixels.y);
+		image.Format = nvrhi::Format::RGBA8_UNORM;
+		image.BytesPerPixel = 4;
+		image.Pixels.resize(static_cast<size_t>(image.Width) * image.Height * 4);
+		for (size_t pixel = 0; pixel < image.Pixels.size(); pixel += 4)
+		{
+			for (size_t channel = 0; channel < 4; channel++)
+				image.Pixels[pixel + channel] = m_State->ReadbackColor[static_cast<glm::length_t>(channel)];
+		}
+		callback(image, std::string());
+	}
 
 	ImGuiHarness::ImGuiHarness(const Specification& specification)
 	{

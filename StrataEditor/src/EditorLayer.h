@@ -27,6 +27,7 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -244,6 +245,14 @@ namespace Strata
 		// --screenshot: the frame being drawn, saved once it is on screen; with closeAfter the editor closes then (the last frame
 		// before --quit-after-commands quits). Once per run.
 		void TakeScreenshot(bool closeAfter);
+		// editor.screenshot under way (EditorLayer.cpp).
+		struct ScreenshotCapture;
+		// editor.screenshot's poll: waits the frames that let the commands before it show, arms the readback (ReadBackScreenshots
+		// asks the host for it at the end of that frame's UI), then encodes and saves the picture on job threads.
+		std::optional<EditorCommandResult> PollScreenshot(const std::shared_ptr<ScreenshotCapture>& capture);
+		// At the end of the UI's frame: asks the host to read back the window, or the panel's rectangle as this frame drew it,
+		// for the screenshots armed, once a frame lays out its windows as the frame before (or they waited their longest).
+		void ReadBackScreenshots();
 		// Notes input that arrived this frame (ImGui's input events, held keys and buttons).
 		void TrackInput();
 		// Chooses the frame rate for the next frames (idle throttling) and records frame times.
@@ -309,6 +318,7 @@ namespace Strata
 		// Like the Export dialog, its completions refer to it.
 		RecoveryDialog m_RecoveryDialog;
 		bool m_ScreenshotRequested = false;
+		std::vector<std::shared_ptr<ScreenshotCapture>> m_ScreenshotsToRead; // Armed by their polls (editor.screenshot)
 		bool m_RecoveryDialogWasOpen = false; // Closed with an offer left: a toast says where to find it
 		float m_StatusBarHeight = 0.0f;       // Of the last frame, which the toasts stay above
 		bool m_StatusBarCompact = false;      // The pills show their compact texts (StatusPillText)

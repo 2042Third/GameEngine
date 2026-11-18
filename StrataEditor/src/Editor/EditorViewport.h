@@ -208,6 +208,11 @@ namespace Strata
 		ViewportRenderer* GetGameRenderer();
 		bool HasGameRenderer() const { return m_GameRenderer != nullptr; }
 		ViewportRenderer* GetCaptureRenderer();
+		// The renderer of captures with switches of their own (viewport.capture {renderer}): the capture renderer without any,
+		// else one made with them (kept for the next capture with the same switches, its targets released after each picture
+		// as the capture renderer's), so that frames the editor draws never change. Shared: a capture holds the one it renders
+		// with until it finished, also when a capture with other switches replaced it here.
+		Ref<ViewportRenderer> GetSwitchedCaptureRenderer(const CaptureRendererSwitches& switches);
 		// The viewport panel's renderer when it exists (never created here).
 		const ViewportRenderer* FindRenderer() const { return m_Renderer.get(); }
 		// The Game view's renderer when it exists (never created here).
@@ -281,6 +286,8 @@ namespace Strata
 		Scope<ViewportRenderer> m_Renderer;
 		Scope<ViewportRenderer> m_GameRenderer;
 		Scope<ViewportRenderer> m_CaptureRenderer;
+		Ref<ViewportRenderer> m_SwitchedCaptureRenderer;
+		CaptureRendererSwitches m_CaptureSwitches; // m_SwitchedCaptureRenderer's
 		Scope<PendingPick> m_Pick;
 		PlacementPreview m_PlacementPreview;
 	};

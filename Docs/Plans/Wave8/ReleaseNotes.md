@@ -447,6 +447,54 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   (`localShadowRequested`), got one (`localShadowLights`), are fading theirs out (`localShadowFading`) and how many tiles
   of each size they have (`localShadowTileSizeCounts`).
 
+**docs-captures: pictures by command**
+
+- AI agents: `viewport.capture` says whether its picture is settled: `complete`, and `incomplete`, the JSON pointers of
+  the result's fields that say what it lacks (assets still loading, textures below the wanted level, an unsettled
+  pre-exposure, fewer than 8 TAA frames, preview lighting, a camera fallback's `notice`...); it also reports
+  `screenSpaceReflectionsPending`. Every wait of a capture is bounded, and the capture succeeds when one runs out: a
+  script that needs a settled picture expects `/complete`.
+- AI agents: `editor.commands` reports each command's `mayDefer` (it may answer frames later; `editor.batch` refuses it),
+  `waitsForAssets` (it waits for the asset scan) and `results` (`content` or `session`).
+- AI agents: `asset.types` lists the asset types with the extension of the engine's own documents and their importers'
+  names, versions and file extensions.
+- Editor: `--window-size <width>x<height>` opens a window of exactly that many pixels instead of a maximized one, at
+  least 640x360; an editor whose window the system makes another size at start (larger than the display, or a size the
+  display's scale cannot make: a Retina display makes only even sizes, and the message names the nearest) does not
+  start (exit code 1, the reason in its output and log, never in a dialog: `StrataCLI launch` fails at once, naming the
+  exit code). The window stays resizable: a person, a snap or a window manager can still change its size later, and
+  each `editor.screenshot` result gives its `width` and `height`. With `--ui-scale 1` (or another fixed scale) beside it,
+  screenshots of the editor compare across machines; `StrataCLI launch --window-size` and `--ui-scale` pass them on.
+- AI agents: `editor.screenshot {path?, overwrite?, panel?}` takes a picture of the whole editor window as the person sees
+  it, UI and all, or of one panel, without stalling a frame; it needs a window. The picture is of the first frame, from the
+  second after the command, that lays out its windows and tabs as the one before (so `editor.showPanel`,
+  `editor.showDialog` and the other commands before it show, and an editor that just started has its tabs laid out),
+  at most 30 frames later; `settled` says whether the layout had stopped moving.
+- AI agents: `viewport.capture {renderer: {...}}` switches techniques for one picture to show what they do: specular
+  anti-aliasing, the specular energy compensation, the horizon fade, dithering, the spatial reflections' resolve, FXAA's
+  sub-pixel amount (0.75 beside 0.25), one bounce of global illumination, the GPU-driven path, occlusion culling,
+  visibility feedback, batching across materials, texture streaming and LOD fades. Such a capture renders through a
+  renderer of its own: no view, other capture or game frame changes. Automatic exposure meters each capture alone, so
+  pairs of switches that change the light are compared with a fixed exposure.
+- Editor: three debug views (the Scene view's debug view chip, `viewport.capture` and `viewport.setSettings` `debugView`):
+  **Specular** and **Diffuse** show one kind of light alone (each exposed on its own: they do not add up to the picture),
+  **Clusters** how many lights each pixel's light cluster lists, in bands up to a full cluster with a legend. Frames
+  without them are drawn as before, to the bit.
+- Editor: two more debug views: **Wireframe** draws the edges of every triangle drawn (each level of detail as chosen,
+  skins as posed) over the image, **Culled** boxes the meshes in view that culling left out, over everything: too small
+  on screen (yellow, each box's diagonal grown to 6 pixels) or hidden behind what is drawn (red, the GPU-driven path's
+  occlusion culling), counted in its legend (while the camera moves, the occluded count includes what the frame drew once
+  more, boxed from the next frame). Both paths draw them from their own decisions; frames without them record nothing of
+  them.
+- Fixed: a program (the editor, the runtime, an exported game) whose frame an exception left logged a critical line,
+  ended in order and exited with code 0, so a script or CI read success; it now exits with code 1.
+- Fixed: a Scene view with no room under its toolbar (an editor window shrunk to almost nothing) made ImGui stop a Debug
+  editor with an assertion and show its error window in other builds, and so did the default layout of a window with no
+  room at all; the view now draws nothing until it has room.
+- Fixed: script modules built with GCC or Clang (Linux, macOS) carried no debug information in Release and Dist, the
+  configurations a released editor builds scripts in, so breakpoints in scripts did not bind; they are compiled with `-g`
+  in every configuration, as MSVC's modules always had their PDB.
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and

@@ -6,6 +6,7 @@
 #include "FeatureTest/FeatureTestUtils.h"
 #include "TestHelpers.h"
 
+#include <Strata/Asset/AssetImporter.h>
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Asset/EditorAssetManager.h>
@@ -18,6 +19,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -91,6 +93,50 @@ namespace
 
 TEST_SUITE("Editor.AssetOperations")
 {
+	TEST_CASE("asset.types lists every asset type with its importers, their versions and extensions")
+	{
+		// Without a project: the types and importers are the editor's.
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		const nlohmann::json listing = Tests::RunCommandToCompletion(context, commands, "asset.types", nlohmann::json::object());
+		std::map<std::string, nlohmann::json> types;
+		for (const nlohmann::json& type : listing["types"])
+			types[type["type"].get<std::string>()] = type;
+		// Every named type once, and nothing else.
+		CHECK(types.size() == listing["types"].size());
+		CHECK(types.size() == static_cast<size_t>(AssetType::ColorLookup));
+		for (const auto& [name, type] : types)
+		{
+			CAPTURE(name);
+			CHECK(AssetTypeFromString(name).has_value());
+			// Every importer the registry has is listed under its type, with what it says of itself.
+			for (const nlohmann::json& importer : type["importers"])
+			{
+				const AssetImporter* registered = AssetImporterRegistry::FindByExtension(importer["extensions"][0].get<std::string>());
+				REQUIRE(registered);
+				CHECK(importer["name"] == registered->GetName());
+				CHECK(importer["version"] == registered->GetVersion());
+				CHECK(importer["extensions"] == registered->GetExtensions());
+			}
+		}
+		size_t listedImporters = 0;
+		for (const auto& [name, type] : types)
+			listedImporters += type["importers"].size();
+		CHECK(listedImporters == AssetImporterRegistry::GetAll().size());
+
+		CHECK(types["Scene"]["nativeExtension"] == ".stscene");
+		CHECK(types["Scene"]["importers"][0]["name"] == "Native");
+		CHECK(types["Texture"]["nativeExtension"].is_null());
+		CHECK(types["Texture"]["importers"][0]["name"] == "Texture");
+		const std::vector<std::string> textureExtensions = types["Texture"]["importers"][0]["extensions"].get<std::vector<std::string>>();
+		CHECK(std::find(textureExtensions.begin(), textureExtensions.end(), ".png") != textureExtensions.end());
+		CHECK(types["Model"]["importers"][0]["name"] == "glTF");
+		CHECK(types["Model"]["importers"][0]["extensions"] == nlohmann::json { ".gltf", ".glb" });
+		// Sub-assets of a model's import have no importer of their own.
+		CHECK(types["Mesh"]["importers"].empty());
+		CHECK(types["Skeleton"]["importers"].empty());
+	}
+
 	TEST_CASE("Deleting a material a scene uses fails listing the scene; with force it goes to the trash, and undo brings it back")
 	{
 		AssetHarness harness("AssetOpsDeleteReferenced", "basic3d");

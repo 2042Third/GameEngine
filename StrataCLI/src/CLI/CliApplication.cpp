@@ -10,10 +10,12 @@
 #include "Strata/Network/JsonRpc.h"
 #include "Strata/Network/Socket.h"
 
+#include <nlohmann/json.hpp>
 #include <spdlog/sinks/stdout_sinks.h>
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <istream>
 #include <iterator>
 #include <mutex>
@@ -28,6 +30,12 @@ namespace Strata::CLI
 
 		constexpr std::chrono::milliseconds c_DefaultCallTimeout = std::chrono::milliseconds(30000);
 		constexpr int64_t c_MaxIdleTimeoutSeconds = 7 * 24 * 60 * 60; // A week, as the editor accepts
+		// The editor's --window-size and --ui-scale as it takes them (EditorApplication's CheckValues): the CLI checks them before
+		// it starts the editor, whose output a launch discards.
+		constexpr int64_t c_MinWindowWidth = 640;
+		constexpr int64_t c_MinWindowHeight = 360;
+		constexpr double c_MinUIScale = 0.5; // ImGuiLayer::c_MinScale
+		constexpr double c_MaxUIScale = 4.0; // ImGuiLayer::c_MaxScale
 		constexpr const char* c_EditorPortVariable = "STRATA_EDITOR_PORT";
 		constexpr const char* c_EditorTokenVariable = "STRATA_EDITOR_TOKEN";
 
@@ -47,6 +55,8 @@ namespace Strata::CLI
 			{ "--wait-timeout", true },
 			{ "--save-image", true },
 			{ "--idle-timeout", true },
+			{ "--window-size", true },
+			{ "--ui-scale", true },
 			{ "--stall-timeout", true },
 			{ "--no-wait-scan", false },
 			{ "--toolsets", true },
@@ -295,6 +305,10 @@ namespace Strata::CLI
 				specification.ProjectDirectory = ToAbsolutePath(*arguments.Project);
 			specification.Headless = arguments.Headless;
 			specification.NoGpu = arguments.NoGpu;
+			if (arguments.WindowSize && (arguments.Headless || arguments.NoGpu))
+				return ReportUsageError("--window-size sizes the editor's window: it cannot be combined with --headless or --no-gpu", errorOutput);
+			specification.WindowSize = arguments.WindowSize.value_or(std::string());
+			specification.UIScale = arguments.UIScale;
 			if (arguments.IdleTimeoutSeconds && *arguments.IdleTimeoutSeconds > 0)
 				specification.IdleTimeout = std::chrono::seconds(*arguments.IdleTimeoutSeconds);
 			if (arguments.WaitTimeoutMilliseconds)
@@ -458,6 +472,32 @@ namespace Strata::CLI
 			}
 			else if (name == "--save-image")
 				result.SaveImage = value;
+			else if (name == "--window-size")
+			{
+				// <width>x<height>, at least 640x360 and each at most 65535, as the editor takes it (CommandLine::GetSizeOption).
+				const size_t separator = value.find('x');
+				const std::optional<int64_t> width = separator == std::string::npos ? std::nullopt : ParseInteger(std::string_view(value).substr(0, separator));
+				const std::optional<int64_t> height = separator == std::string::npos ? std::nullopt : ParseInteger(std::string_view(value).substr(separator + 1));
+				if (!width || !height || *width < c_MinWindowWidth || *height < c_MinWindowHeight || *width > UINT16_MAX || *height > UINT16_MAX)
+				{
+					error = fmt::format("--window-size expects the window's pixels as <width>x<height> (e.g. 1600x900), at least {} wide and {} high, "
+						"got '{}'", c_MinWindowWidth, c_MinWindowHeight, value);
+					return std::nullopt;
+				}
+				result.WindowSize = fmt::format("{}x{}", *width, *height);
+			}
+			else if (name == "--ui-scale")
+			{
+				// A number, read as JSON as the editor reads it (independent of the C locale).
+				const nlohmann::json parsed = nlohmann::json::parse(value, nullptr, false);
+				const double scale = parsed.is_number() ? parsed.get<double>() : 0.0;
+				if (!std::isfinite(scale) || scale < c_MinUIScale || scale > c_MaxUIScale)
+				{
+					error = fmt::format("--ui-scale expects a factor from {} to {} (1 is 100%), got '{}'", c_MinUIScale, c_MaxUIScale, value);
+					return std::nullopt;
+				}
+				result.UIScale = static_cast<float>(scale);
+			}
 			else if (name == "--idle-timeout")
 			{
 				const std::optional<int64_t> seconds = ParseInteger(value);
@@ -573,8 +613,9 @@ namespace Strata::CLI
 			"  StrataCLI call <method> [params] [connection options] [--timeout <ms>] [--save-image <file>]\n"
 			"  StrataCLI list [connection options] [--json]\n"
 			"  StrataCLI status [connection options]\n"
-			"  StrataCLI launch [--project <dir>] [--headless | --no-gpu] [--idle-timeout <s>] [--editor <path>]\n"
-			"                   [--wait-timeout <ms>] [--stall-timeout <s>] [--no-wait-scan]\n"
+			"  StrataCLI launch [--project <dir>] [--headless | --no-gpu | --window-size <w>x<h>] [--ui-scale <factor>]\n"
+			"                   [--idle-timeout <s>] [--editor <path>] [--wait-timeout <ms>] [--stall-timeout <s>]\n"
+			"                   [--no-wait-scan]\n"
 			"  StrataCLI mcp [connection options] [--editor <path>] [--timeout <ms>] [--idle-timeout <s>] [--stall-timeout <s>]\n"
 			"                [--toolsets <name,...> | all]\n"
 			"  StrataCLI --help | --version\n"
@@ -592,7 +633,9 @@ namespace Strata::CLI
 			"           nothing progressed for --stall-timeout seconds, default 60). --no-wait-scan returns once it\n"
 			"           accepts connections. It keeps running until 'call editor.quit', or until no client has been\n"
 			"           connected for --idle-timeout seconds. --headless runs without a window, --no-gpu also without\n"
-			"           a graphics device\n"
+			"           a graphics device; --window-size opens a window of exactly that many pixels (at least\n"
+			"           640x360) and --ui-scale draws the UI at that scale (1 is 100%) instead of the display's:\n"
+			"           with both, screenshots of the editor compare across machines\n"
 			"  mcp      Serve the Model Context Protocol on stdin/stdout (for AI agents). Editors it starts close\n"
 			"           themselves after --idle-timeout seconds without a client (default 600, 0: never). Only the\n"
 			"           commands of --toolsets are tools (default core: about 30; all: every command); the tools\n"

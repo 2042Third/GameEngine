@@ -23,12 +23,13 @@ namespace
 
 	constexpr uint32_t c_SpecularViewSize = 256;
 
-	SceneRenderer CreateSpecularRenderer(const char* name, bool specularAntiAliasing, bool temporal = false)
+	SceneRenderer CreateSpecularRenderer(const char* name, bool specularAntiAliasing, bool temporal = false, bool horizonFade = true)
 	{
 		SceneRendererSpecification specification;
 		specification.TextureStreaming = false;
 		specification.TemporalAntiAliasing = temporal;
 		specification.SpecularAntiAliasing = specularAntiAliasing;
+		specification.HorizonFade = horizonFade;
 		specification.DebugName = name;
 		return SceneRenderer(specification);
 	}
@@ -58,6 +59,36 @@ namespace
 		} while (environment && !renderer.GetStats().EnvironmentLighting && std::chrono::steady_clock::now() < deadline);
 		REQUIRE(renderer.GetStats().EnvironmentLighting == environment);
 		return updates;
+	}
+
+	// A mirror-like metal plane under a sky bright only below the horizon (4 nits), its normal map (with normalMap) tilting
+	// every normal 60 degrees away from GetHorizonFadeCamera's camera, 70 degrees up: the reflected direction points 50 degrees
+	// below the plane. Without the normal map the plane reflects the black sky above it.
+	void AddHorizonFadeScene(SceneTestAssets& assets, Scene& scene, bool normalMap)
+	{
+		const AssetHandle sky = assets.Add(CreateEnvironmentTexture(glm::vec3(0.0f), glm::vec3(4.0f)), "Sky");
+		AddNeutralPostProcess(scene);
+		SkyLightComponent& skyLight = scene.CreateEntity("Sky").AddComponent<SkyLightComponent>();
+		skyLight.EnvironmentMap = sky;
+		skyLight.ShowBackground = false;
+		MaterialProperties metal;
+		metal.Metallic = 1.0f;
+		metal.Roughness = 0.1f;
+		if (normalMap)
+		{
+			// The plane's tangent is +X: a normal tilted toward -X (x = -sin 60, z = cos 60 in tangent space).
+			std::vector<uint8_t> tilted;
+			for (int texel = 0; texel < 4; texel++)
+				AppendPixel(tilted, 17, 128, 191, 255);
+			metal.NormalMap = assets.AddTexture(2, 2, tilted, TextureFormat::RGBA8);
+		}
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(metal), glm::vec3(0.0f), "Plane").GetComponent<TransformComponent>().Scale = glm::vec3(10.0f);
+	}
+
+	SceneCamera GetHorizonFadeCamera()
+	{
+		const glm::vec3 toCamera(std::cos(glm::radians(70.0f)), std::sin(glm::radians(70.0f)), 0.0f);
+		return LookAt(toCamera * 3.0f, glm::vec3(0.0f));
 	}
 
 	struct SphereImage
@@ -288,37 +319,54 @@ TEST_SUITE("GPU.SceneRenderer.Materials")
 
 	TEST_CASE("Normal-mapped reflections fade below the geometric surface")
 	{
-		// A mirror-like metal plane whose normal map tilts every normal 60 degrees away from a camera 70 degrees up: the
-		// reflected direction points 50 degrees below the plane, at a sky bright only below the horizon. Without the fade the
-		// pixel would reflect that light, the bottom's 4 nits times the metal's reflectance (above 0.9); with it, at most 0.3 of
-		// that.
+		// The pixel's reflection points 50 degrees below the plane (AddHorizonFadeScene). Without the fade it would reflect the
+		// sky's light there, the bottom's 4 nits times the metal's reflectance (above 0.9); with it, at most 0.3 of that.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
 		LoadMeshes(assets);
-		const AssetHandle sky = assets.Add(CreateEnvironmentTexture(glm::vec3(0.0f), glm::vec3(4.0f)), "Sky");
 		Scene scene;
-		AddNeutralPostProcess(scene);
-		SkyLightComponent& skyLight = scene.CreateEntity("Sky").AddComponent<SkyLightComponent>();
-		skyLight.EnvironmentMap = sky;
-		skyLight.ShowBackground = false;
-		// The plane's tangent is +X: a normal tilted toward -X (x = -sin 60, z = cos 60 in tangent space).
-		std::vector<uint8_t> tilted;
-		for (int texel = 0; texel < 4; texel++)
-			AppendPixel(tilted, 17, 128, 191, 255);
-		MaterialProperties metal;
-		metal.Metallic = 1.0f;
-		metal.Roughness = 0.1f;
-		metal.NormalMap = assets.AddTexture(2, 2, tilted, TextureFormat::RGBA8);
-		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(metal), glm::vec3(0.0f), "Plane").GetComponent<TransformComponent>().Scale = glm::vec3(10.0f);
+		AddHorizonFadeScene(assets, scene, true);
 		SceneRenderer renderer = CreateSpecularRenderer("HorizonFade", true);
 		renderer.SetViewportSize(c_SpecularViewSize, c_SpecularViewSize);
-		const glm::vec3 toCamera(std::cos(glm::radians(70.0f)), std::sin(glm::radians(70.0f)), 0.0f);
-		RenderSettled(gpu, renderer, scene, LookAt(toCamera * 3.0f, glm::vec3(0.0f)), true);
+		RenderSettled(gpu, renderer, scene, GetHorizonFadeCamera(), true);
 		const std::vector<glm::vec3> image = ReadHDR(renderer.GetHDRTexture());
 		const glm::vec3 center = image[static_cast<size_t>(c_SpecularViewSize / 2) * c_SpecularViewSize + c_SpecularViewSize / 2];
 		CAPTURE(center);
 		CHECK(Luminance(center) <= 0.3f * 4.0f * 0.9f);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Without the horizon fade a normal map's reflection below the surface shows, and a plain surface is unchanged")
+	{
+		// SceneRendererSpecification::HorizonFade off (viewport.capture's renderer switch): the reflection the fade holds below
+		// 0.3 of the sky's light comes through. A plane without a normal map reflects only above its surface, so the switch
+		// changes none of its pixels.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadMeshes(assets);
+		const SceneCamera camera = GetHorizonFadeCamera();
+		const auto render = [&](bool normalMap, bool horizonFade)
+		{
+			Scene scene;
+			AddHorizonFadeScene(assets, scene, normalMap);
+			SceneRenderer renderer = CreateSpecularRenderer(horizonFade ? "HorizonFadeOn" : "HorizonFadeOff", true, false, horizonFade);
+			renderer.SetViewportSize(c_SpecularViewSize, c_SpecularViewSize);
+			RenderSettled(gpu, renderer, scene, camera, true);
+			return ReadHDR(renderer.GetHDRTexture());
+		};
+		const std::vector<glm::vec3> unfaded = render(true, false);
+		const glm::vec3 center = unfaded[static_cast<size_t>(c_SpecularViewSize / 2) * c_SpecularViewSize + c_SpecularViewSize / 2];
+		CAPTURE(center);
+		CHECK(Luminance(center) >= 0.6f * 4.0f * 0.9f);
+		const std::vector<glm::vec3> plainFaded = render(false, true);
+		const std::vector<glm::vec3> plainUnfaded = render(false, false);
+		REQUIRE(plainFaded.size() == plainUnfaded.size());
+		size_t differing = 0;
+		for (size_t index = 0; index < plainFaded.size(); index++)
+			differing += plainFaded[index] != plainUnfaded[index] ? 1u : 0u;
+		CHECK(differing == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }
