@@ -3,7 +3,9 @@
 #include "Strata/Core/Application.h"
 #include "Strata/Core/FrameProfiler.h"
 #include "Strata/Core/Layer.h"
+#include "Strata/Core/Process.h"
 #include "Strata/Core/Profiling.h"
+#include "TestHelpers.h"
 
 #include <chrono>
 #include <string>
@@ -103,6 +105,22 @@ namespace
 
 TEST_SUITE("Core.Application")
 {
+	TEST_CASE("An exception that leaves a frame ends the program in order with a failure code")
+	{
+		// The main loop catches what third-party code throws, logs it as critical and shuts down: the process must not
+		// report success (TestMain.cpp, "throwing-application", ends as Engine/EntryPoint.h does).
+		ProcessSpecification specification;
+		specification.Executable = Tests::GetTestExecutablePath();
+		specification.Arguments = { "--strata-test-helper=throwing-application" };
+		const Process::RunResult result = Process::Run(specification, std::chrono::milliseconds(60000));
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == Application::c_UnhandledExceptionExitCode);
+		CHECK(result.ExitCode != 0);
+		CHECK(result.Output.find("Unhandled exception in the main loop: the layer threw") != std::string::npos);
+	}
+
 	TEST_CASE("The frame work time counts the frame's work, not the wait for the next frame")
 	{
 		ApplicationSpecification specification;

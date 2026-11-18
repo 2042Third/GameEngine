@@ -430,6 +430,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   names, versions and file extensions.
 - Editor: `--window-size <width>x<height>` opens a window of exactly that many pixels instead of a maximized one, for
   screenshots that compare across machines; `StrataCLI launch --window-size` passes it on.
+- Fixed: a program (the editor, the runtime, an exported game) whose frame an exception left logged a critical line,
+  ended in order and exited with code 0, so a script or CI read success; it now exits with code 1.
 
 ## Defaults that change
 

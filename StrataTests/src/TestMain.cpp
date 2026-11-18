@@ -22,6 +22,7 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Core/Layer.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/Process.h"
@@ -205,6 +206,35 @@ private:
 };
 
 static LateLogProbe s_LateLogProbe;
+
+// Throws out of its second frame's update, as third-party code may (a driver's failure inside NVRHI): "throwing-application".
+class ThrowingLayer : public Strata::Layer
+{
+public:
+	ThrowingLayer()
+		: Layer("Throwing")
+	{
+	}
+
+	void OnUpdate(Strata::Timestep) override
+	{
+		if (++m_Frames == 2)
+			throw std::runtime_error("the layer threw");
+	}
+private:
+	uint32_t m_Frames = 0;
+};
+
+class ThrowingApplication : public Strata::Application
+{
+public:
+	explicit ThrowingApplication(const Strata::ApplicationSpecification& specification)
+		: Application(specification)
+	{
+		if (IsRunning())
+			PushLayer(new ThrowingLayer());
+	}
+};
 
 // Helper processes that could outlive their test stop when it says so: once the stop file exists or its directory is gone
 // (temporary directories are removed when the tests end), and after a minute at the latest.
@@ -666,6 +696,24 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		std::fflush(stdout);
 		std::fflush(stderr);
 		std::_Exit(result);
+	}
+	if (mode == "throwing-application")
+	{
+		// A headless application whose layer throws in its second frame, run and ended as the programs' main does
+		// (Engine/EntryPoint.h): the process exits with the application's exit code.
+		Strata::Log::Init();
+		Strata::ApplicationSpecification specification;
+		specification.Name = "ThrowingApplication";
+		specification.Headless = true;
+		specification.MaxFrames = 100;
+		int exitCode = 0;
+		{
+			ThrowingApplication application(specification);
+			application.Run();
+			exitCode = application.GetExitCode();
+		}
+		Strata::Log::Shutdown();
+		return exitCode;
 	}
 	if (mode == "log-after-exit" && argc > 2)
 	{

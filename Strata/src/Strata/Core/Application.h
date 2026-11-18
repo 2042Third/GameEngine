@@ -69,6 +69,9 @@ namespace Strata
 		// The exit code of a run that quit because it was interrupted (Ctrl+C, SIGINT, SIGTERM: Platform::InstallInterruptHandler),
 		// unless it had failed before: 128 + SIGINT, as shells report an interrupted program.
 		static constexpr int c_InterruptedExitCode = 130;
+		// The exit code of a run an exception ended (third-party code threw out of a frame; the loop logs it as critical and
+		// shuts down in order), unless it had failed before.
+		static constexpr int c_UnhandledExceptionExitCode = 1;
 
 		// A failure that ends the program before it could do what it was started for (no graphics device, no game to run):
 		// logged as critical, and, for a person who would not see the log (Platform::ShouldShowErrorDialogs), also shown in a

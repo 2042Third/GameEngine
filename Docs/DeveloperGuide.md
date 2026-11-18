@@ -326,7 +326,11 @@ option mistakes) prints into the terminal that started it; an *Interactive* run 
 so its Ctrl+C or closing it does not end the program and the log does not run into the shell's prompt. Then
 `Platform::InstallInterruptHandler` turns Ctrl+C, Ctrl+Break and the console closing (Windows) or SIGINT and SIGTERM
 (POSIX) into an orderly quit through the main loop (`Platform::IsInterruptRequested`; exit code
-`Application::c_InterruptedExitCode`, 130, unless the run had failed); a second request ends the process at once. Fatal
+`Application::c_InterruptedExitCode`, 130, unless the run had failed); a second request ends the process at once. An
+exception that leaves a frame (engine code does not throw: third-party code, a driver's failure inside NVRHI) is caught by
+the main loop, logged as critical ("Unhandled exception in the main loop") and ends the run in order with
+`Application::c_UnhandledExceptionExitCode`, 1, unless the run had failed before (`Core.Application` checks it through a
+helper process that ends as `Engine/EntryPoint.h` does). Fatal
 startup failures go through `Application::ReportFatalError` (no window, no graphics device, no game to run, a game that cannot
 start): logged, and for an Interactive run whose stderr nobody reads (`Platform::ShouldShowErrorDialogs`: started from
 the desktop, from a terminal it left alone, or with its output sent to the null device) also shown in a native dialog
