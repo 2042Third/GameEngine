@@ -5080,16 +5080,22 @@ lights, Post Process and the sky), and never a resolution below the output's.
   continuous as it moves) gives the **kernel**: the light's two half axes projected into the view through the receiver's ray,
   times `(z_r - z_b) / (z_r z_b)`, each column clamped to the reach. It is exact for the image's linearization: a rectangle
   light's shadow is filtered by a parallelogram, long along a strip light, foreshortened in the faces that see it edge-on.
-  Each tap stands for a point of the face (its lattice coordinates) and compares with the **path** from that point to the
-  receiver where the path crosses the tap (`CompareAreaShadowPath`: the tap's offset in the kernel's own units, through the
-  columns' inverse, over the lattice's reach is the path's spread (z_r - z) / (z_r z) there, and NDC depth is affine in
-  1 / z), and with the **receiver's plane** there (affine in the image), kept from half the receiver's depth to its own: what
-  lies beyond the receiver along a ray shadows nothing, which keeps curved receivers where the light grazes them and the
-  background from shadowing a receiver. An occluder beside every path, such as a wall rising beside a floor point, is farther
-  than the path where a tap sees it and blocks nothing; with the plane alone the Cornell box showed a band along every wall
-  and the back wall's foot (0.40 of the light). Each tap looks once more at a third of its offset with the plane alone
-  (`c_AreaShadowNearTap`): solid blockers just above the receiver, which the path at the kernel's depth passes in front of
-  (a sphere's or a post's foot). Under a texel of kernel the
+  Each tap stands for a point of the face (its lattice coordinates) and looks three times along the **path** from that point
+  to the receiver (`GetAreaShadowPathReference`: the tap's offset in the kernel's own units, through the columns' inverse,
+  over the lattice's reach is the path's spread (z_r - z) / (z_r z) there, and NDC depth is affine in 1 / z; the path is made
+  deeper by the receiver's biases scaled to its depth, so a face the path crosses at the kernel's depth lies nearer), each
+  look also against the **receiver's plane** (affine in the image), kept from half the receiver's depth to its own: what lies
+  beyond the receiver along a ray shadows nothing, which keeps curved receivers where the light grazes them and the background
+  from shadowing a receiver. At the tap, an occluder nearer than the path blocks it; an occluder beside every path, such as a
+  wall rising beside a floor point, is farther than the path there and blocks nothing (with the plane alone the Cornell box
+  showed a band along every wall and the back wall's foot, 0.40 of the light). At two thirds of its offset
+  (`c_AreaShadowMiddleTap`), an occluder nearer than the path blocks it where the surface the first look saw is nearer than
+  the path there too: the path entered a solid whose face continues between the looks (the near face of a wall under its
+  top), not passed behind an occluder's silhouette. At a third (`c_AreaShadowNearTap`), an occluder nearer than the plane
+  blocks it where it is also deeper than the path at the kernel's depth: solid blockers just above the receiver (a sphere's
+  or a post's foot), not the blocker the kernel was made from counted again as solid down to the receiver. The first two
+  looks compare from one gather of the atlas (`CompareAreaShadowTwice`, the linear clamp sampler s8), as do the near look's
+  two tests. Under a texel of kernel the
   sun's four-tap tent filters; from one to two texels a lattice of `c_AreaShadowTapsPerFilterTap` (2) times
   `ShadowFilterQuality` taps (a golden-ratio rank-1 lattice over the face, shifted per pixel by the blue-noise tile's far
   shifts (17, 43) and (43, 17)) takes over; nothing turns with the frame. Taps and cells whose rays leave the center behind a
@@ -5109,14 +5115,17 @@ lights, Post Process and the sky), and never a resolution below the output's.
   seen from under its ceiling within 0.124 of the reference outside the penumbrae (at one point under the sphere's foot that
   the light's center sees, where the filter misses part of the sphere just above the floor; elsewhere within 0.03) and 0.199
   inside them (the spec's 0.03 and 0.1), no step between neighbours beyond 0.016 where the reference is flat; a wall's
-  penumbra under a 1 x 0.5 m light within 0.167 of the reference and 38% narrower (the side of a solid blocker, seen beyond
-  the path that enters it nearer the receiver, blocks less: with the plane alone 0.063 and 8.5%, the spec's 0.12 and 25%); a
-  6 cm post's shadow 5 mm behind it 2.0 cm wide (the reference's 1.2 cm: the spec's two shadow texels are not met, the
-  blockers' depth comes from cells holding the post's lower part), 1 m on as the reference's; a blocker 0.3 m under a 2 m
-  light gets 16% of the reference's width: the **reach clamp**, the known limit of very wide penumbrae (a blocker within about
-  a third of the receiver's distance of a large light); in the Cornell box 46% of the fully lit pixels still reach the taps
-  (the spec's 30% is not met: by walls and corners geometry nearer than the receiver lies within its own reach); a strafe
-  across the Cornell box's penumbrae without anti-aliasing measures 0.048% of blocks and 0.78% at their 99th percentile on the
+  penumbra under a 1 x 0.5 m light within 0.063 of the reference and 8.4% wider (the spec's 0.12 and 25%; with the path's
+  crossing at the kernel's depth and the plane at a third of it alone 0.167 and 38% narrow); a 6 cm post's shadow 5 mm behind
+  it 2.1 cm wide (the reference's 1.2 cm: the spec's two shadow texels are not met, the blockers' depth comes from cells
+  holding the post's lower part), 1 m on within 0.031 of the reference (that shadow is 15% deep, where its 10-90% width, the
+  spec's measure, turns on a few hundredths: 0.132 m against 0.090 m); the Cornell box's back wall in the 0.3 m band under
+  its ceiling light's plane within 0.015 of the reference (0.21 without leaving out the taps behind the plane); a blocker
+  0.3 m under a 2 m light gets 16% of the reference's width: the **reach clamp**, the known limit of very wide penumbrae (a
+  blocker within about a third of the receiver's distance of a large light); in the Cornell box 46% of the fully lit pixels
+  still reach the taps (the spec's 30% is not met: by walls and corners geometry nearer than the receiver lies within its own
+  reach); a strafe across the Cornell box's penumbrae without anti-aliasing measures 0.054% of blocks and 0.78% at their
+  99th percentile on the
   flicker meter, the sun's widest soft shadows in the same room 0.062% and 0.84% (with the row's taps alone rect lights
   measured 0.092% and 1.46%, hence the factor 2); the masks' grain in a still penumbra (RMS from the 9 x 9 mean) 0.003
   against the sun's 0.026.
