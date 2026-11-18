@@ -701,8 +701,12 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   renderers of equal voxels, neither with a moving object, also differed in one byte of the field's 4.4 million in
   one run of seven. None of these cases has a mover, so no pass of this unit ran in them (a renderer without one
   dispatches none: `GIMoverDispatches` 0). The movers' two cases that compare two renderers' fields allow 16 bytes for
-  it (their voxel textures stay equal to the byte); main's two cases still fail when it happens: a gate that fails
-  only there is rerun.
+  it (their voxel textures stay equal to the byte). Cases that compare fields to the bit still fail when it happens:
+  main's two (their harmonics: the failures above) and, were it to reach one renderer's faces, the movers' "A resting
+  prop makes no mover work, and one that moved and rested leaves a fresh renderer's voxels", which compares a fresh
+  renderer's faces of three frames with an earlier frame's. One renderer's faces were not seen to differ since the
+  reduce's sums are `precise`: in none of 67 logged runs of the still camera's case in this unit's build directory,
+  and the resting prop's field had one hash in all 74 logged runs. A gate that fails only in these cases is rerun.
 
 **Reflections (R1)**
 

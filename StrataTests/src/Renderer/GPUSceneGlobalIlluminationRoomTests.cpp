@@ -2046,6 +2046,10 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 					ReadVoxelsAndField(*fresh.Renderer, 4, freshLevels, freshField);
 				if (frame > 2)
 				{
+					// One renderer's faces from frame to frame, to the byte, as "A still camera's field repeats frame after
+					// frame" compares them: the driver's two ways of summing (c_FieldBytes) showed between two renderers and in
+					// the harmonics, never in one renderer's faces since GI/FieldReduce.comp's sums are `precise`. Were it to,
+					// this check fails with main's (the release notes' Known issues).
 					ReadVoxelsAndField(*fresh.Renderer, 4, levels, field);
 					CHECK(levels == freshLevels);
 					CHECK(field == freshField);
