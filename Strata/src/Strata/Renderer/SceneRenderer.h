@@ -171,6 +171,11 @@ namespace Strata
 		// no limit beyond RendererQuality::c_MaxShadowMapSize and the device's texture limit, which always bound it). Tests
 		// set it low to check the limit.
 		uint32_t MaxShadowMapSize = 0;
+		// The largest shadow atlas of point, spot and rect lights the renderer allocates, in texels each way (0: no limit beyond
+		// the quality's size). A larger one counts as an allocation the device refused, as on a device short of memory: the atlas
+		// falls back to half the size each way, down to 2048, and below that local lights cast no shadows. Tests set it to check
+		// those paths.
+		uint32_t MaxLocalShadowAtlasSize = 0;
 		// The depth prepass writes the entity-ID buffer (a 32-bit render target of the viewport's size): picking (GetEntityAt,
 		// ReadEntityIDAsync), the selection outline and entity tints read it. Renderers that do none of these (games) turn it
 		// off; outlines and tints asked of them are then left out, with an error.

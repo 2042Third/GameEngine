@@ -338,6 +338,7 @@ namespace Strata
 	{
 		m_LocalShadowLights.clear();
 		m_LocalShadowViews.clear();
+		m_LocalShadowClears.clear(); // Their tiles were placed for an atlas this frame may not have
 		m_LocalShadowCasters.clear();
 		m_LocalShadowBatches.clear();
 		m_LocalShadowAllocator.Clear();
@@ -1416,19 +1417,25 @@ namespace Strata
 		desc.debugName = m_Specification.DebugName + ".LocalShadowAtlas";
 		desc.initialState = nvrhi::ResourceStates::ShaderResource;
 		desc.keepInitialState = true;
-		nvrhi::TextureHandle atlas = m_Device->createTexture(desc);
+		const auto createAtlas = [&]() -> nvrhi::TextureHandle
+		{
+			if (m_Specification.MaxLocalShadowAtlasSize != 0 && desc.width > m_Specification.MaxLocalShadowAtlasSize)
+				return nullptr; // As the device refusing it
+			return m_Device->createTexture(desc);
+		};
+		nvrhi::TextureHandle atlas = createAtlas();
 		// Large atlases (Ultra's 8192: 256 MiB) may not fit the device's memory: half the size each way, down to 2048, rather
 		// than no shadows.
 		while (!atlas && desc.width > c_MinFallbackLocalShadowAtlasSize)
 		{
 			desc.width /= 2;
 			desc.height /= 2;
-			atlas = m_Device->createTexture(desc);
+			atlas = createAtlas();
 		}
 		nvrhi::FramebufferHandle framebuffer = atlas ? m_Device->createFramebuffer(nvrhi::FramebufferDesc().setDepthAttachment(atlas)) : nullptr;
 		if (!atlas || !framebuffer)
 		{
-			m_Errors.Report(fmt::format("failed to create the {0}x{0} shadow atlas of point and spot lights; they cast no shadows", m_LocalShadowAllocator.GetAtlasSize()));
+			m_Errors.Report(fmt::format("failed to create the {0}x{0} shadow atlas of point, spot and rect lights; they cast no shadows", m_LocalShadowAllocator.GetAtlasSize()));
 			return false;
 		}
 		m_LocalShadowAtlas = std::move(atlas);
@@ -1442,7 +1449,7 @@ namespace Strata
 			if (!m_LocalShadowAtlasFallbackReported)
 			{
 				m_LocalShadowAtlasFallbackReported = true;
-				m_Errors.Report(fmt::format("the {}-texel shadow atlas of point and spot lights could not be allocated; using {}",
+				m_Errors.Report(fmt::format("the {}-texel shadow atlas of point, spot and rect lights could not be allocated; using {}",
 					m_LocalShadowAllocator.GetAtlasSize(), desc.width));
 			}
 			m_LocalShadowAllocator.Reset(desc.width, c_MinLocalShadowTile);
@@ -1493,7 +1500,11 @@ namespace Strata
 
 	void SceneRenderer::ClearUnneededLocalShadowTiles(nvrhi::ICommandList* commandList)
 	{
-		// Only the faces behind one-sided rect lights go unneeded: their back faces' tiles are cleared too.
+		// Only the faces behind one-sided rect lights go unneeded: their back faces' tiles are cleared too. A frame without the
+		// atlas has reset its views and these with them (ResetLocalShadows).
+		ST_CORE_ASSERT(m_LocalShadowClears.empty() || (m_LocalShadowAtlas && m_LocalShadowFramebuffer), "SceneRenderer: shadow tiles to clear without an atlas");
+		if (!m_LocalShadowAtlas || !m_LocalShadowFramebuffer)
+			return;
 		for (const ShadowAtlasTile& tile : m_LocalShadowClears)
 			ClearLocalShadowTile(commandList, tile, true);
 	}

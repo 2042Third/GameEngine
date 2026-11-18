@@ -381,6 +381,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   of the floor is more than 0.3 off the true visibility (0.23% before). The back faces take a second shadow atlas of the
   point and spot atlas's size (64 MiB at Medium and High, 256 MiB at Ultra), made with the first rect light that casts a
   shadow.
+- A frame whose shadow atlas of point, spot and rect lights cannot be made no longer crashes with a one-sided rect light
+  casting shadows in view: the face behind the light kept its tile to clear in an atlas that did not exist.
 - Rect light shadows are right from the first frame a light casts one: views drawn before its shadow had faded in (a
   renderer's first frame, a light whose views are drawn over several frames) kept depth ranges that were never built, so
   its shadow could be missing or wrong until its views were drawn again.

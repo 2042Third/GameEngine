@@ -1,9 +1,11 @@
 #include "Renderer/FlickerMetrics.h"
 #include "Renderer/GIScenes.h"
 #include "Renderer/SceneRendererTestUtils.h"
+#include "Strata/Core/Log.h"
 #include "Strata/Math/Math.h"
 #include "Strata/Renderer/AreaLights.h"
 #include "Strata/Renderer/RendererComponents.h"
+#include "TestHelpers.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -15,6 +17,7 @@
 #include <cstring>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 using namespace Strata;
@@ -909,6 +912,82 @@ TEST_SUITE("GPU.SceneRenderer.AreaShadows")
 		MESSAGE("A rect light's shadow faded in from a first frame without a fade step: " << MaxDifference(reference, frame)
 			<< " codes from the shadow shown at once");
 		CHECK(MaxDifference(reference, frame) <= 1);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A frame without the shadow atlas leaves a one-sided rect light's tiles alone, and a smaller atlas takes over")
+	{
+		// The face behind a one-sided ceiling panel needs no view: its tile is cleared instead (placed before the atlas is made).
+		// A frame whose atlas cannot be made resets its views and must reset those clears too: drawn, they cleared a tile of an
+		// atlas that does not exist (a null texture or framebuffer). With a smaller atlas made instead, the frame draws nothing
+		// and the next places its tiles in the atlas made, as a renderer whose quality asks for that size.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		AreaShadowScene scene;
+		BuildAreaShadowScene(scene, assets, glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), 1.0f, 0.5f);
+		AddBox(scene, Box { glm::vec3(0.5f, 0.3f, 0.0f), glm::vec3(0.6f, 0.6f, 0.6f) });
+		constexpr uint32_t c_Size = 128;
+		const SceneCamera camera = TopDown(glm::vec3(0.0f), 6.0f);
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			if (mode == GPUDrivenMode::Auto && !DeviceDrawsGPUDriven())
+				continue;
+			CAPTURE(static_cast<int>(mode));
+			{
+				SceneRendererSpecification specification = AreaShadowSpecification(mode);
+				specification.Quality.LocalShadowAtlasSize = 4096;
+				specification.MaxLocalShadowAtlasSize = 1024; // Below the fallback's 2048: no atlas at all
+				SceneRenderer renderer(specification);
+				renderer.SetViewportSize(c_Size, c_Size);
+				size_t reports = 0;
+				{
+					const LogCapture log;
+					for (int frame = 0; frame < 3; frame++)
+					{
+						RenderOutput(renderer, scene.SceneData, camera);
+						CHECK(renderer.GetStats().LocalShadowRequested == 1);
+						CHECK(renderer.GetStats().LocalShadowLights == 0);
+						CHECK(renderer.GetStats().LocalShadowViewsDrawn == 0);
+						CHECK(renderer.GetStats().AreaShadowMasks == 0);
+					}
+					for (const LogEntry& entry : log.GetEntries())
+						reports += entry.Message.find("failed to create the 4096x4096 shadow atlas") != std::string::npos ? 1u : 0u;
+				}
+				CHECK(reports == 1);
+			}
+			{
+				SceneRendererSpecification specification = AreaShadowSpecification(mode);
+				specification.Quality.LocalShadowAtlasSize = 4096;
+				specification.MaxLocalShadowAtlasSize = 2048;
+				SceneRenderer fallback(specification);
+				fallback.SetViewportSize(c_Size, c_Size);
+				SceneRendererSpecification smallSpecification = AreaShadowSpecification(mode);
+				smallSpecification.Quality.LocalShadowAtlasSize = 2048;
+				SceneRenderer small(smallSpecification);
+				small.SetViewportSize(c_Size, c_Size);
+				size_t reports = 0;
+				{
+					const LogCapture log;
+					RenderOutput(fallback, scene.SceneData, camera);
+					CHECK(fallback.GetStats().LocalShadowLights == 0);
+					for (const LogEntry& entry : log.GetEntries())
+						reports += entry.Message.find("could not be allocated; using 2048") != std::string::npos ? 1u : 0u;
+				}
+				CHECK(reports == 1);
+				ReadbackImage frame;
+				ReadbackImage reference;
+				for (int index = 0; index < 3; index++)
+				{
+					frame = RenderOutput(fallback, scene.SceneData, camera);
+					reference = RenderOutput(small, scene.SceneData, camera);
+				}
+				CHECK(fallback.GetStats().LocalShadowLights == 1);
+				CHECK(fallback.GetStats().AreaShadowMasks == 1);
+				CHECK(fallback.GetStats().AreaShadowTiles == RenderData::c_LocalShadowFaces);
+				CHECK(CountDifferent(frame, reference) == 0);
+			}
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

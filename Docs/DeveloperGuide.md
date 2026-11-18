@@ -4768,8 +4768,12 @@ lights, Post Process and the sky), and never a resolution below the output's.
   band's) all lie behind a one-sided light's plane is not needed (`LocalShadowView::Needed`): no receiver the light lights
   selects it, so it is never drawn and its tile is only cleared, to the far plane (`m_LocalShadowClears`,
   `ClearUnneededLocalShadowTiles`, on either path before the views; `ClearedTile` names it); a ceiling panel draws five
-  views. A turn that makes such a face needed again draws it first, and until then it reads unshadowed from its cleared tile
-  while the light stays complete (its fade is not restarted). The guard band holds the area filter's reach,
+  views. The face keeps its tile (the spec's D6.2 gave it none), so a one-sided panel holds six tiles of the atlas's budget
+  for five drawn: a turn that makes the face needed again draws it first into the tile it holds, and until then it reads
+  unshadowed from its cleared tile while the light stays complete (its fade is not restarted). The clears are placed with
+  the tiles, before the atlas exists: `ResetLocalShadows` drops them with the views, so a frame whose atlas cannot be made
+  (or that falls back to a smaller one) clears no tile (`SceneRendererSpecification::MaxLocalShadowAtlasSize` makes tests
+  refuse an atlas). The guard band holds the area filter's reach,
   `RenderData::c_AreaShadowReach` (an eighth of the tile) plus the normal bias's, so a rect light's tile has about a quarter
   fewer texels per degree than a point light's of the same size. Without it the taps clamp to their own face: a blocker just
   beyond a seam leaves the receivers before it fully lit (S4 of `GPU.SceneRenderer.AreaShadows`: a 0.18 step at the seam,
