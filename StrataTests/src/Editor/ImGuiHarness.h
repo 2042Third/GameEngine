@@ -45,6 +45,13 @@ namespace Strata::Tests
 			double FrameWorkTime = 0.0;    // Reported as the last frame's work time
 			std::string WindowTitle;
 			uint32_t ScreenshotRequests = 0;
+			// A window to read back (HasWindow): RequestWindowReadback records each region and answers at once with an image of
+			// that size (the window's DisplaySize where it reaches the edge) in ReadbackColor, or with ReadbackError when set.
+			bool Window = false;
+			glm::uvec2 WindowPixels = { 1600, 900 };
+			glm::u8vec4 ReadbackColor = { 40, 90, 160, 255 };
+			std::string ReadbackError;
+			std::vector<glm::uvec4> WindowReadbacks;
 			std::optional<double> ProcessUptime = 0.25;
 			std::optional<GraphicsDeviceInfo> GraphicsDevice;
 		};
@@ -63,8 +70,9 @@ namespace Strata::Tests
 		// Rendering needs a real device: the fake only describes one (GraphicsDevice), for what the UI shows about it.
 		bool HasGraphicsDevice() const override { return false; }
 		std::optional<GraphicsDeviceInfo> GetGraphicsDeviceInfo() const override { return m_State->GraphicsDevice; }
-		// No window: the layer neither opens native file dialogs nor sets a title.
-		bool HasWindow() const override { return false; }
+		// No window unless the state says so (window readbacks); without one the layer neither opens native file dialogs nor
+		// sets a title.
+		bool HasWindow() const override { return m_State->Window; }
 		void SetWindowTitle(const std::string& title) override { m_State->WindowTitle = title; }
 		glm::uvec2 GetWindowSize() const override { return glm::uvec2(0); }
 		bool IsWindowFocused() const override { return m_State->WindowFocused; }
@@ -80,6 +88,7 @@ namespace Strata::Tests
 		uint32_t GetMaxFrameRate() const override { return m_State->MaxFrameRate; }
 		double GetLastFrameWorkTime() const override { return m_State->FrameWorkTime; }
 		void RequestScreenshot(std::function<void(const ReadbackImage&)>) override { m_State->ScreenshotRequests++; }
+		void RequestWindowReadback(const glm::uvec4& region, WindowReadbackCallback callback) override;
 	private:
 		Ref<State> m_State;
 	};

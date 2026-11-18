@@ -9,14 +9,18 @@
 #include "UI/ItemProbe.h"
 #include "UI/RecoveryDialog.h"
 
+#include <Strata/Core/Base64.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/ImageReader.h>
 #include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Scene/Components.h>
 
 #include <nlohmann/json.hpp>
 
+#include <cmath>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -175,7 +179,112 @@ TEST_SUITE("Editor.UI.Dialogs")
 			REQUIRE(command);
 			CHECK(command->Kind == EditorCommandKind::Session);
 			CHECK(command->Results == EditorCommandResults::Content);
+			CHECK_FALSE(command->MayDefer);
 		}
+		// A picture of the window changes nothing, and answers frames later.
+		const EditorCommand* screenshot = editor.Layer->GetCommands().Find("editor.screenshot");
+		REQUIRE(screenshot);
+		CHECK(screenshot->Kind == EditorCommandKind::Query);
+		CHECK(screenshot->Results == EditorCommandResults::Content);
+		CHECK(screenshot->MayDefer);
+	}
+
+	TEST_CASE("editor.screenshot reads back the window or a panel as a later frame drew it, and fails without side effects")
+	{
+		HarnessEditor editor({}, WithFeatureProject("Screenshot"));
+		editor.Frames(2);
+		REQUIRE(editor.Context().HasProject());
+		const std::filesystem::path directory = CreateTemporaryDirectory("ScreenshotFiles");
+		const auto execute = [&](const nlohmann::json& parameters)
+		{
+			return editor.Layer->GetCommands().Execute(editor.Context(), "editor.screenshot", parameters);
+		};
+		// Through the runner, frames until it answered.
+		const auto run = [&](const nlohmann::json& parameters)
+		{
+			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+			editor.Layer->GetCommandRunner().Run(editor.Context(), editor.Layer->GetCommands(), "editor.screenshot", parameters,
+				[completed](const EditorCommandResult& result) { *completed = result; });
+			REQUIRE(editor.FramesUntil([&]() { return completed->has_value(); }));
+			return **completed;
+		};
+
+		// The host's window is set after the layer attached (a window would start native file dialogs).
+		CHECK(execute(nlohmann::json::object()).ErrorKind == EditorCommandError::Failed);
+		editor.Host->Window = true;
+		editor.Frames(1);
+		// What cannot be done changes nothing and asks for no readback.
+		CHECK(execute({ { "panel", "Nope" } }).ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(execute({ { "path", FileSystem::ToUTF8(directory / "Shot.txt") } }).ErrorKind == EditorCommandError::InvalidParameters);
+		REQUIRE(FileSystem::WriteText(directory / "Existing.png", "kept"));
+		CHECK(execute({ { "path", FileSystem::ToUTF8(directory / "Existing.png") } }).ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(*FileSystem::ReadText(directory / "Existing.png") == "kept");
+		editor.Layer->GetPanels().SetOpen(EditorPanels::c_Performance, false);
+		const EditorCommandResult closed = execute({ { "panel", "Performance" } });
+		CHECK(closed.ErrorKind == EditorCommandError::Failed);
+		CHECK(closed.Error.find("is not open") != std::string::npos);
+		CHECK(editor.Host->WindowReadbacks.empty());
+
+		// The whole window: read back at the end of the second frame's UI, then encoded and saved on job threads.
+		const std::filesystem::path windowFile = directory / "Shots" / "Window.png";
+		const uint64_t before = editor.Host->FrameCount;
+		const EditorCommandResult whole = run({ { "path", FileSystem::ToUTF8(windowFile) } });
+		REQUIRE_MESSAGE(whole.Success, whole.Error);
+		REQUIRE(editor.Host->WindowReadbacks.size() == 1);
+		CHECK(editor.Host->WindowReadbacks[0] == glm::uvec4(0));
+		CHECK(editor.Host->FrameCount - before >= 2);
+		CHECK(whole.Value["width"] == 1600);
+		CHECK(whole.Value["height"] == 900);
+		CHECK(whole.Value["panel"].is_null());
+		CHECK(FileSystem::FromUTF8(whole.Value["path"].get<std::string>()) == windowFile);
+		const std::optional<std::vector<uint8_t>> saved = FileSystem::ReadBytes(windowFile);
+		REQUIRE(saved);
+		CHECK(*Base64::Decode(whole.Value["Image"]["Data"].get<std::string>()) == *saved);
+		const std::optional<ReadbackImage> decoded = ImageReader::DecodeRGBA8(*saved);
+		REQUIRE(decoded);
+		CHECK(decoded->Width == 1600);
+		CHECK(decoded->Height == 900);
+		CHECK(decoded->Pixels[0] == 40);
+		CHECK(decoded->Pixels[1] == 90);
+		CHECK(decoded->Pixels[2] == 160);
+
+		// A panel ("Scene" names the Scene view): its window's rectangle as the frame that was read back drew it.
+		editor.Run("editor.showPanel", { { "panel", "Inspector" } });
+		const EditorCommandResult inspector = run({ { "panel", "Inspector" } });
+		REQUIRE_MESSAGE(inspector.Success, inspector.Error);
+		const std::optional<EditorPanelRegistry::WindowRect> rect = editor.Layer->GetPanels().GetShownWindowRect(EditorPanels::c_Inspector);
+		REQUIRE(rect);
+		const glm::uvec4 region = editor.Host->WindowReadbacks.back();
+		CHECK(region.x == static_cast<uint32_t>(std::floor(rect->Min.x)));
+		CHECK(region.y == static_cast<uint32_t>(std::floor(rect->Min.y)));
+		CHECK(region.z == static_cast<uint32_t>(std::ceil(rect->Max.x)) - region.x);
+		CHECK(region.w == static_cast<uint32_t>(std::ceil(rect->Max.y)) - region.y);
+		CHECK(inspector.Value["panel"] == "Inspector");
+		CHECK(inspector.Value["width"] == region.z);
+		CHECK(inspector.Value["height"] == region.w);
+		CHECK(inspector.Value["region"]["x"] == region.x);
+		CHECK(inspector.Value["region"]["y"] == region.y);
+		CHECK_FALSE(inspector.Value.contains("path"));
+		const EditorCommandResult scene = run({ { "panel", "Scene" } });
+		REQUIRE_MESSAGE(scene.Success, scene.Error);
+		CHECK(scene.Value["panel"] == EditorPanels::c_Viewport);
+
+		// A panel behind another tab of its dock node is not shown: the picture fails, naming the way to show it.
+		editor.Run("editor.showPanel", { { "panel", "AssetInspector" } });
+		editor.Frames(6);
+		REQUIRE_FALSE(editor.Layer->GetPanels().GetShownWindowRect(EditorPanels::c_Inspector).has_value());
+		const size_t readbacks = editor.Host->WindowReadbacks.size();
+		const EditorCommandResult hidden = run({ { "panel", "Inspector" } });
+		CHECK_FALSE(hidden.Success);
+		CHECK(hidden.Error.find("not shown") != std::string::npos);
+		CHECK(editor.Host->WindowReadbacks.size() == readbacks);
+
+		// A readback that fails fails the command, and nothing is written.
+		editor.Host->ReadbackError = "the device was lost";
+		const EditorCommandResult failed = run({ { "path", FileSystem::ToUTF8(directory / "Failed.png") } });
+		CHECK_FALSE(failed.Success);
+		CHECK(failed.Error.find("the device was lost") != std::string::npos);
+		CHECK_FALSE(FileSystem::Exists(directory / "Failed.png"));
 	}
 
 	TEST_CASE("editor.showDialog opens the project dialogs and the export dialog of an open project")

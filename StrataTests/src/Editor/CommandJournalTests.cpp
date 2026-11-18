@@ -98,7 +98,7 @@ namespace
 
 	// The kind of every built-in command (EditorCommandKind): what replays repeat (Edit), leave out as reads (Query) or as
 	// the editor's session (Session). A command left unmarked counts as an edit, so these lists make each new command's kind
-	// a decision. The two commands of the editor's window (EditorLayer) are checked in Editor.UI.Dialogs.
+	// a decision. The three commands of the editor's window (EditorLayer) are checked in Editor.UI.Dialogs.
 	constexpr std::string_view c_EditCommands[] = {
 		"animation.createController", "animation.setController",
 		"asset.createFolder", "asset.delete", "asset.deleteFolder", "asset.import", "asset.move", "asset.moveFolder", "asset.place", "asset.reimport",

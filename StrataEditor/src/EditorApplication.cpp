@@ -210,6 +210,16 @@ namespace Strata
 			// Nothing will ever be rendered: the answer is an empty image, on the next frame as a capture's would be.
 			m_Application.SubmitToMainThread([callback = std::move(callback)]() { callback(ReadbackImage()); });
 		}
+
+		void RequestWindowReadback(const glm::uvec4& region, WindowReadbackCallback callback) override
+		{
+			if (GraphicsModule* graphics = m_Application.GetModules().Find<GraphicsModule>())
+			{
+				graphics->RequestBackBufferReadback(TextureReadbackRegion { region.x, region.y, region.z, region.w }, std::move(callback));
+				return;
+			}
+			m_Application.SubmitToMainThread([callback = std::move(callback)]() { callback(ReadbackImage(), "this editor runs without a graphics device"); });
+		}
 	private:
 		GraphicsDevice* GetDevice() const
 		{

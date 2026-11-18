@@ -857,6 +857,11 @@ exercised by it.
     long an export takes. A new editor command a game relies on gets a step there.
     `StrataRuntime.FeatureTestQuality` (labels `feature` and `gpu`) runs the exported game in a window with
     `--quality low`: its scripts must read the preset as the command line's and say so.
+    `StrataEditor.FeatureCaptures` (labels `feature` and `gpu`) takes the editor's pictures by command in a window of a fixed
+    size (`--window-size 1280x720`, its own layout file and its own copy of the project,
+    `Editor/FeatureCaptureCommands.json.in`): `editor.screenshot` of the window and of the Inspector, and `viewport.capture`
+    through the scene's camera, which must be `complete`; `StrataTests --strata-test-helper=check-image` checks the pictures.
+    A new capture command, switch or debug view gets a step there.
 - **The feature test enforces coverage.** It fails when:
   - a registered component is missing from the feature scene, or a property has its default value on every entity
     with the component (new properties need a non-default value there, which also proves that they serialize);
@@ -2839,7 +2844,21 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     root or its asset folders; `search`: the Hierarchy's search text, as if typed, e.g. a world's `l:Props`;
     `UI::SearchField`'s `reload` makes a field being typed in show it); it fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
     stays open through a layout reset and the saved open states read at the first frame, and is asked for again until its
-    tab shows; while a modal dialog waits for the person it opens behind it (focusing it would close the dialog). Glyphs a font lacks show as its fallback glyph: draw color swatches as rectangles (the monospaced font has no
+    tab shows; while a modal dialog waits for the person it opens behind it (focusing it would close the dialog).
+    `editor.screenshot {path?, overwrite?, panel?}`, the window's third command, takes a picture of the window as the person
+    sees it, UI and all, or of one docked panel's window (named as `editor.showPanel` names them), as a PNG (`{Image, width,
+    height, panel, region: {x, y, width, height}, path?}`; `path` through `CommandUtils::ResolveOutputPath`). It is an
+    `EditorHost` service: `StrataEditorCore` never reaches the UI. The command's poll waits `c_ScreenshotSettleFrames` (2)
+    so the commands before it took effect and ImGui laid out what changed, then arms the capture; at the end of that frame's
+    UI (`EditorLayer::ReadBackScreenshots`) the panel's rectangle as this frame drew it (`GetShownWindowRect`, times
+    `DisplayFramebufferScale`; a panel brought to the front gets `c_ScreenshotShowFrames` to show) goes to
+    `EditorHost::RequestWindowReadback`, which `GraphicsModule::RequestBackBufferReadback` answers: a `TextureReadback` of
+    the back buffer submitted at the end of that frame, after the UI is drawn, polled at the start of later frames, so no
+    frame stalls (`--screenshot`'s `RequestScreenshot` blocks its last frame). The picture is encoded and saved on job
+    threads (`CommandUtils::SubmitEncodePNG`, `SubmitSavePNG`, which `viewport.capture` uses too). It fails without side
+    effects for an unknown panel, a closed one, one another tab covers, a panel while the launcher shows, an existing file
+    without `overwrite` and a run without a window; the window's size is the person's, or `--window-size`'s for pictures
+    that compare across machines. Glyphs a font lacks show as its fallback glyph: draw color swatches as rectangles (the monospaced font has no
     icons), and check panels with `ImGuiHarness::CountFallbackGlyphs`.
 
 ### Changes go through commands

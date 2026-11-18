@@ -59,8 +59,15 @@ namespace Strata
 		virtual double GetLastFrameWorkTime() const = 0;
 
 		// Reads the window back at the end of the next rendered frame (with the UI) and passes the image to the callback on
-		// the main thread; the image is empty when nothing can be captured.
+		// the main thread; the image is empty when nothing can be captured. Blocks that frame on the GPU (--screenshot).
 		virtual void RequestScreenshot(std::function<void(const ReadbackImage&)> callback) = 0;
+		// What a window readback gives its callback: the pixels, or an empty image and why there are none.
+		using WindowReadbackCallback = std::function<void(const ReadbackImage& image, const std::string& error)>;
+		// Reads a rectangle of the window back (framebuffer pixels from its top-left corner, x, y, width, height; a zero width
+		// or height reaches the window's edge) as the frame being drawn presents it, with the UI drawn this frame, without
+		// waiting for the GPU (GraphicsModule::RequestBackBufferReadback): the callback runs on the main thread a frame or more
+		// later. Called while the UI draws (EditorLayer::OnImGuiRender), so the picture is that frame's.
+		virtual void RequestWindowReadback(const glm::uvec4& region, WindowReadbackCallback callback) = 0;
 	};
 
 }

@@ -816,6 +816,29 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpectTimeout.cmake")
 	set_tests_properties(StrataEditor.RunAndExpectTimeout PROPERTIES LABELS "feature" TIMEOUT 100)
 
+	# The pictures the editor takes by command, of a copy of the feature project of its own (the run above changes its copy),
+	# in a window of a fixed size (--window-size): editor.screenshot of the window and of the Inspector, and viewport.capture
+	# through the scene's camera, which must report a complete picture. The layout file is the run's, never the user's.
+	set(STRATA_FEATURE_CAPTURE_RUN_DIR "${CMAKE_CURRENT_BINARY_DIR}/FeatureCaptureRun")
+	set(STRATA_FEATURE_CAPTURE_DIR "${STRATA_FEATURE_CAPTURE_RUN_DIR}/Captures")
+	configure_file("${CMAKE_CURRENT_SOURCE_DIR}/Editor/FeatureCaptureCommands.json.in" "${CMAKE_CURRENT_BINARY_DIR}/FeatureCaptureCommands.json" @ONLY)
+	add_test(NAME StrataFeatureCaptures.Clean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${STRATA_FEATURE_CAPTURE_RUN_DIR}")
+	set_tests_properties(StrataFeatureCaptures.Clean PROPERTIES FIXTURES_SETUP StrataFeatureCapturesClean LABELS "feature;gpu")
+	add_test(NAME StrataFeatureCaptures.Copy COMMAND "${CMAKE_COMMAND}" -E copy_directory "${STRATA_FEATURE_TEST_DIR}" "${STRATA_FEATURE_CAPTURE_RUN_DIR}/Project")
+	set_tests_properties(StrataFeatureCaptures.Copy PROPERTIES FIXTURES_REQUIRED StrataFeatureCapturesClean FIXTURES_SETUP StrataFeatureCapturesProject
+		LABELS "feature;gpu")
+	add_test(NAME StrataEditor.FeatureCaptures
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:StrataEditor>"
+			"-DARGUMENTS=--no-automation|--quit-after-commands|--window-size|1280x720|--layout|${STRATA_FEATURE_CAPTURE_RUN_DIR}/Layout.ini|--project|${STRATA_FEATURE_CAPTURE_RUN_DIR}/Project/FeatureTest.stproj|--commands|${CMAKE_CURRENT_BINARY_DIR}/FeatureCaptureCommands.json"
+			"-DEXPECT_PATHS=${STRATA_FEATURE_CAPTURE_DIR}/Window.png|${STRATA_FEATURE_CAPTURE_DIR}/Inspector.png|${STRATA_FEATURE_CAPTURE_DIR}/Scene.png"
+			-DTIMEOUT_SECONDS=300 -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+	set_tests_properties(StrataEditor.FeatureCaptures PROPERTIES FIXTURES_REQUIRED StrataFeatureCapturesProject FIXTURES_SETUP StrataFeatureCaptures
+		LABELS "feature;gpu")
+	add_test(NAME StrataEditor.FeatureCapturesCheck COMMAND StrataTests --strata-test-helper=check-image "${STRATA_FEATURE_CAPTURE_DIR}/Window.png" --size 1280x720)
+	set_tests_properties(StrataEditor.FeatureCapturesCheck PROPERTIES FIXTURES_REQUIRED StrataFeatureCaptures LABELS "feature;gpu")
+	add_test(NAME StrataEditor.FeatureCapturesPanelCheck COMMAND StrataTests --strata-test-helper=check-image "${STRATA_FEATURE_CAPTURE_DIR}/Inspector.png")
+	set_tests_properties(StrataEditor.FeatureCapturesPanelCheck PROPERTIES FIXTURES_REQUIRED StrataFeatureCaptures LABELS "feature;gpu")
+
 	# The game runs longer than the in-process feature scenario (200 frames), where nothing may end it: its scripts quit only
 	# when a test runner asks them to. Its save files go into the build tree (--save-directory), never into the user's data,
 	# where the runs of other build trees would meet them. Its log names the project's title and version, and its icon lies

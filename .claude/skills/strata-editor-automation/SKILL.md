@@ -580,6 +580,12 @@ person at the editor sees the same in the Performance panel (click the frame pil
 "openSample" | "recovery" | "newScript" | "preferences" | "externalEditor" | "about"}` opens a dialog of the window the same
 way ("recovery" lets the person choose what to recover or discard, instead of you choosing for them; "newScript" and
 "externalEditor" let them name a script class or pick the program that opens scripts; "preferences" takes a `section`).
+`editor.screenshot {path?, overwrite?, panel?}` takes a picture of the whole editor window as the person sees it (UI,
+dialogs, toasts), or of one panel (`"Inspector"`, `"Scene"`, ... as `editor.showPanel` names them), two frames after the
+command so the commands before it show: `{Image, width, height, panel, region, path?}`. It needs a window (not
+`--headless`); start the editor with `StrataCLI launch --window-size 1600x900` (or `StrataEditor --window-size`) for
+pictures of one size on every machine, and bring a panel to the front with `editor.showPanel` first (a closed panel or one
+behind another tab fails).
 
 **Play it (simulated input)**: while the game runs (`play.start`), the `input.*` commands press keys and buttons the way a
 player would; scripts see them through `Input::IsKeyDown/IsKeyPressed/IsKeyReleased` (also while the viewport has no focus).

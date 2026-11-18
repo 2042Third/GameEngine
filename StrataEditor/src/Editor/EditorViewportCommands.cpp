@@ -4,12 +4,10 @@
 #include "Editor/ProjectThumbnail.h"
 #include "Editor/ViewportRenderer.h"
 
-#include <Strata/Core/Base64.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/FrameProfiler.h>
 #include <Strata/Core/JobSystem.h>
 #include <Strata/Core/Log.h>
-#include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/SceneRenderer.h>
@@ -361,16 +359,6 @@ namespace Strata
 			bool Overwrite = false;
 		};
 
-		// The image and what the jobs make of it. Jobs write it; the main thread reads it once a job has completed.
-		struct EncodedCapture
-		{
-			ReadbackImage Image;
-			std::vector<uint8_t> Png;
-			std::string Base64;
-			std::string Error;     // Encoding failed when set
-			std::string SaveError; // Saving failed when set
-		};
-
 		struct CaptureProgress
 		{
 			Scope<TextureReadback> Readback;
@@ -419,7 +407,7 @@ namespace Strata
 			uint32_t GPUStatsPolls = 0;   // Polls that waited for its GPU times
 			nlohmann::json RenderStats;   // renderStats, once its GPU times are known
 			std::chrono::steady_clock::time_point Submitted;
-			Ref<EncodedCapture> Encoded; // Set once the pixels are on the CPU
+			Ref<EncodedImage> Encoded; // Set once the pixels are on the CPU
 			JobHandle EncodeJob;
 			JobHandle SaveJob;
 			bool SaveStarted = false;
@@ -445,38 +433,6 @@ namespace Strata
 			return view;
 		}
 
-		// Encodes a captured image as PNG, and as Base64 for the result when `base64`, on a worker thread (compressing a large
-		// image would hitch the frame).
-		JobHandle SubmitEncode(const Ref<EncodedCapture>& encoded, bool base64)
-		{
-			return JobSystem::Submit([encoded, base64]()
-			{
-				std::string error;
-				std::optional<std::vector<uint8_t>> png = ImageWriter::EncodePNG(encoded->Image, true, &error);
-				if (!png)
-				{
-					encoded->Error = fmt::format("Encoding the capture as PNG failed: {}", error);
-					return;
-				}
-				if (base64)
-					encoded->Base64 = Base64::Encode(*png);
-				encoded->Png = std::move(*png);
-			});
-		}
-
-		// Saves an encoded capture on an I/O thread.
-		JobHandle SubmitSave(const Ref<EncodedCapture>& encoded, const std::filesystem::path& path, bool overwrite)
-		{
-			return JobSystem::SubmitIO([encoded, path, overwrite]()
-			{
-				// Checked again: the file may have appeared since the command was given.
-				if (!overwrite && FileSystem::Exists(path))
-					encoded->SaveError = fmt::format("'{}' already exists (pass overwrite: true to replace it)", FileSystem::ToUTF8(path));
-				else if (!FileSystem::CreateDirectories(path.parent_path()) || !FileSystem::WriteBytes(path, encoded->Png))
-					encoded->SaveError = fmt::format("Cannot write the capture to '{}'", FileSystem::ToUTF8(path));
-			});
-		}
-
 		// viewport.capture {live}: what a view presents, read back from its own output, with its history as it is.
 		struct LiveCaptureRequest
 		{
@@ -494,7 +450,7 @@ namespace Strata
 			uint64_t FixedSteps = 0;
 			uint32_t TemporalFrames = 0;
 			std::chrono::steady_clock::time_point Submitted;
-			Ref<EncodedCapture> Encoded; // Set once the pixels are on the CPU
+			Ref<EncodedImage> Encoded; // Set once the pixels are on the CPU
 			JobHandle EncodeJob;
 			JobHandle SaveJob;
 			bool SaveStarted = false;
@@ -585,12 +541,12 @@ namespace Strata
 							return EditorCommandResult::Fail(fmt::format("The GPU did not finish the capture within {} seconds", c_CaptureReadbackTimeout.count()));
 						continue;
 					}
-					Ref<EncodedCapture> encoded = CreateRef<EncodedCapture>();
+					Ref<EncodedImage> encoded = CreateRef<EncodedImage>();
 					if (!frame.Readback->GetResult(encoded->Image))
 						return EditorCommandResult::Fail("Mapping the captured image failed");
 					frame.Readback.reset();
 					frame.Encoded = encoded;
-					frame.EncodeJob = SubmitEncode(encoded, request.Frames == 1); // Several frames go to files only
+					frame.EncodeJob = SubmitEncodePNG(encoded, request.Frames == 1); // Several frames go to files only
 					continue;
 				}
 				if (!frame.EncodeJob.IsComplete())
@@ -605,7 +561,7 @@ namespace Strata
 				if (!frame.SaveStarted)
 				{
 					frame.SaveStarted = true;
-					frame.SaveJob = SubmitSave(frame.Encoded, request.Paths[index], request.Overwrite);
+					frame.SaveJob = SubmitSavePNG(frame.Encoded, request.Paths[index], request.Overwrite);
 					finished = false;
 					continue;
 				}
@@ -957,7 +913,7 @@ namespace Strata
 						known.HasCounters = false;
 					progress.RenderStats = DescribeRenderStats(progress.Stats, known);
 				}
-				Ref<EncodedCapture> encoded = CreateRef<EncodedCapture>();
+				Ref<EncodedImage> encoded = CreateRef<EncodedImage>();
 				if (!progress.Readback->GetResult(encoded->Image))
 				{
 					releaseTargets();
@@ -965,19 +921,19 @@ namespace Strata
 				}
 				progress.Readback.reset();
 				progress.Encoded = encoded;
-				progress.EncodeJob = SubmitEncode(encoded, true);
+				progress.EncodeJob = SubmitEncodePNG(encoded, true);
 				return std::nullopt;
 			}
 
 			if (!progress.EncodeJob.IsComplete())
 				return std::nullopt;
-			EncodedCapture& encoded = *progress.Encoded;
+			EncodedImage& encoded = *progress.Encoded;
 			if (!encoded.Error.empty())
 				return EditorCommandResult::Fail(encoded.Error);
 			if (!request.Path.empty() && !progress.SaveStarted)
 			{
 				progress.SaveStarted = true;
-				progress.SaveJob = SubmitSave(progress.Encoded, request.Path, request.Overwrite);
+				progress.SaveJob = SubmitSavePNG(progress.Encoded, request.Path, request.Overwrite);
 				return std::nullopt;
 			}
 			if (!progress.SaveJob.IsComplete())

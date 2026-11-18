@@ -37,6 +37,7 @@
 #include "UI/Widgets.h"
 
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/SettingsRegistry.h>
@@ -53,6 +54,7 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <optional>
 
@@ -92,6 +94,16 @@ namespace Strata
 		constexpr float c_DebugTintAlpha = 0.6f;
 		// The quieter box of a placement that is a guess (nothing under the pointer).
 		constexpr float c_PlacementGuessAlpha = 0.7f;
+
+		// editor.screenshot reads the window back in the second frame after the command: the commands before it (a panel
+		// brought to the front, a dialog opened, a selection) take effect in the first one's UI, and ImGui lays out what changed
+		// (a window's size, a docked tab) a frame after it appeared.
+		constexpr uint32_t c_ScreenshotSettleFrames = 2;
+		// Frames a panel's screenshot waits for the panel to show: one brought to the front comes up within the registry's
+		// focus attempts (EditorPanelRegistry::c_MaxFocusAttempts).
+		constexpr uint32_t c_ScreenshotShowFrames = 6;
+		// A screenshot whose readback has not answered after this long fails.
+		constexpr std::chrono::seconds c_ScreenshotTimeout { 40 };
 
 		EditorContextSpecification MakeContextSpecification(const EditorOptions& options)
 		{
@@ -165,6 +177,27 @@ namespace Strata
 		RegisterPanelCommands();
 	}
 
+	// editor.screenshot: what its poll and the frame that reads the window back share. The poll owns it; the readback's
+	// callback fills it on the main thread.
+	struct EditorLayer::ScreenshotCapture
+	{
+		std::string Panel;          // Empty: the whole window
+		std::filesystem::path Path; // Empty: the picture is only returned
+		bool Overwrite = false;
+		uint32_t Frames = 0;        // Polls before it was armed
+		uint32_t ShowFrames = 0;    // Frames the armed screenshot waited for its panel to show
+		bool Armed = false;         // In m_ScreenshotsToRead, or read back
+		std::chrono::steady_clock::time_point ArmedAt;
+		bool Arrived = false;       // The readback answered: Encoded->Image, or Error
+		std::string Error;
+		glm::uvec4 Region { 0 };    // What was read back, in the window's pixels (x, y, width, height)
+		Ref<CommandUtils::EncodedImage> Encoded = CreateRef<CommandUtils::EncodedImage>();
+		bool Encoding = false;
+		JobHandle EncodeJob;
+		bool SaveStarted = false;
+		JobHandle SaveJob;
+	};
+
 	void EditorLayer::RegisterPanelCommands()
 	{
 		nlohmann::json panels = nlohmann::json::array();
@@ -229,6 +262,60 @@ namespace Strata
 				}
 				return EditorCommandResult::Ok(std::move(result));
 			}, EditorCommandKind::Session });
+
+		m_Commands.Register(MayDefer({ "editor.screenshot",
+			"Takes a picture of the editor's window as the person sees it, UI and all, or of one of its panels (panel, named as "
+			"editor.showPanel names them), and returns it as a PNG image with its width and height; path also saves it. The picture "
+			"is the second frame after the command, so the commands before it (editor.showPanel, editor.showDialog, selection.set...) "
+			"show in it, and the window is read back without stalling a frame. Fails, changing nothing, for an unknown panel, a panel "
+			"that is closed, hidden behind another tab (editor.showPanel brings it to the front) or asked for while the launcher shows, "
+			"an existing file without overwrite, and an editor without a window (--headless, --no-gpu). Start the editor with "
+			"--window-size <width>x<height> (StrataCLI launch --window-size) for pictures of the same size on every machine. Returns "
+			"{Image, width, height, panel, region: {x, y, width, height} (the window's pixels it shows), path?}.",
+			CommandUtils::ObjectSchema({
+				{ "panel", { { "type", "string" }, { "enum", panels }, { "description", "Only this panel's window, its tab and contents (default: the whole window)" } } },
+				{ "path", CommandUtils::StringSchema("Also save the PNG to this .png file: relative to the project directory (needs an open project) or "
+					"absolute; folders are created, network and device paths are refused") },
+				{ "overwrite", CommandUtils::BoolSchema("Replace an existing file at path (default false: an existing file is an error)") } }),
+			[this](EditorContext& context, const nlohmann::json& parameters) -> EditorCommandResult
+			{
+				CommandArguments arguments(parameters);
+				std::string panel = arguments.GetString("panel", "");
+				const std::string path = arguments.GetString("path", "");
+				const bool overwrite = arguments.GetBool("overwrite", false);
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				// The Scene view keeps the id it had as the viewport.
+				if (panel == "Scene")
+					panel = EditorPanels::c_Viewport;
+				if (arguments.Has("panel"))
+				{
+					const EditorPanelDescriptor* descriptor = m_Panels.FindDescriptor(panel);
+					if (!descriptor || descriptor->Placement != EditorPanelPlacement::Docked)
+						return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'panel': the editor has no panel '{}'", panel));
+				}
+				auto capture = std::make_shared<ScreenshotCapture>();
+				capture->Panel = panel;
+				capture->Overwrite = overwrite;
+				if (arguments.Has("path"))
+				{
+					std::string error;
+					std::optional<std::filesystem::path> resolved = CommandUtils::ResolveOutputPath(context, path, ".png", overwrite, &error);
+					if (!resolved)
+						return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'path': {}", error));
+					capture->Path = std::move(*resolved);
+				}
+				if (m_Options.Headless || !m_Host->HasWindow())
+					return EditorCommandResult::Fail("This editor runs without a window (--headless or --no-gpu): there is nothing to take a picture of");
+				if (!panel.empty())
+				{
+					if (IsLauncherShown())
+						return EditorCommandResult::Fail("No project is open: the editor shows its launcher instead of its panels (take the whole window, or open a project first)");
+					if (!m_Panels.IsOpen(panel))
+						return EditorCommandResult::Fail(fmt::format("The panel '{}' is not open (editor.showPanel opens it)", panel));
+				}
+				return EditorCommandResult::Defer([this, capture](EditorContext&) { return PollScreenshot(capture); });
+			}, EditorCommandKind::Query }));
 
 		m_Commands.Register({ "editor.showDialog",
 			"Opens a dialog of the editor's window for the person at it, e.g. to show what you are about to do or for a screenshot: export (the "
@@ -593,11 +680,122 @@ namespace Strata
 		});
 	}
 
+	std::optional<EditorCommandResult> EditorLayer::PollScreenshot(const std::shared_ptr<ScreenshotCapture>& capture)
+	{
+		ScreenshotCapture& state = *capture;
+		if (!state.Arrived)
+		{
+			if (!state.Armed)
+			{
+				if (++state.Frames < c_ScreenshotSettleFrames)
+					return std::nullopt;
+				state.Armed = true;
+				state.ArmedAt = std::chrono::steady_clock::now();
+				m_ScreenshotsToRead.push_back(capture);
+				return std::nullopt;
+			}
+			if (std::chrono::steady_clock::now() - state.ArmedAt <= c_ScreenshotTimeout)
+				return std::nullopt;
+			std::erase(m_ScreenshotsToRead, capture);
+			return EditorCommandResult::Fail(fmt::format("The window was not read back within {} seconds", c_ScreenshotTimeout.count()));
+		}
+		if (!state.Error.empty())
+			return EditorCommandResult::Fail(state.Error);
+		if (!state.Encoding)
+		{
+			state.Encoding = true;
+			state.EncodeJob = CommandUtils::SubmitEncodePNG(state.Encoded, true);
+			return std::nullopt;
+		}
+		if (!state.EncodeJob.IsComplete())
+			return std::nullopt;
+		CommandUtils::EncodedImage& encoded = *state.Encoded;
+		if (!encoded.Error.empty())
+			return EditorCommandResult::Fail(encoded.Error);
+		if (!state.Path.empty() && !state.SaveStarted)
+		{
+			state.SaveStarted = true;
+			state.SaveJob = CommandUtils::SubmitSavePNG(state.Encoded, state.Path, state.Overwrite);
+			return std::nullopt;
+		}
+		if (!state.SaveJob.IsComplete())
+			return std::nullopt;
+		if (!encoded.SaveError.empty())
+			return EditorCommandResult::Fail(encoded.SaveError);
+		nlohmann::json result = {
+			{ "Image", { { "MimeType", "image/png" }, { "Data", std::move(encoded.Base64) } } },
+			{ "width", encoded.Image.Width },
+			{ "height", encoded.Image.Height },
+			{ "panel", state.Panel.empty() ? nlohmann::json(nullptr) : nlohmann::json(state.Panel) },
+			{ "region", { { "x", state.Region.x }, { "y", state.Region.y }, { "width", encoded.Image.Width }, { "height", encoded.Image.Height } } } };
+		if (!state.Path.empty())
+			result["path"] = FileSystem::ToUTF8(state.Path);
+		return EditorCommandResult::Ok(std::move(result));
+	}
+
+	void EditorLayer::ReadBackScreenshots()
+	{
+		if (m_ScreenshotsToRead.empty())
+			return;
+		// Panel rectangles are in ImGui's coordinates (points from the main viewport's corner); the window's pixels are
+		// DisplayFramebufferScale times as many.
+		const ImGuiIO& io = ImGui::GetIO();
+		const ImVec2 origin = ImGui::GetMainViewport()->Pos;
+		const glm::vec2 scale(io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y);
+		const glm::vec2 pixels = glm::vec2(io.DisplaySize.x, io.DisplaySize.y) * scale;
+		for (size_t index = 0; index < m_ScreenshotsToRead.size();)
+		{
+			const std::shared_ptr<ScreenshotCapture> capture = m_ScreenshotsToRead[index];
+			glm::uvec4 region(0);
+			if (!capture->Panel.empty())
+			{
+				const bool launcher = IsLauncherShown();
+				const std::optional<EditorPanelRegistry::WindowRect> rect = launcher ? std::nullopt : m_Panels.GetShownWindowRect(capture->Panel);
+				// A panel brought to the front shows a frame or more later (the registry's focus attempts).
+				if (!rect && !launcher && m_Panels.IsOpen(capture->Panel) && ++capture->ShowFrames < c_ScreenshotShowFrames)
+				{
+					index++;
+					continue;
+				}
+				glm::vec2 min(0.0f);
+				glm::vec2 max(0.0f);
+				if (rect)
+				{
+					min = glm::clamp(glm::floor((glm::vec2(rect->Min.x, rect->Min.y) - glm::vec2(origin.x, origin.y)) * scale), glm::vec2(0.0f), pixels);
+					max = glm::clamp(glm::ceil((glm::vec2(rect->Max.x, rect->Max.y) - glm::vec2(origin.x, origin.y)) * scale), glm::vec2(0.0f), pixels);
+				}
+				if (!rect || max.x <= min.x || max.y <= min.y)
+				{
+					capture->Error = launcher ? std::string("No project is open: the editor shows its launcher instead of its panels")
+						: !m_Panels.IsOpen(capture->Panel) ? fmt::format("The panel '{}' was closed before its picture was taken", capture->Panel)
+						: fmt::format("The panel '{}' is open but not shown: another tab covers it (editor.showPanel brings it to the front)", capture->Panel);
+					capture->Arrived = true;
+					m_ScreenshotsToRead.erase(m_ScreenshotsToRead.begin() + static_cast<std::ptrdiff_t>(index));
+					continue;
+				}
+				region = glm::uvec4(glm::uvec2(min), glm::uvec2(max - min));
+			}
+			capture->Region = region;
+			m_ScreenshotsToRead.erase(m_ScreenshotsToRead.begin() + static_cast<std::ptrdiff_t>(index));
+			m_Host->RequestWindowReadback(region, [capture](const ReadbackImage& image, const std::string& error)
+			{
+				capture->Arrived = true;
+				if (image.Width == 0 || image.Height == 0)
+				{
+					capture->Error = fmt::format("Reading the window back failed: {}", error.empty() ? std::string("no pixels arrived") : error);
+					return;
+				}
+				capture->Encoded->Image = image;
+			});
+		}
+	}
+
 	void EditorLayer::OnDetach()
 	{
 		// Before the project closes: completions may still look at the editor state. Automation stops afterwards, so the
 		// clients of cancelled commands still get their answers.
 		m_CommandRunner.CancelAll("The editor is closing");
+		m_ScreenshotsToRead.clear();
 		if (m_UIDrawn)
 		{
 			EditorPanelContext panelContext = MakePanelContext();
@@ -792,6 +990,8 @@ namespace Strata
 		if (m_ShowImGuiDemo)
 			ImGui::ShowDemoWindow(&m_ShowImGuiDemo);
 		UpdateFrameRate();
+		// Last: the picture holds everything this frame's UI drew.
+		ReadBackScreenshots();
 	}
 
 	void EditorLayer::OnEvent(Event& event)

@@ -430,6 +430,9 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   names, versions and file extensions.
 - Editor: `--window-size <width>x<height>` opens a window of exactly that many pixels instead of a maximized one, for
   screenshots that compare across machines; `StrataCLI launch --window-size` passes it on.
+- AI agents: `editor.screenshot {path?, overwrite?, panel?}` takes a picture of the whole editor window as the person sees
+  it, UI and all, or of one panel, two frames after the command (so `editor.showPanel`, `editor.showDialog` and the other
+  commands before it show), without stalling a frame; it needs a window.
 - Fixed: a program (the editor, the runtime, an exported game) whose frame an exception left logged a critical line,
   ended in order and exited with code 0, so a script or CI read success; it now exits with code 1.
 - Fixed: script modules built with GCC or Clang (Linux, macOS) carried no debug information in Release and Dist, the
