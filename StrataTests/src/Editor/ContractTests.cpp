@@ -196,6 +196,27 @@ TEST_SUITE("Editor.UI.Dialogs")
 		CHECK(screenshot->MayDefer);
 	}
 
+	TEST_CASE("editor.screenshot of a panel is refused while the launcher shows, the whole window is not")
+	{
+		// No project: the editor shows its launcher, which has no panels.
+		HarnessEditor editor;
+		editor.Frames(2);
+		REQUIRE_FALSE(editor.Context().HasProject());
+		editor.Host->Window = true;
+		editor.Frames(1);
+		const EditorCommandResult panel = editor.Layer->GetCommands().Execute(editor.Context(), "editor.screenshot", { { "panel", "Inspector" } });
+		CHECK(panel.ErrorKind == EditorCommandError::Failed);
+		CHECK(panel.Error.find("shows its launcher") != std::string::npos);
+		CHECK(editor.Host->WindowReadbacks.empty());
+		auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+		editor.Layer->GetCommandRunner().Run(editor.Context(), editor.Layer->GetCommands(), "editor.screenshot", nlohmann::json::object(),
+			[completed](const EditorCommandResult& result) { *completed = result; });
+		REQUIRE(editor.FramesUntil([&]() { return completed->has_value(); }));
+		INFO((*completed)->Error);
+		CHECK((*completed)->Success);
+		CHECK(editor.Host->WindowReadbacks.size() == 1);
+	}
+
 	TEST_CASE("editor.screenshot reads back the window or a panel as a later frame drew it, and fails without side effects")
 	{
 		HarnessEditor editor({}, WithFeatureProject("Screenshot"));
@@ -285,6 +306,25 @@ TEST_SUITE("Editor.UI.Dialogs")
 		CHECK_FALSE(hidden.Success);
 		CHECK(hidden.Error.find("not shown") != std::string::npos);
 		CHECK(editor.Host->WindowReadbacks.size() == readbacks);
+
+		// A panel closed after the command, before its picture was taken: the picture fails, and nothing is read back or written.
+		editor.Run("editor.showPanel", { { "panel", "Inspector" } });
+		editor.Frames(2);
+		{
+			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+			editor.Layer->GetCommandRunner().Run(editor.Context(), editor.Layer->GetCommands(), "editor.screenshot",
+				{ { "panel", "Inspector" }, { "path", FileSystem::ToUTF8(directory / "Closed.png") } },
+				[completed](const EditorCommandResult& result) { *completed = result; });
+			REQUIRE_FALSE(completed->has_value());
+			editor.Layer->GetPanels().SetOpen(EditorPanels::c_Inspector, false);
+			const size_t readbacksBefore = editor.Host->WindowReadbacks.size();
+			REQUIRE(editor.FramesUntil([&]() { return completed->has_value(); }));
+			CHECK_FALSE((*completed)->Success);
+			CHECK((*completed)->Error.find("was closed before its picture was taken") != std::string::npos);
+			CHECK(editor.Host->WindowReadbacks.size() == readbacksBefore);
+			CHECK_FALSE(FileSystem::Exists(directory / "Closed.png"));
+			editor.Layer->GetPanels().SetOpen(EditorPanels::c_Inspector, true);
+		}
 
 		// A readback that fails fails the command, and nothing is written.
 		editor.Host->ReadbackError = "the device was lost";
