@@ -356,19 +356,24 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 
 - Fixed: a moved object's shade and bounce light appeared only after it had rested. Objects now take part while they
   move: a crate pushed across a floor darkens the floor beside it and tints it with its color in the same frame, and
-  when it stops its light is already there. Before, an object that moved was left out of the bounce light until 30
-  frames after it stopped (half a second at 60 frames a second, longer at lower frame rates), and then popped in. In the
+  when it stops most of its shade and tint is there (within 20.7% of a resting object's light at every point of the
+  open-sky test; in a closed room 69% of the light a resting box takes from the points around it). The rest eases in
+  over the next half second, not evenly (Known issues). Before, an object that moved was left out of the bounce light
+  until 30 frames after it stopped (half a second at 60 frames a second, longer at lower frame rates), and then popped
+  in. In the
   test, a box sliding 2 cm a frame takes 10.1% of the light of the ground beside it, for the 9.8% of its sky the box
   hides (none before, while it moved), a red box in the sun reddens that ground as much as it does at rest (1.01), and
-  the ground's light changes smoothly as the box crosses voxels (largest second difference 0.53% of the light, 0.09% on
-  average; 2% was the bound).
+  the ground's light changes smoothly as the box crosses voxels (largest second difference 0.53% of the light, 0.10% on
+  average; 2% was the bound, which holds beside the box's way for the steady move: Known issues for its start and
+  stop, and for the floor before its leading face).
 - While an object moves, the engine takes each of its parts as a box of its size with soft edges; a quarter of a second
   after it stops (by the clock, at any frame rate), it rebuilds the object's exact shape. Scenes in which nothing moves
-  are unchanged to the bit and pay nothing: no pass runs.
+  are unchanged to the bit and pay nothing: no pass runs (the new `GIMoverDispatches` statistic reads 0).
 - When an object starts to move and when its exact shape comes back, the light around it no longer changes in one
-  frame: the voxels around it fade from what they showed to what they hold within a quarter of a second. In the test
-  the frame a box starts changes nothing where it stepped a point's light beside it by 26.5%, and no frame after it
-  stopped changes one by more than 4.3% where one stepped 26.1% (Known issues: what is left).
+  frame: the voxels around it fade from what they showed to what they hold within a quarter of a second. In the
+  open-sky test the frame a box starts changes nothing where it stepped a point's light beside it by 26.5%, and no
+  frame after it stopped changes one by more than 4.3% where one stepped 26.1%. In a closed room single frames still
+  step (Known issues: what is left).
 - Memory: 3.1 MiB more per view that runs global illumination at High (155.7 MiB), 1.5 MiB at Low (24.9 MiB). The
   Graphics Quality page's rows and the row's description say so.
 - Cost: nothing while nothing moves. Eight boxes of 0.5 m moving at once cost nothing the measurement can tell from the
@@ -651,18 +656,53 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   edges. A ball, a barrel or a hollow object therefore shades and bounces light as its bounds would until it rests. A
   quarter of a second after it stops, its exact shape takes the box's place, and the light beside it changes by what
   the two differ by: up to 26% at 0.3 m from a 0.5 m box that stops off the voxel grid (its exact voxels are whole ones,
-  larger than the box), and more for an object that is no box. In a closed room lit by its bounces the two differ more:
+  larger than the box); objects that are no box were not measured. So the owner's "its light is in place the frame it
+  stops" is met in part. In a closed room lit by its bounces the two differ more:
   in the look-dev's Cornell box a blue 0.7 m box that stops shows, in that frame, 59% of the shade and tint it gives the
   tall box behind it at rest, 72% of those on the sphere beside it and 25% of its shade on the floor to its left (by
-  the regions' mean color; none of it before), and the rest arrives once its exact shape is back. The change is
-  spread over another quarter of a second,
-  but not evenly: in the test single frames still step a point's light by up to 4.3% then, and by up to 10.1% once (4.5%
-  otherwise) in the quarter second after the box starts, when its exact voxels give way to the box. An object that moves
+  the regions' mean color; none of it before), and the rest arrives once its exact shape is back; in the test of the
+  same scene the box takes, in that frame, 69.1% of the light a resting box takes from twelve points around it, and a
+  point is up to 50.7% of its light off. The cause is the box's soft edge against whole voxels: written as whole voxels
+  in an experiment (which pops as the box crosses voxels), the moving box read as the resting one within 2.3%. The
+  change is spread over another quarter of a second,
+  but not evenly, and the light does not stay between its two ends. Under an open sky single frames still step a
+  point's light by up to 4.3% then, and by up to 10.1% once (5.3% otherwise, the move's own) in the quarter second after
+  the box starts, when its exact voxels give way to the box; a point's light leaves the range between the two forms' by
+  up to 3.3%, and the second differences are 2.9% from rest through the start and 3.1% through the stop (the 2% of the
+  flicker measure holds for the steady move alone). In the Cornell box the light beside the stopped box first moves
+  away from where it ends (the blue on the tall box rises 11%, then falls to 27% under where it began: a point leaves
+  the range between the two forms' by up to 14.8% of its light), and one frame two thirds into the fade steps the
+  floor 0.3 m beside the box's back by 27.6%: a pop, for there the fade does not divide what the two forms differ by
+  (117 against 86.5 nits per albedo).
+  Holding the leaving form until the arriving one stands did not help (the same step three frames earlier, and larger
+  steps under the open sky). What would: static voxels that hold fractions as the moving box does, which changes
+  every still scene's bits; deferred, for the owner to decide. An object that moves
   away fast leaves its old place's shade fading for that quarter second.
+- Moving objects: the floor right before a moving box's leading face pulses once per voxel the face crosses (every
+  fourth frame at 2.5 cm a frame). In the Cornell box test the floor's light 0.2 to 0.45 m before the face rises over
+  the four frames and falls back in one (100.4, 101.7, 104.0, 110.5, then 97.1 nits per albedo): second differences of
+  19.1% of the light there, 8.7% beside the box's corner and 3.4% on the tall box behind it, against the 2% of the
+  flicker measure, which holds beside the box's way (0.53% under the open sky). In the look-dev's consecutive 3840 x
+  2160 frames (`lookdev/gi-movers/2026-11-18-frames`) the mean of a 180 x 110 pixel patch of floor before the face
+  rises from 161.5 to 170.0 of 255 over four frames and falls to 160.0 in the next, with no anti-aliasing, FXAA and
+  TAA alike; the tall box's and the sphere's regions change by a code a frame at most. Found by the fix round's
+  closed-room test and frames; not explained and not fixed yet.
 - Moving objects: at most 64 parts and 512 bricks of voxels (256 at Low) move at once; what is past them (a pile of many
   bodies falling together, an object tens of meters large) is left out of the bounce light until it rests, as every
   moving object was before. Objects thinner than a voxel are dark while they move, as thin walls are.
 - Animated characters (skinned meshes) still receive the bounce light without blocking or bouncing it.
+- The field's bits still do not always repeat on this machine's driver (NVIDIA 621.1), the rounding of GI batch 2's
+  last item notwithstanding, and it is not this unit's doing. With the Debug GPU suites of global illumination run as
+  one process under the validation layer, a build with this unit's code reversed (main's `Strata` and `StrataTests`)
+  failed "A still camera's field repeats frame after frame" in 1 of 3 runs (the harmonics changed in 6 of 11 frames),
+  taking turns with the unit's build, which failed in none of those 3 but in one run before them (that case, 4 of 11
+  frames, and the harmonics of "A strafe's gi view is a fresh renderer's at its camera") and once in a whole Release
+  run of the GPU suites; alone the case passed four times of four, and the room suite alone in Release 8 times of 8. Two
+  renderers of equal voxels, neither with a moving object, also differed in one byte of the field's 4.4 million in
+  one run of seven. None of these cases has a mover, so no pass of this unit ran in them (a renderer without one
+  dispatches none: `GIMoverDispatches` 0). The movers' two cases that compare two renderers' fields allow 16 bytes for
+  it (their voxel textures stay equal to the byte); main's two cases still fail when it happens: a gate that fails
+  only there is rerun.
 
 **Reflections (R1)**
 

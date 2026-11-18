@@ -352,8 +352,11 @@ fences.
 - **Moving objects** take part while they move: a crate pushed across a floor shades the floor beside it and tints it with
   its color in the same frame. While it moves the engine takes each of its parts as a box of its size with soft edges; a
   quarter of a second after it stops, it rebuilds the object's exact shape and eases the light around it over to that
-  within another quarter of a second, as it does when the object starts to move. The light beside the object can
-  shift a little in those moments. Animated characters receive the bounce light but do not block or bounce it yet.
+  within another quarter of a second, as it does when the object starts to move. Most of the object's shade and tint
+  is there the moment it stops; the rest arrives in that half second, and close to the object the light visibly
+  shifts then: under an open sky by up to a quarter of a nearby point's light in small steps, in a closed room lit
+  only by bounce light by up to half, a quarter of it in a single frame. Animated characters receive the bounce light
+  but do not block or bounce it yet.
 - **Debug views** (the viewport's debug view chip): **GI** shows the bounce light on surfaces made white, **Open** the share
   of the sky each surface sees, **Voxels** the voxel copy of the scene (walls too thin in the error color) and **Probes**
   the probes, dead ones dark red.
@@ -375,7 +378,8 @@ fences.
   - A wall that stands at an angle to the world's axes glows softly around a patch of sunlight on it (up to about two
     and a half times the bounce light of its shadowed part).
   - A moving ball, barrel or hollow object shades and bounces light as the box around it would, until it rests. More than
-    64 parts moving at once, or very large moving objects, are left out of the bounce light until they rest.
+    64 parts moving at once, or very large moving objects, are left out of the bounce light until they rest. In a room
+    lit by bounce light, the floor right before a moving object can pulse faintly as it advances.
   - It costs about 4 ms of GPU time at 3840 x 2160 at High.
 
   Use it for interiors and look at them with the **GI** debug view.
