@@ -81,6 +81,45 @@ namespace
 		return entity;
 	}
 
+	// The fields of a renderer's specification that a capture's renderer switches set (CaptureRendererSwitches::Apply).
+	struct SwitchedFields
+	{
+		bool FadeLevelsOfDetail = false;
+		GPUDrivenMode GPUDriven = GPUDrivenMode::Off;
+		bool BatchAcrossMaterials = false;
+		bool TextureStreaming = false;
+		bool SpecularAntiAliasing = false;
+		bool VisibilityFeedback = false;
+		bool OcclusionCulling = false;
+		bool DitherOutput = false;
+		bool SpecularEnergyCompensation = false;
+		bool HorizonFade = false;
+		bool SpatialReflectionResolve = false;
+		float BounceGain = 0.0f;
+		float FXAASubpixel = 0.0f;
+
+		bool operator==(const SwitchedFields&) const = default;
+	};
+
+	SwitchedFields ReadSwitchedFields(const SceneRendererSpecification& specification)
+	{
+		SwitchedFields fields;
+		fields.FadeLevelsOfDetail = specification.FadeLevelsOfDetail;
+		fields.GPUDriven = specification.GPUDriven;
+		fields.BatchAcrossMaterials = specification.BatchAcrossMaterials;
+		fields.TextureStreaming = specification.TextureStreaming;
+		fields.SpecularAntiAliasing = specification.SpecularAntiAliasing;
+		fields.VisibilityFeedback = specification.VisibilityFeedback;
+		fields.OcclusionCulling = specification.OcclusionCulling;
+		fields.DitherOutput = specification.DitherOutput;
+		fields.SpecularEnergyCompensation = specification.SpecularEnergyCompensation;
+		fields.HorizonFade = specification.HorizonFade;
+		fields.SpatialReflectionResolve = specification.SpatialReflectionResolve;
+		fields.BounceGain = specification.GlobalIllumination.BounceGain;
+		fields.FXAASubpixel = specification.FXAASubpixel;
+		return fields;
+	}
+
 }
 
 TEST_SUITE("Editor.Viewport")
