@@ -100,6 +100,39 @@ namespace Strata
 	// project's picture render their still view again until then.
 	constexpr uint32_t c_TemporalSettleFrames = SceneRenderer::c_TemporalJitterPhases;
 
+	// Switches of SceneRendererSpecification one capture sets (viewport.capture {renderer}), to show what a technique does. A
+	// capture with any renders through a renderer of its own (EditorViewport::GetCaptureRenderer(switches)), made with the
+	// capture renderer's specification and these over it, so no frame the editor, its views or a game draws changes; unset ones
+	// keep the capture renderer's values. Named as the specification's fields.
+	struct CaptureRendererSwitches
+	{
+		std::optional<bool> FadeLevelsOfDetail;
+		std::optional<bool> GPUDriven; // True: GPUDrivenMode::Auto, false: Off (the CPU path)
+		std::optional<bool> BatchAcrossMaterials;
+		std::optional<bool> TextureStreaming;
+		std::optional<bool> SpecularAntiAliasing;
+		std::optional<bool> VisibilityFeedback;
+		std::optional<bool> OcclusionCulling;
+		std::optional<bool> DitherOutput;
+		std::optional<bool> SpecularEnergyCompensation;
+		std::optional<bool> HorizonFade;
+		std::optional<bool> SpatialReflectionResolve;
+		std::optional<float> GlobalIlluminationBounceGain; // GlobalIlluminationSettings::BounceGain: 0 is one bounce
+		std::optional<float> FXAASubpixel;                 // 0.25 or 0.75
+
+		bool IsSet() const;
+		void Apply(SceneRendererSpecification& specification) const;
+		// The set ones, by name.
+		nlohmann::json ToJson() const;
+		// viewport.capture's renderer object: nullopt, with the reason, for a name it does not know or a value of another type
+		// or outside its range.
+		static std::optional<CaptureRendererSwitches> FromJson(const nlohmann::json& value, std::string* outError);
+		// The JSON Schema of the object, with a description of every switch for agents.
+		static nlohmann::json GetSchema(std::string description);
+
+		bool operator==(const CaptureRendererSwitches& other) const;
+	};
+
 	// What a view's last successful Render showed of the game: live captures (viewport.capture {live}) pair a view's frames
 	// with the game's fixed steps, and the sun's Inspector line names the quality the Scene view's frame was drawn with.
 	struct ViewportRenderStamp
@@ -120,7 +153,8 @@ namespace Strata
 	public:
 		// `fades`: SceneRendererSpecification::FadeTextureLevels, FadeLevelsOfDetail and SpreadLightingUpdates (off for the
 		// capture renderer, whose images wait for the levels they need and show them and every light's shadow at once).
-		explicit ViewportRenderer(const std::string& debugName, bool fades = true);
+		// `switches`: a capture's own (CaptureRendererSwitches), applied over that specification.
+		explicit ViewportRenderer(const std::string& debugName, bool fades = true, const CaptureRendererSwitches& switches = {});
 
 		ViewportRenderer(const ViewportRenderer&) = delete;
 		ViewportRenderer& operator=(const ViewportRenderer&) = delete;

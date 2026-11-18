@@ -989,6 +989,42 @@ TEST_SUITE("GPU.SceneRenderer.Lighting")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Without the specular energy compensation a rough metal keeps only the single-scattering lobe's light")
+	{
+		// SceneRendererSpecification::SpecularEnergyCompensation, which only the editor's captures turn off (the book's furnace
+		// pair): image light and direct light lose what single scattering loses, the split sum's directional albedo at the pixel.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		const AssetHandle sky = assets.Add(CreateEnvironmentTexture(glm::vec3(1.0f), glm::vec3(1.0f)), "Furnace");
+		SceneRendererSpecification specification;
+		specification.TextureStreaming = false;
+		specification.SpecularEnergyCompensation = false;
+		SceneRenderer single(specification);
+		const FurnaceReading reading = RenderFurnace(assets, sky, FurnaceMetal(glm::vec3(1.0f), 1.0f), &single);
+		const glm::vec2 dfg = ReadRoughBRDF(single);
+		CAPTURE(dfg);
+		CHECK(dfg.x + dfg.y < 0.9f);
+		CHECK(reading.Center.g == doctest::Approx(dfg.x + dfg.y).epsilon(0.03));
+		// The compensated renderer keeps the furnace's light.
+		CHECK(RenderFurnace(assets, sky, FurnaceMetal(glm::vec3(1.0f), 1.0f)).Center.g >= 0.97f);
+
+		// Direct light: the plane of "Direct light's specular is compensated as image light's", without the division.
+		constexpr float c_Illuminance = 10.0f;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().AmbientColor = glm::vec3(0.0f);
+		AddMesh(scene, BuiltinAssets::PlaneMesh, assets.AddMaterial(FurnaceMetal(glm::vec3(1.0f), 1.0f)), glm::vec3(0.0f), "Plane")
+			.GetComponent<TransformComponent>().Scale = glm::vec3(10.0f);
+		AddSun(scene, glm::vec3(0.0f, -1.0f, 0.0f), c_Illuminance, false);
+		single.SetViewportSize(c_Size, c_Size);
+		REQUIRE(single.Render(scene, OrthographicLookAt(glm::vec3(0.0f, 3.0f, 0.0f), glm::vec3(0.0f), 2.0f)));
+		ReadbackImage image;
+		REQUIRE(Renderer::ReadTexture(single.GetHDRTexture(), image));
+		CHECK(ReadHDRPixel(image, c_Size / 2, c_Size / 2).g == doctest::Approx((1.0f / glm::pi<float>()) * 0.25f * c_Illuminance).epsilon(0.02));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A clear coat over a white metal keeps the furnace's light")
 	{
 		// The coat reflects what it takes from the base: with both compensated, the furnace's light stays 1.

@@ -146,7 +146,11 @@ editor started with `--no-gpu` (use `--headless`):
   screenSpaceReflectionsPending, notice?, path?, incomplete, complete}`. Every wait below is bounded and the capture still
   succeeds when one runs out: check `complete` (true when the picture lacks nothing), else `incomplete` lists the JSON
   pointers of the fields that say what it lacks (`"/pendingAssets"`, `"/preExposureSettled"`, `"/temporalFrames"`,
-  `"/previewLighting"`, `"/notice"`, ...). Text is complete in the picture, and so are the view's meshes,
+  `"/previewLighting"`, `"/notice"`, ...). `renderer: {...}` switches techniques for that one picture to show what they
+  do (`SpecularAntiAliasing`, `SpecularEnergyCompensation`, `DitherOutput`, `HorizonFade`, `SpatialReflectionResolve`,
+  `GPUDriven`, `OcclusionCulling`, `VisibilityFeedback`, `BatchAcrossMaterials`, `TextureStreaming`, `FadeLevelsOfDetail`:
+  booleans; `GlobalIlluminationBounceGain` 0 for one bounce; `FXAASubpixel` 0.25 or 0.75); the editor's views and the game
+  never draw with them, and the result's `renderer` echoes them. Text is complete in the picture, and so are the view's meshes,
   materials and textures: the capture renders again for up to about five seconds of frames while they load, up to about
   two more while textures still lack the finer mip levels the view wants, and a few while animated characters that
   animate only while seen (`CullingMode: WhenVisible`) still show an older pose, also while paused, and while mesh renderers

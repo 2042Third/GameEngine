@@ -355,12 +355,17 @@ namespace Strata
 			// Unset: the view's (the Scene view's setting; for the scene's camera the game's quality, EditorContext::GetGameQuality:
 			// the project's, with the players' options while playing)
 			std::optional<ViewportQuality> Quality;
+			// Switches of the renderer for this capture alone: set ones render through a renderer of their own
+			// (EditorViewport::GetSwitchedCaptureRenderer), never the views' or the capture renderer.
+			CaptureRendererSwitches Renderer;
 			std::filesystem::path Path; // Empty: the image is only returned
 			bool Overwrite = false;
 		};
 
 		struct CaptureProgress
 		{
+			// The renderer of a capture with switches (CaptureRequest::Renderer), held until the capture finished.
+			Ref<ViewportRenderer> SwitchedRenderer;
 			Scope<TextureReadback> Readback;
 			ViewportView View;
 			bool Overlays = false;
@@ -412,6 +417,17 @@ namespace Strata
 			JobHandle SaveJob;
 			bool SaveStarted = false;
 		};
+
+		// The renderer a capture draws with: the capture renderer, or for a capture with switches the renderer made with them, which
+		// the capture holds until it finished. Null without a renderer.
+		ViewportRenderer* GetCaptureRenderer(EditorContext& context, const CaptureRequest& request, CaptureProgress& progress)
+		{
+			if (!request.Renderer.IsSet())
+				return context.GetViewport().GetCaptureRenderer();
+			if (!progress.SwitchedRenderer)
+				progress.SwitchedRenderer = context.GetViewport().GetSwitchedCaptureRenderer(request.Renderer);
+			return progress.SwitchedRenderer.get();
+		}
 
 		// The view of a capture: the viewport's choice of camera, or the capture's own camera (an editor view while the game
 		// is not playing, like the editor camera it starts from).
@@ -597,7 +613,7 @@ namespace Strata
 		EditorCommandResult StartLiveCapture(EditorContext& context, const nlohmann::json& parameters)
 		{
 			CommandArguments arguments(parameters);
-			for (const char* refused : { "width", "height", "overlays", "position", "target", "fov", "debugView", "quality", "waitForAssets" })
+			for (const char* refused : { "width", "height", "overlays", "position", "target", "fov", "debugView", "quality", "waitForAssets", "renderer" })
 			{
 				if (arguments.Has(refused) && arguments.IsValid())
 					arguments.SetError(fmt::format("Parameter '{}' does not apply to live captures, which return what the view presented", refused));
@@ -691,7 +707,7 @@ namespace Strata
 		std::optional<EditorCommandResult> StartCapture(EditorContext& context, const CaptureRequest& request, CaptureProgress& progress)
 		{
 			EditorViewport& viewport = context.GetViewport();
-			ViewportRenderer* renderer = viewport.GetCaptureRenderer();
+			ViewportRenderer* renderer = GetCaptureRenderer(context, request, progress);
 			if (!renderer)
 				return EditorCommandResult::Fail("viewport.capture needs a GPU: the renderer is not running");
 			// The project's picture renders through this renderer in the frames after a save, at a size of its own: in shared
@@ -704,7 +720,11 @@ namespace Strata
 			if (context.GetProjectThumbnail().IsRendering())
 			{
 				if (progress.Rendered)
+				{
+					Ref<ViewportRenderer> switched = std::move(progress.SwitchedRenderer);
 					progress = CaptureProgress {};
+					progress.SwitchedRenderer = std::move(switched);
+				}
 				return std::nullopt;
 			}
 
@@ -855,11 +875,11 @@ namespace Strata
 		std::optional<EditorCommandResult> ContinueCapture(EditorContext& context, const CaptureRequest& request, CaptureProgress& progress)
 		{
 			// The targets a lighting view's capture kept for its statistics: released once they arrived, or when the capture fails.
-			const auto releaseTargets = [&context, &progress]()
+			const auto releaseTargets = [&context, &request, &progress]()
 			{
 				if (!progress.LightingStatsPending)
 					return;
-				if (ViewportRenderer* renderer = context.GetViewport().GetCaptureRenderer())
+				if (ViewportRenderer* renderer = GetCaptureRenderer(context, request, progress))
 					renderer->ReleaseTargets();
 				progress.LightingStatsPending = false;
 			};
@@ -877,7 +897,7 @@ namespace Strata
 				// The GPU finished the capture: its GPU times are known once the profiler resolved its frame (a frame or two).
 				if (progress.RenderStats.is_null())
 				{
-					ViewportRenderer* renderer = context.GetViewport().GetCaptureRenderer();
+					ViewportRenderer* renderer = GetCaptureRenderer(context, request, progress);
 					SceneRenderer& sceneRenderer = renderer->GetSceneRenderer();
 					sceneRenderer.ResolveGPUStats(false);
 					// The capture renderer renders no frame while the capture waits: its shadows view's counts are read here.
@@ -969,7 +989,8 @@ namespace Strata
 					progress.DebugView == ViewportDebugView::Shadows ? &progress.ShadowView : nullptr, progress.ShadowViewComplete, progress.LightingStats,
 					progress.GlobalIllumination) },
 				{ "renderStats", std::move(progress.RenderStats) },
-				{ "screenSpaceReflectionsPending", progress.Stats.ScreenSpaceReflectionsPending }
+				{ "screenSpaceReflectionsPending", progress.Stats.ScreenSpaceReflectionsPending },
+				{ "renderer", request.Renderer.ToJson() }
 			};
 			if (!progress.View.Notice.empty())
 				result["notice"] = progress.View.Notice;
@@ -1242,7 +1263,10 @@ namespace Strata
 			"Needs a GPU (fails in editors started with --no-gpu). live: true renders nothing: it reads back what the Scene view (camera "
 			"\"editor\") or the Game view (\"scene\") presented, as it played, to see motion (trails, smearing, crawling) at exact steps: arm it "
 			"after play.start {paused: true}, then run input.sequence or play.step. It fails when the view does not render, play stops or step "
-			"atFixedStep already ran; images: [{fixedSteps, temporalFrames, width, height, path}].",
+			"atFixedStep already ran; images: [{fixedSteps, temporalFrames, width, height, path}]. renderer switches techniques of the renderer "
+			"for this one picture, to show what they do (SpecularAntiAliasing, SpecularEnergyCompensation, DitherOutput, GPUDriven, "
+			"OcclusionCulling, SpatialReflectionResolve, FXAASubpixel 0.75, GlobalIlluminationBounceGain 0 for one bounce, ...): it renders "
+			"through a renderer of its own, so no view of the editor or game frame changes; the result's renderer echoes the switches set.",
 			ObjectSchema({
 				{ "width", IntegerSchema("Image width in pixels; without height the viewport's aspect ratio is kept", c_MinCaptureSize, c_MaxCaptureSize) },
 				{ "height", IntegerSchema("Image height in pixels; without width the viewport's aspect ratio is kept", c_MinCaptureSize, c_MaxCaptureSize) },
@@ -1271,7 +1295,10 @@ namespace Strata
 				{ "overwrite", BoolSchema("Replace an existing file at path (default false: an existing file is an error)") },
 				{ "live", BoolSchema("Return what the view (camera: required) presented, with its history as it is, instead of rendering") },
 				{ "atFixedStep", IntegerSchema("live: the first frame the view renders once the game's fixedSteps reached this", 1, c_MaxLiveCaptureStep) },
-				{ "frames", IntegerSchema("live: that frame and the next ones, as numbered files beside path above 1 (default 1)", 1, c_MaxLiveCaptureFrames) } }),
+				{ "frames", IntegerSchema("live: that frame and the next ones, as numbered files beside path above 1 (default 1)", 1, c_MaxLiveCaptureFrames) },
+				{ "renderer", CaptureRendererSwitches::GetSchema("Switches of the renderer for this capture alone, named as SceneRendererSpecification's "
+					"fields, to show what a technique does (e.g. {\"SpecularAntiAliasing\": false}); the editor's views, other captures and the game "
+					"never draw with them. Unset ones keep the capture's own values") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
@@ -1318,6 +1345,14 @@ namespace Strata
 					request.Quality = ViewportQualityFromString(arguments.GetString("quality"));
 					if (!request.Quality && arguments.IsValid())
 						arguments.SetError("Parameter 'quality' must be \"project\", \"low\", \"medium\", \"high\" or \"ultra\"");
+				}
+				if (arguments.Has("renderer") && arguments.IsValid())
+				{
+					std::string error;
+					if (std::optional<CaptureRendererSwitches> switches = CaptureRendererSwitches::FromJson(parameters["renderer"], &error))
+						request.Renderer = *switches;
+					else
+						arguments.SetError(fmt::format("Parameter 'renderer' {}", error));
 				}
 				request.Overwrite = arguments.GetBool("overwrite", false);
 				if (arguments.Has("path"))

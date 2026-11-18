@@ -3713,7 +3713,20 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   they arrived (`lighting` null and `lightingPending` true if they did not within the same polls); it defaults to the
   viewport's size, camera, overlays and debug view and fails without a GPU. `position`, `target` and `fov` render through a camera of the capture's own (a copy
   of the editor camera with those changes; `camera.get` is unchanged, the result's camera is `"custom"`), so agents look
-  around without moving the person's view. **Live captures** (`viewport.capture {live: true, camera, atFixedStep?,
+  around without moving the person's view. **Renderer switches** (`viewport.capture {renderer: {...}}`,
+  `CaptureRendererSwitches` in `ViewportRenderer.h`) turn techniques on or off for one picture, to show what they do:
+  `SceneRendererSpecification`'s `FadeLevelsOfDetail`, `GPUDriven` (false: the CPU path), `BatchAcrossMaterials`,
+  `TextureStreaming`, `SpecularAntiAliasing`, `VisibilityFeedback`, `OcclusionCulling`, `DitherOutput`, and the capture-only
+  fields `SpecularEnergyCompensation`, `HorizonFade`, `SpatialReflectionResolve` (false: the forward pass reads each pixel's
+  traced reflection, copied over the resolved target), `GlobalIlluminationBounceGain` (`GlobalIlluminationSettings::
+  BounceGain`, 0 is one bounce) and `FXAASubpixel` (0.25 or 0.75: `PostProcess/FXAAWideSubpixel.frag`, a variant, so the
+  default's shader is unchanged). A capture with any renders through a renderer of its own
+  (`EditorViewport::GetSwitchedCaptureRenderer`: the capture renderer's specification with the switches over it, kept for
+  the next capture with the same switches, its targets released after each picture; the capture holds it until it
+  finished), so no view, other capture or game frame changes (`GPU.Editor.Viewport` checks the Scene view's frames and a
+  capture without switches against those before, to the bit; the switches' waits are a capture's like any other's: a
+  texture made resident whole without `TextureStreaming` stays resident as a capture's levels do). The result's `renderer`
+  echoes the switches set; live captures refuse them. **Live captures** (`viewport.capture {live: true, camera, atFixedStep?,
   frames?, path?}`) render nothing: they read back what the Scene view (`"editor"`) or the Game view (`"scene"`) presented, its
   temporal history as it is, to see motion as it plays (trails, smearing, crawling). Every command poll runs before the
   views render in its frame, so a poll reads back the frame the view rendered in the previous one before it renders
@@ -4896,7 +4909,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   (`SurfaceData::SpecularEnergy`, `ClearcoatData::SpecularEnergy` for the coat's lobe of F0 0.04) is computed once per pixel
   from the table fetch the surface setup of `ShadeLitSurface` makes, and multiplies direct light's specular term
   (`EvaluateLightWeighted`, `EvaluateClearcoat`), image light's split sum (`IndirectInputs::SpecularColor`), the coat's
-  reflectance, and what glass reflects in `TransmitLight` (what passes through is what it does not reflect). Image light's
+  reflectance, and what glass reflects in `TransmitLight` (what passes through is what it does not reflect); the forward pass
+  reads it through `GetFrameSpecularEnergy`, as `GetHorizonFade` through `GetFrameHorizonFade`, which return 1 where a
+  capture turned them off (`SceneRendererSpecification::SpecularEnergyCompensation`, `HorizonFade`: the bits of
+  `FrameConstants::CaptureSwitches`, 0 in every other frame, a uniform branch). Image light's
   diffuse keeps `1 - SpecularColor` (diffuse gets what specular leaves); direct light's keeps `1 - F`, as the compensation
   adds under 0.5% to a dielectric's reflection. A white metal in a white furnace reflects the whole sky at every roughness
   (0.31 of it at roughness 1 before; `GPU.SceneRenderer.Lighting`'s furnace cases): check every shading change with them,

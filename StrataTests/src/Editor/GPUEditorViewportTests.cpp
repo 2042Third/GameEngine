@@ -1754,6 +1754,115 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A capture's renderer switches draw through a renderer of their own: the views' frames and other captures do not change")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		EditorContext& context = harness.Context;
+		EditorViewport& viewport = context.GetViewport();
+		ViewportRenderer* panel = viewport.GetRenderer();
+		REQUIRE(panel);
+		const glm::uvec2 panelSize(96, 64);
+		// A frame of the Scene view's renderer, read back.
+		const auto renderPanel = [&]()
+		{
+			const std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic,
+				static_cast<float>(panelSize.x) / static_cast<float>(panelSize.y));
+			REQUIRE(view);
+			REQUIRE(panel->Render(context, panelSize, *view, viewport.GetSettings(), view->EditorOverlays, RendererQuality::GetProjectQuality()));
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(panel->GetOutputTexture(), image));
+			return image.Pixels;
+		};
+		const std::vector<uint8_t> panelBefore = renderPanel();
+		const auto capture = [&](const nlohmann::json& renderer, nlohmann::json* outResult = nullptr)
+		{
+			nlohmann::json parameters = { { "width", 96 }, { "height", 64 }, { "overlays", false } };
+			if (!renderer.is_null())
+				parameters["renderer"] = renderer;
+			return harness.Capture(parameters, outResult);
+		};
+
+		nlohmann::json result;
+		const DecodedImage plain = capture(nullptr, &result);
+		CHECK(result["renderer"] == nlohmann::json::object());
+		// No switch: the capture renderer, today's picture.
+		CHECK(capture(nlohmann::json::object()).Pixels == plain.Pixels);
+		CHECK(viewport.FindRenderer() == panel);
+		// A switch that changes nothing in this scene draws the same picture through the renderer of its own, and the result
+		// echoes it.
+		const DecodedImage unbatched = capture({ { "BatchAcrossMaterials", false } }, &result);
+		CHECK(result["renderer"] == nlohmann::json { { "BatchAcrossMaterials", false } });
+		CHECK(unbatched.Pixels == plain.Pixels);
+		// The GPU-driven path and the CPU path agree.
+		CHECK(harness.CountDifferences(capture({ { "GPUDriven", false } }), plain) == 0);
+		// A switch that changes the picture: without the dither the lit faces' codes change by at most one.
+		const DecodedImage undithered = capture({ { "DitherOutput", false } });
+		CHECK(undithered.Pixels != plain.Pixels);
+		CHECK(harness.CountDifferences(undithered, plain) == 0);
+		// None of it changed what the editor's view draws, nor today's capture.
+		CHECK(renderPanel() == panelBefore);
+		CHECK(capture(nullptr).Pixels == plain.Pixels);
+		// Captures of the switched renderer release their targets as the capture renderer does.
+		const Ref<ViewportRenderer> switched = viewport.GetSwitchedCaptureRenderer(CaptureRendererSwitches { .DitherOutput = false });
+		REQUIRE(switched);
+		CHECK(switched->GetSize() == glm::uvec2(0, 0));
+
+		// Switches that do not exist, values of the wrong type or range, and live captures are refused without a picture.
+		for (const nlohmann::json& wrong : { nlohmann::json { { "Wireframe", true } }, nlohmann::json { { "DitherOutput", 1 } },
+			nlohmann::json { { "FXAASubpixel", 0.5 } }, nlohmann::json { { "GlobalIlluminationBounceGain", 2 } }, nlohmann::json(true) })
+		{
+			CAPTURE(wrong.dump());
+			const EditorCommandResult refused = harness.Commands.Execute(context, "viewport.capture", { { "renderer", wrong } });
+			CHECK(refused.ErrorKind == EditorCommandError::InvalidParameters);
+		}
+		CHECK(harness.Commands.Execute(context, "viewport.capture", { { "live", true }, { "camera", "editor" }, { "renderer", { { "DitherOutput", false } } } }).ErrorKind
+			== EditorCommandError::InvalidParameters);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Captures switch FXAA's sub-pixel amount and the spatial reflections' resolve for one picture")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.Run("entity.create", { { "name", "PostProcess" }, { "components", { { "PostProcess", { { "Tonemapper", "None" }, { "AutoExposure", false },
+			{ "Vignette", 0.0 }, { "Bloom", false }, { "AntiAliasing", true }, { "AntiAliasingMethod", "FXAA" }, { "ScreenSpaceReflections", true },
+			{ "ScreenSpaceReflectionsMaxRoughness", 1.0 } } } } } });
+		Scene& scene = *harness.Context.GetActiveScene();
+		Entity floor = scene.CreateEntity("Floor");
+		floor.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, -0.5f, 0.0f);
+		floor.GetComponent<TransformComponent>().Scale = glm::vec3(20.0f, 1.0f, 20.0f);
+		floor.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		Entity box = scene.CreateEntity("Box");
+		box.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.5f, 0.0f);
+		box.GetComponent<TransformComponent>().Rotation = glm::vec3(0.0f, 0.4f, 0.0f);
+		box.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		scene.CreateEntity("Sun").AddComponent<DirectionalLightComponent>();
+		harness.Run("camera.set", { { "position", { 0, 2, 6 } }, { "target", { 0, 0, 0 } } });
+
+		const nlohmann::json size = { { "width", 128 }, { "height", 128 }, { "overlays", false }, { "quality", "high" } };
+		nlohmann::json result;
+		const DecodedImage plain = harness.CaptureLoaded(size, &result);
+		CHECK(result["complete"] == true);
+		nlohmann::json wide = size;
+		wide["renderer"] = { { "FXAASubpixel", 0.75 } };
+		const DecodedImage wider = harness.CaptureLoaded(wide, &result);
+		CHECK(result["renderer"]["FXAASubpixel"] == 0.75);
+		CHECK(wider.Pixels != plain.Pixels);
+		nlohmann::json traced = size;
+		traced["renderer"] = { { "SpatialReflectionResolve", false } };
+		const DecodedImage unresolved = harness.CaptureLoaded(traced, &result);
+		CHECK(result["complete"] == true);
+		CHECK(unresolved.Pixels != plain.Pixels);
+		// The switched renderers drew those; the capture renderer's picture is as before.
+		CHECK(harness.CaptureLoaded(size).Pixels == plain.Pixels);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A capture of a scene with sixteen shadowed point lights shows every light's shadow in its first complete frame")
 	{
 		Tests::GPUContext gpu;

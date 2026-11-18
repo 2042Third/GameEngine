@@ -433,6 +433,11 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - AI agents: `editor.screenshot {path?, overwrite?, panel?}` takes a picture of the whole editor window as the person sees
   it, UI and all, or of one panel, two frames after the command (so `editor.showPanel`, `editor.showDialog` and the other
   commands before it show), without stalling a frame; it needs a window.
+- AI agents: `viewport.capture {renderer: {...}}` switches techniques for one picture to show what they do: specular
+  anti-aliasing, the specular energy compensation, the horizon fade, dithering, the spatial reflections' resolve, FXAA's
+  sub-pixel amount (0.75 beside 0.25), one bounce of global illumination, the GPU-driven path, occlusion culling,
+  visibility feedback, batching across materials, texture streaming and LOD fades. Such a capture renders through a
+  renderer of its own: no view, other capture or game frame changes.
 - Fixed: a program (the editor, the runtime, an exported game) whose frame an exception left logged a critical line,
   ended in order and exited with code 0, so a script or CI read success; it now exits with code 1.
 - Fixed: script modules built with GCC or Clang (Linux, macOS) carried no debug information in Release and Dist, the

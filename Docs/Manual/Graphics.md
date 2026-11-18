@@ -90,7 +90,10 @@ what each one costs:
   the game's preset, a player's choice while you play.
 - **Pictures** (`viewport.capture`) draw at the quality of the view they show unless they ask for one
   (`{"quality": "ultra"}`). A picture waits a bounded number of frames for what it shows to load and settle; its result's
-  `complete` says whether it got there, and `incomplete` names what it still lacked.
+  `complete` says whether it got there, and `incomplete` names what it still lacked. A picture can also switch techniques
+  off or on for itself alone, to show what they do (`{"renderer": {"SpecularAntiAliasing": false}}`, and the energy
+  compensation, dithering, FXAA's sub-pixel amount, one bounce of global illumination...); the views and the game never
+  draw with them.
 - **One run of a game**: `<Game> --quality low` (or `medium`, `high`, `ultra`) plays at that preset without saving
   anything.
 

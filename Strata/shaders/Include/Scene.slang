@@ -116,7 +116,12 @@ struct FrameConstants
 	// the scene's GI intensity; w: the alpha^2 the directional light's disk adds to its highlight's lobe
 	// (RenderData::GetSunLobeAlpha2; Include/PBR.slang).
 	float4 ReflectionParams;
+	// x: what a capture turned off (ST_CAPTURE_*: SceneRendererSpecification's SpecularEnergyCompensation and HorizonFade); 0 in
+	// every other frame
+	uint4 CaptureSwitches;
 };
+#define ST_CAPTURE_NO_SPECULAR_ENERGY 1u
+#define ST_CAPTURE_NO_HORIZON_FADE    2u
 
 ConstantBuffer<FrameConstants> u_Frame : register(b0);
 

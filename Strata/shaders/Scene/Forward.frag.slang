@@ -82,6 +82,22 @@ uint GetLightingView()
 	return uint(u_Frame.MaterialParams.y + 0.5);
 }
 
+// GetSpecularEnergy and GetHorizonFade (Include/PBR.slang) as the frame shades them: 1 where a capture turned them off
+// (FrameConstants::CaptureSwitches, a uniform branch; 0 in every other frame).
+float3 GetFrameSpecularEnergy(float3 f0, float2 dfg)
+{
+	if ((u_Frame.CaptureSwitches.x & ST_CAPTURE_NO_SPECULAR_ENERGY) != 0u)
+		return float3(1.0);
+	return GetSpecularEnergy(f0, dfg);
+}
+
+float GetFrameHorizonFade(float3 reflected, float3 geometricNormal)
+{
+	if ((u_Frame.CaptureSwitches.x & ST_CAPTURE_NO_HORIZON_FADE) != 0u)
+		return 1.0;
+	return GetHorizonFade(reflected, geometricNormal);
+}
+
 // The views whose values are not light (occlusion, albedo): written unexposed, without fog or what glass transmits.
 bool IsLightingValueView(uint view)
 {
@@ -168,7 +184,7 @@ IndirectInputs GetIndirectInputs(SurfaceData surface, float3 f0, float2 dfg, flo
 	// map turns into the surface fade out (GetHorizonFade).
 	inputs.SpecularOcclusion = inputs.Form == ST_INDIRECT_AMBIENT ? 1.0
 		: clamp(pow(NoV + diffuseOcclusion, exp2(-16.0 * surface.Roughness - 1.0)) - 1.0 + diffuseOcclusion, 0.0, 1.0)
-		* GetHorizonFade(inputs.Reflected, geometricNormal);
+		* GetFrameHorizonFade(inputs.Reflected, geometricNormal);
 	// The same on the material's occlusion alone, for what screen-space reflections found (exactly 1 without an occlusion map).
 	inputs.ScreenReflectionOcclusion = clamp(pow(NoV + surface.Occlusion, exp2(-16.0 * surface.Roughness - 1.0)) - 1.0 + surface.Occlusion, 0.0, 1.0);
 	inputs.FieldWeight = 0.0;
@@ -224,14 +240,14 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 	float3 f0 = lerp(float3(material.Absorption.w), surface.Albedo, surface.Metallic);
 	surface.F0 = f0;
 	float2 dfg = u_BRDFLut.SampleLevel(u_LinearClampSampler, float2(NoV, surface.Roughness), 0.0).rg;
-	surface.SpecularEnergy = GetSpecularEnergy(f0, dfg);
+	surface.SpecularEnergy = GetFrameSpecularEnergy(f0, dfg);
 	float coatNoV = 1.0;
 	float2 coatDFG = float2(1.0, 0.0);
 	if (coat.Strength > 0.0)
 	{
 		coatNoV = max(dot(coat.Normal, surface.View), 1e-4);
 		coatDFG = u_BRDFLut.SampleLevel(u_LinearClampSampler, float2(coatNoV, coat.Roughness), 0.0).rg;
-		coat.SpecularEnergy = GetSpecularEnergy(float3(c_ClearcoatF0), coatDFG).x;
+		coat.SpecularEnergy = GetFrameSpecularEnergy(float3(c_ClearcoatF0), coatDFG).x;
 	}
 
 	float viewDepth = -(mul(u_Frame.View, float4(v_RelativePosition, 1.0))).z;
@@ -345,7 +361,7 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 		float3 coatReflected = reflect(-surface.View, coat.Normal);
 		float3 coatRadiance = SampleSpecularLight(surface.Position, coat.Normal, coatReflected, coat.Roughness, indirectInputs.Environment);
 		float coatOcclusion = clamp(pow(coatNoV + diffuseOcclusion, exp2(-16.0 * coat.Roughness - 1.0)) - 1.0 + diffuseOcclusion, 0.0, 1.0)
-			* GetHorizonFade(coatReflected, indirectInputs.GeometricNormal);
+			* GetFrameHorizonFade(coatReflected, indirectInputs.GeometricNormal);
 		indirect = indirect * (1.0 - coatReflectance) + coatRadiance * coatReflectance * coatOcclusion;
 		emitted *= 1.0 - ClearcoatFresnel(coat, coatNoV);
 	}
@@ -381,7 +397,7 @@ float3 TransmitLight(InstanceData instance, MaterialData material, float3 normal
 	float2 dfg = u_BRDFLut.SampleLevel(u_LinearClampSampler, float2(NoV, roughness), 0.0).rg;
 	// What the surface reflects, compensated as its specular light is (ShadeLitSurface): the rest passes through.
 	float3 f0 = lerp(float3(material.Absorption.w), albedo, metallic);
-	float3 reflectance = (f0 * dfg.x + dfg.y) * GetSpecularEnergy(f0, dfg);
+	float3 reflectance = (f0 * dfg.x + dfg.y) * GetFrameSpecularEnergy(f0, dfg);
 	float3 absorbed = exp(-material.Absorption.rgb * thickness);
 	return behind * absorbed * albedo * (1.0 - metallic) * (1.0 - reflectance) * transmission;
 }

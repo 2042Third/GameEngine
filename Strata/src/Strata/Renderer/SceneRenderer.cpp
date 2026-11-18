@@ -309,7 +309,8 @@ namespace Strata
 		m_AtmosphereSkyboxPixelShader = shaders.Get("Scene/SkyboxAtmosphere.frag");
 		m_ShadowVertexShader = shaders.Get("Scene/ShadowMesh.vert");
 		m_ShadowMaskPixelShader = shaders.Get("Scene/ShadowMask.frag");
-		m_FXAAPixelShader = shaders.Get("PostProcess/FXAA.frag");
+		m_FXAAPixelShader = shaders.Get(m_Specification.FXAASubpixel == SceneRendererSpecification::c_WideFXAASubpixel ? "PostProcess/FXAAWideSubpixel.frag"
+			: "PostProcess/FXAA.frag");
 		m_MorphologicalEdgesShader = shaders.Get("PostProcess/MorphologicalEdges.frag");
 		m_MorphologicalWeightsShader = shaders.Get("PostProcess/MorphologicalWeights.frag");
 		m_MorphologicalBlendShader = shaders.Get("PostProcess/MorphologicalBlend.frag");
@@ -3275,6 +3276,9 @@ namespace Strata
 		const SceneLightingView forwardView = IsGlobalIlluminationOverlayView(options.LightingView) ? SceneLightingView::None : options.LightingView;
 		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, static_cast<float>(forwardView),
 			m_Specification.SpecularAntiAliasing ? 1.0f : 0.0f, options.ProbeCapture ? 1.0f : 0.0f);
+		// What a capture turned off (Include/Scene.slang, ST_CAPTURE_*): 0 in every other renderer's frames.
+		frame.CaptureSwitches = glm::uvec4((m_Specification.SpecularEnergyCompensation ? 0u : RenderData::c_CaptureNoSpecularEnergy)
+			| (m_Specification.HorizonFade ? 0u : RenderData::c_CaptureNoHorizonFade), 0u, 0u, 0u);
 
 		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get())
 			|| m_BoundShadowRanges != (m_ShadowRanges ? m_ShadowRanges.Get() : m_DummyShadowRanges.Get()) || m_BoundScreenShadows != GetBoundScreenShadows()

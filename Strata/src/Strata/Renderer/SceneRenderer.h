@@ -254,6 +254,22 @@ namespace Strata
 		// (Tests::ExactSpecification).
 		bool DitherOutput = true;
 
+		// Switches only the editor's captures turn off (viewport.capture {renderer}), to show what a technique does; every other
+		// renderer keeps them on, and its frames are as without them, to the bit. SpecularEnergyCompensation: the forward pass
+		// scales specular light by GetSpecularEnergy (Include/PBR.slang), which restores what single scattering loses on rough
+		// surfaces; off, the specular light is the single-scattering lobe's. HorizonFade: reflections a normal map turns into the
+		// surface fade out (GetHorizonFade); off, they do not. Both reach the forward pass as FrameConstants::CaptureSwitches
+		// bits (a uniform branch, nothing while 0). SpatialReflectionResolve: the spatial screen-space reflections' 5x5 resolve
+		// (Effects/ReflectionResolve.comp); off, the forward pass reads each pixel's traced reflection as the march found it.
+		bool SpecularEnergyCompensation = true;
+		bool HorizonFade = true;
+		bool SpatialReflectionResolve = true;
+		// FXAA's sub-pixel aliasing removal: 0.25, or 0.75 (PostProcess/FXAAWideSubpixel.frag, a variant compiled with it:
+		// the default's shader is unchanged); other values draw at 0.25. Only captures change it.
+		float FXAASubpixel = c_DefaultFXAASubpixel;
+		static constexpr float c_DefaultFXAASubpixel = 0.25f;
+		static constexpr float c_WideFXAASubpixel = 0.75f;
+
 		// A shadow view (a light's tile) is drawn again only when what it shows changed: the light (its position, direction,
 		// range, cone, tile or filter), a shadow caster whose bounds before or after its change reach the light's range and
 		// view, or what the casters are drawn with (the scene's GPU copy's mesh and material tables and new proxies, the
