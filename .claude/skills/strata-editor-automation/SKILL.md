@@ -796,6 +796,7 @@ the scene has unsaved changes; `{"force": true}` discards them. The editor answe
 | Changes vanished after `play.stop` | They were made while playing; make them in edit mode. |
 | `scene.open`, `scene.new`, `project.*` or `editor.quit` fail with unsaved changes | `scene.save` / `scene.saveAs` first, or `{"force": true}` to discard them. |
 | Headless editor exits at once with code 1 | Its automation could not start (session directory not private, port in use); read its output or `<user data>/Logs/StrataEditor.log`. |
+| `launch` says the editor exited before its session became available (exit code 1) | It could not start (e.g. a `--window-size` the display cannot make); `<user data>/Logs/StrataEditor.log` says why. |
 | The editor went away on its own | It was started with `--idle-timeout` (MCP: 10 minutes) and no client stayed connected; start it again. |
 | `viewport.*` / `camera.*` fail or are missing | The editor runs with `--no-gpu` (restart it with `--headless`), or this build has no viewport commands (check `editor.commands`). |
 | The capture is lit, but the game is dark | The capture says `"previewLighting": true`: the scene has no light of its own. Add a directional light and a sky light (or start from the `basic3d` template); check with `{"camera": "scene"}`. |

@@ -135,9 +135,17 @@ namespace Strata::CLI
 			[&process]() { return process.IsRunning(); }, &result.Error);
 		if (!session)
 		{
-			// Nobody could reach it (and it may never quit by itself): stop it rather than leave it running unseen.
-			if (process.IsRunning() && process.Terminate())
-				result.Error += "; the editor was stopped";
+			// Nobody could reach it (and it may never quit by itself): stop it rather than leave it running unseen. One that
+			// ended by itself could not start: its exit code, and its log, say why (its output went to the null device).
+			if (process.IsRunning())
+			{
+				if (process.Terminate())
+					result.Error += "; the editor was stopped";
+			}
+			else if (const std::optional<int> exitCode = process.GetExitCode())
+			{
+				result.Error += fmt::format(" (exit code {}: the editor's log, Logs/StrataEditor.log in the user's Strata data folder, says why)", *exitCode);
+			}
 			return result;
 		}
 

@@ -321,11 +321,12 @@ Windows, so that no console window opens with them; `StrataCLI` and `StrataTests
 `CreateApplication` in `Engine/ApplicationLaunch.h`: `ProgramRun` in `Core/Platform.h`) and calls `Platform::ConnectStandardStreams` with it: pipes and
 files their callers pass are kept, so tests and tools read their output and exit codes as before. A *Console* run
 (output is the point: `--version`, `--help`, usage errors, headless and scripted runs: the editor's `--headless`,
-`--no-gpu`, `--frames`, `--commands`, `--quit-after-commands`, the runtime's `--headless`, `--frames`, `--seconds` and
-option mistakes) prints into the terminal that started it; an *Interactive* run (a person's window) leaves that terminal alone,
-so its Ctrl+C or closing it does not end the program and the log does not run into the shell's prompt. Then
-`Platform::InstallInterruptHandler` turns Ctrl+C, Ctrl+Break and the console closing (Windows) or SIGINT and SIGTERM
-(POSIX) into an orderly quit through the main loop (`Platform::IsInterruptRequested`; exit code
+`--no-gpu`, `--frames`, `--commands`, `--quit-after-commands` and `--window-size` (pictures for tools: `StrataCLI launch`
+discards the output, so a dialog would wait for a person while the CLI waits for the session), the runtime's
+`--headless`, `--frames`, `--seconds` and option mistakes) prints into the terminal that started it; an *Interactive*
+run (a person's window) leaves that terminal alone, so its Ctrl+C or closing it does not end the program and the log
+does not run into the shell's prompt. Then `Platform::InstallInterruptHandler` turns Ctrl+C, Ctrl+Break and the
+console closing (Windows) or SIGINT and SIGTERM (POSIX) into an orderly quit through the main loop (`Platform::IsInterruptRequested`; exit code
 `Application::c_InterruptedExitCode`, 130, unless the run had failed); a second request ends the process at once. An
 exception that leaves a frame (engine code does not throw: third-party code, a driver's failure inside NVRHI) is caught by
 the main loop, logged as critical ("Unhandled exception in the main loop") and ends the run in order with
@@ -3279,7 +3280,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   --window-size` passes it on). It takes no window smaller than 640x360 (`c_MinWindowWidth`, `c_MinWindowHeight`: the
   size the panels are laid out for; Windows widens a window narrower than its title bar anyway), and a window the system
   made another size (Windows shrinks one larger than the display) ends the start with exit code 1 and both sizes
-  (`HasRequestedPixels`). `--ui-scale <factor>` draws the
+  (`HasRequestedPixels`), logged and never in a dialog (a run with `--window-size` is a Console run): `StrataCLI launch`
+  then fails at once, naming the editor's exit code (`LaunchEditor`). `--ui-scale <factor>` draws the
   UI at a fixed scale instead of the display's and the person's preference (e.g. 1 to check it at 100% on a 150%
   display; `StrataCLI launch --ui-scale` passes it on); with `--window-size` it gives pictures of the editor that compare
   across machines. `--layout <file>` keeps

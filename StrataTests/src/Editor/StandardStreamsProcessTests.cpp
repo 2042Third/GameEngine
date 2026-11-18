@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "CLI/CliApplication.h"
 #include "TestHelpers.h"
 
 #include <Strata/Core/Application.h>
@@ -327,6 +328,34 @@ TEST_SUITE("GPU.Startup")
 		INFO(output);
 		CHECK(run.ExitCode == 1);
 		CHECK(Contains(output, "Strata Editor cannot start: the display cannot hold a window of 65535 x 65535 pixels (--window-size), the system made it "));
+	}
+
+	TEST_CASE("StrataCLI launch of an editor whose window cannot have the pixels asked for fails at once, without a dialog")
+	{
+		// The launch sends the editor's output to the null device, as the desktop does for a person's window: a dialog there
+		// would wait for a person while the CLI waits for a session that never comes. A --window-size run is a tool's
+		// (GetProgramRun): it ends at once, and the CLI says so with the exit code. Were a dialog shown, its text would go to
+		// the file instead; only the CLI's environment (a helper sets it) says so, and where its sessions go.
+		const std::filesystem::path editor = FindBuiltExecutable("STRATA_TEST_EDITOR_PATH", "StrataEditor");
+		const std::filesystem::path cli = FindBuiltExecutable("STRATA_TEST_CLI_PATH", "StrataCLI");
+		REQUIRE_MESSAGE(FileSystem::IsRegularFile(editor), FileSystem::ToUTF8(editor), " is not built");
+		REQUIRE_MESSAGE(FileSystem::IsRegularFile(cli), FileSystem::ToUTF8(cli), " is not built");
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("LaunchWindowTooLarge");
+		const std::filesystem::path dialog = directory / "Dialog.txt";
+		const std::chrono::milliseconds waitTimeout(45000);
+		const auto start = std::chrono::steady_clock::now();
+		const Process::RunResult run = RunCaptured(Tests::GetTestExecutablePath(), { "--strata-test-helper=run-with-environment",
+			"STRATA_ERROR_DIALOG_FILE=" + FileSystem::ToUTF8(dialog), "STRATA_SESSION_DIR=" + FileSystem::ToUTF8(directory / "Sessions"), "--",
+			FileSystem::ToUTF8(cli), "launch", "--window-size", "65535x65535", "--wait-timeout", std::to_string(waitTimeout.count()),
+			"--editor", FileSystem::ToUTF8(editor) });
+		const auto elapsed = std::chrono::steady_clock::now() - start;
+		const std::string output = run.Output + run.ErrorOutput;
+		INFO(output);
+		CHECK(run.ExitCode == CLI::ExitCode::ConnectionFailure);
+		CHECK(Contains(run.ErrorOutput, "exited before its session became available (exit code 1: the editor's log"));
+		CHECK_FALSE(ReadDialog(dialog));
+		// It did not wait for the session's timeout.
+		CHECK(elapsed < waitTimeout);
 	}
 #endif
 }

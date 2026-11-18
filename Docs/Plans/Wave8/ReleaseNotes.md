@@ -430,8 +430,9 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   names, versions and file extensions.
 - Editor: `--window-size <width>x<height>` opens a window of exactly that many pixels instead of a maximized one, at
   least 640x360; an editor whose window the system makes another size (larger than the display) does not start, so a
-  picture never has another size than asked for. With `--ui-scale 1` (or another fixed scale) beside it, screenshots of
-  the editor compare across machines; `StrataCLI launch --window-size` and `--ui-scale` pass them on.
+  picture never has another size than asked for (exit code 1, the reason in its output and log, never in a dialog:
+  `StrataCLI launch` fails at once, naming the exit code). With `--ui-scale 1` (or another fixed scale) beside it,
+  screenshots of the editor compare across machines; `StrataCLI launch --window-size` and `--ui-scale` pass them on.
 - AI agents: `editor.screenshot {path?, overwrite?, panel?}` takes a picture of the whole editor window as the person sees
   it, UI and all, or of one panel, without stalling a frame; it needs a window. The picture is of the first frame, from the
   second after the command, that lays out its windows and tabs as the one before (so `editor.showPanel`,

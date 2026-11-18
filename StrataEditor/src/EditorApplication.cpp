@@ -290,12 +290,15 @@ namespace Strata
 	ProgramRun GetProgramRun(const CommandLine& commandLine)
 	{
 		// What it prints is the point: information, a usage error, and the log of runs that tools and command scripts drive
-		// (they end by themselves or through automation). A person's window leaves the terminal it was started from alone.
+		// (they end by themselves or through automation), among them --window-size's pictures of a fixed size: a start that
+		// fails there (a window the display cannot hold) ends at once with its reason in the output, never in a dialog that
+		// waits for a person while the tool waits for the editor (StrataCLI launch discards the output). A person's window
+		// leaves the terminal it was started from alone.
 		if (commandLine.HasFlag("--help") || commandLine.HasFlag("-h") || commandLine.HasFlag("--version"))
 			return ProgramRun::Console;
 		if (CommandLineOptions::FindUnknownArgument(commandLine, c_Arguments) || CheckValues(commandLine))
 			return ProgramRun::Console;
-		for (const char* scripted : { "--headless", "--no-gpu", "--frames", "--commands", "--quit-after-commands" })
+		for (const char* scripted : { "--headless", "--no-gpu", "--frames", "--commands", "--quit-after-commands", "--window-size" })
 		{
 			if (commandLine.HasFlag(scripted))
 				return ProgramRun::Console;
