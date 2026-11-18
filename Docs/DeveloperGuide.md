@@ -5115,9 +5115,17 @@ lights, Post Process and the sky), and never a resolution below the output's.
   ranges cannot be made draws its rect lights unshadowed (reported). Transparent surfaces filter per pixel, without the blur.
   The last masked light's evaluation (`GetAreaShadowEvaluation`) marks every pixel that compared depths.
   Measured (`GPU.SceneRenderer.AreaShadows` and `.AreaLightCornell`, both paths alike to the code): the Cornell box's floor
-  seen from under its ceiling within 0.110 of the reference outside the penumbrae (at one point under the sphere's foot that
-  the light's center sees, where the filter misses part of the sphere just above the floor; elsewhere within 0.03) and 0.129
-  inside them (the spec's 0.03 and 0.1), no step between neighbours beyond 0.016 where the reference is flat; a wall's
+  seen from under its ceiling within 0.110 of the reference at the grid's points outside the penumbrae (at one point under the
+  sphere's overhang; elsewhere within 0.03) and 0.129 inside them (the spec's 0.03 and 0.1); over the whole floor that view
+  sees, 1.8% of the pixels more than 0.1 off and 0.23% more than 0.3, 0.64 at worst. That is the **one-layer limit**: the views
+  hold one depth per texel, so the taps cannot see a blocker's lower part that its upper part hides from the light, nor tell
+  a solid from the space under an overhang. The floor beside the tall box's foot on its side away from the light reads up to
+  0.64 more of the light than the reference, which has almost none there (a lighter band between the box and the red
+  wall), the floor under the sphere's overhang reads lit a little, and the outer edge of the sphere's penumbra darker. A
+  look deeper along the paths
+  counts the space behind any blocker as solid (one at a ninth of the offset closed the light under the sphere and darkened
+  its penumbra by 0.24), so closing the leak needs a second layer of depth (the casters' far side). No step between
+  neighbours beyond 0.016 where the reference is flat; a wall's
   penumbra under a 1 x 0.5 m light within 0.063 of the reference and 8.4% wider (the spec's 0.12 and 25%; with the path's
   crossing at the kernel's depth and the plane at a third of it alone 0.167 and 38% narrow); a 6 cm post's shadow 5 mm behind
   it 2.1 cm wide (the reference's 1.2 cm: the spec's two shadow texels are not met, the blockers' depth comes from cells

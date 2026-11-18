@@ -368,7 +368,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   panel out. It changes nothing else: the mesh draws, is picked and casts the sun's and other lights' shadows.
 - Rect light shadows no longer darken a band along walls: each of the filter's taps now tests the path from its point of
   the light to the surface, so a wall beside a floor point blocks nothing (in the Cornell box the floor was 0.40 off the
-  reference by the walls before, within 0.03 now but at one point under the sphere's foot), and a post's contact shadow is
+  reference by the walls before; the test's grid points outside the penumbrae are within 0.03 now but one, and Known issues
+  has the leaks beside the tall box and under the sphere), and a post's contact shadow is
   2.1 cm wide instead of 3.3 cm. Each tap also looks at two points nearer the surface along its path, so a solid blocker's
   shadow keeps its true width: behind a thick wall's top edge the penumbra is within 0.063 of the true one and 8% wider
   (0.167 off and 38% narrower before), and a wall rising beside a surface no longer darkens it as a contact would (the
@@ -605,10 +606,12 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   reflect all of it.
 - Rect light shadows: penumbrae wider than an eighth of the light's shadow tile come out narrower than real ones (a blocker
   0.3 m under a 2 m light gets 16% of the true width); at a contact the shadow is 2.1 cm wide where the true one is 1.2 cm
-  (a 6 cm post, 5 mm behind it); the filter looks from the light's center, so under the Cornell sphere's foot, which the
-  center sees, the floor gets 0.110 of the light where it should get none, and its penumbrae are within 0.129 of the
-  reference (the spec asked 0.03 and 0.1); in the Cornell box 46% of the fully lit pixels still run the filter's
-  comparisons. Their
+  (a 6 cm post, 5 mm behind it); the filter sees each object as the light's center sees it, so light leaks where only an
+  object's hidden lower part blocks it: beside the Cornell box's tall box, on its side away from the light, a band of the
+  floor gets up to 0.64 more of the light than it should (almost none), and under the sphere's overhang 0.110; over the
+  floor 1.8% of the pixels are more than 0.1 off the true visibility, its penumbrae at the test's points within 0.129 (the spec asked
+  0.03 outside the penumbrae and 0.1 inside); closing the leak needs a second layer of depth in the views. In the Cornell
+  box 46% of the fully lit pixels still run the filter's comparisons. Their
   wide penumbrae take twice the Shadow Filter Quality's taps, so a slow strafe across them shimmers no more than the sun's
   widest soft shadows. At most four rect lights cast shadows at once; a fifth waits.
 - A scene with a rect light, even an unlit one out of sight, draws every surface with the forward shaders that shade rect

@@ -102,8 +102,10 @@ linearly transformed cosines), the same in every frame.
   Local Lights, the atlas size and largest tile), and at most four rect lights cast shadows at once: a fifth waits until one
   leaves the view or matters less, and a light losing its shadow fades it out. Very wide penumbrae (a large light close above
   an object) come out narrower than real ones: the filter reaches at most an eighth of the light's shadow tile. Walls beside
-  a lit floor do not shadow it. Where an object's lower part hangs over the floor close above it (a sphere's foot) a little
-  light reaches under it, and the soft edge behind a thick object's top comes out narrower than a real one. Shadows of
+  a lit floor do not shadow it. The filter sees each object as the light's center sees it, from above, so light leaks where
+  only an object's hidden lower part blocks it: on the floor beside a tall box's foot on its side away from the light (up to
+  two thirds of the light in a band beside the Cornell box's tall box) and a little under a sphere that hangs over the
+  floor; the soft edge behind a thick object's top comes out narrower than a real one. Shadows of
   shadowed rect lights cost every pixel near their penumbrae a filter of twice the Shadow Filter Quality's taps.
 - **An emissive panel is not a light by itself.** A mesh with an emissive material shows its glow, but it lights the scene
   only through global illumination's probes, with their coarse resolution. To make a panel light the room, right-click it

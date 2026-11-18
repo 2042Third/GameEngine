@@ -418,6 +418,54 @@ TEST_SUITE("GPU.SceneRenderer.AreaLightCornell")
 		MESSAGE(fmt::format("L4: the back wall beside the red wall, fully lit: {:.4f} from the reference at most ({} points)", cornerWorst, cornerPoints));
 		CHECK(cornerPoints >= 30);
 		CHECK(cornerWorst <= 0.03);
+
+		// The whole floor the camera sees, every other pixel each way, away from the blockers' outlines (pixels whose 7 x 7
+		// neighbours all show the floor), where the 0.5 m grid above samples too little: the shares of pixels more than 0.1 and
+		// 0.3 off the reference. Known issue: the views hold one depth per texel, so the filter cannot see a blocker's lower part
+		// that its upper part hides from the light. The floor beside the tall box's foot on its side away from the light, and
+		// under the sphere's overhang, gets light the reference does not (the worst, 0.64, beside the box), and the outer edge
+		// of the sphere's penumbra reads darker. The bounds are 1.5 times the measured shares (1.77% and 0.23%).
+		std::vector<uint8_t> showsFloor(static_cast<size_t>(c_Size) * c_Size, 0);
+		for (uint32_t y = 0; y < c_Size; y++)
+		{
+			for (uint32_t x = 0; x < c_Size; x++)
+			{
+				const std::optional<glm::dvec3> point = FindPlanePoint(camera, x, y, 1, 0.0);
+				showsFloor[static_cast<size_t>(y) * c_Size + x] = point && std::abs(point->x) < 2.74 && std::abs(point->z) < 2.74
+					&& !blockers.Blocks(glm::dvec3(camera.Position), *point) && frames.Visibility(x, y) >= 0.0f;
+			}
+		}
+		uint32_t mapPixels = 0;
+		uint32_t beyondTenth = 0;
+		uint32_t beyondThreeTenths = 0;
+		double mapWorst = 0.0;
+		for (uint32_t y = 3; y + 3 < c_Size; y += 2)
+		{
+			for (uint32_t x = 3; x + 3 < c_Size; x += 2)
+			{
+				bool clear = true;
+				for (uint32_t row = y - 3; row <= y + 3 && clear; row++)
+				{
+					for (uint32_t column = x - 3; column <= x + 3 && clear; column++)
+						clear = showsFloor[static_cast<size_t>(row) * c_Size + column] != 0;
+				}
+				if (!clear)
+					continue;
+				const std::optional<glm::dvec3> point = FindPlanePoint(camera, x, y, 1, 0.0);
+				const double difference = std::abs(frames.Visibility(x, y) - CornellVisibility(*point, up, light, blockers, 24));
+				mapPixels++;
+				beyondTenth += difference > 0.1 ? 1u : 0u;
+				beyondThreeTenths += difference > 0.3 ? 1u : 0u;
+				mapWorst = std::max(mapWorst, difference);
+			}
+		}
+		const double shareTenth = static_cast<double>(beyondTenth) / std::max(mapPixels, 1u);
+		const double shareThreeTenths = static_cast<double>(beyondThreeTenths) / std::max(mapPixels, 1u);
+		MESSAGE(fmt::format("L4: the floor's map, {} pixels: {:.2f}% more than 0.1 off the reference, {:.2f}% more than 0.3, {:.4f} at worst", mapPixels,
+			100.0 * shareTenth, 100.0 * shareThreeTenths, mapWorst));
+		CHECK(mapPixels > 20000);
+		CHECK(shareTenth <= 0.0266);
+		CHECK(shareThreeTenths <= 0.0035);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
