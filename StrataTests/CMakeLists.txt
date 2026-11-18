@@ -445,15 +445,16 @@ if(TARGET StrataEditor)
 		FIXTURES_SETUP StrataEditorQuitScreenshot)
 	add_test(NAME StrataEditor.QuitScreenshotCheck COMMAND StrataTests --strata-test-helper=check-image "${CMAKE_CURRENT_BINARY_DIR}/QuitScreenshot.png")
 	set_tests_properties(StrataEditor.QuitScreenshotCheck PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataEditorQuitScreenshot)
-	# --window-size opens a window of exactly that many pixels: the frame the script ended on has them.
+	# --window-size opens a window of exactly that many pixels: the frame the script ended on has them (an even size, which a
+	# Retina display, 2 pixels to a point, makes too).
 	add_test(NAME StrataEditor.WindowSizeClean COMMAND "${CMAKE_COMMAND}" -E rm -f "${CMAKE_CURRENT_BINARY_DIR}/WindowSize.png")
 	set_tests_properties(StrataEditor.WindowSizeClean PROPERTIES FIXTURES_SETUP StrataEditorWindowSizeClean)
 	add_test(NAME StrataEditor.WindowSize
-		COMMAND StrataEditor --no-automation --quit-after-commands --frames 3600 --window-size 816x459 --screenshot "${CMAKE_CURRENT_BINARY_DIR}/WindowSize.png"
+		COMMAND StrataEditor --no-automation --quit-after-commands --frames 3600 --window-size 816x460 --screenshot "${CMAKE_CURRENT_BINARY_DIR}/WindowSize.png"
 			--commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/WaitCommands.json"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	set_tests_properties(StrataEditor.WindowSize PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataEditorWindowSizeClean FIXTURES_SETUP StrataEditorWindowSize)
-	add_test(NAME StrataEditor.WindowSizeCheck COMMAND StrataTests --strata-test-helper=check-image "${CMAKE_CURRENT_BINARY_DIR}/WindowSize.png" --size 816x459)
+	add_test(NAME StrataEditor.WindowSizeCheck COMMAND StrataTests --strata-test-helper=check-image "${CMAKE_CURRENT_BINARY_DIR}/WindowSize.png" --size 816x460)
 	set_tests_properties(StrataEditor.WindowSizeCheck PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataEditorWindowSize)
 	# Without a project a windowed editor opens into the launcher (and closes cleanly from it).
 	add_test(NAME StrataEditor.LauncherSmoke

@@ -8,6 +8,7 @@
 #include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Core/Timer.h>
 #include <Strata/Core/Version.h>
+#include <Strata/Core/Window.h>
 #include <Strata/Engine/EntryPoint.h>
 #include <Strata/ImGui/ImGuiLayer.h>
 #include <Strata/ImGui/ImGuiModule.h>
@@ -267,8 +268,9 @@ namespace Strata
 		}
 	private:
 		// --window-size promises a window of exactly that many pixels, so that its pictures have that size: a window the system
-		// made another size (Windows shrinks one larger than the display to fit it) ends the start, as a failure, instead of
-		// giving pictures of another size. False then, the application closing with exit code 1.
+		// made another size (Windows shrinks one larger than the display to fit it; a display whose scale is 2, a Retina one,
+		// makes only even sizes) ends the start, as a failure, instead of giving pictures of another size. False then, the
+		// application closing with exit code 1.
 		bool HasRequestedPixels(const ApplicationSpecification& specification)
 		{
 			const Window* window = GetWindow();
@@ -276,11 +278,23 @@ namespace Strata
 				return true;
 			const glm::uvec2 requested(specification.Window.Width, specification.Window.Height);
 			const glm::uvec2 pixels = window->GetFramebufferSize();
-			if (pixels == requested)
+			const glm::uvec2 windowSize(window->GetWidth(), window->GetHeight());
+			const WindowPixelsMatch match = MatchWindowPixels(requested, pixels, windowSize);
+			if (match == WindowPixelsMatch::Exact)
 				return true;
-			ReportFatalError(specification.Name, fmt::format("{} cannot start: the display cannot hold a window of {} x {} pixels (--window-size), "
-				"the system made it {} x {}.", specification.Name, requested.x, requested.y, pixels.x, pixels.y),
-				"Ask for a window that fits on the display, or leave out --window-size.");
+			if (match == WindowPixelsMatch::NearestOfScale)
+			{
+				const double scale = static_cast<double>(pixels.x) / static_cast<double>(windowSize.x);
+				ReportFatalError(specification.Name, fmt::format("{} cannot start: the display's scale ({:.3g} pixels to a point) makes no window of {} x {} "
+					"pixels (--window-size); the nearest it makes is {} x {}.", specification.Name, scale, requested.x, requested.y, pixels.x, pixels.y),
+					fmt::format("Ask for {}x{}, or another size the display's scale makes, or leave out --window-size.", pixels.x, pixels.y));
+			}
+			else
+			{
+				ReportFatalError(specification.Name, fmt::format("{} cannot start: the display cannot hold a window of {} x {} pixels (--window-size), "
+					"the system made it {} x {}.", specification.Name, requested.x, requested.y, pixels.x, pixels.y),
+					"Ask for a window that fits on the display, or leave out --window-size.");
+			}
 			SetExitCode(1);
 			Close();
 			return false;

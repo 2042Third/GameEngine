@@ -3279,9 +3279,11 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (screenshots of a fixed size; it needs a window, so `--headless` and `--no-gpu` refuse it, and `StrataCLI launch
   --window-size` passes it on). It takes no window smaller than 640x360 (`c_MinWindowWidth`, `c_MinWindowHeight`: the
   size the panels are laid out for; Windows widens a window narrower than its title bar anyway), and a window the system
-  made another size (Windows shrinks one larger than the display) ends the start with exit code 1 and both sizes
-  (`HasRequestedPixels`), logged and never in a dialog (a run with `--window-size` is a Console run): `StrataCLI launch`
-  then fails at once, naming the editor's exit code (`LaunchEditor`). `--ui-scale <factor>` draws the
+  made another size ends the start with exit code 1 and both sizes (`HasRequestedPixels`): Windows shrinks one larger
+  than the display, and a display whose screen coordinates are more than a pixel makes only the sizes its scale steps
+  through (a Retina display's 2: even ones; `MatchWindowPixels` tells the two apart, and the message then names the
+  nearest size the scale makes), logged and never in a dialog (a run with `--window-size` is a Console run):
+  `StrataCLI launch` then fails at once, naming the editor's exit code (`LaunchEditor`). `--ui-scale <factor>` draws the
   UI at a fixed scale instead of the display's and the person's preference (e.g. 1 to check it at 100% on a 150%
   display; `StrataCLI launch --ui-scale` passes it on); with `--window-size` it gives pictures of the editor that compare
   across machines. `--layout <file>` keeps

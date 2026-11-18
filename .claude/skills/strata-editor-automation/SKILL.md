@@ -602,8 +602,9 @@ from the second after the command whose windows and tabs lie as in the frame bef
 `{Image, width, height, panel, region, settled, path?}` (`settled` false: the layout still moved after 30 frames). What
 is still loading shows as it is: after a start, `editor.wait` first. It needs a window (not `--headless`); start the
 editor with `StrataCLI launch --window-size 1600x900 --ui-scale 1` (or `StrataEditor --window-size ... --ui-scale 1`;
-at least 640x360, and within the display, else the editor does not start) for pictures that compare across machines, and
-bring a panel to the front with `editor.showPanel` first (a closed panel or one behind another tab fails).
+at least 640x360, within the display and, on a Retina display, even, else the editor does not start) for pictures that
+compare across machines, and bring a panel to the front with `editor.showPanel` first (a closed panel or one behind
+another tab fails).
 
 **Play it (simulated input)**: while the game runs (`play.start`), the `input.*` commands press keys and buttons the way a
 player would; scripts see them through `Input::IsKeyDown/IsKeyPressed/IsKeyReleased` (also while the viewport has no focus).

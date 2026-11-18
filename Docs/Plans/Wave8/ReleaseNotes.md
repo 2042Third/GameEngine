@@ -429,7 +429,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - AI agents: `asset.types` lists the asset types with the extension of the engine's own documents and their importers'
   names, versions and file extensions.
 - Editor: `--window-size <width>x<height>` opens a window of exactly that many pixels instead of a maximized one, at
-  least 640x360; an editor whose window the system makes another size (larger than the display) does not start, so a
+  least 640x360; an editor whose window the system makes another size (larger than the display, or a size the display's
+  scale cannot make: a Retina display makes only even sizes, and the message names the nearest) does not start, so a
   picture never has another size than asked for (exit code 1, the reason in its output and log, never in a dialog:
   `StrataCLI launch` fails at once, naming the exit code). With `--ui-scale 1` (or another fixed scale) beside it,
   screenshots of the editor compare across machines; `StrataCLI launch --window-size` and `--ui-scale` pass them on.
