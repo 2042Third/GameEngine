@@ -300,6 +300,10 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(result["pendingTextGlyphs"] == 0);
 		CHECK_FALSE(result.contains("notice"));
 		CHECK(FileSystem::FromUTF8(result["path"].get<std::string>()) == path);
+		// Nothing was left pending: the picture is complete.
+		CHECK(result["screenSpaceReflectionsPending"] == false);
+		CHECK(result["incomplete"] == nlohmann::json::array());
+		CHECK(result["complete"] == true);
 
 		// The lit cube fills the center; the corners show the dark clear color.
 		const glm::ivec4 center = image.At(32, 24);
@@ -891,6 +895,9 @@ TEST_SUITE("GPU.Editor.Viewport")
 		harness.Capture({ { "width", 32 }, { "height", 32 } }, &result);
 		CHECK(result["camera"] == "editor");
 		CHECK_FALSE(result["notice"].get<std::string>().empty());
+		// Not the view that was asked for: the picture is not complete.
+		CHECK(result["incomplete"] == nlohmann::json { "/notice" });
+		CHECK(result["complete"] == false);
 		harness.Context.Stop();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
@@ -1284,6 +1291,8 @@ TEST_SUITE("GPU.Editor.Viewport")
 		nlohmann::json result;
 		const DecodedImage lit = harness.Capture(size, &result);
 		CHECK(result["previewLighting"] == true);
+		CHECK(result["incomplete"] == nlohmann::json { "/previewLighting" });
+		CHECK(result["complete"] == false);
 		const SceneCamera camera = harness.Context.GetViewport().GetCamera().GetSceneCamera(static_cast<float>(width) / static_cast<float>(height));
 		const double top = MeanLumaAround(lit, camera, glm::vec3(0.0f, 0.5f, 0.0f));
 		const double right = MeanLumaAround(lit, camera, glm::vec3(0.5f, 0.0f, 0.0f));
@@ -1298,6 +1307,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		harness.Run("viewport.setSettings", { { "previewLighting", false } });
 		const DecodedImage plain = harness.Capture(size, &result);
 		CHECK(result["previewLighting"] == false);
+		CHECK(result["complete"] == true);
 		CHECK(harness.CountDifferences(plain, reference) == 0);
 		CHECK(std::abs(MeanLumaAround(plain, camera, glm::vec3(0.0f, 0.5f, 0.0f)) - MeanLumaAround(plain, camera, glm::vec3(0.5f, 0.0f, 0.0f))) < 10.0);
 

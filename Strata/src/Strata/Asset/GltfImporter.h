@@ -30,6 +30,7 @@ namespace Strata
 	{
 	public:
 		AssetType GetType() const override { return AssetType::Model; }
+		std::string GetName() const override { return "glTF"; }
 		std::vector<std::string> GetExtensions() const override { return { ".gltf", ".glb" }; }
 		// 6: skins, animations and skinned meshes; 7: buffer views compressed with EXT_meshopt_compression too.
 		// 8: the import scale is baked into the content instead of the model root's scale.

@@ -862,6 +862,38 @@ namespace Strata
 			return std::nullopt;
 		}
 
+		// What a finished capture's picture may lack, as JSON pointers to the fields of its result that say so: every wait of a
+		// capture is bounded in frames, and the command still succeeds when a bound runs out, so a client that needs a settled
+		// picture checks this list (empty: complete). The temporal history counts only under TAA, the shadows view's counts and
+		// a lighting view's statistics only with those views, and a notice (the view fell back to another camera) always.
+		nlohmann::json ListIncompleteCapture(const nlohmann::json& result, const SceneRendererStats& stats)
+		{
+			nlohmann::json incomplete = nlohmann::json::array();
+			const auto note = [&incomplete](bool pending, const char* pointer)
+			{
+				if (pending)
+					incomplete.push_back(pointer);
+			};
+			note(result["pendingAssets"].get<uint32_t>() > 0, "/pendingAssets");
+			note(result["texturesBelowWanted"].get<uint32_t>() > 0, "/texturesBelowWanted");
+			note(result["stalePoses"].get<uint32_t>() > 0, "/stalePoses");
+			note(result["pendingTextGlyphs"].get<uint32_t>() > 0, "/pendingTextGlyphs");
+			note(result["ui"]["pendingGlyphs"].get<uint32_t>() > 0, "/ui/pendingGlyphs");
+			note(result["localShadowViewsPending"].get<uint32_t>() > 0, "/localShadowViewsPending");
+			note(result["reflectionProbesPending"].get<uint32_t>() > 0, "/reflectionProbesPending");
+			note(result["renderStats"].value("deferredInstanceBytes", uint64_t(0)) > 0, "/renderStats/deferredInstanceBytes");
+			note(!stats.PreExposureSettled, "/preExposureSettled");
+			note(!stats.GlobalIlluminationSettled, "/globalIlluminationSettled");
+			note(result["previewLighting"].get<bool>(), "/previewLighting");
+			note(stats.TemporalAntiAliasing && stats.TemporalFrames < c_TemporalSettleFrames, "/temporalFrames");
+			note(stats.ScreenSpaceReflectionsPending, "/screenSpaceReflectionsPending");
+			const nlohmann::json& debugView = result["debugView"];
+			note(debugView.contains("shadows") && !debugView["shadows"]["complete"].get<bool>(), "/debugView/shadows/complete");
+			note(debugView.value("lightingPending", false), "/debugView/lightingPending");
+			note(result.contains("notice"), "/notice");
+			return incomplete;
+		}
+
 		// Later polls: wait for the GPU copy, encode the image on a worker thread (PNG compression and Base64 of a large
 		// image take long enough to hitch the editor), save it on an I/O thread when asked to, then report.
 		std::optional<EditorCommandResult> ContinueCapture(EditorContext& context, const CaptureRequest& request, CaptureProgress& progress)
@@ -980,12 +1012,15 @@ namespace Strata
 				{ "debugView", DescribeDebugView(progress.DebugView, progress.DebugViewStats, progress.TintedEntities,
 					progress.DebugView == ViewportDebugView::Shadows ? &progress.ShadowView : nullptr, progress.ShadowViewComplete, progress.LightingStats,
 					progress.GlobalIllumination) },
-				{ "renderStats", std::move(progress.RenderStats) }
+				{ "renderStats", std::move(progress.RenderStats) },
+				{ "screenSpaceReflectionsPending", progress.Stats.ScreenSpaceReflectionsPending }
 			};
 			if (!progress.View.Notice.empty())
 				result["notice"] = progress.View.Notice;
 			if (!request.Path.empty())
 				result["path"] = FileSystem::ToUTF8(request.Path);
+			result["incomplete"] = ListIncompleteCapture(result, progress.Stats);
+			result["complete"] = result["incomplete"].empty();
 			return EditorCommandResult::Ok(std::move(result));
 		}
 
@@ -1231,7 +1266,11 @@ namespace Strata
 			"loading when the picture was taken (pendingAssets), the textures drawn coarser than the view wants (texturesBelowWanted), animators "
 			"drawn with an older pose (stalePoses), glyphs that could not be prepared in time (pendingTextGlyphs) and point and spot lights' shadow "
 			"views not drawn (localShadowViewsPending; captures draw them all at once) and reflection probes whose capture was not loaded "
-			"(reflectionProbesPending; waited for as assets are, with waitForAssets; captures convert loaded ones at once). debugView colors "
+			"(reflectionProbesPending; waited for as assets are, with waitForAssets; captures convert loaded ones at once), and whether spatial "
+			"screen-space reflections still lacked a previous frame's color (screenSpaceReflectionsPending). Every wait is bounded and the "
+			"command succeeds when a bound runs out: complete is true when the picture lacks nothing, else incomplete lists the JSON pointers "
+			"of the result's fields that say what it lacks (\"/pendingAssets\", \"/preExposureSettled\", \"/temporalFrames\" under TAA, "
+			"\"/debugView/shadows/complete\", \"/notice\" when the view fell back to another camera, ...). debugView colors "
 			"the picture "
 			"by streaming state, level of detail, mip levels, motion or shadow texels, or shows a lighting view (default: the viewport's, "
 			"viewport.setSettings) and the result's debugView says what it found: {view, tintedEntities, pendingEntities, failedEntities, "

@@ -120,7 +120,7 @@ namespace
 	};
 	constexpr std::string_view c_QueryCommands[] = {
 		"animation.info",
-		"asset.findReferences", "asset.info", "asset.list", "asset.stats",
+		"asset.findReferences", "asset.info", "asset.list", "asset.stats", "asset.types",
 		"audio.state",
 		"camera.get",
 		"component.get", "component.list",

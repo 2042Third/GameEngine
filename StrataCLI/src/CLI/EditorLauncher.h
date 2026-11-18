@@ -23,6 +23,7 @@ namespace Strata::CLI
 		std::filesystem::path ProjectDirectory; // Empty starts the editor without a project (e.g. to create one)
 		bool Headless = false;                  // No window ("--headless")
 		bool NoGpu = false;                     // No graphics device either ("--no-gpu", implies headless)
+		std::string WindowSize;                 // A window of exactly these pixels ("--window-size <width>x<height>"); empty: maximized
 		std::chrono::milliseconds WaitTimeout = std::chrono::milliseconds(60000);
 		// The editor closes itself after this long without a connected client ("--idle-timeout <seconds>"), so an editor
 		// started for a client that went away does not run forever. Unset: it runs until editor.quit.

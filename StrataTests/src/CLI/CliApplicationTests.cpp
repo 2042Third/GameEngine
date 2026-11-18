@@ -103,6 +103,18 @@ TEST_SUITE("CLI.Commands")
 		CHECK(error.find("--idle-timeout") != std::string::npos);
 		CHECK_FALSE(ParseCliArguments({ "launch", "--idle-timeout", "soon" }, error).has_value());
 
+		// launch --window-size passes the editor its window's pixels, checked as the editor checks them.
+		std::optional<CliArguments> sized = ParseCliArguments({ "launch", "--window-size", "1600x900" }, error);
+		REQUIRE_MESSAGE(sized.has_value(), error);
+		CHECK(sized->WindowSize.value() == "1600x900");
+		CHECK_FALSE(ParseCliArguments({ "launch" }, error)->WindowSize.has_value());
+		for (const char* wrong : { "1600", "0x900", "1600x", "x900", "1600x900x2", "70000x900", "-5x9" })
+		{
+			CAPTURE(wrong);
+			CHECK_FALSE(ParseCliArguments({ "launch", "--window-size", wrong }, error).has_value());
+			CHECK(error.find("--window-size expects") != std::string::npos);
+		}
+
 		std::optional<CliArguments> scan = ParseCliArguments({ "launch", "--stall-timeout", "90", "--no-wait-scan" }, error);
 		REQUIRE_MESSAGE(scan.has_value(), error);
 		CHECK(scan->StallTimeoutSeconds.value() == 90);
@@ -452,6 +464,11 @@ TEST_SUITE("CLI.Commands")
 		CHECK(run.ExitCode == ExitCode::ConnectionFailure);
 		CHECK(run.ErrorOutput.find("not found") != std::string::npos);
 		CHECK(run.Output.empty());
+
+		// A window's size without a window is refused before anything starts.
+		const CliRun sized = Run({ "launch", "--headless", "--window-size", "800x450", "--editor", FileSystem::ToUTF8(project / "NoSuchEditor.exe") });
+		CHECK(sized.ExitCode != ExitCode::Success);
+		CHECK(sized.ErrorOutput.find("cannot be combined with --headless or --no-gpu") != std::string::npos);
 	}
 
 	TEST_CASE("launch starts the editor and prints its session without the token")

@@ -47,6 +47,7 @@ namespace Strata::CLI
 			{ "--wait-timeout", true },
 			{ "--save-image", true },
 			{ "--idle-timeout", true },
+			{ "--window-size", true },
 			{ "--stall-timeout", true },
 			{ "--no-wait-scan", false },
 			{ "--toolsets", true },
@@ -295,6 +296,9 @@ namespace Strata::CLI
 				specification.ProjectDirectory = ToAbsolutePath(*arguments.Project);
 			specification.Headless = arguments.Headless;
 			specification.NoGpu = arguments.NoGpu;
+			if (arguments.WindowSize && (arguments.Headless || arguments.NoGpu))
+				return ReportUsageError("--window-size sizes the editor's window: it cannot be combined with --headless or --no-gpu", errorOutput);
+			specification.WindowSize = arguments.WindowSize.value_or(std::string());
 			if (arguments.IdleTimeoutSeconds && *arguments.IdleTimeoutSeconds > 0)
 				specification.IdleTimeout = std::chrono::seconds(*arguments.IdleTimeoutSeconds);
 			if (arguments.WaitTimeoutMilliseconds)
@@ -458,6 +462,19 @@ namespace Strata::CLI
 			}
 			else if (name == "--save-image")
 				result.SaveImage = value;
+			else if (name == "--window-size")
+			{
+				// <width>x<height>, each from 1 to 65535, as the editor takes it (CommandLine::GetSizeOption).
+				const size_t separator = value.find('x');
+				const std::optional<int64_t> width = separator == std::string::npos ? std::nullopt : ParseInteger(std::string_view(value).substr(0, separator));
+				const std::optional<int64_t> height = separator == std::string::npos ? std::nullopt : ParseInteger(std::string_view(value).substr(separator + 1));
+				if (!width || !height || *width < 1 || *height < 1 || *width > UINT16_MAX || *height > UINT16_MAX)
+				{
+					error = fmt::format("--window-size expects the window's pixels as <width>x<height> (e.g. 1600x900), got '{}'", value);
+					return std::nullopt;
+				}
+				result.WindowSize = fmt::format("{}x{}", *width, *height);
+			}
 			else if (name == "--idle-timeout")
 			{
 				const std::optional<int64_t> seconds = ParseInteger(value);
@@ -573,8 +590,8 @@ namespace Strata::CLI
 			"  StrataCLI call <method> [params] [connection options] [--timeout <ms>] [--save-image <file>]\n"
 			"  StrataCLI list [connection options] [--json]\n"
 			"  StrataCLI status [connection options]\n"
-			"  StrataCLI launch [--project <dir>] [--headless | --no-gpu] [--idle-timeout <s>] [--editor <path>]\n"
-			"                   [--wait-timeout <ms>] [--stall-timeout <s>] [--no-wait-scan]\n"
+			"  StrataCLI launch [--project <dir>] [--headless | --no-gpu | --window-size <w>x<h>] [--idle-timeout <s>]\n"
+			"                   [--editor <path>] [--wait-timeout <ms>] [--stall-timeout <s>] [--no-wait-scan]\n"
 			"  StrataCLI mcp [connection options] [--editor <path>] [--timeout <ms>] [--idle-timeout <s>] [--stall-timeout <s>]\n"
 			"                [--toolsets <name,...> | all]\n"
 			"  StrataCLI --help | --version\n"
@@ -592,7 +609,7 @@ namespace Strata::CLI
 			"           nothing progressed for --stall-timeout seconds, default 60). --no-wait-scan returns once it\n"
 			"           accepts connections. It keeps running until 'call editor.quit', or until no client has been\n"
 			"           connected for --idle-timeout seconds. --headless runs without a window, --no-gpu also without\n"
-			"           a graphics device\n"
+			"           a graphics device; --window-size opens a window of exactly that many pixels (for screenshots)\n"
 			"  mcp      Serve the Model Context Protocol on stdin/stdout (for AI agents). Editors it starts close\n"
 			"           themselves after --idle-timeout seconds without a client (default 600, 0: never). Only the\n"
 			"           commands of --toolsets are tools (default core: about 30; all: every command); the tools\n"

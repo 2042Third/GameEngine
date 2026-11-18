@@ -110,7 +110,8 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Did something fail that I have not seen? | `editor.status` `errors`: `unread` (errors logged since your last `log.read`), `scriptBuild {failed, errors}`, `scriptFault`, `importFailures`; then `log.read`, `script.status` or `asset.info` |
 | Does the person at the editor see the launcher or the editor? | `editor.status` (`editor.launcher`; `{"sections": ["editor"]}` adds `gpu` and `startupSeconds`) |
 | Did the game ask for fullscreen or a resolution, lock the cursor, where do its saves go? | `editor.status {"sections": ["game"]}` (`windowRequests`, recorded but not applied in play mode; `cursor`; `saveDirectory`, the project's `.strata/Saves`) |
-| Which commands and parameters exist? | `editor.commands` (or `list --json`) |
+| Which commands and parameters exist? | `editor.commands` (or `list --json`): each with `kind`, `mayDefer` (answers frames later; `editor.batch` refuses it), `waitsForAssets` (waits for the asset scan) and `results` (`"content"` or `"session"`) |
+| Which files can be imported, by which importer? | `asset.types`: each asset type with `nativeExtension` (the engine's own documents) and `importers: [{name, version, extensions}]` |
 | Which components and properties (types, ranges, enum values)? | `component.list` |
 | Which assets exist? | `asset.list` (`type`, `path` filters), `asset.info` (meshes, models, prefabs: `bounds`, their size as placed) |
 | What uses an asset (before deleting it)? | `asset.findReferences` (`asset.delete` refuses while anything does) |
@@ -141,7 +142,11 @@ editor started with `--no-gpu` (use `--headless`):
 - `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?, fov?, overlays?, debugView?,
   quality?, waitForAssets?, path?}` returns `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, view, waitedFrames,
   temporalFrames, overlays, pendingAssets, texturesBelowWanted, stalePoses, pendingTextGlyphs, previewLighting, screenSpaceTexts,
-  hiddenScreenSpaceTexts, ui: {canvases, hiddenCanvases, elements, drawCalls, pendingGlyphs}, debugView, notice?, path?}`. Text is complete in the picture, and so are the view's meshes,
+  hiddenScreenSpaceTexts, ui: {canvases, hiddenCanvases, elements, drawCalls, pendingGlyphs}, debugView, renderStats,
+  screenSpaceReflectionsPending, notice?, path?, incomplete, complete}`. Every wait below is bounded and the capture still
+  succeeds when one runs out: check `complete` (true when the picture lacks nothing), else `incomplete` lists the JSON
+  pointers of the fields that say what it lacks (`"/pendingAssets"`, `"/preExposureSettled"`, `"/temporalFrames"`,
+  `"/previewLighting"`, `"/notice"`, ...). Text is complete in the picture, and so are the view's meshes,
   materials and textures: the capture renders again for up to about five seconds of frames while they load, up to about
   two more while textures still lack the finer mip levels the view wants, and a few while animated characters that
   animate only while seen (`CullingMode: WhenVisible`) still show an older pose, also while paused, and while mesh renderers

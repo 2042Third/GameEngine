@@ -93,6 +93,11 @@ namespace Strata::CLI
 			processSpecification.Arguments.push_back("--headless");
 		if (specification.NoGpu)
 			processSpecification.Arguments.push_back("--no-gpu");
+		if (!specification.WindowSize.empty())
+		{
+			processSpecification.Arguments.push_back("--window-size");
+			processSpecification.Arguments.push_back(specification.WindowSize);
+		}
 		if (specification.IdleTimeout)
 		{
 			processSpecification.Arguments.push_back("--idle-timeout");

@@ -3239,7 +3239,10 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   anything starts (no log file, window or session); an argument the editor does not know, or an option without its value,
   exits 3 with the usage, and so does a value an option does not take (`--frames abc`, `--frames 0`: `CheckValues`; the
   table of arguments is `c_Arguments` in `EditorApplication.cpp`: add new ones there; the runtime's is in
-  `RuntimeApplication.cpp`, and both check and print theirs through `Core/CommandLineOptions`). `--ui-scale <factor>` draws the
+  `RuntimeApplication.cpp`, and both check and print theirs through `Core/CommandLineOptions`). `--window-size
+  <width>x<height>` opens a window of exactly that many pixels, whatever the display's scale, instead of a maximized one
+  (screenshots that compare across machines; it needs a window, so `--headless` and `--no-gpu` refuse it, and
+  `StrataCLI launch --window-size` passes it on). `--ui-scale <factor>` draws the
   UI at a fixed scale instead of the display's and the person's preference (e.g. 1 to check it at 100% on a 150%
   display), `--layout <file>` keeps
   the panel layout in that file instead of the user's (`<user data>/Strata/EditorLayout.ini`), and `--imgui-demo` offers
@@ -3659,7 +3662,15 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   "screenSpaceTexts", "hiddenScreenSpaceTexts", "ui": {"canvases",
   "hiddenCanvases", "elements", "drawCalls", "pendingGlyphs"}, "debugView":
   {"view", "tintedEntities", "pendingEntities", "failedEntities", "placeholderBoxes", "entitiesPerLOD",
-  "entitiesPerMipShortfall", "shadows"?, "lighting"?, "lightingPending"?}, "notice"?, "path"?}` (the mip view counts entities
+  "entitiesPerMipShortfall", "shadows"?, "lighting"?, "lightingPending"?}, "renderStats", "screenSpaceReflectionsPending",
+  "notice"?, "path"?, "incomplete", "complete"}` (every wait is bounded in frames and the command succeeds when a bound runs
+  out, so `incomplete` lists, as JSON pointers into the result, the fields that say what the picture lacks:
+  `ListIncompleteCapture`'s `/pendingAssets`, `/texturesBelowWanted`, `/stalePoses`, `/pendingTextGlyphs`,
+  `/ui/pendingGlyphs`, `/localShadowViewsPending`, `/reflectionProbesPending`, `/renderStats/deferredInstanceBytes`,
+  `/preExposureSettled`, `/globalIlluminationSettled`, `/previewLighting` (lit by the editor's preview, not the scene),
+  `/temporalFrames` (under TAA, fewer than 8), `/screenSpaceReflectionsPending`, `/debugView/shadows/complete`,
+  `/debugView/lightingPending` and `/notice` (another camera than the one asked for), and `complete` is true when it is
+  empty; the mip view counts entities
   with textures by the mip levels their worst texture lacks: none, 1, 2, 3 or more or still loading; the motion view colors
   pixels by their motion since the capture renderer's previous frame, so it renders a second frame, and a still scene shows
   none; the shadows view colors every receiver by screen pixels per shadow texel and adds `shadows: {complete, shadowMapSize,
@@ -6620,7 +6631,7 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   ranges and `required` stay (`McpToolsets::MakeCompactToolDefinition`). So the first sentence of a command's
   description says what it does, and a property's first sentence what it is. The default list stays at most 32 tools
   and 30 KiB of `tools/list` JSON (`CLI.McpToolsets`). It is at the tool limit: 27 core commands and 5 generic tools, about 18.6 KB; every command
-  is about 99 KB of definitions (151 commands; `CLI.McpToolsets` prints the figure). A command added to `core` takes the place
+  is about 99 KB of definitions (152 commands; `CLI.McpToolsets` prints the figure). A command added to `core` takes the place
   of another.
 
 ### Other methods and tests

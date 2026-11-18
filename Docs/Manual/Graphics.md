@@ -89,7 +89,8 @@ what each one costs:
   game will, and so does the Scene view while it looks through the scene's camera (**Game camera**): its chip then names
   the game's preset, a player's choice while you play.
 - **Pictures** (`viewport.capture`) draw at the quality of the view they show unless they ask for one
-  (`{"quality": "ultra"}`).
+  (`{"quality": "ultra"}`). A picture waits a bounded number of frames for what it shows to load and settle; its result's
+  `complete` says whether it got there, and `incomplete` names what it still lacked.
 - **One run of a game**: `<Game> --quality low` (or `medium`, `high`, `ultra`) plays at that preset without saving
   anything.
 

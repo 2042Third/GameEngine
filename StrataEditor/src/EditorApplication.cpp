@@ -70,6 +70,7 @@ namespace Strata
 			{ "--headless", nullptr, "Run without a window (rendering stays available for captures)" },
 			{ "--no-gpu", nullptr, "Run without a graphics device (implies --headless)" },
 			{ "--windowed", nullptr, "Open a 1600x900 window instead of a maximized one" },
+			{ "--window-size", "<width>x<height>", "Open a window of exactly this many pixels instead of a maximized one" },
 			{ "--ui-scale", "<factor>", "Draw the UI at this scale instead of the display's (1 is 100%)" },
 			{ "--layout", "<file.ini>", "Keep the panel layout in this file" },
 			{ "--no-automation", nullptr, "Do not serve automation (StrataCLI, MCP)" },
@@ -118,6 +119,13 @@ namespace Strata
 			}
 			if (commandLine.HasFlag("--ui-scale") && !ParseUIScale(commandLine.GetOption("--ui-scale").value_or(std::string())))
 				return fmt::format("--ui-scale expects a factor from {} to {} (1 is 100%)", ImGuiLayer::c_MinScale, ImGuiLayer::c_MaxScale);
+			if (commandLine.HasFlag("--window-size"))
+			{
+				if (!commandLine.GetSizeOption("--window-size"))
+					return fmt::format("--window-size expects the window's pixels as <width>x<height> (e.g. 1600x900), each from 1 to {}", CommandLine::c_MaxSizeOption);
+				if (commandLine.HasFlag("--headless") || commandLine.HasFlag("--no-gpu"))
+					return std::string("--window-size sizes the editor's window: it cannot be combined with --headless or --no-gpu, which open none");
+			}
 			return std::nullopt;
 		}
 
@@ -347,6 +355,15 @@ namespace Strata
 		specification.Window.Width = 1600;
 		specification.Window.Height = 900;
 		specification.Window.Maximized = !commandLine.HasFlag("--windowed");
+		// A window of exactly that many pixels, whatever the display's scale: screenshots of the editor that compare across
+		// machines and displays (editor.screenshot).
+		if (const std::optional<std::pair<uint32_t, uint32_t>> size = commandLine.GetSizeOption("--window-size"))
+		{
+			specification.Window.Width = size->first;
+			specification.Window.Height = size->second;
+			specification.Window.SizeInPixels = true;
+			specification.Window.Maximized = false;
+		}
 		if (const std::optional<int64_t> frames = commandLine.GetIntOption("--frames"))
 			specification.MaxFrames = static_cast<uint64_t>(*frames);
 		options.MaxFrames = specification.MaxFrames;

@@ -417,6 +417,20 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   (`localShadowRequested`), got one (`localShadowLights`), are fading theirs out (`localShadowFading`) and how many tiles
   of each size they have (`localShadowTileSizeCounts`).
 
+**docs-captures: pictures by command**
+
+- AI agents: `viewport.capture` says whether its picture is settled: `complete`, and `incomplete`, the JSON pointers of
+  the result's fields that say what it lacks (assets still loading, textures below the wanted level, an unsettled
+  pre-exposure, fewer than 8 TAA frames, preview lighting, a camera fallback's `notice`...); it also reports
+  `screenSpaceReflectionsPending`. Every wait of a capture is bounded, and the capture succeeds when one runs out: a
+  script that needs a settled picture expects `/complete`.
+- AI agents: `editor.commands` reports each command's `mayDefer` (it may answer frames later; `editor.batch` refuses it),
+  `waitsForAssets` (it waits for the asset scan) and `results` (`content` or `session`).
+- AI agents: `asset.types` lists the asset types with the extension of the engine's own documents and their importers'
+  names, versions and file extensions.
+- Editor: `--window-size <width>x<height>` opens a window of exactly that many pixels instead of a maximized one, for
+  screenshots that compare across machines; `StrataCLI launch --window-size` passes it on.
+
 ## Defaults that change
 
 Stored values never change: a scene or project that saved a value keeps it. These change what new components and

@@ -65,7 +65,10 @@ namespace Strata
 
 		Register({ "editor.commands",
 			"Every editor command with its description, the JSON Schema of its parameters and its kind: \"Edit\" (changes the scene, its assets or "
-			"the project), \"Query\" (changes nothing) or \"Session\" (changes the editor's session: open project, play mode, view, selection).",
+			"the project), \"Query\" (changes nothing) or \"Session\" (changes the editor's session: open project, play mode, view, selection); "
+			"mayDefer: it may answer frames later (loads, builds, captures, waits; editor.batch refuses it); waitsForAssets: it waits while the "
+			"project's assets are scanned (every Edit command does too); results: \"content\" (what it returns comes from the project's content) "
+			"or \"session\" (from the editor's session: the selection, the journal, what is loaded or running).",
 			CommandUtils::ObjectSchema({}),
 			[this](EditorContext&, const nlohmann::json&)
 			{
@@ -73,7 +76,9 @@ namespace Strata
 				for (const EditorCommand* command : GetAll())
 				{
 					commands.push_back({ { "name", command->Name }, { "description", command->Description }, { "parameters", command->Parameters },
-						{ "kind", EditorCommandKindToString(command->Kind) } });
+						{ "kind", EditorCommandKindToString(command->Kind) }, { "mayDefer", command->MayDefer },
+						{ "waitsForAssets", WaitsForAssetScan(*command) },
+						{ "results", command->Results == EditorCommandResults::Session ? "session" : "content" } });
 				}
 				return EditorCommandResult::Ok({ { "commands", std::move(commands) } });
 			}, EditorCommandKind::Query });
