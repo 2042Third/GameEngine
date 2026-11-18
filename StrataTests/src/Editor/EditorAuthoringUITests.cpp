@@ -1764,6 +1764,118 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.ExtractSun").has_value());
 	}
 
+	TEST_CASE("Make Area Light in a row's menu and in the Mesh Renderer's runs lighting.makeAreaLight as the person's, never while playing")
+	{
+		// The feature scene's light panel: an emissive mesh tagged Light Surface, without a light of its own yet.
+		AuthoringEditor editor({}, WithFeatureProject("EditorAuthoringMakeAreaLight"));
+		const UUID panelId = *UUIDFromJson("F7E0000000000092");
+		REQUIRE(editor.Get(panelId));
+		const auto lightUnder = [&]() -> Entity
+		{
+			for (const Entity child : editor.Get(panelId).GetChildren())
+			{
+				if (child.HasComponent<RectLightComponent>())
+					return child;
+			}
+			return {};
+		};
+		REQUIRE_FALSE(lightUnder());
+		const auto lastCommand = [&]() -> const CommandJournalEntry*
+		{
+			const auto& entries = editor.Context().GetJournal().GetEntries();
+			for (auto entry = entries.rbegin(); entry != entries.rend(); ++entry)
+			{
+				if (!entry->Event)
+					return &*entry;
+			}
+			return nullptr;
+		};
+		// The command waits for the panel's material; then one undo step, the light under the panel, the panel still tagged.
+		const auto made = [&](size_t position)
+		{
+			REQUIRE(editor.FramesUntil([&]()
+			{
+				return lastCommand() && lastCommand()->Command == "lighting.makeAreaLight" && lastCommand()->Status != CommandStatus::Pending;
+			}, std::chrono::seconds(30)));
+			CHECK(lastCommand()->Status == CommandStatus::Succeeded);
+			CHECK(lastCommand()->Source == CommandSource::UI);
+			CHECK(lastCommand()->Parameters == nlohmann::json { { "entity", UUIDToJson(panelId) } });
+			CHECK(lightUnder());
+			CHECK(editor.Get(panelId).HasComponent<LightSurfaceComponent>());
+			CHECK(editor.UndoPosition() == position + 1);
+		};
+		// Selected first, so the hierarchy reveals the row (the feature scene's list is longer than the panel).
+		const auto openRowMenu = [&](UUID id)
+		{
+			editor.Context().Select(id);
+			editor.Frames(3);
+			editor.Pause();
+			editor.Harness.MoveMouse(AuthoringEditor::Center(editor.Row(id)));
+			editor.Frames(1);
+			editor.Harness.SetMouseButton(ImGuiMouseButton_Right, true);
+			editor.Frames(1);
+			editor.Harness.SetMouseButton(ImGuiMouseButton_Right, false);
+			editor.Frames(2);
+			REQUIRE(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId));
+		};
+		editor.Frames(2);
+
+		// The row's menu.
+		openRowMenu(panelId);
+		std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find("Hierarchy.MakeAreaLight");
+		REQUIRE(item);
+		CHECK(item->Enabled);
+		size_t position = editor.UndoPosition();
+		REQUIRE(editor.Click("Hierarchy.MakeAreaLight"));
+		made(position);
+		editor.Run("edit.undo");
+		editor.Frames(2);
+		REQUIRE_FALSE(lightUnder());
+
+		// The Mesh Renderer's menu in the Inspector.
+		editor.Context().Select(panelId);
+		editor.Frames(2);
+		REQUIRE(editor.Click("Inspector.MeshRenderer.Menu"));
+		item = UI::ItemProbe::Find("Inspector.MeshRenderer.Menu.MakeAreaLight");
+		REQUIRE(item);
+		CHECK(item->Enabled);
+		position = editor.UndoPosition();
+		REQUIRE(editor.Click("Inspector.MeshRenderer.Menu.MakeAreaLight"));
+		made(position);
+		editor.Run("edit.undo");
+		editor.Frames(2);
+
+		// Without a Mesh Renderer the row offers it disabled, and while playing neither menu offers it.
+		const UUID plain = *UUIDFromJson(editor.Run("entity.create", { { "name", "Plain" } })["id"]);
+		editor.Frames(2);
+		openRowMenu(plain);
+		item = UI::ItemProbe::Find("Hierarchy.MakeAreaLight");
+		REQUIRE(item);
+		CHECK_FALSE(item->Enabled);
+		editor.Harness.SetKey(ImGuiKey_Escape, true);
+		editor.Frames(1);
+		editor.Harness.SetKey(ImGuiKey_Escape, false);
+		editor.Frames(2);
+		editor.Run("play.start");
+		editor.Frames(2);
+		openRowMenu(panelId);
+		item = UI::ItemProbe::Find("Hierarchy.MakeAreaLight");
+		REQUIRE(item);
+		CHECK_FALSE(item->Enabled);
+		editor.Harness.SetKey(ImGuiKey_Escape, true);
+		editor.Frames(1);
+		editor.Harness.SetKey(ImGuiKey_Escape, false);
+		editor.Frames(2);
+		editor.Context().Select(panelId);
+		editor.Frames(2);
+		REQUIRE(editor.Click("Inspector.MeshRenderer.Menu"));
+		item = UI::ItemProbe::Find("Inspector.MeshRenderer.Menu.MakeAreaLight");
+		REQUIRE(item);
+		CHECK_FALSE(item->Enabled);
+		editor.Run("play.stop");
+		editor.Frames(2);
+	}
+
 	TEST_CASE("The scene's settings set the physics world's capacities, one undo step each, within their limits")
 	{
 		AuthoringEditor editor;
