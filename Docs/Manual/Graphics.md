@@ -44,7 +44,7 @@ what each one costs:
 - **Level of detail error** and **Smallest drawn size** decide how much geometry a frame draws. Two debug views of the
   Scene view's debug view chip show it: **Wireframe** draws the edges of every triangle drawn over the image, so you see
   which level of detail each mesh is drawn at; **Culled** draws a box over everything around each mesh in view the frame
-  left out, yellow where it is smaller on screen than the smallest drawn size (each box grown to about 6 pixels across so
+  left out, yellow where it is smaller on screen than the smallest drawn size (each box's diagonal grown to 6 pixels so
   it shows), red where it is hidden behind what is drawn (occlusion culling, on GPUs that cull on the GPU), with the counts
   in its legend. While the camera moves, the Occluded count may be a little ahead of the red boxes: it counts what the
   frame found hidden, and what was in view a frame before is drawn once more and gets its box in the next frame.

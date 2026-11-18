@@ -4834,7 +4834,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   texture. The replay leaves `DrawCommands` as the frame counted them. It needs the device's non-solid fill mode
   (`GraphicsDeviceInfo::SupportsWireframe`): without it the frame reports why and draws no lines. The culled view boxes the
   mesh renderers in the frustum that culling left out, over everything (no depth test): by their size (`CulledColors[0]`,
-  boxes grown to `RenderData::c_CulledViewMinPixels` across their diagonal, about 5 pixels on a cube's face) and, on the
+  boxes grown to `RenderData::c_CulledViewMinPixels` across their diagonal, a cube's edges about 3.5 pixels) and, on the
   GPU-driven path, by occlusion (`[1]`: hidden now and not drawn by the first phase; `renderStats.occludedProxies` counts
   every proxy the second phase found hidden, so while the camera moves it includes the ones the first phase drew once
   more because the previous frame saw them, boxed from the next frame). Each path records them where it decides, so the

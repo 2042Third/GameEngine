@@ -452,7 +452,7 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   without them are drawn as before, to the bit.
 - Editor: two more debug views: **Wireframe** draws the edges of every triangle drawn (each level of detail as chosen,
   skins as posed) over the image, **Culled** boxes the meshes in view that culling left out, over everything: too small
-  on screen (yellow, each box grown to about 6 pixels across) or hidden behind what is drawn (red, the GPU-driven path's
+  on screen (yellow, each box's diagonal grown to 6 pixels) or hidden behind what is drawn (red, the GPU-driven path's
   occlusion culling), counted in its legend (while the camera moves, the occluded count includes what the frame drew once
   more, boxed from the next frame). Both paths draw them from their own decisions; frames without them record nothing of
   them.

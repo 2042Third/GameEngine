@@ -196,7 +196,7 @@ editor started with `--no-gpu` (use `--headless`):
   (shares of the image; pixels per texel over covered receivers: about 1 or less means shadows as fine as the screen; the
   cascades are stable, the view's alone, so the first frame is final);
   `"culled"` draws over everything a box around each mesh renderer in view that culling left out: yellow (Sulfur) those
-  too small on screen (`RendererQualitySettings::MinProjectedPixels`; each box grown to about 6 pixels across so it
+  too small on screen (`RendererQualitySettings::MinProjectedPixels`; each box's diagonal grown to 6 pixels so it
   shows), red (Cinnabar) those hidden behind what is drawn (occlusion culling, which only the GPU-driven path does: pass
   `renderer: {"OcclusionCulling": false}` to see the CPU path's boxes), counted by `renderStats.sizeCulledProxies` and
   `occludedProxies` (every proxy found hidden: while the camera moves also those drawn once more because the frame before

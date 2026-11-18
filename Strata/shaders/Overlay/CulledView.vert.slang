@@ -6,9 +6,10 @@
 // the proxy its entry of the frame's culled list names (the index below ST_CULLED_REASON_SHIFT, why the frame left it out
 // above: RenderData::c_CulledReasonShift; Scene/Cull.comp or the CPU's extraction wrote it). A draw shows the entries of the push
 // constant's reason only, so crossing lines of two colors do not depend on the order the GPU recorded them in; the others'
-// lines lie outside the clip volume. A box smaller on screen than MinPixels is drawn that wide about its center, so that the
-// proxies culled by their size show. Positions are the bounds minus the camera's position, as Scene/Cull.comp tests them,
-// drawn with the overlays' camera-relative matrices; Overlay/DebugLine.frag writes the color.
+// lines lie outside the clip volume. A box whose diagonal is shorter on screen than MinPixels is grown about its center until
+// its diagonal is that long, so that the proxies culled by their size show. Positions are the bounds minus the camera's
+// position, as Scene/Cull.comp tests them, drawn with the overlays' camera-relative matrices; Overlay/DebugLine.frag writes
+// the color.
 
 struct CulledViewProxy
 {
