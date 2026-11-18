@@ -768,7 +768,8 @@ namespace Strata
 			section.Fields.push_back(NumberField("MinProjectedPixels", "Smallest drawn size (pixels)", "Meshes smaller on screen than this many "
 				"pixels are not drawn: higher draws fewer (0: all).", SettingsFieldType::Float, 0.0, c_MaxPixels, high.MinProjectedPixels));
 			section.Fields.push_back(EnumField("ShadowFilterQuality", "Shadow filter quality", "Taps of the sun's shadow edges where they are wider "
-				"than a shadow texel: more taps leave less grain in soft shadows for more GPU time (8, 16, 24 or 32).",
+				"than a shadow texel, and half the taps of rect lights' soft shadows: more taps leave less grain in soft shadows for more GPU time "
+				"(8, 16, 24 or 32).",
 				SizeOptions(c_ShadowFilterTapOptions), std::to_string(high.ShadowFilterQuality)));
 			section.Fields.push_back(NumberField("ContactShadows", "Contact shadows", "Steps of the sun's contact shadows, which ground small objects "
 				"below the shadow map's detail: more steps find thinner contacts for more GPU time, but they can shimmer in motion, so no "

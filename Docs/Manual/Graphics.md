@@ -21,7 +21,7 @@ what each one costs:
 | Point and spot shadow updates per frame (views) | 12 | 12 | 24 | 48 |
 | Level of detail error (pixels) | 2 | 1 | 1 | 0.5 |
 | Smallest drawn size (pixels) | 1 | 0.5 | 0.5 | 0.25 |
-| Sun shadow filter taps (wide soft edges) | 8 | 16 | 24 | 32 |
+| Shadow filter taps (the sun's wide soft edges; rect lights take twice as many) | 8 | 16 | 24 | 32 |
 | Contact shadow steps | Off | Off | Off | Off |
 | Ambient occlusion samples (slices x steps each side) | 1 x 4 | 2 x 6 | 3 x 8 | 4 x 12 |
 | Sky reflection resolution (per face) | 256 | 256 | 512 | 512 |
@@ -36,7 +36,8 @@ what each one costs:
   penumbrae at every size, and sharper sun shadows at every size: twice Medium's shadow map size each way below 1440
   rows and four times from 1440 rows on, with a fifth cascade for what lies within about 1.5 m of the camera.
   **Ultra** is for large GPUs; **Low** for older and integrated ones.
-- **Sun shadow filter taps** smooth the sun's soft shadow edges where they are wider than a shadow texel, and
+- **Shadow filter taps** smooth the sun's soft shadow edges where they are wider than a shadow texel (rect lights' soft
+  shadows take twice as many), and
   **contact shadows** ground small objects the shadow maps are too coarse for (Custom only: no preset turns them on,
   because they can shimmer in motion; each sun's Contact Shadow Length sets how far they reach:
   [Lighting.md](Lighting.md#shadows)). Neither takes memory of its own; both cost GPU time in the
