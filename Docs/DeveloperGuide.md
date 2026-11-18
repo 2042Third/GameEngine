@@ -5574,7 +5574,11 @@ probe-field levels and local lights follow.
   moving objects are in them as their submeshes' bounds (oriented boxes with soft edges: a ball or a hollow shape shades
   and bounces as its bounds do while it moves. A quarter of a second after a mover stops, its triangles' voxels take
   the box's place, and the light beside it changes by what the two forms differ by: up to 26% of a point's light 0.3 m
-  from the test's box, whose static voxels are whole ones, and more for a mesh that is no box. The fade spreads that over
+  from the test's box, whose static voxels are whole ones, and more for a mesh that is no box; with every bounce in a
+  closed room more still: the look-dev's Cornell box (a blue 0.7 m box that slid and stopped, 2026-11-18) shows in the
+  frame it stops 59% of the resting box's shade and tint on the tall box behind it, 72% on the sphere and 25% on the
+  floor to its left, by the regions' mean color; why the moving form gives less there is not known. The fade spreads
+  that over
   another quarter of a second, but not evenly: the test's frames step by up to 4.3% then, and by up to 10.1% in one frame
   of the fade after a start (the others 4.5%), with second differences of 3.1%, above the 2% of the flicker measure.
   What is left are single events a blend of voxels cannot divide: a probe the object covers changes its way out (the

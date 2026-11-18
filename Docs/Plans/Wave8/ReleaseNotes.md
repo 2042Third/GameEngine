@@ -651,7 +651,11 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   edges. A ball, a barrel or a hollow object therefore shades and bounces light as its bounds would until it rests. A
   quarter of a second after it stops, its exact shape takes the box's place, and the light beside it changes by what
   the two differ by: up to 26% at 0.3 m from a 0.5 m box that stops off the voxel grid (its exact voxels are whole ones,
-  larger than the box), and more for an object that is no box. The change is spread over another quarter of a second,
+  larger than the box), and more for an object that is no box. In a closed room lit by its bounces the two differ more:
+  in the look-dev's Cornell box a blue 0.7 m box that stops shows, in that frame, 59% of the shade and tint it gives the
+  tall box behind it at rest, 72% of those on the sphere beside it and 25% of its shade on the floor to its left (by
+  the regions' mean color; none of it before), and the rest arrives once its exact shape is back. The change is
+  spread over another quarter of a second,
   but not evenly: in the test single frames still step a point's light by up to 4.3% then, and by up to 10.1% once (4.5%
   otherwise) in the quarter second after the box starts, when its exact voxels give way to the box. An object that moves
   away fast leaves its old place's shade fading for that quarter second.
