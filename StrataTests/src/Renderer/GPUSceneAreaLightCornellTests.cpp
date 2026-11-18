@@ -358,13 +358,12 @@ TEST_SUITE("GPU.SceneRenderer.AreaLightCornell")
 			worstInside, inside));
 		CHECK(outside >= 9);
 		CHECK(inside >= 3);
-		// The spec asks 0.03 outside the penumbrae and 0.1 inside. Measured: 0.110, at one point under the sphere's foot that the
-		// light's center sees (the filter, which looks from the center, misses some of the sphere just above the receiver
-		// there), and 0.129 in the penumbrae (Known issue); the bounds are 1.5 times that. Stage 3's filter read 0.124 and 0.199;
-		// the receiver's plane as the taps' only reference (stage 2's) 0.40 outside: a band along every wall and the back wall's
-		// foot.
-		CHECK(worstOutside <= 0.165);
-		CHECK(worstInside <= 0.195);
+		// The spec asks 0.03 outside the penumbrae and 0.1 inside. Measured: 0.0725 outside and 0.129 in the penumbrae (Known
+		// issue); the bounds are 1.5 times that. Without the looks inside solids (the views' back faces) a point under the
+		// sphere's foot read 0.110; stage 3's filter read 0.124 and 0.199; the receiver's plane as the taps' only reference
+		// (stage 2's) 0.40 outside: a band along every wall and the back wall's foot.
+		CHECK(worstOutside <= 0.108);
+		CHECK(worstInside <= 0.193);
 
 		uint32_t pairs = 0;
 		double floorStep = 0.0;
@@ -421,10 +420,10 @@ TEST_SUITE("GPU.SceneRenderer.AreaLightCornell")
 
 		// The whole floor the camera sees, every other pixel each way, away from the blockers' outlines (pixels whose 7 x 7
 		// neighbours all show the floor), where the 0.5 m grid above samples too little: the shares of pixels more than 0.1 and
-		// 0.3 off the reference. Known issue: the views hold one depth per texel, so the filter cannot see a blocker's lower part
-		// that its upper part hides from the light. The floor beside the tall box's foot on its side away from the light, and
-		// under the sphere's overhang, gets light the reference does not (the worst, 0.64, beside the box), and the outer edge
-		// of the sphere's penumbra reads darker. The bounds are 1.5 times the measured shares (1.77% and 0.23%).
+		// 0.3 off the reference. Measured 1.33% and 0.03% (0.45 at worst), the first bound 1.5 times its share. Without the looks
+		// inside solids the floor beside the tall box's foot on its side away from the light, where only the box's lower part
+		// blocks the paths, got up to 0.64 of the light the reference does not: 1.77% and 0.23%. Known issue: the outer edge of
+		// the sphere's penumbra reads darker, and a little light still passes the box's corner at its foot.
 		std::vector<uint8_t> showsFloor(static_cast<size_t>(c_Size) * c_Size, 0);
 		for (uint32_t y = 0; y < c_Size; y++)
 		{
@@ -464,8 +463,8 @@ TEST_SUITE("GPU.SceneRenderer.AreaLightCornell")
 		MESSAGE(fmt::format("L4: the floor's map, {} pixels: {:.2f}% more than 0.1 off the reference, {:.2f}% more than 0.3, {:.4f} at worst", mapPixels,
 			100.0 * shareTenth, 100.0 * shareThreeTenths, mapWorst));
 		CHECK(mapPixels > 20000);
-		CHECK(shareTenth <= 0.0266);
-		CHECK(shareThreeTenths <= 0.0035);
+		CHECK(shareTenth <= 0.0199);
+		CHECK(shareThreeTenths <= 0.001);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

@@ -29,8 +29,8 @@ what each one costs:
 | Motion blur samples (scenes with motion blur) | Off | 8 | 12 | 16 |
 | Reflection probe resolution (per face) | 128 | 128 | 256 | 256 |
 | Global illumination (experimental; scenes that use it) | Off | Off | High | High |
-| Memory of one view, 1920 x 1080 (see below) | 50 MiB | 198 MiB | 701 MiB | 1.83 GiB |
-| Memory of one view, 3840 x 2160 | 50 MiB | 330 MiB | 1.86 GiB | 2.07 GiB |
+| Memory of one view, 1920 x 1080 (see below) | 66 MiB | 262 MiB | 765 MiB | 2.08 GiB |
+| Memory of one view, 3840 x 2160 | 66 MiB | 394 MiB | 1.93 GiB | 2.32 GiB |
 
 - **Medium** keeps Strata 0.6.0's shadow map sizes and sample counts. **High**, the default, adds smoother wide sun
   penumbrae at every size, and sharper sun shadows at every size: twice Medium's shadow map size each way below 1440
@@ -74,7 +74,7 @@ what each one costs:
 - **Custom** sets each value yourself: the table's Custom column is editable. Choosing a preset keeps your Custom values
   for later, and the column keeps showing them. Editing it while a preset is chosen switches to Custom, starting from
   the values the column shows: your earlier Custom values, or that preset's when you have none (its tooltip says which).
-- The memory is that of one view, the shadow maps and atlas (with the rect lights' depth ranges over it), the sky's reflection map, the screen-space reflections'
+- The memory is that of one view, the shadow maps and atlas (with the rect lights' depth ranges over it and their back faces, a second atlas of its size, both made with the first rect light that casts a shadow), the sky's reflection map, the screen-space reflections'
   and motion blur's targets and global illumination's field: each renderer holds its own (the editor's Scene and Game views and its captures, the
   exported game one); shadow maps exist only while a light casts shadows, the sky's map only with a sky, the reflections'
   and motion blur's targets and global illumination only while a scene uses them.

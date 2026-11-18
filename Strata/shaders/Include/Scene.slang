@@ -13,9 +13,9 @@
 // below its cut), 34 volumetric fog (volumetric), 35 the GI field (global illumination's irradiance per probe), 36 fog
 // volumes (volumetric, below its cut), 37 the GI probes' validity, 38-40 its voxel levels 0-2, 54 its probes' depth
 // moments (Include/GIField.slang; 41-53 are the GI's light passes' own, which read the field too); 55 the area lights' LTC table
-// and 56 the lights' shapes (Include/AreaLights.slang), 57 the local shadow atlas's depth ranges and 58 the rect lights' shadow
-// masks (Include/AreaShadows.slang, Scene/Forward.frag). A new scene resource takes the next free slot (59), and a pass that does
-// not run binds a dummy.
+// and 56 the lights' shapes (Include/AreaLights.slang), 57 the local shadow atlas's depth ranges, 58 the rect lights' shadow
+// masks and 59 their back faces (Include/AreaShadows.slang, Scene/Forward.frag). A new scene resource takes the next free slot
+// (60), and a pass that does not run binds a dummy.
 
 #include "Include/Common.slang"
 

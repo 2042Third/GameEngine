@@ -976,6 +976,9 @@ namespace Strata
 		// The rect lights' depth ranges over the local shadow atlas (Scene/LocalShadowRanges.comp), with the atlas once a frame
 		// drew a shadowed rect light.
 		nvrhi::ITexture* GetLocalShadowRanges() const { return m_LocalShadowRanges; }
+		// The rect lights' back faces (D32, the local shadow atlas's size and tiles), made with the ranges by the first frame in
+		// which a rect light holds tiles, released with the atlas.
+		nvrhi::ITexture* GetLocalShadowBackAtlas() const { return m_LocalShadowBackAtlas; }
 		static constexpr float c_ScreenShadowMaxBlurPixels = 8.0f;
 		// The mask's blur keeps taps within this fraction of a pixel's view distance of its plane.
 		static constexpr float c_ScreenShadowPlaneTolerance = 0.01f;
@@ -1143,7 +1146,11 @@ namespace Strata
 			SelectionMask, // The selected instances into the selection mask (temporal anti-aliasing's outline)
 			Glass,         // Transmissive surfaces: the transparent pass's first draws, unblended, writing depth, entity ids and motion
 			LocalShadow,   // Into a point or spot light's shadow view (a tile of the local shadows' atlas)
-			LocalShadowMasked
+			LocalShadowMasked,
+			// A rect light's view's back faces into its tile of the back faces' atlas (EnsureLocalShadowBackAtlas): the winding
+			// reversed, no depth bias
+			LocalShadowBack,
+			LocalShadowBackMasked
 		};
 
 		struct PipelineKey
@@ -1937,20 +1944,29 @@ namespace Strata
 		static uint32_t GetLocalShadowCullMode(uint32_t firstView, uint32_t viewCount);
 		// The shadow culling's pipeline of the frame: the area views' form when it has an area light's view.
 		nvrhi::IComputePipeline* GetCullShadowPipeline() const;
-		// Clears a view's tile (a quad at depth 0: the atlas's other tiles keep their shadows).
-		void ClearLocalShadowTile(nvrhi::ICommandList* commandList, const ShadowAtlasTile& tile);
+		// Clears a view's tile (a quad at depth 0: the atlas's other tiles keep their shadows), with `backFaces` (a rect light's
+		// view) also its tile of m_LocalShadowBackAtlas where that exists.
+		void ClearLocalShadowTile(nvrhi::ICommandList* commandList, const ShadowAtlasTile& tile, bool backFaces);
+		// Whether a frame's view draws its back faces too: a rect light's, while m_LocalShadowBackAtlas exists.
+		bool DrawsLocalShadowBackFaces(const LocalShadowDrawView& drawView) const;
 		// Clears the tiles of the views no receiver needs (m_LocalShadowClears), on either path before the views are drawn.
 		void ClearUnneededLocalShadowTiles(nvrhi::ICommandList* commandList);
 		// The depth ranges of the rect lights' views drawn this frame (Scene/LocalShadowRanges.comp; u_LocalShadowRanges), after
-		// either path drew them, and when new also of those holding content. Made with the first frame in which a rect light holds
-		// tiles (EnsureLocalShadowRanges, false when that fails: the frame's rect lights then cast no shadow), released with the
-		// atlas.
+		// either path drew them. Made with the first frame that draws a shadowed rect light's view (EnsureLocalShadowRanges, false
+		// when that fails: the frame's rect lights then cast no shadow), released with the atlas.
 		bool EnsureLocalShadowRanges();
 		void BuildLocalShadowRanges(nvrhi::ICommandList* commandList);
 		void ReleaseLocalShadowRanges(std::vector<nvrhi::ResourceHandle>& released);
-		// Whether a rect light holds tiles (its views are drawn, or hold content): its views need the ranges from the frame
-		// they are first drawn in, before its shadow fades in.
+		// The rect lights' back faces (Include/AreaShadows.slang, scene SRV 59): every rect light view is drawn a second time
+		// into m_LocalShadowBackAtlas with the winding reversed (Pass::LocalShadowBack), so each texel holds the nearest back
+		// face, where the solid the view first sees ends. Made with the ranges (false when that fails: reported, the rect
+		// lights unshadowed); a new one is cleared and the rect light views holding content are drawn again.
+		bool EnsureLocalShadowBackAtlas();
+		// Whether a rect light holds tiles (its views are drawn, or hold content): its views need the ranges and back faces from
+		// the frame they are first drawn in, before its shadow fades in.
 		bool HoldsAreaShadowViews() const;
+		// Draws the views of rect lights holding content again (new back faces).
+		void RedrawAreaShadowViews();
 		// The layers of the area shadow masks the frame's shadowed rect lights take (LocalShadowLight::MaskLayer), the light
 		// buffer's SpotAngles.w of each, and the masks' targets (EnsureAreaShadowMasks: false, reported, when they cannot be
 		// made); RenderAreaShadowMasks draws them after the prepass, in GPU.ScreenShadows.
@@ -2368,6 +2384,12 @@ namespace Strata
 		nvrhi::BufferHandle m_LocalShadowRangeTileBuffer;
 		std::vector<glm::uvec4> m_LocalShadowRangeTiles;
 		bool m_LocalShadowRangesFresh = false; // Made since the last build: the rect lights' views holding content need theirs too
+		// The rect lights' back faces (EnsureLocalShadowBackAtlas; scene SRV 59, the dummy atlas while there is none) and the
+		// framebuffer their views are drawn into.
+		nvrhi::TextureHandle m_LocalShadowBackAtlas;
+		nvrhi::FramebufferHandle m_LocalShadowBackFramebuffer;
+		nvrhi::ITexture* m_BoundLocalShadowBackAtlas = nullptr;
+		bool m_LocalShadowBackAtlasCleared = false;
 		// The area shadow masks of the frame (AssignAreaShadowMasks): per masked light its parameters and its scissor on screen
 		// (x, y, width, height in pixels).
 		struct AreaShadowMask
@@ -2395,6 +2417,7 @@ namespace Strata
 		std::array<nvrhi::BindingSetHandle, 2> m_AreaShadowBlurSets;
 		nvrhi::ITexture* m_AreaShadowBoundAtlas = nullptr;
 		nvrhi::ITexture* m_AreaShadowBoundRanges = nullptr;
+		nvrhi::ITexture* m_AreaShadowBoundBackAtlas = nullptr;
 		nvrhi::IBuffer* m_AreaShadowBoundBuffer = nullptr;
 		std::array<CascadeBox, RenderData::c_MaxCascades> m_Cascades = {};
 		glm::mat4 m_LightView = glm::mat4(1.0f);

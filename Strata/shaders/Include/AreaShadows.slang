@@ -14,10 +14,12 @@
 // image), is kept from half the receiver's depth to its own. Under a texel of
 // kernel the sun's four-tap tent filters, from one to two texels the wide filter takes over: ShadowFilterQuality taps of a
 // fixed lattice shifted per pixel by the blue-noise tile (fixed noise: a still view is the same in every frame), whose grain
-// the opaque surfaces' mask blur takes (Effects/AreaScreenShadows.frag). The kernel is clamped to RenderData::c_AreaShadowReach
-// of the tile, which the views' guard band holds, so penumbrae cross the cube's seams without a step. For a one-sided light,
-// taps whose ray from the center lies behind the light's plane (no path from the face meets what they see) and cells wholly
-// behind it are left out.
+// the opaque surfaces' mask blur takes (Effects/AreaScreenShadows.frag). Where the light's center does not see the receiver,
+// each tap also looks along its path for points inside solids, between the view's front faces and its back faces
+// (u_LocalShadowBackAtlas): one depth per texel cannot tell a solid's hidden lower part from the space under an overhang. The
+// kernel is clamped to RenderData::c_AreaShadowReach of the tile, which the views' guard band holds, so penumbrae cross the
+// cube's seams without a step. For a one-sided light, taps whose ray from the center lies behind the light's plane (no path from
+// the face meets what they see) and cells wholly behind it are left out.
 
 #ifndef ST_LOCAL_SHADOW_SAMPLING
 #define ST_LOCAL_SHADOW_SAMPLING
@@ -29,6 +31,10 @@
 // Levels of cells of 4 << level atlas texels each way: the nearest depth (toward the light, the largest) rounded up in the
 // high 16 bits and the farthest rounded down in the low 16 bits, for the tiles of rect lights' views.
 Texture2D<uint4> u_LocalShadowRanges : register(t57);
+// The rect lights' views drawn again with the winding reversed and no depth bias (SceneRenderer::EnsureLocalShadowBackAtlas):
+// per texel the nearest back face, where the solid the view sees first ends (0, the far plane, where it sees none), in the
+// atlas's tiles.
+Texture2D<float4> u_LocalShadowBackAtlas : register(t59);
 
 static const float c_AreaShadowReach = 0.125;          // RenderData::c_AreaShadowReach
 static const float c_LocalShadowRangeMinTileShare = 8.0; // RenderData::c_LocalShadowRangeMinTileShare
@@ -79,12 +85,32 @@ struct AreaShadowView
 // under the sphere's foot but darkened its penumbra by 0.24.
 static const float c_AreaShadowMiddleTap = 2.0 / 3.0;
 static const float c_AreaShadowNearTap = 1.0 / 3.0;
+// The looks inside solids (GetAreaShadowInside): this many, the first at this fraction of a tap's offset, each next at 1 / sqrt(2)
+// of the one before, down to a forty-fifth. With six from a sixth halving the box's foot in the Cornell box still leaked half the
+// light at its corner (paths cross the box's corner in 3% to 8% of their offset); six from a quarter at this ratio left the
+// strafe's flicker above the sun's (0.90% against 0.84% of blocks at the 99th percentile), at 1 ms less in
+// PerfGPU.Renderer.AreaShadows4.
+static const int c_AreaShadowInsideLooks = 10;
+static const float c_AreaShadowInsideFirst = 0.5;
+static const float c_AreaShadowInsideRatio = 0.70710678;
 
 // The receiver's plane's NDC depth at `offset` atlas texels from its lookup, kept from half the receiver's depth to its own:
 // what lies beyond the receiver shadows nothing.
 float GetAreaShadowPlaneReference(AreaShadowView view, float2 offset)
 {
 	return clamp(view.Reference + dot(view.Gradient, offset), view.Low, view.High);
+}
+
+// The spread (z_r - z) / (z_r z) at which the path from the light's point at `lattice` on its face to the receiver crosses the view
+// at `offset` atlas texels from the receiver's lookup: the offset in the kernel's own units over the lattice's reach (-1 where
+// the paths are not known: a face seen edge-on, or the lattice's center).
+float GetAreaShadowTapSpread(AreaShadowView view, float2 offset, float2 lattice)
+{
+	float reach = max(abs(lattice.x), abs(lattice.y));
+	if (!(view.HasPyramid && reach > 1e-3))
+		return -1.0;
+	float2 spread = float2(dot(view.Inverse.xy, offset), dot(view.Inverse.zw, offset));
+	return max(abs(spread.x), abs(spread.y)) / reach;
 }
 
 // The NDC depth of the path from the light's point at `lattice` on its face to the receiver where it crosses the view at `offset`
@@ -99,12 +125,33 @@ float GetAreaShadowPlaneReference(AreaShadowView view, float2 offset)
 // Cornell box (0.40 of the light at its worst).
 float GetAreaShadowPathReference(AreaShadowView view, float2 offset, float2 lattice)
 {
-	float reach = max(abs(lattice.x), abs(lattice.y));
-	if (!(view.HasPyramid && reach > 1e-3))
+	float pathSpread = GetAreaShadowTapSpread(view, offset, lattice);
+	if (!(pathSpread >= 0.0))
 		return view.Low;
-	float2 spread = float2(dot(view.Inverse.xy, offset), dot(view.Inverse.zw, offset));
-	float pathSpread = max(abs(spread.x), abs(spread.y)) / reach;
 	return view.Unbiased + view.DepthB * pathSpread - view.TieMargin * (1.0 + view.ReceiverDepth * pathSpread);
+}
+
+// The bilinear weights of a gather's four texels at `texel` (in the gathered texture's texels), in the gather's order: x (0, 1),
+// y (1, 1), z (1, 0), w (0, 0) of the footprint.
+float4 GetAreaShadowGatherWeights(float2 texel)
+{
+	float2 fraction = frac(texel - 0.5);
+	return float4((1.0 - fraction.x) * fraction.y, fraction.x * fraction.y, fraction.x * (1.0 - fraction.y), (1.0 - fraction.x) * (1.0 - fraction.y));
+}
+
+// How much of the bilinear footprint at `texel` (atlas texels) holds the point of a path at the NDC depth `depth` inside a solid,
+// texel by texel: the view sees a front face nearer than the point there (as the atlas holds it, a little farther by its depth
+// bias) and the back face behind it farther than the point by `margin` (the receiver's biases at that depth: a receiver the view
+// sees from behind is its own back face). Where the view sees no back face (an open surface) nothing is known to be solid: none.
+float GetAreaShadowInside(AreaShadowView view, float2 texel, float atlasSize, float depth, float margin)
+{
+	float4 front = u_LocalShadowAtlas.GatherRed(u_LinearClampSampler, texel / atlasSize);
+	float4 nearer = step(float4(depth), front);
+	if (!any(nearer > 0.0))
+		return 0.0;
+	float4 back = u_LocalShadowBackAtlas.GatherRed(u_LinearClampSampler, texel / atlasSize);
+	float4 beyond = (1.0 - step(float4(depth - margin), back)) * (1.0 - step(back, float4(0.0)));
+	return dot(GetAreaShadowGatherWeights(texel), nearer * beyond);
 }
 
 // The comparison sampler's test (stored nearer to the light than the reference) over the bilinear footprint at `uv`, for two
@@ -368,6 +415,7 @@ AreaShadowSample EvaluateAreaLightShadow(uint slot, float3 relativePosition, flo
 		float2 shift = float2(BlueNoise(pixel, int2(17, 43)), BlueNoise(pixel, int2(43, 17)));
 		float disk = 0.0;
 		float counted = 0.0;
+		bool insideLooks = tent > 0.0;
 		for (int tap = 0; tap < taps; tap++)
 		{
 			float2 lattice = frac(float2((float(tap) + 0.5) / float(taps), (float(tap) + 0.5) * c_InverseGoldenRatio) + shift) * 2.0 - 1.0;
@@ -399,7 +447,23 @@ AreaShadowSample EvaluateAreaLightShadow(uint slot, float3 relativePosition, flo
 			float2 nearOffset = tapOffset * c_AreaShadowNearTap;
 			float2 nearLook = CompareAreaShadowTwice(clamp(texel + nearOffset, lowest, highest) * atlasTexel, float2(atlasSize, atlasSize),
 				max(GetAreaShadowPlaneReference(shadowView, nearOffset), GetAreaShadowPathReference(shadowView, nearOffset, float2(1.0, 1.0))), pathReference);
-			disk += max(pathLook.x, max(middleBlocked, nearLook.x * (1.0 - nearLook.y)));
+			float blocked = max(pathLook.x, max(middleBlocked, nearLook.x * (1.0 - nearLook.y)));
+			// Looks inside solids, where the light's center does not see the receiver (elsewhere the looks above found what the
+			// one depth per texel can show): from half the offset toward the receiver, the path blocked where its point lies
+			// between a front face the view sees and the back face behind it, as at a box's foot where only the box's hidden lower
+			// part stands between the receiver and the face and the looks above pass beside it. Without them the Cornell box's
+			// floor beside its tall box read up to 0.64 of the light too bright (0.23% of its pixels more than 0.3 off the
+			// reference; 0.03% with them).
+			float tapSpread = GetAreaShadowTapSpread(shadowView, tapOffset, lattice);
+			float lookSpread = tapSpread * c_AreaShadowInsideFirst;
+			for (int look = 0; insideLooks && look < c_AreaShadowInsideLooks && blocked < 1.0 && tapSpread > 0.0; look++)
+			{
+				float2 lookTexel = clamp(texel + tapOffset * (lookSpread / tapSpread), lowest, highest);
+				blocked = max(blocked, GetAreaShadowInside(shadowView, lookTexel, atlasSize, shadowView.Unbiased + shadowView.DepthB * lookSpread,
+					shadowView.TieMargin * (1.0 + shadowView.ReceiverDepth * lookSpread)));
+				lookSpread *= c_AreaShadowInsideRatio;
+			}
+			disk += blocked;
 			counted += 1.0;
 		}
 		shadowed = lerp(tent, counted > 0.0 ? disk / counted : 0.0, diskWeight);

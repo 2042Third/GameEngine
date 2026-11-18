@@ -4778,7 +4778,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   one holding a shadow keeps it while it ranks among the first four rect lights in view, else it fades out; a new one takes a
   place only when one is free. So no light ever switches filter, and a fifth waits. `SceneRendererStats::AreaShadowTiles`
   (`editor.perf`'s `areaShadowTiles`, the Scene view's statistics) counts the tiles they hold: six each, a face not needed
-  keeping its cleared tile. Their filter, depth ranges and masks: "Area lights".
+  keeping its cleared tile. Their filter, depth ranges, back faces and masks: "Area lights".
 - Point and spot lights cast shadows with `CastShadows` (off by default, so scenes saved before it render as they did), with
   `ShadowBias` and `ShadowNormalBias` (texels of the light's tiles) and `ShadowFilterRadius` (texels, at most 8). A renderer
   gives tiles of one D32 atlas (`RendererQualitySettings::LocalShadowAtlasSize`: 4096 texels, 64 MiB; made with the first
@@ -5098,7 +5098,18 @@ lights, Post Process and the sky), and never a resolution below the output's.
   the receiver (a sphere's or a post's foot), not a wall rising beside it (the Cornell box's back wall beside the red wall
   read 0.19 dark with the plane alone) nor the blocker the kernel was made from counted again as solid down to the receiver. The first two
   looks compare from one gather of the atlas (`CompareAreaShadowTwice`, the linear clamp sampler s8), as do the near look's
-  two tests. Under a texel of kernel the
+  two tests. One depth per texel cannot tell a solid's hidden lower part from the space under an overhang, so every rect
+  light view is drawn a second time with the winding reversed and no depth bias (`Pass::LocalShadowBack`, both paths, from the
+  same draws or culled buckets) into the **back faces' atlas** (`EnsureLocalShadowBackAtlas`: a D32 atlas of the atlas's size,
+  the same tiles; scene SRV 59 and the masks' t59; made with the ranges, released with the atlas; a new one is cleared to the
+  far plane, which reads as no back face, and the views holding content are drawn again). Where the light's center does not
+  see the receiver (the tent found a blocker) each tap then looks **inside solids** (`GetAreaShadowInside`): ten points of its
+  path from half its offset toward the receiver, each at 1 / sqrt(2) of the one before
+  (`c_AreaShadowInsideLooks`, `c_AreaShadowInsideFirst`, `c_AreaShadowInsideRatio`), blocked where the point lies, texel by
+  texel of a gather, behind a front face the view sees and before the back face behind it (by the receiver's biases: a
+  receiver the view sees from behind is its own back face); an open surface (no back face) counts as nothing. That closed the
+  light beside the Cornell box's tall box, where only its lower part blocks the paths and they cross its corner in 3% to 8%
+  of their offset. Under a texel of kernel the
   sun's four-tap tent filters; from one to two texels a lattice of `c_AreaShadowTapsPerFilterTap` (2) times
   `ShadowFilterQuality` taps (a golden-ratio rank-1 lattice over the face, shifted per pixel by the blue-noise tile's far
   shifts (17, 43) and (43, 17)) takes over; nothing turns with the frame. Taps and cells whose rays leave the center behind a
@@ -5111,23 +5122,22 @@ lights, Post Process and the sky), and never a resolution below the output's.
   to 16 pixels, the sun's 8) into the light's layer of an R8 array (scene SRV 58; a 1 x 1 dummy without masks). The light
   buffer's `SpotAngles.w` is a rect light's layer plus one (the CPU path writes it with the slot, the GPU-driven path packs it
   in the top byte of the slot table, t21, which `Scene/LightCompact.comp` unpacks). The masks and two RG8 scratch targets
-  (66 MB at 3840 x 2160) are made by the first frame with one and released with the render targets. The ranges are made by
-  the first frame in which a rect light holds tiles, before its shadow has faded in and before it has a mask: the views drawn
-  then need them too (a renderer's first frame has no time to fade by, and views drawn before the ranges existed kept ranges
-  never built: `GPU.SceneRenderer.AreaShadows`, "drawn before its shadow fades in"); new ranges are built for the views
-  holding content as well. A frame whose masks or ranges cannot be made draws its rect lights unshadowed (reported). Transparent surfaces filter per pixel, without the blur.
+  (66 MB at 3840 x 2160) are made by the first frame with one and released with the render targets. The ranges and back faces
+  are made by the first frame in which a rect light holds tiles, before its shadow has faded in and before it has a mask: the
+  views drawn then need them too (a renderer's first frame has no time to fade by, and views drawn before the ranges existed
+  kept ranges never built: `GPU.SceneRenderer.AreaShadows`, "drawn before its shadow fades in"); new ranges are built for the
+  views holding content as well. A frame whose masks, ranges or back faces cannot be made draws its rect lights unshadowed
+  (reported). Transparent surfaces filter per pixel, without the blur.
   The last masked light's evaluation (`GetAreaShadowEvaluation`) marks every pixel that compared depths.
   Measured (`GPU.SceneRenderer.AreaShadows` and `.AreaLightCornell`, both paths alike to the code): the Cornell box's floor
-  seen from under its ceiling within 0.110 of the reference at the grid's points outside the penumbrae (at one point under the
-  sphere's overhang; elsewhere within 0.03) and 0.129 inside them (the spec's 0.03 and 0.1); over the whole floor that view
-  sees, 1.8% of the pixels more than 0.1 off and 0.23% more than 0.3, 0.64 at worst. That is the **one-layer limit**: the views
-  hold one depth per texel, so the taps cannot see a blocker's lower part that its upper part hides from the light, nor tell
-  a solid from the space under an overhang. The floor beside the tall box's foot on its side away from the light reads up to
-  0.64 more of the light than the reference, which has almost none there (a lighter band between the box and the red
-  wall), the floor under the sphere's overhang reads lit a little, and the outer edge of the sphere's penumbra darker. A
-  look deeper along the paths
-  counts the space behind any blocker as solid (one at a ninth of the offset closed the light under the sphere and darkened
-  its penumbra by 0.24), so closing the leak needs a second layer of depth (the casters' far side). No step between
+  seen from under its ceiling within 0.073 of the reference at the grid's points outside the penumbrae and 0.129 inside them
+  (the spec's 0.03 and 0.1); over the whole floor that view sees, 1.33% of the pixels more than 0.1 off and 0.03% more than
+  0.3, 0.45 at worst (without the looks inside solids 0.110 and 0.129, 1.77% and 0.23%, 0.64 at worst: a lighter band on the
+  floor beside the tall box's foot, between the box and the red wall). What is left: the outer edge of the sphere's penumbra
+  reads darker (the near look counts space under its overhang as solid), and a little light still passes the tall box's
+  corner at its foot, where the paths cross the box in less than the looks' spacing. Looks at more points cost more: six
+  from a quarter of the offset measured 1 ms less in `PerfGPU.Renderer.AreaShadows4` but left the strafe's flicker above the
+  sun's. No step between
   neighbours beyond 0.016 where the reference is flat; a wall's
   penumbra under a 1 x 0.5 m light within 0.063 of the reference and 8.4% wider (the spec's 0.12 and 25%; with the path's
   crossing at the kernel's depth and the plane at a third of it alone 0.167 and 38% narrow); a 6 cm post's shadow 5 mm behind
@@ -5139,14 +5149,14 @@ lights, Post Process and the sky), and never a resolution below the output's.
   0.3 m under a 2 m light gets 16% of the reference's width: the **reach clamp**, the known limit of very wide penumbrae (a
   blocker within about a third of the receiver's distance of a large light); in the Cornell box 46% of the fully lit pixels
   still reach the taps (the spec's 30% is not met: by walls and corners geometry nearer than the receiver lies within its own
-  reach); a strafe across the Cornell box's penumbrae without anti-aliasing measures 0.054% of blocks and 0.78% at their
+  reach); a strafe across the Cornell box's penumbrae without anti-aliasing measures 0.060% of blocks and 0.83% at their
   99th percentile on the
   flicker meter, the sun's widest soft shadows in the same room 0.062% and 0.84% (with the row's taps alone rect lights
-  measured 0.092% and 1.46%, hence the factor 2); the masks' grain in a still penumbra (RMS from the 9 x 9 mean) 0.003
+  measured 0.092% and 1.46%, hence the factor 2); the masks' grain in a still penumbra (RMS from the 9 x 9 mean) 0.0024
   against the sun's 0.026. **Cost**: `PerfGPU.Renderer.AreaShadows4` (a room seen whole at 3840 x 2160 and High, four rect
-  lights casting shadows over it, their views cached) measures 6.77 ms on the GPU, 5.3 ms of it the masks
-  (`GPU.ScreenShadows`); the entry first measured 2.18 ms in frames whose ranges had never been built (the classification
-  read an unfilled texture).
+  lights casting shadows over it, their views cached) measures 8.65 ms on the GPU, 7.3 ms of it the masks
+  (`GPU.ScreenShadows`), of which the looks inside solids take 1.9 ms; the entry first measured 2.18 ms in frames whose
+  ranges had never been built (the classification read an unfilled texture).
 - **Light surfaces** (`LightSurfaceComponent`, Lighting, a tag): the emissive mesh that shows an area light's face, which
   `lighting.makeAreaLight` tags when it makes the panel a light (a child Rect Light on its emitting face, `auto` judging the
   face on the mesh's bounds times the panel's world scale; a second call finds the light: "already a light"). The light lights

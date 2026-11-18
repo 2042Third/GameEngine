@@ -29,8 +29,10 @@
 // penumbra's reach) so that they never leave the face they sample. A rect light's views reach its range from the face plus the
 // face's half diagonal from the center (its bounds), which every range test of its views takes; at most
 // RenderData::c_MaxAreaShadowMasks rect lights hold a shadow at once (the area shadow masks), and the frame's drawn rect light
-// views get the atlas's depth ranges (Scene/LocalShadowRanges.comp) their filter classifies receivers with. Tiles follow the light's size on screen, stepped down for the less important lights while they do not
-// fit seven eighths of the atlas; a light whose tiles change size keeps sampling its old tiles until the new ones are drawn,
+// views get the atlas's depth ranges (Scene/LocalShadowRanges.comp) their filter classifies receivers with, and are drawn a
+// second time for their back faces into a second atlas of the same tiles (SceneRenderer::EnsureLocalShadowBackAtlas). Tiles
+// follow the light's size on screen, stepped down for the less important lights while they do not fit seven eighths of the
+// atlas; a light whose tiles change size keeps sampling its old tiles until the new ones are drawn,
 // and at most two lights change at a time. A view is drawn again only when what it shows changed (its key, a caster reaching
 // it, what casters are drawn with), at most LocalShadowViewsPerFrame of them per frame where SpreadLightingUpdates spreads
 // them (views without content first, a quarter to the views that waited longest, the rest by waiting times importance); a
@@ -1450,7 +1452,7 @@ namespace Strata
 		return true;
 	}
 
-	void SceneRenderer::ClearLocalShadowTile(nvrhi::ICommandList* commandList, const ShadowAtlasTile& tile)
+	void SceneRenderer::ClearLocalShadowTile(nvrhi::ICommandList* commandList, const ShadowAtlasTile& tile, bool backFaces)
 	{
 		if (!m_LocalShadowAtlasCleared)
 		{
@@ -1476,12 +1478,24 @@ namespace Strata
 			static_cast<float>(tile.Y + tile.Size), 0.0f, 1.0f));
 		commandList->setGraphicsState(state);
 		commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
+		if (!backFaces || !m_LocalShadowBackFramebuffer)
+			return;
+		// The back faces' atlas has the atlas's size and depth format: the clear pipeline draws into its tile as well.
+		state.framebuffer = m_LocalShadowBackFramebuffer;
+		commandList->setGraphicsState(state);
+		commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
+	}
+
+	bool SceneRenderer::DrawsLocalShadowBackFaces(const LocalShadowDrawView& drawView) const
+	{
+		return m_LocalShadowBackFramebuffer && m_LocalShadowLights[drawView.Light].Type == RenderData::c_LightRect;
 	}
 
 	void SceneRenderer::ClearUnneededLocalShadowTiles(nvrhi::ICommandList* commandList)
 	{
+		// Only the faces behind one-sided rect lights go unneeded: their back faces' tiles are cleared too.
 		for (const ShadowAtlasTile& tile : m_LocalShadowClears)
-			ClearLocalShadowTile(commandList, tile);
+			ClearLocalShadowTile(commandList, tile, true);
 	}
 
 	void SceneRenderer::DrawLocalShadows(nvrhi::ICommandList* commandList)
@@ -1491,24 +1505,32 @@ namespace Strata
 		{
 			const LocalShadowLight& light = m_LocalShadowLights[drawView.Light];
 			const ShadowAtlasTile& tile = light.Views[drawView.Face].Key.Tile;
-			ClearLocalShadowTile(commandList, tile);
+			const bool backFaces = DrawsLocalShadowBackFaces(drawView);
+			ClearLocalShadowTile(commandList, tile, backFaces);
 			if (drawView.BatchCount == 0)
 				continue;
-			const nvrhi::Viewport viewport(static_cast<float>(tile.X), static_cast<float>(tile.X + tile.Size), static_cast<float>(tile.Y),
-				static_cast<float>(tile.Y + tile.Size), 0.0f, 1.0f);
-			nvrhi::GraphicsState state;
-			state.viewport.addViewportAndScissorRect(viewport);
-			state.bindings = { m_ShadowBindingSet, Renderer::GetBindlessTextures().GetTable(), m_ShadowPushBindingSet };
 			// The view's matrix is its light's slot's (a push constant after the state, as for the cascades).
 			const uint32_t viewIndex = drawView.Light * RenderData::c_LocalShadowFaces + drawView.Face;
-			DrawBuckets(commandList, state, std::span<const SceneDrawBatch>(m_LocalShadowBatches.data() + drawView.FirstBatch, drawView.BatchCount),
-				firstArgument + drawView.FirstBatch,
-				[](const SceneDrawBatch& batch)
-				{
-					return PipelineKey { batch.AlphaMask ? Pass::LocalShadowMasked : Pass::LocalShadow, batch.DoubleSided, batch.Mirrored, batch.Skinned };
-				},
-				[this](const SceneDrawBatch&, nvrhi::GraphicsState& bucketState) { bucketState.framebuffer = m_LocalShadowFramebuffer; },
-				[commandList, viewIndex](const SceneDrawBatch&) { commandList->setPushConstants(&viewIndex, sizeof(viewIndex)); });
+			// The front faces into the atlas; a rect light's back faces, the winding reversed, into the back faces' atlas.
+			for (uint32_t layer = 0; layer < (backFaces ? 2u : 1u); layer++)
+			{
+				const bool back = layer == 1;
+				nvrhi::GraphicsState state;
+				state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(tile.X), static_cast<float>(tile.X + tile.Size),
+					static_cast<float>(tile.Y), static_cast<float>(tile.Y + tile.Size), 0.0f, 1.0f));
+				state.bindings = { m_ShadowBindingSet, Renderer::GetBindlessTextures().GetTable(), m_ShadowPushBindingSet };
+				nvrhi::IFramebuffer* framebuffer = back ? m_LocalShadowBackFramebuffer.Get() : m_LocalShadowFramebuffer.Get();
+				DrawBuckets(commandList, state, std::span<const SceneDrawBatch>(m_LocalShadowBatches.data() + drawView.FirstBatch, drawView.BatchCount),
+					firstArgument + drawView.FirstBatch,
+					[back](const SceneDrawBatch& batch)
+					{
+						const Pass pass = back ? (batch.AlphaMask ? Pass::LocalShadowBackMasked : Pass::LocalShadowBack)
+							: (batch.AlphaMask ? Pass::LocalShadowMasked : Pass::LocalShadow);
+						return PipelineKey { pass, batch.DoubleSided, batch.Mirrored, batch.Skinned };
+					},
+					[framebuffer](const SceneDrawBatch&, nvrhi::GraphicsState& bucketState) { bucketState.framebuffer = framebuffer; },
+					[commandList, viewIndex](const SceneDrawBatch&) { commandList->setPushConstants(&viewIndex, sizeof(viewIndex)); });
+			}
 		}
 	}
 

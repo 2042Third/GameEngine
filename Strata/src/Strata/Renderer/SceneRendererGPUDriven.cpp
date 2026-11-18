@@ -1533,37 +1533,45 @@ namespace Strata
 			{
 				const LocalShadowDrawView& drawView = m_LocalShadowViews[first + place];
 				const ShadowAtlasTile& tile = m_LocalShadowLights[drawView.Light].Views[drawView.Face].Key.Tile;
-				ClearLocalShadowTile(commandList, tile);
-				nvrhi::GraphicsState state;
-				state.framebuffer = m_LocalShadowFramebuffer;
-				state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(tile.X), static_cast<float>(tile.X + tile.Size),
-					static_cast<float>(tile.Y), static_cast<float>(tile.Y + tile.Size), 0.0f, 1.0f));
-				state.bindings = { m_GPUShadowBindingSet, Renderer::GetBindlessTextures().GetTable(), m_ShadowPushBindingSet };
-				state.indexBuffer = nvrhi::IndexBufferBinding { pool.GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
-				state.indirectParams = m_CullArgumentBuffer;
-				state.indirectCountBuffer = count ? m_CullBucketCountBuffer.Get() : nullptr;
+				const bool backFaces = DrawsLocalShadowBackFaces(drawView);
+				ClearLocalShadowTile(commandList, tile, backFaces);
 				// The view's matrix is its light's slot's (a push constant after the state).
 				const uint32_t viewIndex = drawView.Light * RenderData::c_LocalShadowFaces + drawView.Face;
-				for (uint32_t dense = constants.FirstLocalBucket; dense < constants.BucketCount; dense++)
+				// The front faces into the atlas; a rect light's back faces, the winding reversed, into the back faces' atlas, from
+				// the same culled buckets.
+				for (uint32_t layer = 0; layer < (backFaces ? 2u : 1u); layer++)
 				{
-					const uint32_t bucket = m_CullBuckets[dense];
-					const BucketParts parts = DecodeBucket(bucket);
-					const uint32_t slots = GetBucketSlots(bucket);
-					if (parts.Cascade != place || (slots == 0 && !count))
-						continue;
-					const PipelineKey key { parts.AlphaMask ? Pass::LocalShadowMasked : Pass::LocalShadow, parts.DoubleSided, parts.Mirrored,
-						parts.Geometry == RenderData::c_CullGeometrySkinned };
-					const GeometryArena arena = parts.Geometry == RenderData::c_CullGeometryStatic ? GeometryArena::Static : GeometryArena::Skinned;
-					state.pipeline = GetScenePipeline(key);
-					state.vertexBuffers = {
-						nvrhi::VertexBufferBinding { pool.GetPositionBuffer(arena), 0, 0 },
-						nvrhi::VertexBufferBinding { pool.GetAttributeBuffer(arena), 1, 0 }
-					};
-					if (key.Skinned)
-						state.vertexBuffers.push_back(nvrhi::VertexBufferBinding { pool.GetSkinBuffer(), 2, 0 });
-					commandList->setGraphicsState(state);
-					commandList->setPushConstants(&viewIndex, sizeof(viewIndex));
-					DrawGPUBucket(commandList, dense, slots);
+					const bool back = layer == 1;
+					nvrhi::GraphicsState state;
+					state.framebuffer = back ? m_LocalShadowBackFramebuffer : m_LocalShadowFramebuffer;
+					state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(tile.X), static_cast<float>(tile.X + tile.Size),
+						static_cast<float>(tile.Y), static_cast<float>(tile.Y + tile.Size), 0.0f, 1.0f));
+					state.bindings = { m_GPUShadowBindingSet, Renderer::GetBindlessTextures().GetTable(), m_ShadowPushBindingSet };
+					state.indexBuffer = nvrhi::IndexBufferBinding { pool.GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
+					state.indirectParams = m_CullArgumentBuffer;
+					state.indirectCountBuffer = count ? m_CullBucketCountBuffer.Get() : nullptr;
+					for (uint32_t dense = constants.FirstLocalBucket; dense < constants.BucketCount; dense++)
+					{
+						const uint32_t bucket = m_CullBuckets[dense];
+						const BucketParts parts = DecodeBucket(bucket);
+						const uint32_t slots = GetBucketSlots(bucket);
+						if (parts.Cascade != place || (slots == 0 && !count))
+							continue;
+						const Pass pass = back ? (parts.AlphaMask ? Pass::LocalShadowBackMasked : Pass::LocalShadowBack)
+							: (parts.AlphaMask ? Pass::LocalShadowMasked : Pass::LocalShadow);
+						const PipelineKey key { pass, parts.DoubleSided, parts.Mirrored, parts.Geometry == RenderData::c_CullGeometrySkinned };
+						const GeometryArena arena = parts.Geometry == RenderData::c_CullGeometryStatic ? GeometryArena::Static : GeometryArena::Skinned;
+						state.pipeline = GetScenePipeline(key);
+						state.vertexBuffers = {
+							nvrhi::VertexBufferBinding { pool.GetPositionBuffer(arena), 0, 0 },
+							nvrhi::VertexBufferBinding { pool.GetAttributeBuffer(arena), 1, 0 }
+						};
+						if (key.Skinned)
+							state.vertexBuffers.push_back(nvrhi::VertexBufferBinding { pool.GetSkinBuffer(), 2, 0 });
+						commandList->setGraphicsState(state);
+						commandList->setPushConstants(&viewIndex, sizeof(viewIndex));
+						DrawGPUBucket(commandList, dense, slots);
+					}
 				}
 			}
 		}

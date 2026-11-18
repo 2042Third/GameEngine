@@ -16,7 +16,8 @@
 
 // Rect lights' shadows beyond what the local shadows' views share with point lights (Docs/DeveloperGuide.md, "Area lights"):
 // the atlas's depth ranges over the frame's drawn rect light tiles (Scene/LocalShadowRanges.comp, in GPU.Shadows after either
-// path drew the views), which the filter (Include/AreaShadows.slang) classifies receivers with, and the opaque surfaces'
+// path drew the views), which the filter (Include/AreaShadows.slang) classifies receivers with, the views' back faces (a
+// second atlas of the same tiles, drawn with the views), with which it finds paths inside solids, and the opaque surfaces'
 // screen-space masks (Effects/AreaScreenShadows.frag, then Effects/ScreenShadowsBlur.frag's two passes, in GPU.ScreenShadows
 // after the sun's): per shadowed rect light in view, at most RenderData::c_MaxAreaShadowMasks, the filter at every prepass
 // pixel within the light's reach on screen, blurred where its lattice's taps filtered into the light's layer of an R8 array.
@@ -161,6 +162,7 @@ namespace Strata
 				nvrhi::BindingLayoutItem::Texture_SRV(23),          // Its normals
 				nvrhi::BindingLayoutItem::Texture_SRV(33),          // The blue-noise tile
 				nvrhi::BindingLayoutItem::Texture_SRV(57),          // The atlas's depth ranges
+				nvrhi::BindingLayoutItem::Texture_SRV(59),          // The rect lights' back faces
 				nvrhi::BindingLayoutItem::Sampler(8),               // The filter's gathers of the atlas
 				nvrhi::BindingLayoutItem::Sampler(9),
 				// Slot 1: register b0 belongs to the frame constants.
@@ -244,9 +246,10 @@ namespace Strata
 
 	void SceneRenderer::RenderAreaShadowMasks(nvrhi::ICommandList* commandList)
 	{
-		// The evaluation names the atlas, its ranges and the local shadows' buffer, which the frame's buffers may have replaced.
+		// The evaluation names the atlas, its ranges, its back faces and the local shadows' buffer, which the frame's buffers may
+		// have replaced.
 		if (!m_AreaShadowMaskSet || m_AreaShadowBoundAtlas != m_LocalShadowAtlas.Get() || m_AreaShadowBoundRanges != m_LocalShadowRanges.Get()
-			|| m_AreaShadowBoundBuffer != m_LocalShadowBuffer.Get())
+			|| m_AreaShadowBoundBackAtlas != m_LocalShadowBackAtlas.Get() || m_AreaShadowBoundBuffer != m_LocalShadowBuffer.Get())
 		{
 			if (m_AreaShadowMaskSet)
 				Renderer::ReleaseDeferred({ nvrhi::ResourceHandle(m_AreaShadowMaskSet.Get()) });
@@ -259,6 +262,7 @@ namespace Strata
 				nvrhi::BindingSetItem::Texture_SRV(23, m_NormalTexture),
 				nvrhi::BindingSetItem::Texture_SRV(33, Renderer::GetBlueNoiseTexture()),
 				nvrhi::BindingSetItem::Texture_SRV(57, m_LocalShadowRanges),
+				nvrhi::BindingSetItem::Texture_SRV(59, m_LocalShadowBackAtlas),
 				nvrhi::BindingSetItem::Sampler(8, m_LinearClampSampler),
 				nvrhi::BindingSetItem::Sampler(9, m_ShadowCompareSampler),
 				nvrhi::BindingSetItem::PushConstants(1, sizeof(RenderData::AreaShadowMaskParameters))
@@ -266,6 +270,7 @@ namespace Strata
 			m_AreaShadowMaskSet = m_Device->createBindingSet(desc, m_AreaShadowMaskLayout);
 			m_AreaShadowBoundAtlas = m_LocalShadowAtlas.Get();
 			m_AreaShadowBoundRanges = m_LocalShadowRanges.Get();
+			m_AreaShadowBoundBackAtlas = m_LocalShadowBackAtlas.Get();
 			m_AreaShadowBoundBuffer = m_LocalShadowBuffer.Get();
 			if (!m_AreaShadowMaskSet)
 			{
@@ -461,15 +466,76 @@ namespace Strata
 		m_LocalShadowRangeSets.clear();
 		m_LocalShadowRangeLevels = 0;
 		m_LocalShadowRangesFresh = false;
-		// The scene's binding sets and the masks' evaluation name the ranges: made again by the next frame's comparison.
+		if (m_LocalShadowBackAtlas)
+			released.emplace_back(m_LocalShadowBackAtlas.Get());
+		if (m_LocalShadowBackFramebuffer)
+			released.emplace_back(m_LocalShadowBackFramebuffer.Get());
+		m_LocalShadowBackAtlas = nullptr;
+		m_LocalShadowBackFramebuffer = nullptr;
+		// The scene's binding sets and the masks' evaluation name the ranges and the back faces: made again by the next frame's
+		// comparison.
 		m_BoundLocalShadowRanges = nullptr;
 		m_AreaShadowBoundRanges = nullptr;
+		m_BoundLocalShadowBackAtlas = nullptr;
+		m_AreaShadowBoundBackAtlas = nullptr;
+	}
+
+	bool SceneRenderer::EnsureLocalShadowBackAtlas()
+	{
+		if (!m_LocalShadowAtlas)
+			return false;
+		const uint32_t size = std::max(m_LocalShadowAtlas->getDesc().width, 1u);
+		if (m_LocalShadowBackAtlas && m_LocalShadowBackAtlas->getDesc().width == size && m_LocalShadowBackFramebuffer)
+			return true;
+		std::vector<nvrhi::ResourceHandle> released;
+		if (m_LocalShadowBackAtlas)
+			released.emplace_back(m_LocalShadowBackAtlas.Get());
+		if (m_LocalShadowBackFramebuffer)
+			released.emplace_back(m_LocalShadowBackFramebuffer.Get());
+		Renderer::ReleaseDeferred(std::move(released));
+		m_LocalShadowBackAtlas = nullptr;
+		m_LocalShadowBackFramebuffer = nullptr;
+		m_BoundLocalShadowBackAtlas = nullptr;
+		m_AreaShadowBoundBackAtlas = nullptr;
+		nvrhi::TextureDesc desc;
+		desc.width = size;
+		desc.height = size;
+		desc.format = nvrhi::Format::D32;
+		desc.isRenderTarget = true;
+		desc.debugName = m_Specification.DebugName + ".LocalShadowBackAtlas";
+		desc.initialState = nvrhi::ResourceStates::ShaderResource;
+		desc.keepInitialState = true;
+		nvrhi::TextureHandle atlas = m_Device->createTexture(desc);
+		nvrhi::FramebufferHandle framebuffer = atlas ? m_Device->createFramebuffer(nvrhi::FramebufferDesc().setDepthAttachment(atlas)) : nullptr;
+		if (!atlas || !framebuffer)
+			return false;
+		m_LocalShadowBackAtlas = std::move(atlas);
+		m_LocalShadowBackFramebuffer = std::move(framebuffer);
+		m_LocalShadowBackAtlasCleared = false;
+		RedrawAreaShadowViews();
+		return true;
 	}
 
 	bool SceneRenderer::HoldsAreaShadowViews() const
 	{
 		return std::any_of(m_LocalShadowLights.begin(), m_LocalShadowLights.end(),
 			[](const LocalShadowLight& light) { return light.Type == RenderData::c_LightRect && light.TileSize > 0; });
+	}
+
+	void SceneRenderer::RedrawAreaShadowViews()
+	{
+		// Views drawn while the back faces did not exist (only after a failure to make them) lack them: they are drawn again,
+		// their light keeping its shadow meanwhile (with no back faces, as before the views had any: the atlas is cleared).
+		for (LocalShadowLight& light : m_LocalShadowLights)
+		{
+			if (light.Type != RenderData::c_LightRect)
+				continue;
+			for (uint32_t view = 0; view < light.ViewCount; view++)
+			{
+				if (light.Views[view].HasContent)
+					light.Views[view].Dirty = true;
+			}
+		}
 	}
 
 }
