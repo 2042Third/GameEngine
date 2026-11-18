@@ -1155,7 +1155,8 @@ namespace Strata
 			// The prepass of a frame with screen-space reflections (always with Velocity): it writes the surface target too.
 			bool Surface = false;
 			// The forward passes (Opaque, Transparent, Glass) of a frame whose scene has a rect light: the shaders' forms that
-			// shade rect lights (ST_AREA_LIGHTS). GetScenePipeline sets it from the frame.
+			// shade rect lights (ST_AREA_LIGHTS); its prepass with the surface target: the form that marks light surfaces
+			// (ST_PREPASS_LIGHT_SURFACES). GetScenePipeline sets it from the frame.
 			bool AreaLights = false;
 			bool operator==(const PipelineKey&) const = default;
 		};
@@ -2924,8 +2925,13 @@ namespace Strata
 		nvrhi::TextureHandle m_ScreenReflectionTexture;
 		nvrhi::FramebufferHandle m_SurfacePrepassFramebuffer;
 		nvrhi::ShaderHandle m_PrepassSurfacePixelShader;
+		// Its form that marks light surfaces (ST_PREPASS_LIGHT_SURFACES), drawn in frames with a rect light (m_AreaLightsFrame)
+		nvrhi::ShaderHandle m_PrepassSurfaceAreaPixelShader;
 		nvrhi::BindingLayoutHandle m_ScreenReflectionLayout;
 		nvrhi::ComputePipelineHandle m_ScreenReflectionPipeline;
+		// The traces' forms that leave light surfaces out (ST_SSR_LIGHT_SURFACES), run in frames with a rect light
+		// (m_AreaLightsFrame): frames without one run the plain forms, unchanged.
+		nvrhi::ComputePipelineHandle m_ScreenReflectionLightSurfacePipeline;
 		std::array<nvrhi::BindingSetHandle, 2> m_ScreenReflectionSets;
 		nvrhi::ITexture* m_BoundScreenReflections = nullptr;
 		// Spatial reflections (Reflections Spatial and SpatialHigh): whether the reflection resources made are theirs (the target
@@ -2939,6 +2945,7 @@ namespace Strata
 		nvrhi::BindingSetHandle m_ReflectionColorCopySet;
 		nvrhi::BindingLayoutHandle m_SpatialReflectionLayout;
 		nvrhi::ComputePipelineHandle m_SpatialReflectionPipeline;
+		nvrhi::ComputePipelineHandle m_SpatialReflectionLightSurfacePipeline;
 		nvrhi::BindingSetHandle m_SpatialReflectionSet;
 		nvrhi::BindingLayoutHandle m_ReflectionResolveLayout;
 		nvrhi::ComputePipelineHandle m_ReflectionResolvePipeline;

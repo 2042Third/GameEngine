@@ -5123,16 +5123,17 @@ lights, Post Process and the sky), and never a resolution below the output's.
   face on the mesh's bounds times the panel's world scale; a second call finds the light: "already a light"). The light lights
   the room and its highlight is the panel's reflection, so the passes that would count the panel's emission again leave it
   out: `RenderProxyFlags::LightSurface` (bit 7) on the proxy and `c_InstanceLightSurface` (`ST_INSTANCE_LIGHT_SURFACE`, bit 2)
-  on its instances (a tag change is a proxy change: the shadow caches redraw the views it reaches); the prepass writes
-  `c_SurfaceLightMarker` (-1) as the surface target's metallic factor, and both SSR tracers trace nothing from such a pixel and
-  keep a hit on one, or beside one within the texels its color's fetches blend (the bilinear footprint, and the spatial
-  tracer's blurred level's at its corners: else a bright outline rings the panel's image), with its confidence but no light
-  (the probes' and sky's specular is replaced by nothing there, the area
-  light's highlight stands for the reflection); reflection probe captures draw its emission as 0, lit or unlit (the forms of
-  frames with rect lights, `ST_AREA_LIGHTS`, which a light surface needs); area lights' views leave it out on both paths
-  (`FindLocalShadowCasters`; `Cull.comp` through `CullLocalShadowView::Parameters.w`, in its form `CullShadowAreaViews.comp`,
-  which frames with a rect light's view run instead of `CullShadow.comp`: the plain form's code is unchanged, and so are the
-  pictures of scenes without rect lights), point, spot and sun shadows keep it.
+  on its instances (a tag change is a proxy change: the shadow caches redraw the views it reaches). Each pass below does it in
+  a form of its shader that only frames with a rect light run (`PipelineKey::AreaLights`, `m_AreaLightsFrame`), so a scene
+  without rect lights runs the shaders it always ran, byte for byte, and renders the same pictures. The prepass
+  (`ST_PREPASS_LIGHT_SURFACES`) writes `c_SurfaceLightMarker` (-1) as the surface target's metallic factor, and both SSR
+  tracers (`ST_SSR_LIGHT_SURFACES`) trace nothing from such a pixel and keep a hit on one, or beside one within the drawn
+  texels its color's fetches blend (the bilinear footprint, and the spatial tracer's blurred level's at its corners: else a
+  bright outline rings the panel's image), with its confidence but no light (the probes' and sky's specular is replaced by
+  nothing there, the area light's highlight stands for the reflection); reflection probe captures draw its emission as 0,
+  lit or unlit (`ST_AREA_LIGHTS`); area lights' views leave it out on both paths (`FindLocalShadowCasters`; on the GPU,
+  `CullShadowAreaViews.comp` through `CullLocalShadowView::Parameters.w`, run instead of `CullShadow.comp` when a frame has a
+  rect light's view), point, spot and sun shadows keep it.
   It never hides the mesh or leaves it out of the prepass, picking or the GI's occupancy. Until area lights reach the GI the
   voxelizer keeps its emission: a GI scene counts the panel's light twice (Known issue). Measured: SSR on and off read the
   panel's mirror image alike on both tracers (`GPU.SceneRenderer.AreaLights`); a capture's mean radiance with the tagged panel

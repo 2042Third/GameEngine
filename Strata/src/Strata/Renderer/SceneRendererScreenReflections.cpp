@@ -59,9 +59,17 @@ namespace Strata
 			desc.CS = shaders.Get("Effects/ScreenSpaceReflections.comp");
 			desc.bindingLayouts = { m_ScreenReflectionLayout };
 			m_PrepassSurfacePixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/DepthPrepassSurface.frag" : "Scene/DepthPrepassNoEntityIDsSurface.frag");
-			ST_CORE_VERIFY(desc.CS && m_ScreenReflectionLayout && m_PrepassSurfacePixelShader, "SceneRenderer: the screen-space reflection shaders are missing");
+			m_PrepassSurfaceAreaPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/DepthPrepassSurfaceLightSurfaces.frag"
+				: "Scene/DepthPrepassNoEntityIDsSurfaceLightSurfaces.frag");
+			ST_CORE_VERIFY(desc.CS && m_ScreenReflectionLayout && m_PrepassSurfacePixelShader && m_PrepassSurfaceAreaPixelShader,
+				"SceneRenderer: the screen-space reflection shaders are missing");
 			m_ScreenReflectionPipeline = m_Device->createComputePipeline(desc);
-			ST_CORE_VERIFY(m_ScreenReflectionPipeline, "SceneRenderer: failed to create the screen-space reflection pipeline");
+			nvrhi::ComputePipelineDesc lightSurfaceDesc = desc;
+			lightSurfaceDesc.CS = shaders.Get("Effects/ScreenSpaceReflectionsLightSurfaces.comp");
+			ST_CORE_VERIFY(lightSurfaceDesc.CS, "SceneRenderer: the screen-space reflection shaders are missing");
+			m_ScreenReflectionLightSurfacePipeline = m_Device->createComputePipeline(lightSurfaceDesc);
+			ST_CORE_VERIFY(m_ScreenReflectionPipeline && m_ScreenReflectionLightSurfacePipeline,
+				"SceneRenderer: failed to create the screen-space reflection pipelines");
 		}
 		if (m_ScreenReflectionSets[0])
 			return true;
@@ -146,7 +154,7 @@ namespace Strata
 		parameters.Frame = m_TemporalFrames;
 
 		nvrhi::ComputeState state;
-		state.pipeline = m_ScreenReflectionPipeline;
+		state.pipeline = m_AreaLightsFrame ? m_ScreenReflectionLightSurfacePipeline : m_ScreenReflectionPipeline;
 		state.bindings = { m_ScreenReflectionSets[m_HistoryIndex] };
 		commandList->setComputeState(state);
 		commandList->setPushConstants(&parameters, sizeof(parameters));
@@ -186,20 +194,25 @@ namespace Strata
 			};
 			m_ReflectionResolveLayout = m_Device->createBindingLayout(resolveLayout);
 			nvrhi::ShaderHandle traceShader = shaders.Get("Effects/ScreenSpaceReflectionsSpatial.comp");
+			nvrhi::ShaderHandle lightSurfaceTraceShader = shaders.Get("Effects/ScreenSpaceReflectionsSpatialLightSurfaces.comp");
 			nvrhi::ShaderHandle resolveShader = shaders.Get("Effects/ReflectionResolve.comp");
-			ST_CORE_VERIFY(traceShader && resolveShader && m_SpatialReflectionLayout && m_ReflectionResolveLayout,
+			ST_CORE_VERIFY(traceShader && lightSurfaceTraceShader && resolveShader && m_SpatialReflectionLayout && m_ReflectionResolveLayout,
 				"SceneRenderer: the spatial screen-space reflection shaders are missing");
 			m_ReflectionResolvePipeline = m_Device->createComputePipeline(nvrhi::ComputePipelineDesc().setComputeShader(resolveShader)
 				.addBindingLayout(m_ReflectionResolveLayout));
 			m_SpatialReflectionPipeline = m_Device->createComputePipeline(nvrhi::ComputePipelineDesc().setComputeShader(traceShader)
 				.addBindingLayout(m_SpatialReflectionLayout));
-			ST_CORE_VERIFY(m_ReflectionResolvePipeline && m_SpatialReflectionPipeline,
+			m_SpatialReflectionLightSurfacePipeline = m_Device->createComputePipeline(nvrhi::ComputePipelineDesc()
+				.setComputeShader(lightSurfaceTraceShader).addBindingLayout(m_SpatialReflectionLayout));
+			ST_CORE_VERIFY(m_ReflectionResolvePipeline && m_SpatialReflectionPipeline && m_SpatialReflectionLightSurfacePipeline,
 				"SceneRenderer: failed to create the spatial screen-space reflection pipelines");
 		}
 		if (!m_PrepassSurfacePixelShader)
 		{
 			m_PrepassSurfacePixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/DepthPrepassSurface.frag" : "Scene/DepthPrepassNoEntityIDsSurface.frag");
-			ST_CORE_VERIFY(m_PrepassSurfacePixelShader, "SceneRenderer: the prepass's surface shader is missing");
+			m_PrepassSurfaceAreaPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/DepthPrepassSurfaceLightSurfaces.frag"
+				: "Scene/DepthPrepassNoEntityIDsSurfaceLightSurfaces.frag");
+			ST_CORE_VERIFY(m_PrepassSurfacePixelShader && m_PrepassSurfaceAreaPixelShader, "SceneRenderer: the prepass's surface shader is missing");
 		}
 		if (m_SpatialReflectionSet)
 			return true;
@@ -309,7 +322,7 @@ namespace Strata
 		parameters.MaxCandidates = steps.MaxCandidates;
 		parameters.ColorLevels = m_SceneColorTexture->getDesc().mipLevels;
 		nvrhi::ComputeState state;
-		state.pipeline = m_SpatialReflectionPipeline;
+		state.pipeline = m_AreaLightsFrame ? m_SpatialReflectionLightSurfacePipeline : m_SpatialReflectionPipeline;
 		state.bindings = { m_SpatialReflectionSet };
 		commandList->setComputeState(state);
 		commandList->setPushConstants(&parameters, sizeof(parameters));

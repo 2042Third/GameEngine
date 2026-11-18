@@ -19,7 +19,9 @@
 // themselves. Smooth surfaces read the copy at full resolution; rougher ones the half-resolution copy's blurred levels at
 // roughness x (levels - 1), as glass does, blended over roughness 0.05 to 0.15. A frame without a previous copy (the first,
 // a camera cut, a reset) is not traced. Output: rgb the reflected luminance (pre-exposed) times the confidence, a the
-// confidence (as the Checkerboard trace's).
+// confidence (as the Checkerboard trace's). With ST_SSR_LIGHT_SURFACES (Effects/ScreenSpaceReflectionsSpatialLightSurfaces.comp,
+// frames with a rect light) light surfaces trace nothing and send no light; frames without rect lights run this form as it
+// always was.
 
 // Slots of this pass's own layout (its frame constants and linear clamp sampler at Include/Scene.slang's slots).
 Texture2D<float4> u_Depth : register(t22);
@@ -187,21 +189,21 @@ float RefineCrossing(ScreenRay ray, MarchPoint low, MarchPoint high, int2 size)
 	return ValidateCrossing(low, high);
 }
 
-// Whether a texel the hit's color fetches blend shows a light surface (its metallic factor c_SurfaceLightMarker): the
-// full-resolution copy's bilinear footprint, and with `radius` (full-resolution pixels) the blurred level's, at its corners.
+#ifdef ST_SSR_LIGHT_SURFACES
+// Whether a texel the hit's color fetches blend shows a light surface (CountLightSurfaceTexels): the full-resolution copy's
+// bilinear footprint, and with `radius` (full-resolution pixels) the blurred level's, at its corners.
 bool IsNearLightSurface(float2 uv, float radius)
 {
-	float4 markers = u_Surface.GatherAlpha(u_LinearClampSampler, uv);
+	float marked = CountLightSurfaceTexels(uv);
 	if (radius > 0.0)
 	{
 		float2 offset = radius / u_Frame.ViewportSize.xy;
-		markers = min(markers, u_Surface.GatherAlpha(u_LinearClampSampler, uv - offset));
-		markers = min(markers, u_Surface.GatherAlpha(u_LinearClampSampler, uv + offset));
-		markers = min(markers, u_Surface.GatherAlpha(u_LinearClampSampler, uv + float2(offset.x, -offset.y)));
-		markers = min(markers, u_Surface.GatherAlpha(u_LinearClampSampler, uv + float2(-offset.x, offset.y)));
+		marked += CountLightSurfaceTexels(uv - offset) + CountLightSurfaceTexels(uv + offset)
+			+ CountLightSurfaceTexels(uv + float2(offset.x, -offset.y)) + CountLightSurfaceTexels(uv + float2(-offset.x, offset.y));
 	}
-	return any(markers < float4(0.0));
+	return marked > 0.0;
 }
+#endif
 
 float4 TraceReflection(int2 pixel, int2 size)
 {
@@ -210,9 +212,13 @@ float4 TraceReflection(int2 pixel, int2 size)
 		return float4(0.0);
 	float4 surface = u_Surface.Load(int3(pixel, 0));
 	float roughnessFade = clamp((u_Reflections.MaxRoughness - surface.z) / max(0.25 * u_Reflections.MaxRoughness, 1e-4), 0.0, 1.0);
-	// A light surface (its metallic factor c_SurfaceLightMarker) traces nothing: what it shows is the light's emission.
-	if (roughnessFade <= 0.0 || u_Reflections.Intensity <= 0.0 || surface.w < 0.0)
+	if (roughnessFade <= 0.0 || u_Reflections.Intensity <= 0.0)
 		return float4(0.0);
+#ifdef ST_SSR_LIGHT_SURFACES
+	// A light surface (its metallic factor c_SurfaceLightMarker) traces nothing: what it shows is the light's emission.
+	if (surface.w < 0.0)
+		return float4(0.0);
+#endif
 	ScreenRay ray;
 	if (!BeginScreenRay(pixel, depth, OctahedralDecode(surface.xy), ray))
 		return float4(0.0);
@@ -285,14 +291,16 @@ float4 TraceReflection(int2 pixel, int2 size)
 	float3 sharp = u_PreviousColor.SampleLevel(u_LinearClampSampler, previousUV, 0.0).rgb;
 	float colorLevel = surface.z * float(max(u_Reflections.ColorLevels, 1u) - 1u);
 	float3 blurred = u_PreviousColorLevels.SampleLevel(u_LinearClampSampler, previousUV, colorLevel).rgb;
+	float3 color = lerp(sharp, blurred, smoothstep(c_SharpRoughness, c_BlurredRoughness, surface.z)) * u_Reflections.HistoryScale;
+#ifdef ST_SSR_LIGHT_SURFACES
 	float blurredWeight = smoothstep(c_SharpRoughness, c_BlurredRoughness, surface.z);
-	float3 color = lerp(sharp, blurred, blurredWeight) * u_Reflections.HistoryScale;
 	// A ray that met a light surface keeps its confidence and sends no light: the probes' and sky's specular are replaced by
 	// nothing there, and the area light's own highlight is the panel's reflection, once. The texels the color's fetches blend
 	// count too (the blurred level's half-resolution texels reach 2^(level + 1) pixels): a hit beside the panel would otherwise
 	// take its light, a bright outline around its image.
 	if (IsNearLightSurface(hitUV, blurredWeight > 0.0 ? exp2(ceil(colorLevel) + 1.0) : 0.0))
 		color = float3(0.0);
+#endif
 	float confidence = roughnessFade * GetHitConfidence(hitUV, hitPixel, ray) * min(u_Reflections.Intensity, 1.0);
 	return float4(SanitizeHDR(color) * confidence, confidence);
 }

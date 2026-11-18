@@ -4,7 +4,7 @@
 // What both screen-space reflection traces share (Effects/ScreenSpaceReflections.comp and ScreenSpaceReflectionsSpatial.comp):
 // a reflected ray as a straight line in screen space, the depth's view distance, how thick a surface is taken to be, and the
 // confidence of a hit. The includer declares u_Depth (the prepass's depth), u_Normals (its geometric view-space normals,
-// octahedral) and Include/Scene.slang's frame constants first.
+// octahedral), u_Surface (its surface target) and Include/Scene.slang's frame constants and samplers first.
 
 static const float c_FarDistance = 10000.0; // How far rays away from the camera reach before the screen's edges cut them
 // How far behind a surface a ray may be at the first point behind it and still hit it: what the ray's depth changed by
@@ -84,6 +84,18 @@ bool BeginScreenRay(int2 pixel, float depth, float3 normal, out ScreenRay ray)
 	ray.Pixels = length(delta.xy * u_Frame.ViewportSize.xy);
 	return ray.Pixels >= 1.0;
 }
+
+#ifdef ST_SSR_LIGHT_SURFACES
+// How many of the four texels a gather at `uv` reads show a light surface (the surface target's metallic factor
+// c_SurfaceLightMarker): a hit whose color's fetches blend one sends no light. Only drawn texels count: the surface target is
+// not cleared, so where nothing was drawn (the depth buffer's 0) it holds nothing meaningful.
+float CountLightSurfaceTexels(float2 uv)
+{
+	float4 marked = step(u_Surface.GatherAlpha(u_LinearClampSampler, uv), float4(-0.5));
+	float4 drawn = step(float4(1.0e-7), u_Depth.GatherRed(u_LinearClampSampler, uv));
+	return dot(marked, drawn);
+}
+#endif
 
 // How much a hit at `hitUV` (pixel `hitPixel`) of a ray is believed: the depth buffer holds front faces only, so a surface the
 // ray meets from behind is not what it would see; and where the ray leaves the screen, a hit close to its exit fades (what

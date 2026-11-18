@@ -13,7 +13,9 @@
 // confidence, so that the forward pass's bilinear lookup blends a reflection's edges with what it replaces rather than with
 // black. Rays that leave the screen, pass the far plane or meet nothing, and hits whose surface was outside the previous
 // frame, have none: Forward.frag keeps the probes' and the sky's specular light there and mixes the reflection over it
-// elsewhere. The TAA averages the noise of the frames.
+// elsewhere. The TAA averages the noise of the frames. With ST_SSR_LIGHT_SURFACES (Effects/ScreenSpaceReflectionsLightSurfaces.comp,
+// frames with a rect light) light surfaces trace nothing and send no light; frames without rect lights run this form as it
+// always was.
 
 // Slots above the scene set's (Include/Scene.slang, whose frame constants and linear clamp sampler this pass binds too).
 Texture2D<float4> u_Depth : register(t22);
@@ -55,9 +57,13 @@ float4 TraceReflection(int2 pixel, int2 size)
 		return float4(0.0);
 	float4 surface = u_Surface.Load(int3(pixel, 0));
 	float roughnessFade = clamp((u_Reflections.MaxRoughness - surface.z) / max(0.25 * u_Reflections.MaxRoughness, 1e-4), 0.0, 1.0);
-	// A light surface (its metallic factor c_SurfaceLightMarker) traces nothing: what it shows is the light's emission.
-	if (roughnessFade <= 0.0 || u_Reflections.Intensity <= 0.0 || surface.w < 0.0)
+	if (roughnessFade <= 0.0 || u_Reflections.Intensity <= 0.0)
 		return float4(0.0);
+#ifdef ST_SSR_LIGHT_SURFACES
+	// A light surface (its metallic factor c_SurfaceLightMarker) traces nothing: what it shows is the light's emission.
+	if (surface.w < 0.0)
+		return float4(0.0);
+#endif
 
 	ScreenRay ray;
 	if (!BeginScreenRay(pixel, depth, OctahedralDecode(surface.xy), ray))
@@ -111,11 +117,13 @@ float4 TraceReflection(int2 pixel, int2 size)
 	if (any((previousUV < float2(0.0))) || any((previousUV > float2(1.0))))
 		return float4(0.0);
 	float3 color = u_History.SampleLevel(u_LinearClampSampler, previousUV, 0.0).rgb * u_Reflections.HistoryScale;
+#ifdef ST_SSR_LIGHT_SURFACES
 	// A ray that met a light surface keeps its confidence and sends no light: the probes' and sky's specular are replaced by
 	// nothing there, and the area light's own highlight is the panel's reflection, once. Every texel the bilinear fetch of the
 	// color blends counts: a hit beside the panel would otherwise take its light (a bright outline around its image).
-	if (any(u_Surface.GatherAlpha(u_LinearClampSampler, hitUV) < float4(0.0)))
+	if (CountLightSurfaceTexels(hitUV) > 0.0)
 		color = float3(0.0);
+#endif
 	float confidence = roughnessFade * GetHitConfidence(hitUV, hitPixel, ray) * min(u_Reflections.Intensity, 1.0);
 	return float4(SanitizeHDR(color) * confidence, confidence);
 }

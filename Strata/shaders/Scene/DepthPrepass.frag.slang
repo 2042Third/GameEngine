@@ -14,8 +14,10 @@
 // anti-aliasing. With ST_PREPASS_SURFACE (Scene/DepthPrepassSurface.frag, DepthPrepassNoEntityIDsSurface.frag; always with
 // ST_VELOCITY) it also writes the surface target screen-space reflections trace from, after the velocity: the normal-mapped
 // view-space normal (octahedral), the roughness and the metallic factor, as the forward pass shades them (unlit surfaces:
-// roughness 1, nothing to reflect). The face of an area light (ST_INSTANCE_LIGHT_SURFACE) writes c_SurfaceLightMarker as its
-// metallic factor: the light's own highlight is the panel's reflection, so screen-space reflections send no light from it.
+// roughness 1, nothing to reflect). With ST_PREPASS_LIGHT_SURFACES too (DepthPrepassSurfaceLightSurfaces.frag,
+// DepthPrepassNoEntityIDsSurfaceLightSurfaces.frag: frames with a rect light) the face of an area light
+// (ST_INSTANCE_LIGHT_SURFACE) writes c_SurfaceLightMarker as its metallic factor: the light's own highlight is the panel's
+// reflection, so screen-space reflections send no light from it.
 
 static float3 v_RelativePosition;
 static float3 v_Normal;
@@ -70,8 +72,10 @@ void st_Main()
 			u_Frame.MaterialParams.z);
 		surface = float4(OctahedralEncode(normalize(mul(((float3x3)(u_Frame.View)), shadingNormal))), roughness, clamp(material.Metallic * metallicRoughness.b, 0.0, 1.0));
 	}
+#ifdef ST_PREPASS_LIGHT_SURFACES
 	if ((instance.Flags & ST_INSTANCE_LIGHT_SURFACE) != 0u)
 		surface.w = c_SurfaceLightMarker;
+#endif
 #endif
 	if (!IsLODFadeDrawn(v_LODFade, st_FragCoord.xy))
 		discard;

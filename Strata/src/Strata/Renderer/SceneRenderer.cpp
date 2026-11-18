@@ -2464,9 +2464,11 @@ namespace Strata
 
 	nvrhi::IGraphicsPipeline* SceneRenderer::GetScenePipeline(const PipelineKey& requested)
 	{
-		// The forward passes of a frame whose scene has a rect light take the shaders' forms that shade them.
+		// The forward passes of a frame whose scene has a rect light take the shaders' forms that shade them, and its prepass with
+		// the surface target the form that marks light surfaces.
 		PipelineKey key = requested;
-		key.AreaLights = m_AreaLightsFrame && (key.PassType == Pass::Opaque || key.PassType == Pass::Transparent || key.PassType == Pass::Glass);
+		key.AreaLights = m_AreaLightsFrame && (key.PassType == Pass::Opaque || key.PassType == Pass::Transparent || key.PassType == Pass::Glass
+			|| (key.PassType == Pass::Prepass && key.Surface));
 		for (const auto& [cachedKey, pipeline] : m_ScenePipelines)
 		{
 			if (cachedKey == key)
@@ -2492,7 +2494,12 @@ namespace Strata
 		desc.inputLayout = m_SceneInputLayouts[static_cast<size_t>(*vertexLayout)];
 		switch (key.PassType)
 		{
-			case Pass::Prepass:      desc.PS = key.Surface ? m_PrepassSurfacePixelShader : (key.Velocity ? m_PrepassVelocityPixelShader : m_PrepassPixelShader); break;
+			case Pass::Prepass:
+				if (key.Surface)
+					desc.PS = key.AreaLights ? m_PrepassSurfaceAreaPixelShader : m_PrepassSurfacePixelShader;
+				else
+					desc.PS = key.Velocity ? m_PrepassVelocityPixelShader : m_PrepassPixelShader;
+				break;
 			case Pass::ShadowMasked:
 			case Pass::LocalShadowMasked: desc.PS = m_ShadowMaskPixelShader; break;
 			case Pass::Shadow:
