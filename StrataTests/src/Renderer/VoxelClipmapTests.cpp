@@ -308,8 +308,8 @@ TEST_SUITE("Renderer.VoxelClipmap")
 		const RenderScene& render = RenderScene::Get(fixture.SceneData);
 		const AABB before = render.GetWorldBounds(render.FindProxy(cube));
 
-		// Moved: its old voxels are emptied in the frame it moved (it is out of the voxels while it moves), and the camera's move
-		// in the same frame queues its slabs behind the change.
+		// Moved: its old voxels are emptied in the frame it moved (its triangles are out of the voxels while it moves: the dynamic
+		// layer holds it), and the camera's move in the same frame queues its slabs behind the change.
 		cube.GetComponent<TransformComponent>().Translation = glm::vec3(3.0f, 0.5f, 3.0f);
 		cube.MarkModified<TransformComponent>();
 		fixture.Camera = glm::dvec3(0.45, 0.0, 0.0);
@@ -333,17 +333,28 @@ TEST_SUITE("Renderer.VoxelClipmap")
 				CHECK(index < regions.size());
 		}
 
-		// It rests: c_GIMovingFrames frames later its new bounds are queued, with its items.
+		// It rests by the clock, never by frames: while no time passes it stays a mover, and c_GIMoverRestSeconds after its last
+		// move its new bounds are queued, with its items.
 		fixture.Camera = glm::dvec3(0.0);
 		fixture.Build();
 		const AABB after = render.GetWorldBounds(render.FindProxy(cube));
-		for (uint32_t frame = 2; frame < RenderData::c_GIMovingFrames; frame++)
+		for (uint32_t frame = 0; frame < 100; frame++)
 		{
 			fixture.Build();
 			CHECK(fixture.GetItems(cube).empty());
 		}
+		CHECK(fixture.Frame.MovingProxies == 1);
+		fixture.Settings.StepSeconds = 0.4f * RenderData::c_GIMoverRestSeconds;
+		for (uint32_t frame = 0; frame < 2; frame++)
+		{
+			fixture.Build();
+			CHECK(fixture.GetItems(cube).empty());
+			CHECK(fixture.Frame.MovingProxies == 1);
+		}
 		fixture.Build();
 		CHECK(fixture.Frame.MovingProxies == 0);
+		CHECK(fixture.Frame.Movers.empty());
+		CHECK(fixture.Frame.MoverBricks.empty());
 		for (uint32_t level = 0; level < 4; level++)
 		{
 			CAPTURE(level);
@@ -357,6 +368,166 @@ TEST_SUITE("Renderer.VoxelClipmap")
 		for (uint32_t level = 0; level < 4; level++)
 			CHECK(fixture.RegionsCover(level, { fixture.GetChangeBox(after, level) }));
 		CHECK(fixture.Frame.Items.empty());
+	}
+
+	TEST_CASE("A moving proxy is listed for the dynamic layer, and nothing is while nothing moves")
+	{
+		Fixture fixture;
+		fixture.Settings.StepSeconds = 0.4f * RenderData::c_GIMoverRestSeconds;
+		Entity cube = fixture.Add(glm::vec3(2.0f, 0.5f, 3.03f), c_CubeMesh, UUID::Null(), glm::vec3(1.0f, 0.5f, 2.0f));
+		fixture.Camera = glm::dvec3(1.0, 1.0, 1.0);
+		fixture.Build();
+		fixture.Build();
+		CHECK(fixture.Frame.Movers.empty());
+		CHECK(fixture.Frame.MoverBricks.empty());
+		CHECK_FALSE(fixture.Frame.MoversChanged);
+
+		// Moved and turned: one box, its center relative to the camera and its half extents along the proxy's turned axes.
+		TransformComponent& transform = cube.GetComponent<TransformComponent>();
+		transform.Translation = glm::vec3(2.3f, 0.5f, 3.03f);
+		transform.Rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		cube.MarkModified<TransformComponent>();
+		fixture.Build();
+		CHECK(fixture.Frame.MovingProxies == 1);
+		CHECK(fixture.Frame.MoversLeftOut == 0);
+		CHECK(fixture.Frame.MoversChanged);
+		REQUIRE(fixture.Frame.Movers.size() == 1);
+		const RenderData::VoxelMover& mover = fixture.Frame.Movers.front();
+		CHECK(glm::distance(glm::vec3(mover.Center), glm::vec3(1.3f, -0.5f, 2.03f)) < 1e-5f);
+		// A quarter turn about y takes the box's x axis to -z and its z axis to +x.
+		CHECK(glm::distance(glm::abs(glm::vec3(mover.AxisX)), glm::vec3(0.0f, 0.0f, 0.5f)) < 1e-5f);
+		CHECK(glm::distance(glm::abs(glm::vec3(mover.AxisY)), glm::vec3(0.0f, 0.25f, 0.0f)) < 1e-5f);
+		CHECK(glm::distance(glm::abs(glm::vec3(mover.AxisZ)), glm::vec3(1.0f, 0.0f, 0.0f)) < 1e-5f);
+
+		// Its bricks: per level, in order, those holding every voxel of the window the box reaches, each in the window in part,
+		// with its texel, its slot in order and the box's bit.
+		const AABB bounds = RenderScene::Get(fixture.SceneData).GetWorldBounds(RenderScene::Get(fixture.SceneData).FindProxy(cube));
+		const glm::uvec3 dimensions = fixture.Clipmap.GetLayout().Levels.front().Dimensions;
+		constexpr int64_t c_Brick = RenderData::c_GIMoverBrickVoxels;
+		uint32_t previousLevel = 0;
+		std::array<uint32_t, 4> perLevel = {};
+		for (size_t index = 0; index < fixture.Frame.MoverBricks.size(); index++)
+		{
+			const RenderData::VoxelMoverBrick& brick = fixture.Frame.MoverBricks[index];
+			const uint32_t level = static_cast<uint32_t>(brick.Texel.w);
+			REQUIRE(level < 4);
+			CHECK(level >= previousLevel);
+			previousLevel = level;
+			perLevel[level]++;
+			CHECK(brick.Local.w == static_cast<int32_t>(index));
+			CHECK(brick.Movers.x == 1u);
+			CHECK(brick.Movers.y == 0u);
+			const glm::i64vec3 window = fixture.Clipmap.GetLevel(level).Window;
+			const glm::i64vec3 voxel = window + glm::i64vec3(glm::ivec3(brick.Local));
+			CHECK(voxel.x % c_Brick == 0);
+			CHECK(voxel.y % c_Brick == 0);
+			CHECK(voxel.z % c_Brick == 0);
+			CHECK(glm::uvec3(glm::ivec3(brick.Texel)) == GlobalIllumination::GetTexel(voxel, dimensions));
+			const VoxelBox box { voxel, voxel + c_Brick };
+			CHECK(box.Intersects(GlobalIllumination::GetWindow(fixture.Clipmap.GetLayout().Levels[level], window)));
+		}
+		for (uint32_t level = 0; level < 4; level++)
+		{
+			CAPTURE(level);
+			// Along each axis the box and a voxel beyond, at least two voxels each way: what the layer weighs.
+			const double voxelSize = static_cast<double>(fixture.Clipmap.GetLayout().Levels[level].VoxelSize);
+			const glm::dvec3 center = 0.5 * (glm::dvec3(bounds.Min) + glm::dvec3(bounds.Max));
+			const glm::dvec3 reach = glm::max(0.5 * (glm::dvec3(bounds.Max) - glm::dvec3(bounds.Min)), glm::dvec3(voxelSize)) + voxelSize;
+			const glm::i64vec3 low(glm::floor((center - reach) / voxelSize));
+			const glm::i64vec3 high(glm::floor((center + reach) / voxelSize));
+			uint32_t expected = 1;
+			for (int axis = 0; axis < 3; axis++)
+			{
+				const int64_t first = low[axis] >= 0 ? low[axis] / c_Brick : -((-low[axis] + c_Brick - 1) / c_Brick);
+				const int64_t last = high[axis] >= 0 ? high[axis] / c_Brick : -((-high[axis] + c_Brick - 1) / c_Brick);
+				expected *= static_cast<uint32_t>(last - first + 1);
+			}
+			CHECK(perLevel[level] == expected);
+		}
+
+		// Unmoved, the list repeats; resting, it empties in the frame the regions that hold its triangles are taken.
+		fixture.Build();
+		CHECK(fixture.Frame.Movers.size() == 1);
+		CHECK_FALSE(fixture.Frame.MoversChanged);
+		fixture.Build();
+		fixture.Build();
+		CHECK(fixture.Frame.MovingProxies == 0);
+		CHECK(fixture.Frame.Movers.empty());
+		CHECK(fixture.Frame.MoversChanged);
+		CHECK_FALSE(fixture.GetItems(cube).empty());
+		fixture.Build();
+		CHECK_FALSE(fixture.Frame.MoversChanged);
+	}
+
+	TEST_CASE("A proxy that rested stays in the dynamic layer until its regions are taken")
+	{
+		// A budget of one triangle a frame takes one region a frame: the cube's bounds wait in every level's queue for a while,
+		// and it stays a mover until the last of them is taken, so it is never in neither.
+		Fixture fixture;
+		fixture.Settings.TrianglesPerFrame = 1;
+		fixture.Settings.StepSeconds = RenderData::c_GIMoverRestSeconds;
+		Entity cube = fixture.Add(glm::vec3(2.0f, 0.5f, 3.0f));
+		for (uint32_t frame = 0; frame < 2000 && (frame == 0 || fixture.Frame.QueuedRegions > 0); frame++)
+			fixture.Build();
+		REQUIRE(fixture.Frame.QueuedRegions == 0);
+		cube.GetComponent<TransformComponent>().Translation = glm::vec3(2.33f, 0.5f, 3.0f);
+		cube.MarkModified<TransformComponent>();
+		fixture.Build();
+		CHECK(fixture.Frame.MovingProxies == 1);
+		// The frame after, it has rested: its bounds are queued, and one region a frame is taken.
+		uint32_t waited = 0;
+		bool voxelized = false;
+		for (uint32_t frame = 0; frame < 200; frame++)
+		{
+			fixture.Build();
+			voxelized = voxelized || !fixture.GetItems(cube).empty();
+			if (fixture.Frame.QueuedRegions == 0)
+				break;
+			waited++;
+			CHECK(fixture.Frame.MovingProxies == 1);
+			CHECK(fixture.Frame.Movers.size() == 1);
+		}
+		CHECK(waited >= 3);
+		CHECK(voxelized);
+		CHECK(fixture.Frame.QueuedRegions == 0);
+		CHECK(fixture.Frame.MovingProxies == 0);
+		CHECK(fixture.Frame.Movers.empty());
+	}
+
+	TEST_CASE("Movers past the dynamic layer's bricks or boxes are left out")
+	{
+		Fixture fixture;
+		Entity large = fixture.Add(glm::vec3(0.0f, 0.5f, 0.0f), c_CubeMesh, UUID::Null(), glm::vec3(12.0f, 6.0f, 12.0f));
+		std::vector<Entity> cubes;
+		for (uint32_t index = 0; index < RenderData::c_GIMaxMoverBoxes + 1; index++)
+			cubes.push_back(fixture.Add(glm::vec3(-3.0f + 0.1f * static_cast<float>(index), 0.5f, 3.0f), c_CubeMesh, UUID::Null(), glm::vec3(0.05f)));
+		fixture.Build();
+		const auto move = [](Entity entity)
+		{
+			entity.GetComponent<TransformComponent>().Translation.y += 0.01f;
+			entity.MarkModified<TransformComponent>();
+		};
+
+		// A box of 12 x 6 x 12 m reaches more of level 0's bricks than High's layer holds: left out, nothing listed.
+		move(large);
+		fixture.Build();
+		CHECK(fixture.Frame.MovingProxies == 1);
+		CHECK(fixture.Frame.MoversLeftOut == 1);
+		CHECK(fixture.Frame.Movers.empty());
+		CHECK(fixture.Frame.MoverBricks.empty());
+
+		// One box more than a frame lists: the last proxy is left out, the others keep their boxes.
+		for (Entity cube : cubes)
+			move(cube);
+		fixture.Build();
+		CHECK(fixture.Frame.MovingProxies == RenderData::c_GIMaxMoverBoxes + 2);
+		CHECK(fixture.Frame.MoversLeftOut == 2);
+		CHECK(fixture.Frame.Movers.size() == RenderData::c_GIMaxMoverBoxes);
+		CHECK(fixture.Frame.MoverBricks.size() <= fixture.Clipmap.GetLayout().MoverBricks);
+		uint32_t bits = 0;
+		for (const RenderData::VoxelMoverBrick& brick : fixture.Frame.MoverBricks)
+			bits |= brick.Movers.y;
+		CHECK(bits != 0u); // Boxes past the 32nd are named in the second word
 	}
 
 	TEST_CASE("A jump queues every window within the cut's budget, level 0 first")

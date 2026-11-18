@@ -29,8 +29,8 @@ what each one costs:
 | Motion blur samples (scenes with motion blur) | Off | 8 | 12 | 16 |
 | Reflection probe resolution (per face) | 128 | 128 | 256 | 256 |
 | Global illumination (experimental; scenes that use it) | Off | Off | High | High |
-| Memory of one view, 1920 x 1080 (see below) | 48 MiB | 192 MiB | 702 MiB | 1.81 GiB |
-| Memory of one view, 3840 x 2160 | 48 MiB | 325 MiB | 1.86 GiB | 2.05 GiB |
+| Memory of one view, 1920 x 1080 (see below) | 48 MiB | 192 MiB | 705 MiB | 1.81 GiB |
+| Memory of one view, 3840 x 2160 | 48 MiB | 325 MiB | 1.87 GiB | 2.06 GiB |
 
 - **Medium** keeps Strata 0.6.0's shadow map sizes and sample counts. **High**, the default, adds smoother wide sun
   penumbrae at every size, and sharper sun shadows at every size: twice Medium's shadow map size each way below 1440
@@ -59,7 +59,7 @@ what each one costs:
   the reflections it asks for show at full resolution from High on, and not at all at Low.
 - **Global illumination** (experimental) applies only to scenes whose Post Process turns it on (it is off by default, and
   in the template and the samples). The Low and Medium presets draw none; set to Low, it traces a coarser, shorter field for
-  about 23 MiB of GPU memory per view, High a finer one for about 153 MiB and several milliseconds of GPU time at 3840 x
+  about 25 MiB of GPU memory per view, High a finer one for about 156 MiB and several milliseconds of GPU time at 3840 x
   2160 (the `GPU.RadianceCascades` stage). High's cost was measured on one Windows machine with an NVIDIA GPU only: on
   integrated and Apple GPUs choose Low until measured there.
 - **Motion blur samples** apply only to scenes whose Post Process turns motion blur on (it is off by default, and in the

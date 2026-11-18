@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <deque>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace Strata
@@ -45,6 +46,9 @@ namespace Strata
 		uint32_t TrianglesPerFrame = RenderData::c_GIVoxelizeTrianglesPerFrame;
 		// The same on a frame that rebuilds or jumps a window.
 		uint32_t TrianglesOnCut = RenderData::c_GIVoxelizeTrianglesOnCut;
+		// Seconds since the frame before, by the renderer's clock: what moving proxies rest by (c_GIMoverRestSeconds). 0: no time
+		// passes, so what moves stays in the dynamic layer.
+		float StepSeconds = 0.0f;
 	};
 
 	// Regions of one level the GPU voxelizes together: their voxels fit the layout's scratch (BatchVoxels).
@@ -69,7 +73,15 @@ namespace Strata
 		uint32_t Triangles = 0;            // Of the frame's work items
 		uint32_t QueuedRegions = 0;        // Regions left for later frames
 		uint32_t WaitingProxies = 0;       // Left out until they are resident with a loaded mesh
-		uint32_t MovingProxies = 0;        // Left out while they move (placed anew within c_GIMovingFrames frames)
+		// Proxies moving, or resting for less than c_GIMoverRestSeconds: out of the voxels their triangles made, in the dynamic layer
+		// (Movers, MoverBricks) but for MoversLeftOut of them, which are past its boxes or bricks and in no voxel until they rest.
+		uint32_t MovingProxies = 0;
+		uint32_t MoversLeftOut = 0;
+		// The dynamic layer (GI/VoxelMovers.comp): the moving proxies' submeshes as oriented boxes, camera-relative, and the bricks
+		// of voxels they reach, by level; empty while nothing moves. MoversChanged: they differ from the frame before's.
+		std::vector<RenderData::VoxelMover> Movers;
+		std::vector<RenderData::VoxelMoverBrick> MoverBricks;
+		bool MoversChanged = false;
 		// Per region taken: submeshes beyond c_VoxelItemMaxSubmesh, and items beyond the frame's limits (a closed mesh missing
 		// any is voxelized open)
 		uint32_t UnvoxelizedSubmeshes = 0;
@@ -87,8 +99,11 @@ namespace Strata
 	// toroidally (a world voxel at its index modulo the dimensions), a queue of regions to voxelize and the box of voxels that
 	// are valid. Each frame (BuildFrame) it follows the camera (scrolling queues the slabs that entered; a move of a window or
 	// more, or a renderer's first frame, queues the whole window) and the scene: the render scene's proxy log, the GPU copy's
-	// tables (meshes and materials loaded, changed or dropped) and the proxies waiting for residency or moving, queuing the
-	// boxes their voxels were made with and their new bounds. It then takes regions in order (changes, slabs, then whole
+	// tables (meshes and materials loaded, changed or dropped) and the proxies waiting for residency, queuing the boxes their
+	// voxels were made with and their new bounds. A proxy placed anew is moving: its old bounds are queued once (its triangles
+	// leave the voxels) and its submeshes' oriented boxes are listed every frame for the dynamic layer, with the bricks of
+	// voxels they reach, until it has kept its place for c_GIMoverRestSeconds, when its bounds are queued once more (its
+	// triangles enter again) and it leaves the layer in the frame those regions are taken. It then takes regions in order (changes, slabs, then whole
 	// windows; level 0 first) while their triangles fit the frame's budget, at least one, and lists the work the GPU passes do
 	// for them. Main thread only; never per proxy of the scene but for changes and the regions it takes.
 	class VoxelClipmap
@@ -146,7 +161,7 @@ namespace Strata
 			None = 0,   // Not in the voxels: not drawable as the voxels take it
 			Voxelized,  // In the voxels, with Bounds
 			Waiting,    // Drawable but not resident, or its mesh not loaded
-			Moving      // Placed anew within c_GIMovingFrames frames: out of the voxels until it rests
+			Moving      // Placed anew within c_GIMoverRestSeconds: out of the voxels its triangles made, in the dynamic layer
 		};
 
 		struct ProxyState
@@ -155,6 +170,7 @@ namespace Strata
 			uint64_t Placement = 0;   // Hash of its world transform
 			uint64_t Content = 0;     // Hash of its mesh slot, override material slot and flags
 			uint64_t MovedFrame = 0;  // The frame it last moved (Moving)
+			float RestSeconds = 0.0f; // The clock's time since then
 			ProxyStatus Status = ProxyStatus::None;
 		};
 
@@ -186,7 +202,11 @@ namespace Strata
 		void StartOver(const RenderScene& renderScene, const IVoxelSceneSource& source, const glm::dvec3& cameraPosition);
 		void FollowCamera(const glm::dvec3& cameraPosition, bool& outCut);
 		void FollowTables(const RenderScene& renderScene, const IVoxelSceneSource& source, VoxelFrame& outFrame);
-		void FollowProxies(const RenderScene& renderScene, const IVoxelSceneSource& source);
+		void FollowProxies(const RenderScene& renderScene, const IVoxelSceneSource& source, float stepSeconds);
+		// Whether a change region that holds part of the bounds still waits in a level's queue.
+		bool IsChangeQueued(const AABB& bounds) const;
+		// Lists the dynamic layer's boxes and bricks: the proxies that move and those that rested whose regions still wait.
+		void EmitMovers(const RenderScene& renderScene, const IVoxelSceneSource& source, const glm::dvec3& cameraPosition, VoxelFrame& outFrame);
 		void Rescan(const RenderScene& renderScene, const IVoxelSceneSource& source, bool queueWindows);
 
 		bool IsDrawable(const RenderScene& renderScene, uint32_t proxy) const;
@@ -214,6 +234,12 @@ namespace Strata
 		std::vector<ProxyState> m_Proxies;
 		std::vector<uint32_t> m_Waiting; // Proxies with status Waiting (or that had it: checked as they are read)
 		std::vector<uint32_t> m_Moving;  // Likewise for Moving
+		// Proxies that came to rest (Voxelized again) and stay in the dynamic layer until their regions are taken.
+		std::vector<uint32_t> m_Resting;
+		std::vector<uint64_t> m_MoverKeys;                        // The frame's bricks: level and brick index, sorted
+		std::vector<uint64_t> m_MoverProxyKeys;                   // One proxy's
+		std::vector<std::pair<uint64_t, uint32_t>> m_MoverReach;  // A brick's key and a box that reaches it
+		uint64_t m_MoverHash = 0;                                 // Of the frame's boxes and bricks (MoversChanged)
 		std::vector<MeshInfo> m_Meshes;  // By mesh slot
 		std::vector<RenderData::GIMaterial> m_Materials; // By material slot
 		uint32_t m_LargestAlbedo = 0;                    // 0-255: GetBounceAlbedo

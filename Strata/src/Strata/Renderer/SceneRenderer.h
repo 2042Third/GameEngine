@@ -695,7 +695,9 @@ namespace Strata
 		uint32_t GIVoxelizedTriangles = 0;
 		uint32_t GIQueuedRegions = 0;
 		uint32_t GIWaitingProxies = 0;
-		uint32_t GIMovingProxies = 0;
+		uint32_t GIMovingProxies = 0;      // In the dynamic layer: moving, or resting for less than c_GIMoverRestSeconds
+		uint32_t GIMoverBricks = 0;        // Bricks of voxels the dynamic layer wrote this frame (0: none of its passes ran)
+		uint32_t GIMoversLeftOut = 0;      // Moving proxies past the layer's boxes or bricks: in no voxel until they rest
 		uint32_t GIUnvoxelizedSubmeshes = 0;
 		uint32_t GISettleFrames = 0;
 		// Copies of the scene's color the frame made for transmissive surfaces and spatial reflections (CopySceneColor: 1 when
@@ -2083,7 +2085,7 @@ namespace Strata
 		// GI, a new quality, the render targets.
 		void ReleaseGlobalIllumination(std::vector<nvrhi::ResourceHandle>& released);
 		// The frame's voxelization on the CPU (VoxelClipmap::BuildFrame, in Render.Extract) and the GI's constants.
-		void PrepareGlobalIllumination(const RenderScene& renderScene, const Ref<AssetManagerBase>& assets, const SceneCamera& camera);
+		void PrepareGlobalIllumination(const RenderScene& renderScene, const Ref<AssetManagerBase>& assets, const SceneCamera& camera, const SceneRenderOptions& options);
 		// GlobalIlluminationSettled under re-injection, once the frame's sun and sky are known: not until GISettleFrames frames
 		// after the light's inputs or the bounce's source last changed.
 		void SettleGlobalIllumination(const RenderData::FrameConstants& frame);

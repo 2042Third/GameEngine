@@ -55,6 +55,17 @@ namespace Strata
 			return VoxelBox { box.Minimum + voxels, box.Maximum - voxels };
 		}
 
+		// The brick of c_GIMoverBrickVoxels voxels a world voxel index lies in, per axis (bricks start at multiples of it, so a
+		// mover's bricks stay the same while windows scroll).
+		glm::i64vec3 GetMoverBrick(const glm::i64vec3& voxel)
+		{
+			constexpr int64_t c_Brick = RenderData::c_GIMoverBrickVoxels;
+			glm::i64vec3 brick;
+			for (int axis = 0; axis < 3; axis++)
+				brick[axis] = voxel[axis] >= 0 ? voxel[axis] / c_Brick : -((-voxel[axis] + c_Brick - 1) / c_Brick);
+			return brick;
+		}
+
 	}
 
 	void VoxelFrame::Clear()
@@ -67,6 +78,10 @@ namespace Strata
 		QueuedRegions = 0;
 		WaitingProxies = 0;
 		MovingProxies = 0;
+		MoversLeftOut = 0;
+		Movers.clear();
+		MoverBricks.clear();
+		MoversChanged = false;
 		UnvoxelizedSubmeshes = 0;
 		Pending = false;
 		Rebuilt = false;
@@ -115,7 +130,7 @@ namespace Strata
 			m_SceneId = renderScene.GetId();
 			FollowCamera(cameraPosition, cut);
 			FollowTables(renderScene, source, outFrame);
-			FollowProxies(renderScene, source);
+			FollowProxies(renderScene, source, settings.StepSeconds);
 		}
 
 		// The frame's regions: changes first (a moved object never waits behind slabs), then slabs, then whole windows, each
@@ -193,15 +208,20 @@ namespace Strata
 				outFrame.Pending = true;
 		}
 		// The lists hold each proxy once from here on (Admit may have listed one twice).
-		for (std::vector<uint32_t>* list : { &m_Waiting, &m_Moving })
+		for (std::vector<uint32_t>* list : { &m_Waiting, &m_Moving, &m_Resting })
 		{
 			std::sort(list->begin(), list->end());
 			list->erase(std::unique(list->begin(), list->end()), list->end());
 		}
 		for (uint32_t proxy : m_Waiting)
 			outFrame.WaitingProxies += m_Proxies[proxy].Status == ProxyStatus::Waiting ? 1u : 0u;
-		for (uint32_t proxy : m_Moving)
-			outFrame.MovingProxies += m_Proxies[proxy].Status == ProxyStatus::Moving ? 1u : 0u;
+		// A proxy that came to rest leaves the dynamic layer in the frame every level took the regions that hold its triangles
+		// again (the budget may leave them queued): never a frame in neither.
+		std::erase_if(m_Resting, [this](uint32_t proxy)
+		{
+			return proxy >= m_Proxies.size() || m_Proxies[proxy].Status != ProxyStatus::Voxelized || !IsChangeQueued(m_Proxies[proxy].Bounds);
+		});
+		EmitMovers(renderScene, source, cameraPosition, outFrame);
 	}
 
 	void VoxelClipmap::StartOver(const RenderScene& renderScene, const IVoxelSceneSource& source, const glm::dvec3& cameraPosition)
@@ -224,6 +244,7 @@ namespace Strata
 		m_Proxies.clear();
 		m_Waiting.clear();
 		m_Moving.clear();
+		m_Resting.clear();
 		// The tables first (proxies are ready by their meshes), then every proxy as it is: the windows are queued whole.
 		VoxelFrame unused;
 		m_TablesVersion = source.GetTablesVersion() + 1;
@@ -371,7 +392,7 @@ namespace Strata
 			Refresh(renderScene, source, proxy);
 	}
 
-	void VoxelClipmap::FollowProxies(const RenderScene& renderScene, const IVoxelSceneSource& source)
+	void VoxelClipmap::FollowProxies(const RenderScene& renderScene, const IVoxelSceneSource& source, float stepSeconds)
 	{
 		m_Scratch.clear();
 		if (!renderScene.GetProxyChanges(m_ProxyVersion, m_Scratch))
@@ -402,10 +423,12 @@ namespace Strata
 					{
 						if (placement != state.Placement)
 						{
-							// Moved: out of the voxels until it rests (a move a frame would re-voxelize every frame).
+							// Moved: its triangles leave the voxels until it rests (voxelizing them again every frame would also
+							// re-dispatch every static triangle around it); the dynamic layer holds it meanwhile (EmitMovers).
 							QueueBounds(state.Bounds);
 							state.Status = ProxyStatus::Moving;
 							state.MovedFrame = m_Frame;
+							state.RestSeconds = 0.0f;
 							m_Moving.push_back(proxy);
 						}
 					}
@@ -420,12 +443,18 @@ namespace Strata
 					if (drawable && content == state.Content)
 					{
 						if (placement != state.Placement)
+						{
 							state.MovedFrame = m_Frame;
+							state.RestSeconds = 0.0f;
+						}
 					}
 					else
 					{
+						// Another mesh, material or flags: its triangles are voxelized as it is now, and the layer keeps it until they are.
 						state.Status = ProxyStatus::None;
 						Admit(renderScene, source, proxy, true);
+						if (state.Status == ProxyStatus::Voxelized)
+							m_Resting.push_back(proxy);
 					}
 					break;
 				default:
@@ -447,10 +476,16 @@ namespace Strata
 		{
 			if (proxy >= m_Proxies.size() || m_Proxies[proxy].Status != ProxyStatus::Moving)
 				continue;
-			if (m_Frame - m_Proxies[proxy].MovedFrame >= RenderData::c_GIMovingFrames)
+			// Rest counts the renderer's clock, never frames: the same wait at any frame rate.
+			ProxyState& state = m_Proxies[proxy];
+			if (state.MovedFrame != m_Frame && std::isfinite(stepSeconds))
+				state.RestSeconds += std::max(stepSeconds, 0.0f);
+			if (state.RestSeconds >= RenderData::c_GIMoverRestSeconds)
 			{
-				m_Proxies[proxy].Status = ProxyStatus::None;
+				state.Status = ProxyStatus::None;
 				Admit(renderScene, source, proxy, true);
+				if (state.Status == ProxyStatus::Voxelized)
+					m_Resting.push_back(proxy);
 			}
 			else
 			{
@@ -482,6 +517,7 @@ namespace Strata
 		m_Proxies.assign(renderScene.GetProxyCapacity(), ProxyState {});
 		m_Waiting.clear();
 		m_Moving.clear();
+		m_Resting.clear();
 		for (uint32_t proxy = 0; proxy < renderScene.GetProxyCapacity(); proxy++)
 		{
 			ProxyState& state = m_Proxies[proxy];
@@ -588,6 +624,187 @@ namespace Strata
 					queue.push_back(piece);
 			}
 		}
+	}
+
+	bool VoxelClipmap::IsChangeQueued(const AABB& bounds) const
+	{
+		if (!bounds.IsValid())
+			return false;
+		for (uint32_t level = 0; level < m_Levels.size(); level++)
+		{
+			const VoxelLevelLayout& layout = m_Layout.Levels[level];
+			const VoxelBox box = GlobalIllumination::SnapToBricks(GetTouchedVoxels(bounds, layout.VoxelSize));
+			for (const VoxelBox& queued : m_Levels[level].Queues[static_cast<size_t>(RegionKind::Change)])
+			{
+				if (queued.Intersects(box))
+					return true;
+			}
+		}
+		return false;
+	}
+
+	void VoxelClipmap::EmitMovers(const RenderScene& renderScene, const IVoxelSceneSource& source, const glm::dvec3& cameraPosition, VoxelFrame& outFrame)
+	{
+		m_MoverKeys.clear();
+		m_MoverReach.clear();
+		if (!m_Moving.empty() || !m_Resting.empty())
+		{
+			// Both lists are sorted and hold each proxy once; a proxy is in one of them at most.
+			std::vector<uint32_t> movers;
+			movers.reserve(m_Moving.size() + m_Resting.size());
+			for (uint32_t proxy : m_Moving)
+			{
+				if (m_Proxies[proxy].Status == ProxyStatus::Moving)
+					movers.push_back(proxy);
+			}
+			movers.insert(movers.end(), m_Resting.begin(), m_Resting.end());
+			std::sort(movers.begin(), movers.end());
+			outFrame.MovingProxies = static_cast<uint32_t>(movers.size());
+
+			constexpr int64_t c_Brick = RenderData::c_GIMoverBrickVoxels;
+			for (uint32_t proxy : movers)
+			{
+				// A proxy enters whole or not at all: past the boxes or the bricks it is left out (in no voxel until it rests).
+				const size_t firstBox = outFrame.Movers.size();
+				const size_t firstReach = m_MoverReach.size();
+				bool fits = IsReady(renderScene, source, proxy);
+				const uint32_t meshSlot = renderScene.GetMeshSlot(proxy);
+				if (fits)
+				{
+					const MeshInfo& mesh = m_Meshes[meshSlot];
+					const std::span<const uint32_t> submeshMaterials = renderScene.GetSubmeshMaterialSlots(meshSlot);
+					const uint32_t overrideSlot = renderScene.GetOverrideMaterialSlot(proxy);
+					const glm::mat4 world = renderScene.GetWorldTransform(proxy);
+					const size_t drawn = std::min<size_t>(mesh.Submeshes.size(), renderScene.GetInstanceCount(proxy));
+					for (size_t submesh = 0; submesh < drawn && fits; submesh++)
+					{
+						const uint32_t slot = overrideSlot != RenderScene::c_InvalidIndex ? overrideSlot
+							: (submesh < submeshMaterials.size() ? submeshMaterials[submesh] : RenderScene::c_InvalidIndex);
+						if (slot >= m_Materials.size())
+							continue;
+						const RenderData::GIMaterial& material = m_Materials[slot];
+						const AABB& bounds = mesh.Submeshes[submesh].Bounds;
+						if ((material.Flags & RenderData::c_CullMaterialAvailable) == 0 || (material.Flags & RenderData::c_CullMaterialTransparent) != 0 || !bounds.IsValid())
+							continue;
+						if (outFrame.Movers.size() >= RenderData::c_GIMaxMoverBoxes)
+						{
+							fits = false;
+							break;
+						}
+						// The submesh's bounds under the proxy's world transform (the one it is drawn with): an oriented box.
+						const glm::vec3 half = 0.5f * (bounds.Max - bounds.Min);
+						const glm::dvec3 center(glm::vec3(world * glm::vec4(0.5f * (bounds.Min + bounds.Max), 1.0f)));
+						const glm::vec3 axes[3] = { glm::vec3(world[0]) * half.x, glm::vec3(world[1]) * half.y, glm::vec3(world[2]) * half.z };
+						RenderData::VoxelMover mover = {};
+						mover.Center = glm::vec4(glm::vec3(center - cameraPosition), 0.0f);
+						mover.AxisX = glm::vec4(axes[0], 0.0f);
+						mover.AxisY = glm::vec4(axes[1], 0.0f);
+						mover.AxisZ = glm::vec4(axes[2], 0.0f);
+						mover.Albedo = material.Albedo;
+						mover.Emission = material.Emission;
+						mover.Flags = ((material.Flags & RenderData::c_CullMaterialAlphaMask) != 0 ? RenderData::c_VoxelMoverAlphaMasked : 0u)
+							| ((material.Flags & RenderData::c_CullMaterialDoubleSided) != 0 ? RenderData::c_VoxelMoverDoubleSided : 0u);
+						const uint32_t box = static_cast<uint32_t>(outFrame.Movers.size());
+						outFrame.Movers.push_back(mover);
+						m_LargestAlbedo = std::max({ m_LargestAlbedo, material.Albedo & 255u, (material.Albedo >> 8) & 255u, (material.Albedo >> 16) & 255u });
+
+						// The bricks its voxels lie in: per level, every voxel of the window whose center the box reaches as
+						// GI/VoxelMovers.comp weighs it (along each of its axes the box and a voxel beyond, at least two voxels each way).
+						glm::vec3 units[3];
+						bool flat = false;
+						for (int axis = 0; axis < 3; axis++)
+						{
+							const float length = glm::length(axes[axis]);
+							units[axis] = length > 1e-6f ? axes[axis] / length : glm::cross(axes[(axis + 1) % 3], axes[(axis + 2) % 3]);
+							const float unitLength = glm::length(units[axis]);
+							flat = flat || unitLength < 1e-12f;
+							units[axis] = unitLength < 1e-12f ? glm::vec3(0.0f) : units[axis] / unitLength;
+						}
+						for (uint32_t level = 0; level < m_Levels.size() && !flat; level++)
+						{
+							const VoxelLevelLayout& layout = m_Layout.Levels[level];
+							const double voxel = static_cast<double>(layout.VoxelSize);
+							const VoxelBox window = GlobalIllumination::GetWindow(layout, m_Levels[level].State.Window);
+							glm::dvec3 extent(0.0);
+							for (int axis = 0; axis < 3; axis++)
+							{
+								const float width = layout.VoxelSize * (std::abs(units[axis].x) + std::abs(units[axis].y) + std::abs(units[axis].z));
+								extent += glm::dvec3(glm::abs(units[axis])) * static_cast<double>(std::max(glm::length(axes[axis]), width) + width);
+							}
+							const glm::i64vec3 low = glm::max(glm::i64vec3(glm::floor((center - extent) / voxel)), window.Minimum);
+							const glm::i64vec3 high = glm::min(glm::i64vec3(glm::floor((center + extent) / voxel)), window.Maximum - int64_t(1));
+							if (low.x > high.x || low.y > high.y || low.z > high.z)
+								continue;
+							const glm::i64vec3 origin = GetMoverBrick(window.Minimum);
+							const glm::i64vec3 first = GetMoverBrick(low) - origin;
+							const glm::i64vec3 last = GetMoverBrick(high) - origin;
+							for (int64_t z = first.z; z <= last.z; z++)
+							{
+								for (int64_t y = first.y; y <= last.y; y++)
+								{
+									for (int64_t x = first.x; x <= last.x; x++)
+									{
+										const uint64_t key = (static_cast<uint64_t>(level) << 48) | (static_cast<uint64_t>(z) << 32) | (static_cast<uint64_t>(y) << 16)
+											| static_cast<uint64_t>(x);
+										m_MoverReach.emplace_back(key, box);
+									}
+								}
+							}
+						}
+					}
+				}
+				if (fits)
+				{
+					m_MoverProxyKeys.clear();
+					for (size_t index = firstReach; index < m_MoverReach.size(); index++)
+						m_MoverProxyKeys.push_back(m_MoverReach[index].first);
+					std::sort(m_MoverProxyKeys.begin(), m_MoverProxyKeys.end());
+					m_MoverProxyKeys.erase(std::unique(m_MoverProxyKeys.begin(), m_MoverProxyKeys.end()), m_MoverProxyKeys.end());
+					const size_t held = m_MoverKeys.size();
+					for (uint64_t key : m_MoverProxyKeys)
+					{
+						if (!std::binary_search(m_MoverKeys.begin(), m_MoverKeys.begin() + static_cast<std::ptrdiff_t>(held), key))
+							m_MoverKeys.push_back(key);
+					}
+					fits = m_MoverKeys.size() <= m_Layout.MoverBricks;
+					if (fits)
+						std::inplace_merge(m_MoverKeys.begin(), m_MoverKeys.begin() + static_cast<std::ptrdiff_t>(held), m_MoverKeys.end());
+					else
+						m_MoverKeys.resize(held);
+				}
+				if (!fits)
+				{
+					outFrame.Movers.resize(firstBox);
+					m_MoverReach.resize(firstReach);
+					outFrame.MoversLeftOut++;
+				}
+			}
+
+			const glm::uvec3 dimensions = m_Layout.Levels.front().Dimensions;
+			outFrame.MoverBricks.reserve(m_MoverKeys.size());
+			for (size_t index = 0; index < m_MoverKeys.size(); index++)
+			{
+				const uint64_t key = m_MoverKeys[index];
+				const uint32_t level = static_cast<uint32_t>(key >> 48);
+				const glm::i64vec3 window = m_Levels[level].State.Window;
+				const glm::i64vec3 brick = GetMoverBrick(window) + glm::i64vec3(key & 0xFFFFu, (key >> 16) & 0xFFFFu, (key >> 32) & 0xFFFFu);
+				const glm::i64vec3 voxel = brick * c_Brick;
+				RenderData::VoxelMoverBrick record = {};
+				record.Local = glm::ivec4(glm::ivec3(voxel - window), static_cast<int32_t>(index));
+				record.Texel = glm::ivec4(glm::ivec3(GlobalIllumination::GetTexel(voxel, dimensions)), static_cast<int32_t>(level));
+				outFrame.MoverBricks.push_back(record);
+			}
+			for (const std::pair<uint64_t, uint32_t>& reach : m_MoverReach)
+			{
+				const size_t index = static_cast<size_t>(std::lower_bound(m_MoverKeys.begin(), m_MoverKeys.end(), reach.first) - m_MoverKeys.begin());
+				outFrame.MoverBricks[index].Movers[static_cast<int>(reach.second / 32)] |= 1u << (reach.second % 32);
+			}
+		}
+
+		uint64_t hash = HashBytes(outFrame.Movers.data(), outFrame.Movers.size() * sizeof(RenderData::VoxelMover));
+		hash = HashBytes(outFrame.MoverBricks.data(), outFrame.MoverBricks.size() * sizeof(RenderData::VoxelMoverBrick), hash);
+		outFrame.MoversChanged = hash != m_MoverHash;
+		m_MoverHash = hash;
 	}
 
 	void VoxelClipmap::QueueWindow(uint32_t level, RegionKind kind)

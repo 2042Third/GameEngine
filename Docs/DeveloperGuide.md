@@ -4045,7 +4045,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | Screen-space reflections' targets per view (scenes that ask for them; "Reflections") | none | 20 MiB, 79 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows |
 | Motion blur's targets per view (scenes with motion blur) | none | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows |
 | Reflection probes per view (16 slots, scenes with probes) | 17 MiB | 17 MiB | 68 MiB | 68 MiB |
-| Global illumination per view (scenes that ask for it; Low's layout 23.4 MiB) | none | none | 152.7 MiB | 152.7 MiB |
+| Global illumination per view (scenes that ask for it; Low's layout 24.9 MiB) | none | none | 155.7 MiB | 155.7 MiB |
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
   High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for rows that cost at every
@@ -5027,8 +5027,9 @@ probe-field levels and local lights follow.
 - **Layout** (`R/GlobalIlluminationLayout.h`, `Renderer.GlobalIlluminationLayout`): per quality level the voxel levels
   (High four of 128 x 64 x 128 voxels from 10 cm, Low three of 64 x 32 x 64 from 20 cm, each level twice the voxel size of
   the one before) and the probe cascades (High four from 0.5 m, 16 to 1,024 directions; Low three from 1 m). Memory per view
-  that runs GI (`GetMemory`, the same at every output size, the frame's work and region lists included): 152.7 MiB at High,
-  23.4 MiB at Low (the probes' depth moments 35.2 and 4.4 of them, their spherical harmonics 6.3 and 0.8);
+  that runs GI (`GetMemory`, the same at every output size, the frame's work and region lists included): 155.7 MiB at High,
+  24.9 MiB at Low (the probes' depth moments 35.2 and 4.4 of them, their spherical harmonics 6.3 and 0.8, the dynamic layer
+  of moving objects 3.1 and 1.5);
   `SceneRenderer::GetGlobalIlluminationMemoryBytes` adds the
   scene's material table (4 KiB for 256 materials, doubling as it grows). A frame that wants none releases everything
   (`ReleaseGlobalIllumination`), and so do the render targets' release and a `SetQuality` that changes the row.
@@ -5056,9 +5057,9 @@ probe-field levels and local lights follow.
   have settled (`GISettleFrames`; Multi-bounce, below).
 - **What enters:** indexed, active proxies of the Static arena (meshes of the Skinned arena are left out: characters
   neither occlude nor bounce light; they receive it), opaque and alpha-masked submeshes (transparent and transmissive
-  ones are left out); `CastShadows` does not matter. A proxy placed anew is moving for `c_GIMovingFrames` (30) frames:
-  out of the voxels until it rests (its old voxels empty at once), so movers cost no voxel work and cannot pop the
-  light. Open meshes take the coarsest level of detail whose error stays within half a voxel; closed meshes keep full
+  ones are left out); `CastShadows` does not matter. A proxy placed anew is moving: its triangles leave the voxels (its
+  old voxels empty at once) and the dynamic layer holds it until it has rested (Moving objects, below). Open meshes take
+  the coarsest level of detail whose error stays within half a voxel; closed meshes keep full
   detail. Materials reach the voxels as the CPU's means (`RenderData::GIMaterial`: the diffuse albedo
   `BaseColor * (1 - Metallic)` times the base color map's mean, the emission times the emissive map's mean,
   `Texture::GetLinearMean` of the map's smallest level), so no compute pass reads bindless textures and streaming never
@@ -5120,6 +5121,57 @@ probe-field levels and local lights follow.
   changes only the struct's type. What differs arises in the recompiled pipelines themselves; not found within stage 2's
   time box (next: run the recompiled GTAO twice over one frame in a test and compare its raw target bit for bit), so
   frame constants a new pass needs check the `ao` view's repeats first.
+- **Moving objects** (the dynamic layer: `GI/VoxelMovers.comp`, `VoxelClipmap::EmitMovers`; R5 of the research, the idea
+  of a coverage per voxel from the lab's `voxelize_boxes.comp`): a proxy whose placement changed (the transform it is
+  drawn with: `RenderScene`'s, which takes `Scene::FindDrawnTransform`) is **moving** until it has kept its place for
+  `c_GIMoverRestSeconds` (0.25 s) of the renderer's clock (`StepSeconds`: the wall clock between its frames, at most 0.25 s
+  a frame, or `SceneRenderOptions::AdaptationSeconds`), never for a number of frames: the hold of 30 frames this replaces
+  left movers out of the voxels altogether, so a moved object's shade and bounce arrived half a second after it stopped at
+  60 frames a second, and later at lower rates. Its triangles are voxelized twice only: its old bounds are queued when it
+  starts (they leave) and its new ones when it rests (they enter), and it stays in the layer until every level took those
+  regions (a budget may spread them over frames), so it is never in neither. Meanwhile each of its submeshes is an
+  **oriented box**: the submesh's bounds under the proxy's world transform (`RenderData::VoxelMover`, camera-relative, with
+  the material's mean albedo and emission). Boxes, because a box needs no triangle and no winding: a mover costs the same
+  whatever its mesh, static proxies' triangles are never dispatched for it, and crates, doors and platforms are exact;
+  round and hollow meshes are too large (What it cannot do). Each frame the clipmap lists the boxes (at most
+  `c_GIMaxMoverBoxes`, 64) and the **bricks** of 8 x 8 x 8 voxels they reach in every level (`RenderData::VoxelMoverBrick`,
+  at multiples of 8 voxels of the world, so a mover's bricks stay while windows scroll; at most
+  `GlobalIlluminationLayout::MoverBricks`: 512 at High, 256 at Low; a 1 m box reaches about 50 of High's). A proxy past
+  either limit is left out whole (`GIMoversLeftOut`: in no voxel until it rests, as every mover was before). The pass runs
+  a group of 512 threads a brick, twice a frame: before the voxelizer it **puts back** what the bricks written the frame
+  before held (a backup of 12 bytes a voxel, so the voxelizer and a scroll see the static voxels alone, and a mover that
+  rested leaves a fresh renderer's textures and field, to the byte); after it, it stores what this frame's bricks hold and
+  **writes the boxes into the level's own textures**, where they give more occupancy than the voxel has. So every march,
+  the sun's walk, the probes' moves and the forward gather read max(static, dynamic) with the reads they had: no second
+  texture, no new binding in any shader, the forward shaders and their plain twins untouched, and **no pass, no write and
+  no bit of difference while nothing moves** (`GIMoverBricks` 0). Injection lights the layer's voxels like any others, so a
+  mover bounces light and glows in the frame it moves.
+  What a box writes (`GetMoverOccupancy`): per axis of the box its share of the voxel's surroundings under a tent two
+  voxels wide, multiplied (a voxel's occupancy starts and ends without a kink as a face passes: the box's plain share of
+  the voxel alone bent a probe's light once per voxel crossed, second differences of 3.8% of the light beside the test's
+  box, 0.53% with the tent); times `1 / c_GIOccupancyGain`, so what a march's sample absorbs is the coverage itself
+  (stored as the coverage, a voxel was opaque two fifths of the way in: 5.4%); the box taken a quarter of a voxel smaller
+  (`ST_GI_MOVER_INSET`: whole, the soft edge and the marches' absorption, which saturates, read the ground beside a 0.5 m
+  box 12.0% dark for the 9.8% of its sky the box hides, and half a voxel smaller 7.2%; a quarter reads 10.1%, and the
+  bounce of its sunlit face 1.01 of its static voxels'); voxels more than a voxel inside rise to occupancy 1 over the next
+  one (the solid cores the gather's guard reads); a box thinner than two and a half voxels counts as that thick. The voxels
+  a face passes through carry its surface (the faces' outward normals by nearness; one layer, so injection's walk toward
+  the sun starts beyond what the box itself absorbs), deeper ones are interior, and a box thinner than a voxel is
+  two-sided (dark), as thin static walls are. A static voxel that holds a lit surface of its own below the box's occupancy
+  (the layer in front of a floor's face) turns into the box's gradually.
+  **A new input of what a mover is to the GI** (another shape than a box, an albedo per voxel, a flag) goes into
+  `VoxelMover`, which `EmitMovers` hashes (`VoxelFrame::MoversChanged` keeps `GlobalIlluminationSettled` false while the
+  layer changes); keeps the bricks a superset of the voxels the shader writes (`EmitMovers` mirrors the shader's reach);
+  writes only what the backup puts back (the level's material, emission and normal); and stays continuous in the mover's
+  place: `GlobalIlluminationRoom`'s moving props measure it (the flicker measure, and the box's own share of the sky as
+  the reference). The layer shapes its values to the marches' rules (the gain, the lead-in's threshold, the guard's core):
+  a change to how voxels are read changes the still scenes' bits.
+  Cost: nothing while nothing moves. Eight boxes of 0.5 m sliding up to 3 cm a frame in the sun room at 3840 x 2160 at
+  High (61 bricks): `GPU.RadianceCascades` read 4.22, 4.28 and 4.21 ms against 4.21, 4.25 and 4.15 ms with them at rest
+  in three runs under PerfLock (+0.01, +0.03 and +0.06 ms: less than the blocks' own spread of 0.4 ms lets one tell;
+  `PerfGPU.Renderer`'s "Global illumination's moving objects' cost at 3840x2160": one renderer, interleaved blocks,
+  medians; at most 0.2 ms was the goal). Skinned characters are not in the layer (5c of the spec): they receive the
+  field and neither occlude nor bounce.
 - **The light** (`GPU.RadianceCascades` after the voxels, every frame; `Include/GIProbes.slang`): `GI/VoxelInject` lights
   every surface voxel of every level (albedo times the sun's illuminance on its normal times a walk toward the sun through
   the voxels the ray crosses, read unfiltered, from its own level up: its own level until the walk has risen
@@ -5416,8 +5468,10 @@ probe-field levels and local lights follow.
   `globalIlluminationSettled`, `editor.perf`'s `renderStats` `globalIllumination: {ran, pending, settled}`.
 - **Statistics** (`SceneRendererStats`): `GlobalIllumination`, `GlobalIlluminationPending`, `GlobalIlluminationSettled`,
   `GlobalIlluminationShaded` (the frame drew with the forward shaders that read the field),
-  `GIVoxelizedTriangles`, `GIQueuedRegions`, `GIWaitingProxies`, `GIMovingProxies`,
-  `GIUnvoxelizedSubmeshes`; a frame whose voxelization could not be recorded is degraded, pending and not settled;
+  `GIVoxelizedTriangles`, `GIQueuedRegions`, `GIWaitingProxies`, `GIMovingProxies` (moving, or resting for less than
+  `c_GIMoverRestSeconds`), `GIMoverBricks` (bricks the dynamic layer wrote: 0 when none of its passes ran),
+  `GIMoversLeftOut`, `GIUnvoxelizedSubmeshes`; a frame whose voxelization could not be recorded is degraded, pending
+  and not settled;
   `SceneRendererGPUStats`' `GITiles` and
   `GITileOverflow` (frames late). Tests and tools read a level's textures with `ReadGlobalIlluminationVoxels` (blocking).
 - **Tests:** `Renderer.GlobalIlluminationLayout`, `Renderer.VoxelClipmap` (a render scene with residency and assets a test
@@ -5457,7 +5511,18 @@ probe-field levels and local lights follow.
   1 gives one bounce's light), `GlobalIlluminationRoom`'s "A sealed room stays dark" with the gain 1 at High and Low,
   `Renderer.GlobalIlluminationLayout`'s "High bounces on, Low once" and "Bounces settle by the scene's brightest albedo",
   `Renderer.VoxelClipmap`'s "The brightest albedo voxelized bounds the bounces", and `PerfGPU.Renderer`'s "Global
-  illumination's bounces' cost at 3840x2160" (the gain 0 against 1 in one process).
+  illumination's bounces' cost at 3840x2160" (the gain 0 against 1 in one process). Moving objects:
+  `GlobalIlluminationRoom`'s four cases of a box sliding a fifth of a voxel a frame over open ground (it takes the share
+  of the points' sky the box itself hides within 15%, in every frame at least half of what it takes at rest, and their
+  light's largest second difference stays under 2%: 0.53%; a red box in the sun adds 0.75-1.25 of what it adds at rest to
+  their red; the frame it starts steps by at most 30% of a point's light (26.5%: its static voxels leave and the box takes
+  their place), the frame it stops holds its light, and no later frame steps by more than 15%, the handover to its static
+  voxels included, c_GIMoverRestSeconds later by the renderer's clock; a resting prop makes no brick, and one that moved
+  and rested leaves a fresh renderer's voxel textures and field to the byte), `GlobalIllumination`'s "A moved object
+  leaves no trace", `Renderer.VoxelClipmap`'s "A moving proxy is listed for the dynamic layer, and nothing is while
+  nothing moves", "A proxy that rested stays in the dynamic layer until its regions are taken" and "Movers past the
+  dynamic layer's bricks or boxes are left out", and `PerfGPU.Renderer`'s "Global illumination's moving objects' cost at
+  3840x2160".
 - **What it cannot do** (so far): the field resolves no more than its probes, 0.5 m apart at High and 1 m at Low. In the
   Cornell box at High a row of small hard-edged black notches (the voxels' edges) remains where the sphere meets the floor,
   with soft lighter streaks at its left, and the floor in the gap between the tall box's back-left corner and the red wall
@@ -5479,7 +5544,14 @@ probe-field levels and local lights follow.
   with every bounce its Cornell box is about 1.8 times as bright as High's (ceiling 165-235 nits per albedo against 89-142).
   Denser probes near surfaces are the next step. Walls thinner than two voxels go two-sided
   (dark from both sides), thin props blur into
-  blobs of whole voxels, characters and moving objects are not in the voxels until they rest, textured albedo and emission
+  blobs of whole voxels, characters are not in the voxels (they receive the field; they neither occlude nor bounce light),
+  moving objects are in them as their submeshes' bounds (oriented boxes with soft edges: a ball or a hollow shape shades
+  and bounces as its bounds do while it moves, and a quarter of a second after a mover stops its triangles' voxels replace
+  the box in one frame, so the light beside it steps: 12.8% at the worst of the test's points for a box off the voxel
+  grid, whose static voxels are whole ones, and more for a mesh that is no box; the frame a mover starts steps the same
+  way, its static voxels giving way to the box: 26.5% where the test's box starts; a fade by time between the two forms
+  is the next step; movers past 64 boxes or the layer's bricks
+  are in no voxel until they rest), textured albedo and emission
   count by their maps' means (models colored from one shared palette map, as the ThirdPerson sample's Kenney models are,
   take the palette's mean everywhere: one mauve for grass, wood and rock), double-sided materials' voxels have no facing
   (the voxels view shades them flat), glowing values above 65,408 nits clamp, and an editor top view far above a scene

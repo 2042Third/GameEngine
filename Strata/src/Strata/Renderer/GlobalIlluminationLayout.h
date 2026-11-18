@@ -84,6 +84,9 @@ namespace Strata
 		uint64_t Tiles = 0;       // The large triangles' tiles of a batch (8 bytes each)
 		uint64_t WorkItems = 0;   // The frame's work items (16 bytes) and triangle groups (8 bytes)
 		uint64_t Regions = 0;     // The frame's voxel regions (48 bytes each) and the GI's counters
+		// The dynamic layer of moving objects: what its bricks held before it wrote them (12 bytes a voxel), the bricks written and
+		// those put back (48 bytes each) and the frame's boxes (80 bytes each)
+		uint64_t Movers = 0;
 
 		uint64_t GetTotal() const;
 	};
@@ -95,6 +98,9 @@ namespace Strata
 		// Voxels a voxelization batch's regions hold together: the scratch's size (one 64^3 batch at High; one level at Low,
 		// whose levels are smaller).
 		uint32_t BatchVoxels = 0;
+		// Bricks of c_GIMoverBrickVoxels^3 voxels the dynamic layer of moving objects writes a frame at most, over all levels (512 at
+		// High, 256 at Low: a 1 m box reaches 51 of High's at most); movers past them are in no voxel until they rest.
+		uint32_t MoverBricks = 0;
 		glm::vec3 FieldExtent{ 0.0f };     // Meters the probe cascades cover
 		float FieldSnap = 0.0f;            // The field moves in whole steps of the top cascade's spacing
 		glm::vec2 FieldFullExtent{ 0.0f }; // Meters around the camera where the field has full weight: horizontally, vertically

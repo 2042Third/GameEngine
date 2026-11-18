@@ -380,6 +380,146 @@ namespace
 		return points;
 	}
 
+	// The movers' ground (the dynamic occupancy layer's cases): a slab whose top is y 0 under a constant white sky, and when asked a
+	// sun whose light travels (0.3, -0.7, 0.65), onto the top and the -z face of what stands there. The prop is a box of
+	// c_MoverSize off the 0.1 m voxel grid on every axis but y's foot, sliding along +x c_MoverStep a frame (a fifth of a voxel)
+	// from c_MoverStart; the points are a row on the ground 0.3 m before its -z face.
+	constexpr float c_MoverFrameSeconds = 1.0f / 60.0f;
+	const glm::vec3 c_MoverSize(0.5f, 0.55f, 0.5f);
+	constexpr float c_MoverZ = 0.02f;
+	constexpr float c_MoverStart = -0.37f;
+	constexpr float c_MoverStep = 0.02f;
+	constexpr uint32_t c_MoverFrames = 40;
+	const glm::vec3 c_MoverSky(4000.0f);
+
+	SceneCamera MoverCamera()
+	{
+		return MakeCamera(glm::vec3(0.0f, 2.9f, -1.2f), glm::vec3(0.0f, 0.0f, -1.199f), 100.0f, c_FloorSize);
+	}
+
+	std::vector<RoomPoint> GetMoverPoints()
+	{
+		std::vector<RoomPoint> points;
+		for (int index = -7; index <= 7; index++)
+			points.push_back({ "ground before the prop", { 0.1f * static_cast<float>(index), 0.0f, c_MoverZ - 0.5f * c_MoverSize.z - 0.3f }, c_Up });
+		return points;
+	}
+
+	struct MoverRender
+	{
+		SceneTestAssets Assets;
+		Scene SceneData;
+		Entity Prop;
+		Scope<SceneRenderer> Renderer;
+
+		// `propAlbedo` null: the ground alone.
+		MoverRender(bool sun, const glm::vec3* propAlbedo, float propX)
+		{
+			AddNeutralPostProcess(SceneData);
+			MaterialProperties ground;
+			ground.BaseColor = glm::vec4(0.6f, 0.6f, 0.6f, 1.0f);
+			ground.Roughness = 0.9f;
+			AddMesh(SceneData, BuiltinAssets::CubeMesh, Assets.AddMaterial(ground), glm::vec3(0.0f, -0.5f, 0.0f), "Ground").GetComponent<TransformComponent>().Scale =
+				glm::vec3(40.0f, 1.0f, 40.0f);
+			SceneData.CreateEntity("Sky").AddComponent<SkyLightComponent>().AmbientColor = c_MoverSky;
+			if (sun)
+				AddSun(SceneData, glm::normalize(glm::vec3(0.3f, -0.7f, 0.65f)), 100000.0f);
+			if (propAlbedo)
+			{
+				MaterialProperties material;
+				material.BaseColor = glm::vec4(*propAlbedo, 1.0f);
+				material.Roughness = 0.9f;
+				Prop = AddMesh(SceneData, BuiltinAssets::CubeMesh, Assets.AddMaterial(material), glm::vec3(propX, 0.5f * c_MoverSize.y, c_MoverZ), "Prop");
+				Prop.GetComponent<TransformComponent>().Scale = c_MoverSize;
+			}
+			Renderer = CreateScope<SceneRenderer>(RoomSpecification());
+			Renderer->SetViewportSize(c_FloorSize.x, c_FloorSize.y);
+		}
+
+		void MoveTo(float x)
+		{
+			Prop.GetComponent<TransformComponent>().Translation.x = x;
+			Prop.MarkModified<TransformComponent>();
+		}
+
+		// A frame c_MoverFrameSeconds after the one before (the renderer's clock, not the machine's), and the points' light.
+		std::vector<glm::vec3> Frame(const std::vector<RoomPoint>& points)
+		{
+			AssetManager::SetActive(Assets.Manager);
+			SceneRenderOptions options = GIViewOptions();
+			options.AdaptationSeconds = c_MoverFrameSeconds;
+			REQUIRE(RenderGIFrame(*Renderer, SceneData, MoverCamera(), options));
+			REQUIRE(Renderer->GetStats().GlobalIllumination);
+			REQUIRE_FALSE(Renderer->GetStats().GlobalIlluminationPending);
+			return ReadPoints(*Renderer, MoverCamera(), points);
+		}
+
+		std::vector<glm::vec3> Settle(const std::vector<RoomPoint>& points)
+		{
+			std::vector<glm::vec3> values;
+			for (uint32_t frame = 0; frame < 3; frame++)
+				values = Frame(points);
+			return values;
+		}
+	};
+
+	float SumLuminance(const std::vector<glm::vec3>& values)
+	{
+		float sum = 0.0f;
+		for (const glm::vec3& value : values)
+			sum += Luminance(value);
+		return sum;
+	}
+
+	// The share of the sky a ground point sees past the prop standing with its center at x `propX`: cosine-weighted directions
+	// (Malley's method over `strata` x `strata` cells) against the box.
+	float GetMoverSkyShare(const glm::vec3& point, float propX, uint32_t strata = 96)
+	{
+		const glm::dvec3 minimum = glm::dvec3(propX, 0.0, c_MoverZ) - glm::dvec3(0.5 * c_MoverSize.x, 0.0, 0.5 * c_MoverSize.z);
+		const glm::dvec3 maximum = glm::dvec3(propX, c_MoverSize.y, c_MoverZ) + glm::dvec3(0.5 * c_MoverSize.x, 0.0, 0.5 * c_MoverSize.z);
+		const glm::dvec3 origin(point.x, 1e-6, point.z);
+		uint32_t open = 0;
+		for (uint32_t i = 0; i < strata; i++)
+		{
+			for (uint32_t j = 0; j < strata; j++)
+			{
+				const double u = (static_cast<double>(i) + 0.5) / strata;
+				const double angle = glm::two_pi<double>() * (static_cast<double>(j) + 0.5) / strata;
+				const glm::dvec3 direction(std::sqrt(u) * std::cos(angle), std::sqrt(1.0 - u), std::sqrt(u) * std::sin(angle));
+				double enter = 0.0;
+				double leave = std::numeric_limits<double>::max();
+				for (int axis = 0; axis < 3; axis++)
+				{
+					const double inverse = 1.0 / (std::abs(direction[axis]) > 1e-12 ? direction[axis] : 1e-12);
+					const double first = (minimum[axis] - origin[axis]) * inverse;
+					const double second = (maximum[axis] - origin[axis]) * inverse;
+					enter = std::max(enter, std::min(first, second));
+					leave = std::min(leave, std::max(first, second));
+				}
+				open += enter > leave ? 1u : 0u;
+			}
+		}
+		return static_cast<float>(open) / static_cast<float>(strata * strata);
+	}
+
+	float LargestComponent(const glm::vec3& value)
+	{
+		return std::max(value.x, std::max(value.y, value.z));
+	}
+
+	// How red the points' light is: the sum of red over the sum of green (1 under the white sky alone).
+	float GetRedShare(const std::vector<glm::vec3>& values)
+	{
+		float red = 0.0f;
+		float green = 0.0f;
+		for (const glm::vec3& value : values)
+		{
+			red += value.r;
+			green += value.g;
+		}
+		return red / std::max(green, 1e-6f);
+	}
+
 }
 
 TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
@@ -1469,6 +1609,267 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 				CHECK(Luminance(sealedJunctions[index]) <= c_SealedBound * MeanLuminance(openValues));
 			}
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A moving prop occludes the ground beside it every frame, without a pop per voxel")
+	{
+		// 5b (R5): a box sliding a fifth of a voxel a frame across eight voxels, 0.3 m beside a row of ground points under a
+		// constant sky, one bounce (the box sends nothing: what the points lose is the sky it hides). While it moves it takes
+		// the share of their sky the box itself hides (GetMoverSkyShare, within 15%: 10.1% of the light for 9.8%; left out of the
+		// voxels until it rested, it took none; its static voxels, off the grid here, take 7.9%), and the points' light changes
+		// smoothly: the largest second difference over the frames, over the value, stays under 2% (the spec's flicker measure:
+		// 0.53%; whole voxels turning on gave the lab 15%, the box's plain share of each voxel 5.4% and 3.8% here: Docs/
+		// DeveloperGuide.md, "Global illumination").
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::vector<RoomPoint> points = GetMoverPoints();
+		const glm::vec3 white(0.7f);
+		constexpr uint32_t c_Middle = c_MoverFrames / 2;
+		float open = 0.0f;
+		float restingOcclusion = 0.0f;
+		{
+			MoverRender empty(false, nullptr, 0.0f);
+			open = SumLuminance(empty.Settle(points));
+			MoverRender resting(false, &white, c_MoverStart + c_MoverStep * static_cast<float>(c_Middle));
+			restingOcclusion = open - SumLuminance(resting.Settle(points));
+		}
+		CollectReleases();
+		float reference = 0.0f;
+		for (const RoomPoint& point : points)
+			reference += 1.0f - GetMoverSkyShare(point.Point, c_MoverStart + c_MoverStep * static_cast<float>(c_Middle));
+		reference *= open / static_cast<float>(points.size());
+		MESSAGE("the open ground's light " << open / static_cast<float>(points.size()) << " nits per albedo; a resting prop takes " << 100.0f * restingOcclusion / open
+			<< "% of the points' light, the box itself " << 100.0f * reference / open << "% of their sky");
+		REQUIRE(restingOcclusion > 0.03f * open);
+
+		MoverRender moving(false, &white, c_MoverStart);
+		moving.Settle(points);
+		std::vector<std::vector<glm::vec3>> frames;
+		float leastOcclusion = std::numeric_limits<float>::max();
+		for (uint32_t frame = 1; frame <= c_MoverFrames; frame++)
+		{
+			moving.MoveTo(c_MoverStart + c_MoverStep * static_cast<float>(frame));
+			frames.push_back(moving.Frame(points));
+			CHECK(moving.Renderer->GetStats().GIMovingProxies == 1);
+			leastOcclusion = std::min(leastOcclusion, open - SumLuminance(frames.back()));
+		}
+		const float movingOcclusion = open - SumLuminance(frames[c_Middle - 1]);
+		MESSAGE("moving through the same place it takes " << 100.0f * movingOcclusion / open << "%, at least " << 100.0f * leastOcclusion / open << "% in every frame");
+		CHECK(movingOcclusion >= 0.85f * reference);
+		CHECK(movingOcclusion <= 1.15f * reference);
+		CHECK(leastOcclusion >= 0.5f * restingOcclusion);
+
+		float largest = 0.0f;
+		double sum = 0.0;
+		uint32_t count = 0;
+		for (size_t frame = 1; frame + 1 < frames.size(); frame++)
+		{
+			for (size_t point = 0; point < points.size(); point++)
+			{
+				const float value = Luminance(frames[frame][point]);
+				const float second = std::abs(Luminance(frames[frame + 1][point]) - 2.0f * value + Luminance(frames[frame - 1][point])) / std::max(value, 1e-3f);
+				largest = std::max(largest, second);
+				sum += second;
+				count++;
+			}
+		}
+		MESSAGE("second difference over the value: largest " << 100.0f * largest << "%, mean " << 100.0 * sum / count << "%");
+		CHECK(largest <= 0.02f);
+		moving.Renderer.reset();
+		CollectReleases();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A moving prop bounces its color while it moves")
+	{
+		// A red box in the sun: its sunlit face reddens the ground before it while it slides, as it does resting in the same place
+		// (what it adds to the points' red over green: 0.229 moving for 0.227 resting, at least 0.213 in every frame; none before).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::vector<RoomPoint> points = GetMoverPoints();
+		const glm::vec3 red(0.8f, 0.05f, 0.05f);
+		constexpr uint32_t c_Middle = c_MoverFrames / 2;
+		float open = 0.0f;
+		float restingTint = 0.0f;
+		{
+			MoverRender empty(true, nullptr, 0.0f);
+			open = GetRedShare(empty.Settle(points));
+			MoverRender resting(true, &red, c_MoverStart + c_MoverStep * static_cast<float>(c_Middle));
+			restingTint = GetRedShare(resting.Settle(points)) - open;
+		}
+		CollectReleases();
+		MESSAGE("red over green: " << open << " on the open ground, " << open + restingTint << " before the resting prop");
+		REQUIRE(restingTint > 0.1f);
+
+		MoverRender moving(true, &red, c_MoverStart);
+		moving.Settle(points);
+		float leastTint = std::numeric_limits<float>::max();
+		float movingTint = 0.0f;
+		for (uint32_t frame = 1; frame <= c_MoverFrames; frame++)
+		{
+			moving.MoveTo(c_MoverStart + c_MoverStep * static_cast<float>(frame));
+			const float tint = GetRedShare(moving.Frame(points)) - open;
+			leastTint = std::min(leastTint, tint);
+			if (frame == c_Middle)
+				movingTint = tint;
+		}
+		MESSAGE("moving through the same place it adds " << movingTint << " (resting " << restingTint << "), at least " << leastTint << " in every frame");
+		CHECK(movingTint >= 0.75f * restingTint);
+		CHECK(movingTint <= 1.25f * restingTint);
+		CHECK(leastTint >= 0.5f * restingTint);
+		moving.Renderer.reset();
+		CollectReleases();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A prop's light is in place the frame it stops")
+	{
+		// The red box in the sun slides and stops off the voxel grid: the frame of its last step already holds its shadow on the
+		// sky and its bounce, and no later frame steps by more than c_HandoverStep of a point's light: not the frames it waits in
+		// the dynamic layer (c_GIMoverRestSeconds by the renderer's clock, not frames: nothing changes in them), and not the one
+		// its triangles are voxelized in again, after which it is a fresh renderer's resting prop to the bit. That last step is
+		// what the two forms of the box differ by (12.8% at the worst point and channel; 46.5% with the layer taken out): off
+		// the grid its static voxels are whole ones, fatter than the box. The frame it starts is the other end of the same
+		// difference, where the box stood at rest: its static voxels leave and the box takes their place (c_StartStep: 26.5%
+		// here, 38% with whole voxels in the layer; the whole of its light left in that frame before).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		constexpr float c_HandoverStep = 0.15f;
+		constexpr float c_StartStep = 0.3f;
+		const std::vector<RoomPoint> points = GetMoverPoints();
+		const glm::vec3 red(0.8f, 0.05f, 0.05f);
+		constexpr uint32_t c_Steps = 12;
+		const float end = c_MoverStart + c_MoverStep * static_cast<float>(c_Steps);
+		std::vector<glm::vec3> expected;
+		{
+			MoverRender fresh(true, &red, end);
+			expected = fresh.Settle(points);
+		}
+		CollectReleases();
+
+		MoverRender moving(true, &red, c_MoverStart);
+		const std::vector<glm::vec3> rested = moving.Settle(points);
+		std::vector<glm::vec3> stopped;
+		float largestStart = 0.0f;
+		for (uint32_t frame = 1; frame <= c_Steps; frame++)
+		{
+			moving.MoveTo(c_MoverStart + c_MoverStep * static_cast<float>(frame));
+			stopped = moving.Frame(points);
+			// The frame it starts: its static voxels leave and the box takes their place, a fifth of a voxel on.
+			for (size_t point = 0; point < points.size() && frame == 1; point++)
+				largestStart = std::max(largestStart, LargestComponent(glm::abs(stopped[point] - rested[point])) / std::max(LargestComponent(rested[point]), 1e-3f));
+		}
+		MESSAGE("the frame it starts steps at most " << 100.0f * largestStart << "% from its resting light");
+		CHECK(largestStart <= c_StartStep);
+		CHECK(moving.Renderer->GetStats().GIMovingProxies == 1);
+		float largestLater = 0.0f;
+		uint32_t restFrames = 0;
+		std::vector<glm::vec3> values;
+		// A second of the renderer's clock: four times the rest.
+		for (uint32_t frame = 1; frame <= 60; frame++)
+		{
+			values = moving.Frame(points);
+			if (moving.Renderer->GetStats().GIMovingProxies == 1)
+				restFrames = frame;
+			for (size_t point = 0; point < points.size(); point++)
+				largestLater = std::max(largestLater, LargestComponent(glm::abs(values[point] - stopped[point])) / std::max(LargestComponent(stopped[point]), 1e-3f));
+		}
+		CHECK(moving.Renderer->GetStats().GIMovingProxies == 0);
+		float largestFresh = 0.0f;
+		float largestRested = 0.0f;
+		for (size_t point = 0; point < points.size(); point++)
+		{
+			const float scale = std::max(LargestComponent(expected[point]), 1e-3f);
+			largestFresh = std::max(largestFresh, LargestComponent(glm::abs(stopped[point] - expected[point])) / scale);
+			largestRested = std::max(largestRested, LargestComponent(glm::abs(values[point] - expected[point])) / scale);
+		}
+		MESSAGE("the frame it stops is within " << 100.0f * largestFresh << "% of a fresh renderer's resting prop; later frames step at most " << 100.0f * largestLater
+			<< "% from it; it waited " << restFrames << " frames (" << static_cast<float>(restFrames) * c_MoverFrameSeconds << " s) in the dynamic layer; rested, within "
+			<< 100.0f * largestRested << "% of the fresh one");
+		CHECK(largestFresh <= c_HandoverStep);
+		CHECK(largestLater <= c_HandoverStep);
+		CHECK(largestRested <= 1e-4f);
+		// The wait is the clock's: c_GIMoverRestSeconds at 60 frames a second, whatever the frame rate.
+		CHECK(static_cast<float>(restFrames) * c_MoverFrameSeconds <= RenderData::c_GIMoverRestSeconds + c_MoverFrameSeconds);
+		moving.Renderer.reset();
+		CollectReleases();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A resting prop makes no mover work, and one that moved and rested leaves a fresh renderer's voxels")
+	{
+		// The dynamic layer is empty while nothing moves: no brick, no pass, the same field every frame. What a mover's bricks
+		// held is put back as it was: once it rests, every level's textures and the field are a fresh renderer's, to the byte.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::vector<RoomPoint> points = GetMoverPoints();
+		const glm::vec3 red(0.8f, 0.05f, 0.05f);
+		const float end = c_MoverStart + 0.03f * 11.0f;
+		const auto read = [](SceneRenderer& renderer, std::vector<std::vector<uint8_t>>& outLevels, std::vector<uint8_t>& outField)
+		{
+			outLevels.clear();
+			for (uint32_t level = 0; level < 4; level++)
+			{
+				for (SceneRenderer::GlobalIlluminationTexture texture : { SceneRenderer::GlobalIlluminationTexture::Material, SceneRenderer::GlobalIlluminationTexture::Emission,
+					SceneRenderer::GlobalIlluminationTexture::Normal })
+				{
+					REQUIRE(renderer.ReadGlobalIlluminationVoxels(level, texture, outLevels.emplace_back()));
+				}
+			}
+			REQUIRE(renderer.ReadGlobalIlluminationField(outField));
+		};
+		std::vector<std::vector<uint8_t>> freshLevels;
+		std::vector<uint8_t> freshField;
+		std::vector<uint8_t> field;
+		std::vector<std::vector<uint8_t>> levels;
+		{
+			MoverRender fresh(true, &red, end);
+			for (uint32_t frame = 0; frame < 6; frame++)
+			{
+				fresh.Frame(points);
+				CHECK(fresh.Renderer->GetStats().GIMovingProxies == 0);
+				CHECK(fresh.Renderer->GetStats().GIMoverBricks == 0);
+				if (frame == 2)
+					read(*fresh.Renderer, freshLevels, freshField);
+				if (frame > 2)
+				{
+					read(*fresh.Renderer, levels, field);
+					CHECK(levels == freshLevels);
+					CHECK(field == freshField);
+				}
+			}
+		}
+		CollectReleases();
+		uint64_t hash = 14695981039346656037ull;
+		for (uint8_t byte : freshField)
+			hash = (hash ^ byte) * 1099511628211ull;
+		MESSAGE("the resting prop's field: " << freshField.size() << " bytes, FNV-1a " << hash);
+
+		MoverRender moved(true, &red, c_MoverStart);
+		moved.Settle(points);
+		uint32_t bricks = 0;
+		for (uint32_t frame = 1; frame <= 11; frame++)
+		{
+			moved.MoveTo(c_MoverStart + 0.03f * static_cast<float>(frame));
+			moved.Frame(points);
+			bricks = std::max(bricks, moved.Renderer->GetStats().GIMoverBricks);
+		}
+		CHECK(bricks > 0);
+		for (uint32_t frame = 0; frame < 30; frame++)
+			moved.Frame(points);
+		CHECK(moved.Renderer->GetStats().GIMovingProxies == 0);
+		CHECK(moved.Renderer->GetStats().GIMoverBricks == 0);
+		read(*moved.Renderer, levels, field);
+		REQUIRE(levels.size() == freshLevels.size());
+		for (size_t index = 0; index < levels.size(); index++)
+		{
+			CAPTURE(index);
+			CHECK(levels[index] == freshLevels[index]);
+		}
+		CHECK(field == freshField);
+		moved.Renderer.reset();
+		CollectReleases();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

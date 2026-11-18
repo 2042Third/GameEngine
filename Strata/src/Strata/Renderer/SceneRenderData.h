@@ -690,7 +690,11 @@ namespace Strata
 		constexpr uint32_t c_GISmallTriangleVoxels = 64; // A triangle whose whole bounds hold more voxels goes to tiles
 		constexpr uint32_t c_GITileVoxels = 8;           // A tile is 8^3 voxels, a group of 64 threads with 8 voxels each
 		constexpr uint32_t c_GIMaxTiles = 32768;         // Tiles per batch; beyond them a triangle walks its tiles itself (counted)
-		constexpr uint32_t c_GIMovingFrames = 30;        // A proxy placed anew within this many frames is moving: left out of the voxels
+		// A proxy placed anew is moving: out of the voxels its triangles made, in the dynamic layer (GI/VoxelMovers.comp) until it
+		// has kept its place for this long by the renderer's clock (never frames), when its triangles are voxelized again.
+		constexpr float c_GIMoverRestSeconds = 0.25f;
+		constexpr uint32_t c_GIMoverBrickVoxels = 8;     // The dynamic layer is written in bricks of 8^3 voxels, a group of threads each
+		constexpr uint32_t c_GIMaxMoverBoxes = 64;       // Oriented boxes (a moving proxy's submeshes) a frame: a brick names them by two words of bits
 		constexpr float c_GIMaskedOccupancy = 0.15f;     // Guess: alpha-masked surfaces' occupancy
 		// Guess: the occupancy of voxels marked only because a face on their boundary faces into them (the lit layer in front of a
 		// face on the grid): low, so openings on the grid keep their size, yet the layer's light is taken (Include/Voxelize.slang).
@@ -907,6 +911,44 @@ namespace Strata
 			uint32_t Padding;
 		};
 		static_assert(sizeof(VoxelPassParameters) == 32);
+
+		// VoxelMover::Flags
+		constexpr uint32_t c_VoxelMoverAlphaMasked = 1u << 0; // Its coverage counts c_GIMaskedOccupancy
+		constexpr uint32_t c_VoxelMoverDoubleSided = 1u << 1; // Lit from either side
+
+		// A moving proxy's submesh as the dynamic layer takes it (GI/VoxelMovers.comp): the oriented box of its bounds.
+		struct VoxelMover
+		{
+			glm::vec4 Center;   // xyz: the box's center, camera-relative (m)
+			glm::vec4 AxisX;    // xyz: its half extent along its first axis (world, rotation and scale included)
+			glm::vec4 AxisY;
+			glm::vec4 AxisZ;
+			uint32_t Albedo;    // As GIMaterial's
+			uint32_t Emission;
+			uint32_t Flags;     // c_VoxelMover*
+			uint32_t Padding;
+		};
+		static_assert(sizeof(VoxelMover) == 80);
+
+		// A brick of c_GIMoverBrickVoxels^3 voxels of a level that moving boxes reach: what the dynamic layer writes this frame
+		// and puts back the next.
+		struct VoxelMoverBrick
+		{
+			glm::ivec4 Local;  // xyz: its first voxel, relative to the level's window (voxels outside the window are skipped); w: its slot in the backup
+			glm::ivec4 Texel;  // xyz: that voxel's texel; w: the level
+			glm::uvec4 Movers; // xy: the frame's boxes that reach it, a bit each
+		};
+		static_assert(sizeof(VoxelMoverBrick) == 48);
+
+		// The dynamic layer's push constants (b2; GI/VoxelMovers.comp).
+		struct VoxelMoverPassParameters
+		{
+			uint32_t Level;
+			uint32_t FirstBrick;
+			uint32_t BrickCount;
+			uint32_t Restore;   // 1: put back what the bricks held; 0: keep it and write the boxes
+		};
+		static_assert(sizeof(VoxelMoverPassParameters) == 16);
 
 		// The voxels view's push constants (b2; GI/VoxelView.frag): display colors, RGBA8 sRGB packed (red in the low byte).
 		struct VoxelViewParameters

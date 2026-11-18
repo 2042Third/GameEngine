@@ -177,7 +177,7 @@ namespace Strata
 
 		bool SameLayout(const GlobalIlluminationLayout& a, const GlobalIlluminationLayout& b)
 		{
-			if (a.Levels.size() != b.Levels.size() || a.BatchVoxels != b.BatchVoxels)
+			if (a.Levels.size() != b.Levels.size() || a.BatchVoxels != b.BatchVoxels || a.MoverBricks != b.MoverBricks)
 				return false;
 			for (size_t level = 0; level < a.Levels.size(); level++)
 			{
@@ -437,6 +437,52 @@ namespace Strata
 		gi->VoxelSets.resize(layout.Levels.size());
 		gi->TilesSets.resize(layout.Levels.size());
 
+		// The dynamic layer of moving objects: its boxes and bricks (the CPU's), the backup of what its bricks held, and a binding
+		// set per level, which names nothing of the scene.
+		constexpr uint64_t c_BrickVoxels = RenderData::c_GIMoverBrickVoxels * RenderData::c_GIMoverBrickVoxels * RenderData::c_GIMoverBrickVoxels;
+		gi->MoverBoxes = createBuffer(static_cast<uint64_t>(RenderData::c_GIMaxMoverBoxes) * sizeof(RenderData::VoxelMover), sizeof(RenderData::VoxelMover), false, false,
+			"MoverBoxes");
+		gi->MoverBricks = createBuffer(2ull * layout.MoverBricks * sizeof(RenderData::VoxelMoverBrick), sizeof(RenderData::VoxelMoverBrick), false, false, "MoverBricks");
+		gi->MoverBackup = createBuffer(layout.MoverBricks * c_BrickVoxels * 3 * sizeof(uint32_t), 0, true, true, "MoverBackup");
+		{
+			nvrhi::BindingLayoutDesc desc;
+			desc.visibility = nvrhi::ShaderType::Compute;
+			desc.bindings = {
+				nvrhi::BindingLayoutItem::VolatileConstantBuffer(1),
+				nvrhi::BindingLayoutItem::PushConstants(2, sizeof(RenderData::VoxelMoverPassParameters)),
+				nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0),
+				nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
+				nvrhi::BindingLayoutItem::Texture_UAV(0),
+				nvrhi::BindingLayoutItem::Texture_UAV(1),
+				nvrhi::BindingLayoutItem::Texture_UAV(2),
+				nvrhi::BindingLayoutItem::RawBuffer_UAV(3)
+			};
+			gi->MoverLayout = m_Device->createBindingLayout(desc);
+			created = created && gi->MoverLayout;
+		}
+		if (created)
+		{
+			gi->MoverPipeline = CreateComputePipeline("GI/VoxelMovers.comp", gi->MoverLayout);
+			created = gi->MoverPipeline != nullptr;
+		}
+		for (uint32_t level = 0; level < layout.Levels.size() && created; level++)
+		{
+			const GlobalIlluminationResources::Level& textures = gi->Levels[level];
+			nvrhi::BindingSetDesc desc;
+			desc.bindings = {
+				nvrhi::BindingSetItem::ConstantBuffer(1, gi->ConstantBuffer),
+				nvrhi::BindingSetItem::PushConstants(2, sizeof(RenderData::VoxelMoverPassParameters)),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(0, gi->MoverBricks),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, gi->MoverBoxes),
+				nvrhi::BindingSetItem::Texture_UAV(0, textures.Material, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
+				nvrhi::BindingSetItem::Texture_UAV(1, textures.Emission, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
+				nvrhi::BindingSetItem::Texture_UAV(2, textures.Normal, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
+				nvrhi::BindingSetItem::RawBuffer_UAV(3, gi->MoverBackup)
+			};
+			gi->MoverSets.push_back(m_Device->createBindingSet(desc, gi->MoverLayout));
+			created = created && gi->MoverSets.back();
+		}
+
 		if (!created)
 		{
 			std::vector<nvrhi::ResourceHandle> released;
@@ -499,6 +545,13 @@ namespace Strata
 		release(gi.Items);
 		release(gi.Groups);
 		release(gi.Materials);
+		for (nvrhi::BindingSetHandle& set : gi.MoverSets)
+			release(set);
+		release(gi.MoverPipeline);
+		release(gi.MoverLayout);
+		release(gi.MoverBoxes);
+		release(gi.MoverBricks);
+		release(gi.MoverBackup);
 		release(gi.RepeatSampler);
 		for (nvrhi::BindingSetHandle& set : gi.VoxelSets)
 			release(set);
@@ -517,12 +570,15 @@ namespace Strata
 		m_GIFrame = false;
 	}
 
-	void SceneRenderer::PrepareGlobalIllumination(const RenderScene& renderScene, const Ref<AssetManagerBase>& assets, const SceneCamera& camera)
+	void SceneRenderer::PrepareGlobalIllumination(const RenderScene& renderScene, const Ref<AssetManagerBase>& assets, const SceneCamera& camera,
+		const SceneRenderOptions& options)
 	{
 		ST_PROFILE_FUNCTION();
 		GlobalIlluminationResources& gi = *m_GI;
 		const RendererVoxelSource source(renderScene, *m_SceneGPU, assets.get());
-		const VoxelClipmapSettings settings { m_Specification.GlobalIllumination.VoxelizeTrianglesPerFrame, m_Specification.GlobalIllumination.VoxelizeTrianglesOnCut };
+		// Moving objects rest by the renderer's clock (the wall clock between its frames, or the time its options state).
+		const VoxelClipmapSettings settings { m_Specification.GlobalIllumination.VoxelizeTrianglesPerFrame, m_Specification.GlobalIllumination.VoxelizeTrianglesOnCut,
+			StepSeconds(gi.LastMoverTime, options) };
 		const glm::dvec3 cameraPosition(camera.Position);
 		if (!gi.Recorded)
 			gi.Clipmap->Reset();
@@ -608,6 +664,8 @@ namespace Strata
 		m_Stats.GIQueuedRegions = work.QueuedRegions;
 		m_Stats.GIWaitingProxies = work.WaitingProxies;
 		m_Stats.GIMovingProxies = work.MovingProxies;
+		m_Stats.GIMoverBricks = static_cast<uint32_t>(work.MoverBricks.size());
+		m_Stats.GIMoversLeftOut = work.MoversLeftOut;
 		m_Stats.GIUnvoxelizedSubmeshes = work.UnvoxelizedSubmeshes;
 		if (work.UnvoxelizedSubmeshes > 0 && !gi.UnvoxelizedLogged)
 		{
@@ -633,7 +691,7 @@ namespace Strata
 		inputs.EnvironmentCube = GetEnvironmentCube();
 		inputs.FieldMinimum = gi.FieldMinimum;
 		const VoxelFrame& work = gi.Frame;
-		const bool changed = gi.Constants.Bounce.x <= 0.0f || !work.Batches.empty() || work.MaterialsChanged || inputs != gi.SettleInputs;
+		const bool changed = gi.Constants.Bounce.x <= 0.0f || !work.Batches.empty() || work.MaterialsChanged || work.MoversChanged || inputs != gi.SettleInputs;
 		gi.SettleInputs = inputs;
 		gi.StableFrames = changed ? 0 : gi.StableFrames + 1;
 		const uint32_t settleFrames = GlobalIllumination::GetSettleFrames(gi.Clipmap->GetBounceAlbedo() * GetBounceGain(m_Specification.GlobalIllumination, gi.Layout));
@@ -705,8 +763,64 @@ namespace Strata
 		{
 			commandList->writeBuffer(gi.Materials, materials.data(), materials.size_bytes());
 		}
+
+		// The dynamic layer of moving objects, around the voxelization: first the bricks it wrote last put back what they held
+		// (the voxelizer then writes the static voxels alone), afterwards this frame's bricks written again. No pass while
+		// nothing moves. A level's bricks are one dispatch, followed by a barrier: the level's bricks written after those put
+		// back go through the same binding set, between whose dispatches NVRHI places none of its own.
+		const auto dispatchMovers = [&](const std::vector<RenderData::VoxelMoverBrick>& bricks, uint32_t firstBrick, bool restore)
+		{
+			nvrhi::ComputeState state;
+			state.pipeline = gi.MoverPipeline;
+			for (size_t first = 0; first < bricks.size();)
+			{
+				const uint32_t level = static_cast<uint32_t>(bricks[first].Texel.w);
+				size_t end = first;
+				while (end < bricks.size() && static_cast<uint32_t>(bricks[end].Texel.w) == level)
+					end++;
+				RenderData::VoxelMoverPassParameters parameters = {};
+				parameters.Level = level;
+				parameters.FirstBrick = firstBrick + static_cast<uint32_t>(first);
+				parameters.BrickCount = static_cast<uint32_t>(end - first);
+				parameters.Restore = restore ? 1u : 0u;
+				state.bindings = { gi.MoverSets[level] };
+				commandList->setComputeState(state);
+				commandList->setPushConstants(&parameters, sizeof(parameters));
+				commandList->dispatch(parameters.BrickCount);
+				const GlobalIlluminationResources::Level& textures = gi.Levels[level];
+				commandList->setTextureState(textures.Material, nvrhi::AllSubresources, nvrhi::ResourceStates::UnorderedAccess);
+				commandList->setTextureState(textures.Emission, nvrhi::AllSubresources, nvrhi::ResourceStates::UnorderedAccess);
+				commandList->setTextureState(textures.Normal, nvrhi::AllSubresources, nvrhi::ResourceStates::UnorderedAccess);
+				commandList->setBufferState(gi.MoverBackup, nvrhi::ResourceStates::UnorderedAccess);
+				commandList->commitBarriers();
+				first = end;
+			}
+		};
+		const uint32_t restoredBricks = static_cast<uint32_t>(gi.ComposedBricks.size());
+		if (restoredBricks > 0 || !frame.MoverBricks.empty())
+		{
+			ST_CORE_ASSERT(restoredBricks <= gi.Layout.MoverBricks && frame.MoverBricks.size() <= gi.Layout.MoverBricks, "SceneRenderer: more mover bricks than the layout holds");
+			std::vector<RenderData::VoxelMoverBrick> bricks = gi.ComposedBricks;
+			bricks.insert(bricks.end(), frame.MoverBricks.begin(), frame.MoverBricks.end());
+			commandList->writeBuffer(gi.MoverBricks, bricks.data(), bricks.size() * sizeof(RenderData::VoxelMoverBrick));
+			if (!frame.Movers.empty())
+				commandList->writeBuffer(gi.MoverBoxes, frame.Movers.data(), frame.Movers.size() * sizeof(RenderData::VoxelMover));
+			if (restoredBricks > 0)
+			{
+				dispatchMovers(gi.ComposedBricks, 0, true);
+				gi.ComposedBricks.clear();
+			}
+		}
+		const auto composeMovers = [&]()
+		{
+			if (frame.MoverBricks.empty())
+				return;
+			dispatchMovers(frame.MoverBricks, restoredBricks, false);
+			gi.ComposedBricks = frame.MoverBricks;
+		};
 		if (frame.Batches.empty())
 		{
+			composeMovers();
 			gi.Recorded = true;
 			return RecordGlobalIlluminationLight(commandList);
 		}
@@ -832,6 +946,7 @@ namespace Strata
 			scratchBarrier();
 		}
 
+		composeMovers();
 		gi.Recorded = true;
 		return RecordGlobalIlluminationLight(commandList);
 	}

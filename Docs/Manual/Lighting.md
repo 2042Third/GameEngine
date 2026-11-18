@@ -349,6 +349,11 @@ fences.
   bounce arrives a frame after the one before: rooms fill with light over 12 frames when their brightest surface is
   plaster-like (albedo 0.58), 17 for a white of 0.73 and up to 38 for the brightest whites, and so they do when the light
   changes (the sun moves, an object is placed). The editor's captures and the project's picture wait for it.
+- **Moving objects** take part while they move: a crate pushed across a floor shades the floor beside it and tints it with
+  its color in the same frame. While it moves the engine takes each of its parts as a box of its size with soft edges; a
+  quarter of a second after it stops, it rebuilds the object's exact shape, and the light around it can shift a little
+  then, as it can in the frame the object starts to move. Animated characters receive the bounce light but do not block
+  or bounce it yet.
 - **Debug views** (the viewport's debug view chip): **GI** shows the bounce light on surfaces made white, **Open** the share
   of the sky each surface sees, **Voxels** the voxel copy of the scene (walls too thin in the error color) and **Probes**
   the probes, dead ones dark red.
@@ -369,6 +374,8 @@ fences.
   - Round objects read a few percent dark at their sides.
   - A wall that stands at an angle to the world's axes glows softly around a patch of sunlight on it (up to about two
     and a half times the bounce light of its shadowed part).
+  - A moving ball, barrel or hollow object shades and bounces light as the box around it would, until it rests. More than
+    64 parts moving at once, or very large moving objects, are left out of the bounce light until they rest.
   - It costs about 4 ms of GPU time at 3840 x 2160 at High.
 
   Use it for interiors and look at them with the **GI** debug view.

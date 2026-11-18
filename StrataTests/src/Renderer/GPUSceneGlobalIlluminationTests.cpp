@@ -963,8 +963,9 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 
 	TEST_CASE("A moved object leaves no trace")
 	{
-		// A cube moved 1 m: its old voxels empty in the frame it moved; it is out of the voxels while it moves, and in them again,
-		// where it rests, c_GIMovingFrames frames later, as a renderer made then holds it.
+		// A cube moved 1 m: its old voxels empty in the frame it moved and the dynamic layer holds it where it is;
+		// c_GIMoverRestSeconds of the renderer's clock later its triangles are in the voxels again, as a renderer made then
+		// holds it, and nothing of the layer is left.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
@@ -980,14 +981,25 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIllumination")
 
 		box.GetComponent<TransformComponent>().Translation = glm::vec3(2.0f, 0.5f, 2.0f);
 		box.MarkModified<TransformComponent>();
-		REQUIRE(RenderGIFrame(*renderer, scene, camera, VoxelView()));
+		SceneRenderOptions options = VoxelView();
+		options.AdaptationSeconds = 0.4f * RenderData::c_GIMoverRestSeconds;
+		REQUIRE(RenderGIFrame(*renderer, scene, camera, options));
 		CHECK(renderer->GetStats().GIMovingProxies == 1);
+		CHECK(renderer->GetStats().GIMoverBricks > 0);
 		const VoxelLevel moving = ReadLevel(*renderer, 0);
 		CHECK(moving.GetMaterial(glm::i64vec3(10, 5, 20)).a == 0);
-		CHECK(moving.GetMaterial(glm::i64vec3(20, 5, 20)).a == 0);
-		for (uint32_t frame = 1; frame <= RenderData::c_GIMovingFrames; frame++)
-			REQUIRE(RenderGIFrame(*renderer, scene, camera, VoxelView()));
+		CHECK(moving.GetMaterial(glm::i64vec3(20, 5, 20)).a == 255);
+		// The layer's edge is soft: the voxel beyond the cube's face (x 2.5) holds a little, the next one nothing.
+		CHECK(moving.GetMaterial(glm::i64vec3(25, 5, 20)).a < 13);
+		CHECK(moving.GetMaterial(glm::i64vec3(26, 5, 20)).a == 0);
+		for (uint32_t frame = 0; frame < 2; frame++)
+		{
+			REQUIRE(RenderGIFrame(*renderer, scene, camera, options));
+			CHECK(renderer->GetStats().GIMovingProxies == 1);
+		}
+		REQUIRE(RenderGIFrame(*renderer, scene, camera, options));
 		CHECK(renderer->GetStats().GIMovingProxies == 0);
+		CHECK(renderer->GetStats().GIMoverBricks == 0);
 		CHECK(ReadLevel(*renderer, 0).GetMaterial(glm::i64vec3(20, 5, 20)).a == 255);
 		CHECK(CountDifferences(ReadLevels(*renderer), ReadFreshVoxels(scene, camera, camera)) == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);

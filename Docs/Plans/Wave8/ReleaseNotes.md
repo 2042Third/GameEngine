@@ -215,9 +215,9 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   by 108% of a one-bounce reference's rise, none with it off), glowing surfaces light their surroundings and closed rooms
   stay dark, also for alpha-blended and glass surfaces. **Global Illumination Intensity** (1, 0-4) scales it. Scenes that
   do not turn it on, and every sample and the showcase, look exactly as before.
-- Graphics Quality: a new row **Global illumination** (Off, Low, High; Off at Low and Medium, High at High and Ultra): 23
-  MiB of GPU memory per view at Low, 153 MiB at High, only in scenes that turn it on; the Graphics Quality page's memory
-  rows count it as they count the reflections' (High at 1920 x 1080: 702 MiB, 153 of them global illumination's). The
+- Graphics Quality: a new row **Global illumination** (Off, Low, High; Off at Low and Medium, High at High and Ultra): 25
+  MiB of GPU memory per view at Low, 156 MiB at High, only in scenes that turn it on; the Graphics Quality page's memory
+  rows count it as they count the reflections' (High at 1920 x 1080: 705 MiB, 156 of them global illumination's). The
   `Renderer.Quality` section's version is 6.
 - Captures and the project's picture wait for global illumination to settle.
 - AI agents: `component.set` on `PostProcess` takes `GlobalIllumination` and `GlobalIlluminationIntensity`;
@@ -351,6 +351,27 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   pictures look the same, and a second capture of the new build equals the first in all 15 (captures of one shot do not
   always repeat: Known issues). No GPU time that six interleaved pairs of runs could measure: that frame's busy time
   read 8.76 against 8.78 ms in the sun room and 8.23 against 8.20 ms in the yard.
+
+**Global illumination: moving objects (experimental).**
+
+- Fixed: a moved object's shade and bounce light appeared only after it had rested. Objects now take part while they
+  move: a crate pushed across a floor darkens the floor beside it and tints it with its color in the same frame, and
+  when it stops its light is already there. Before, an object that moved was left out of the bounce light until 30
+  frames after it stopped (half a second at 60 frames a second, longer at lower frame rates), and then popped in. In the
+  test, a box sliding 2 cm a frame takes 10.1% of the light of the ground beside it, for the 9.8% of its sky the box
+  hides (none before, while it moved), a red box in the sun reddens that ground as much as it does at rest (1.01), and
+  the ground's light changes smoothly as the box crosses voxels (largest second difference 0.53% of the light, 0.09% on
+  average; 2% was the bound).
+- While an object moves, the engine takes each of its parts as a box of its size with soft edges; a quarter of a second
+  after it stops (by the clock, at any frame rate), it rebuilds the object's exact shape. Scenes in which nothing moves
+  are unchanged to the bit and pay nothing: no pass runs.
+- Memory: 3.1 MiB more per view that runs global illumination at High (155.7 MiB), 1.5 MiB at Low (24.9 MiB). The
+  Graphics Quality page's rows and the row's description say so.
+- Cost: nothing while nothing moves. Eight boxes of 0.5 m moving at once cost nothing the measurement can tell from the
+  stage's own spread: `GPU.RadianceCascades` read 4.22, 4.28 and 4.21 ms with them moving against 4.21, 4.25 and 4.15 ms
+  at rest in three runs at 3840 x 2160 at High in the sun room (+0.01, +0.03 and +0.06 ms; at most 0.2 ms was the goal).
+- The editor's `viewport.capture` and `editor.perf`: `movingProxies` counts objects that move or stopped less than a
+  quarter of a second ago.
 
 **Occlusion culling (cull fix)**
 
@@ -622,6 +643,18 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
 - With every bounce, rooms take frames to fill after a cut, by their brightest surface: the sun room's gi view changes
   by less than 0.25% a frame from frame 11 (it is reported settled at 13), the Cornell box's from 15 (18), a closed
   white box's from 27 (39). Until then a game's cut shows the light rising.
+- Moving objects: while an object moves, global illumination takes each of its parts as the box around it, with soft
+  edges. A ball, a barrel or a hollow object therefore shades and bounces light as its bounds would until it rests. A
+  quarter of a second after it stops, its exact shape replaces the box in one frame, and the light beside it can step: by
+  up to 12.8% at 0.3 m from a 0.5 m box that stops off the voxel grid (its exact voxels are whole ones, larger than the
+  box: they read the ground beside it 19% under the box's own occlusion, the moving box within 3%), and by more for an
+  object that is no box. The frame an object starts to move steps the same way, its exact voxels giving way to the box:
+  by up to 26.5% in the same test, where the box starts. Before this, both steps were the object's whole light (47% in
+  the same test), the second one 30 frames late.
+- Moving objects: at most 64 parts and 512 bricks of voxels (256 at Low) move at once; what is past them (a pile of many
+  bodies falling together, an object tens of meters large) is left out of the bounce light until it rests, as every
+  moving object was before. Objects thinner than a voxel are dark while they move, as thin walls are.
+- Animated characters (skinned meshes) still receive the bounce light without blocking or bouncing it.
 
 **Reflections (R1)**
 

@@ -151,8 +151,9 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 		CHECK(high.Tiles == 262144);
 		CHECK(high.WorkItems == 1572864);
 		CHECK(high.Regions == 196640);
-		CHECK(high.GetTotal() == 160105072);
-		CHECK(GetLayout(GlobalIlluminationLevel::High).GetMemoryBytes() == 160105072);
+		CHECK(high.Movers == 3200000); // 512 bricks: 512 voxels of 12 bytes and two records of 48 each, and 64 boxes of 80
+		CHECK(high.GetTotal() == 163305072);
+		CHECK(GetLayout(GlobalIlluminationLevel::High).GetMemoryBytes() == 163305072);
 
 		const GlobalIlluminationMemory low = GetLayout(GlobalIlluminationLevel::Low).GetMemory();
 		CHECK(low.VoxelLevels == 7864320);
@@ -166,7 +167,8 @@ TEST_SUITE("Renderer.GlobalIlluminationLayout")
 		CHECK(low.Tiles == 262144);
 		CHECK(low.WorkItems == 1572864);
 		CHECK(low.Regions == 196640);
-		CHECK(low.GetTotal() == 24488560);
+		CHECK(low.Movers == 1602560); // 256 bricks
+		CHECK(low.GetTotal() == 26091120);
 	}
 
 	TEST_CASE("Directions and solid angles")

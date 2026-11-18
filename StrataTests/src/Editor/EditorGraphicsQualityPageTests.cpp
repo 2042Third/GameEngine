@@ -195,15 +195,15 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		// screen-space reflections' and the motion blur's targets but at Low, which turns both off (RowTraits::MemoryBytes; the
 		// reflections': Checkerboard 19.8 MiB at 1920 x 1080 and 79.1 MiB at 3840 x 2160, Spatial 58.0 and 232.0 MiB; the motion
 		// blur's: 24.2 and 96.9 MiB), the reflection probes' cubes (17.0 MiB at 128 per face, 68.0 at 256) and, at High and Ultra,
-		// global illumination's layout (152.7 MiB at every size). Whole MiB, rounded down.
+		// global illumination's layout (155.7 MiB at every size). Whole MiB, rounded down.
 		CHECK(TextOf(PageKey("Memory1080.Low")) == "48 MiB");
 		CHECK(TextOf(PageKey("Memory1080.Medium")) == "192 MiB");
-		CHECK(TextOf(PageKey("Memory1080.High")) == "702 MiB");
+		CHECK(TextOf(PageKey("Memory1080.High")) == "705 MiB");
 		CHECK(TextOf(PageKey("Memory1080.Ultra")) == "1.81 GiB");
-		CHECK(TextOf(PageKey("Memory2160.High")) == "1.86 GiB");
-		CHECK(TextOf(PageKey("Memory2160.Ultra")) == "2.05 GiB");
+		CHECK(TextOf(PageKey("Memory2160.High")) == "1.87 GiB");
+		CHECK(TextOf(PageKey("Memory2160.Ultra")) == "2.06 GiB");
 		// Custom's column under High shows where a switch to Custom starts: High's values.
-		CHECK(TextOf(PageKey("Memory2160.Custom")) == "1.86 GiB");
+		CHECK(TextOf(PageKey("Memory2160.Custom")) == "1.87 GiB");
 		CHECK(ColorOf(PageKey("Memory2160.High")) == AccentMuted());
 		// The harness renders nothing on a GPU.
 		CHECK(TextOf(PageKey("GPU")) == "GPU times appear while the Scene view renders");
@@ -230,7 +230,7 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		// Custom's column keeps showing the stored tuning (two cascades of High's, 512 MiB, with the atlas, the sky's map and the
 		// reflections' and motion blur's targets, the probes' cubes and global illumination), which comes back when Custom is
 		// chosen, and an edit there starts from it, as its tooltip says.
-		CHECK(TextOf(PageKey("Memory2160.Custom")) == "1.11 GiB");
+		CHECK(TextOf(PageKey("Memory2160.Custom")) == "1.12 GiB");
 		CHECK(HoverCustomTooltip(editor, "ShadowCascades") == "Editing a value switches to Custom, starting from the Custom values chosen earlier, "
 			"which this column shows");
 

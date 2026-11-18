@@ -3235,7 +3235,7 @@ namespace Strata
 		}
 		ResolveAssets(renderScene);
 		if (m_GIFrame)
-			PrepareGlobalIllumination(renderScene, assets, camera);
+			PrepareGlobalIllumination(renderScene, assets, camera, options);
 		// After the materials' lookups (which a still frame replays): the probes' captures, and the conversions of the frame.
 		if (!GatherReflectionProbes(scene, camera))
 			degraded = true;
