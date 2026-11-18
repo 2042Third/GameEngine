@@ -8,6 +8,7 @@
 #include "Editor/EditorViewport.h"
 #include "Editor/SceneBounds.h"
 #include "Editor/StreamingView.h"
+#include "Editor/ViewportRenderer.h"
 #include "TestHelpers.h"
 
 #include <Strata/Animation/AnimationPreview.h>
@@ -24,8 +25,11 @@
 #include <Strata/Scene/SceneSerializer.h>
 
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <optional>
+#include <string>
+#include <utility>
 
 using namespace Strata;
 
@@ -229,6 +233,126 @@ TEST_SUITE("Editor.Viewport")
 		CHECK(harness.Error("viewport.capture", { { "path", "Capture.png" } }).find("no project is open") != std::string::npos);
 		CHECK(harness.Error("viewport.capture", { { "overwrite", 1 } }).find("'overwrite'") != std::string::npos);
 		CHECK(harness.Error("viewport.capture", { { "overlays", "yes" } }).find("'overlays'") != std::string::npos);
+	}
+
+	TEST_CASE("A capture's incomplete list names each wait that ran out, and nothing for a settled picture")
+	{
+		// The fields of a settled capture's result and its frame's statistics.
+		const nlohmann::json settled = { { "pendingAssets", 0 }, { "texturesBelowWanted", 0 }, { "stalePoses", 0 }, { "pendingTextGlyphs", 0 },
+			{ "ui", { { "pendingGlyphs", 0 } } }, { "localShadowViewsPending", 0 }, { "reflectionProbesPending", 0 },
+			{ "renderStats", { { "deferredInstanceBytes", 0 } } }, { "previewLighting", false }, { "debugView", nlohmann::json::object() } };
+		SceneRendererStats settledStats;
+		settledStats.PreExposureSettled = true;
+		settledStats.GlobalIlluminationSettled = true;
+		settledStats.TemporalAntiAliasing = false;
+		settledStats.TemporalFrames = 0;
+		settledStats.ScreenSpaceReflectionsPending = false;
+		CHECK(ListIncompleteCapture(settled, settledStats) == nlohmann::json::array());
+
+		using Change = std::function<void(nlohmann::json& result, SceneRendererStats& stats)>;
+		const std::pair<const char*, Change> cases[] = {
+			{ "/pendingAssets", [](nlohmann::json& result, SceneRendererStats&) { result["pendingAssets"] = 2; } },
+			{ "/texturesBelowWanted", [](nlohmann::json& result, SceneRendererStats&) { result["texturesBelowWanted"] = 1; } },
+			{ "/stalePoses", [](nlohmann::json& result, SceneRendererStats&) { result["stalePoses"] = 1; } },
+			{ "/pendingTextGlyphs", [](nlohmann::json& result, SceneRendererStats&) { result["pendingTextGlyphs"] = 3; } },
+			{ "/ui/pendingGlyphs", [](nlohmann::json& result, SceneRendererStats&) { result["ui"]["pendingGlyphs"] = 1; } },
+			{ "/localShadowViewsPending", [](nlohmann::json& result, SceneRendererStats&) { result["localShadowViewsPending"] = 1; } },
+			{ "/reflectionProbesPending", [](nlohmann::json& result, SceneRendererStats&) { result["reflectionProbesPending"] = 1; } },
+			{ "/renderStats/deferredInstanceBytes", [](nlohmann::json& result, SceneRendererStats&) { result["renderStats"]["deferredInstanceBytes"] = 64; } },
+			{ "/preExposureSettled", [](nlohmann::json&, SceneRendererStats& stats) { stats.PreExposureSettled = false; } },
+			{ "/globalIlluminationSettled", [](nlohmann::json&, SceneRendererStats& stats) { stats.GlobalIlluminationSettled = false; } },
+			{ "/previewLighting", [](nlohmann::json& result, SceneRendererStats&) { result["previewLighting"] = true; } },
+			{ "/temporalFrames", [](nlohmann::json&, SceneRendererStats& stats)
+				{
+					stats.TemporalAntiAliasing = true;
+					stats.TemporalFrames = c_TemporalSettleFrames - 1;
+				} },
+			{ "/screenSpaceReflectionsPending", [](nlohmann::json&, SceneRendererStats& stats) { stats.ScreenSpaceReflectionsPending = true; } },
+			{ "/debugView/shadows/complete", [](nlohmann::json& result, SceneRendererStats&) { result["debugView"] = { { "shadows", { { "complete", false } } } }; } },
+			{ "/debugView/lightingPending", [](nlohmann::json& result, SceneRendererStats&) { result["debugView"] = { { "lightingPending", true } }; } },
+			{ "/notice", [](nlohmann::json& result, SceneRendererStats&) { result["notice"] = "The scene has no camera: the editor camera's view"; } } };
+		for (const auto& entry : cases)
+		{
+			const std::string pointer = entry.first;
+			CAPTURE(pointer);
+			nlohmann::json result = settled;
+			SceneRendererStats stats = settledStats;
+			entry.second(result, stats);
+			CHECK(ListIncompleteCapture(result, stats) == nlohmann::json::array({ pointer }));
+		}
+
+		// The temporal history counts only under TAA, until its frames settled; the views' fields only when they say so.
+		SceneRendererStats temporal = settledStats;
+		temporal.TemporalAntiAliasing = true;
+		temporal.TemporalFrames = c_TemporalSettleFrames;
+		CHECK(ListIncompleteCapture(settled, temporal) == nlohmann::json::array());
+		temporal.TemporalAntiAliasing = false;
+		temporal.TemporalFrames = 1;
+		CHECK(ListIncompleteCapture(settled, temporal) == nlohmann::json::array());
+		nlohmann::json views = settled;
+		views["debugView"] = { { "shadows", { { "complete", true } } }, { "lightingPending", false } };
+		CHECK(ListIncompleteCapture(views, settledStats) == nlohmann::json::array());
+		// Several at once, each named.
+		nlohmann::json several = settled;
+		several["pendingAssets"] = 1;
+		several["notice"] = "No camera";
+		SceneRendererStats unsettled = settledStats;
+		unsettled.PreExposureSettled = false;
+		CHECK(ListIncompleteCapture(several, unsettled) == nlohmann::json { "/pendingAssets", "/preExposureSettled", "/notice" });
+	}
+
+	TEST_CASE("Each renderer switch of a capture sets its own field of the renderer's specification and no other")
+	{
+		// Applied over a specification of the defaults: what the switch should change there.
+		using Fields = SwitchedFields;
+		const auto read = ReadSwitchedFields;
+		const SceneRendererSpecification defaults;
+		const Fields base = read(defaults);
+		const std::pair<nlohmann::json, std::function<void(Fields&)>> cases[] = {
+			{ { { "FadeLevelsOfDetail", !defaults.FadeLevelsOfDetail } }, [](Fields& fields) { fields.FadeLevelsOfDetail = !fields.FadeLevelsOfDetail; } },
+			{ { { "GPUDriven", false } }, [](Fields& fields) { fields.GPUDriven = GPUDrivenMode::Off; } },
+			{ { { "BatchAcrossMaterials", !defaults.BatchAcrossMaterials } }, [](Fields& fields) { fields.BatchAcrossMaterials = !fields.BatchAcrossMaterials; } },
+			{ { { "TextureStreaming", !defaults.TextureStreaming } }, [](Fields& fields) { fields.TextureStreaming = !fields.TextureStreaming; } },
+			{ { { "SpecularAntiAliasing", !defaults.SpecularAntiAliasing } }, [](Fields& fields) { fields.SpecularAntiAliasing = !fields.SpecularAntiAliasing; } },
+			{ { { "VisibilityFeedback", !defaults.VisibilityFeedback } }, [](Fields& fields) { fields.VisibilityFeedback = !fields.VisibilityFeedback; } },
+			{ { { "OcclusionCulling", !defaults.OcclusionCulling } }, [](Fields& fields) { fields.OcclusionCulling = !fields.OcclusionCulling; } },
+			{ { { "DitherOutput", !defaults.DitherOutput } }, [](Fields& fields) { fields.DitherOutput = !fields.DitherOutput; } },
+			{ { { "SpecularEnergyCompensation", !defaults.SpecularEnergyCompensation } },
+				[](Fields& fields) { fields.SpecularEnergyCompensation = !fields.SpecularEnergyCompensation; } },
+			{ { { "HorizonFade", !defaults.HorizonFade } }, [](Fields& fields) { fields.HorizonFade = !fields.HorizonFade; } },
+			{ { { "SpatialReflectionResolve", !defaults.SpatialReflectionResolve } },
+				[](Fields& fields) { fields.SpatialReflectionResolve = !fields.SpatialReflectionResolve; } },
+			{ { { "GlobalIlluminationBounceGain", 0.25 } }, [](Fields& fields) { fields.BounceGain = 0.25f; } },
+			{ { { "FXAASubpixel", SceneRendererSpecification::c_WideFXAASubpixel } },
+				[](Fields& fields) { fields.FXAASubpixel = SceneRendererSpecification::c_WideFXAASubpixel; } } };
+		for (const auto& entry : cases)
+		{
+			const std::string text = entry.first.dump();
+			CAPTURE(text);
+			std::string error;
+			const std::optional<CaptureRendererSwitches> switches = CaptureRendererSwitches::FromJson(entry.first, &error);
+			REQUIRE_MESSAGE(switches.has_value(), error);
+			CHECK(switches->IsSet());
+			CHECK(switches->ToJson() == entry.first);
+			SceneRendererSpecification specification = defaults;
+			switches->Apply(specification);
+			Fields expected = base;
+			entry.second(expected);
+			REQUIRE(expected != base);
+			CHECK(read(specification) == expected);
+		}
+		// GPUDriven true is the GPU-driven path where the device has it, also over a specification on the CPU path.
+		SceneRendererSpecification cpuPath = defaults;
+		cpuPath.GPUDriven = GPUDrivenMode::Off;
+		CaptureRendererSwitches gpuDriven;
+		gpuDriven.GPUDriven = true;
+		gpuDriven.Apply(cpuPath);
+		CHECK(cpuPath.GPUDriven == GPUDrivenMode::Auto);
+		// No switch changes nothing.
+		SceneRendererSpecification untouched = defaults;
+		CaptureRendererSwitches {}.Apply(untouched);
+		CHECK(read(untouched) == base);
+		CHECK_FALSE(CaptureRendererSwitches {}.IsSet());
 	}
 
 	TEST_CASE("Output paths resolve against the project and never replace files by accident")

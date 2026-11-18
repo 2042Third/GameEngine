@@ -100,6 +100,15 @@ namespace Strata
 	// project's picture render their still view again until then.
 	constexpr uint32_t c_TemporalSettleFrames = SceneRenderer::c_TemporalJitterPhases;
 
+	// What a finished viewport.capture's picture may lack, as JSON pointers to the fields of its result that say so (the
+	// result's "incomplete"; empty: "complete"): every wait of a capture is bounded in frames, and the command still succeeds
+	// when a bound runs out, so a client that needs a settled picture checks this list. `result` holds the capture's fields
+	// (pendingAssets, texturesBelowWanted, stalePoses, pendingTextGlyphs, ui.pendingGlyphs, localShadowViewsPending,
+	// reflectionProbesPending, renderStats, previewLighting, debugView, notice when there is one), `stats` the frame's. The
+	// temporal history counts only under TAA, the shadows view's counts and a lighting view's statistics only with those views,
+	// and a notice (the view fell back to another camera) always.
+	nlohmann::json ListIncompleteCapture(const nlohmann::json& result, const SceneRendererStats& stats);
+
 	// Switches of SceneRendererSpecification one capture sets (viewport.capture {renderer}), to show what a technique does. A
 	// capture with any renders through a renderer of its own (EditorViewport::GetCaptureRenderer(switches)), made with the
 	// capture renderer's specification and these over it, so no frame the editor, its views or a game draws changes; unset ones

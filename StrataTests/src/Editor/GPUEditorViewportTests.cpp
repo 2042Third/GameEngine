@@ -2071,10 +2071,20 @@ TEST_SUITE("GPU.Editor.Viewport")
 		harness.Capture({ { "width", 64 }, { "height", 64 }, { "overlays", false }, { "waitForAssets", false } }, &result);
 		CHECK(result["reflectionProbesPending"] == 1);
 		CHECK(result["waitedFrames"] == 0);
+		// The result says the picture lacks the probe's light.
+		{
+			const nlohmann::json incomplete = result["incomplete"];
+			const std::string listed = incomplete.dump();
+			CAPTURE(listed);
+			CHECK(std::find(incomplete.begin(), incomplete.end(), nlohmann::json("/reflectionProbesPending")) != incomplete.end());
+			CHECK(result["complete"] == false);
+		}
 		// With it, the capture renders again until the probe's capture loaded and was converted.
 		harness.Capture({ { "width", 64 }, { "height", 64 }, { "overlays", false } }, &result);
 		CHECK(result["reflectionProbesPending"] == 0);
 		CHECK(result["renderStats"]["reflectionProbes"] == 1);
+		CHECK(result["incomplete"] == nlohmann::json::array());
+		CHECK(result["complete"] == true);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

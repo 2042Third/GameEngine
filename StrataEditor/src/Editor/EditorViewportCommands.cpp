@@ -838,38 +838,6 @@ namespace Strata
 			return std::nullopt;
 		}
 
-		// What a finished capture's picture may lack, as JSON pointers to the fields of its result that say so: every wait of a
-		// capture is bounded in frames, and the command still succeeds when a bound runs out, so a client that needs a settled
-		// picture checks this list (empty: complete). The temporal history counts only under TAA, the shadows view's counts and
-		// a lighting view's statistics only with those views, and a notice (the view fell back to another camera) always.
-		nlohmann::json ListIncompleteCapture(const nlohmann::json& result, const SceneRendererStats& stats)
-		{
-			nlohmann::json incomplete = nlohmann::json::array();
-			const auto note = [&incomplete](bool pending, const char* pointer)
-			{
-				if (pending)
-					incomplete.push_back(pointer);
-			};
-			note(result["pendingAssets"].get<uint32_t>() > 0, "/pendingAssets");
-			note(result["texturesBelowWanted"].get<uint32_t>() > 0, "/texturesBelowWanted");
-			note(result["stalePoses"].get<uint32_t>() > 0, "/stalePoses");
-			note(result["pendingTextGlyphs"].get<uint32_t>() > 0, "/pendingTextGlyphs");
-			note(result["ui"]["pendingGlyphs"].get<uint32_t>() > 0, "/ui/pendingGlyphs");
-			note(result["localShadowViewsPending"].get<uint32_t>() > 0, "/localShadowViewsPending");
-			note(result["reflectionProbesPending"].get<uint32_t>() > 0, "/reflectionProbesPending");
-			note(result["renderStats"].value("deferredInstanceBytes", uint64_t(0)) > 0, "/renderStats/deferredInstanceBytes");
-			note(!stats.PreExposureSettled, "/preExposureSettled");
-			note(!stats.GlobalIlluminationSettled, "/globalIlluminationSettled");
-			note(result["previewLighting"].get<bool>(), "/previewLighting");
-			note(stats.TemporalAntiAliasing && stats.TemporalFrames < c_TemporalSettleFrames, "/temporalFrames");
-			note(stats.ScreenSpaceReflectionsPending, "/screenSpaceReflectionsPending");
-			const nlohmann::json& debugView = result["debugView"];
-			note(debugView.contains("shadows") && !debugView["shadows"]["complete"].get<bool>(), "/debugView/shadows/complete");
-			note(debugView.value("lightingPending", false), "/debugView/lightingPending");
-			note(result.contains("notice"), "/notice");
-			return incomplete;
-		}
-
 		// Later polls: wait for the GPU copy, encode the image on a worker thread (PNG compression and Base64 of a large
 		// image take long enough to hitch the editor), save it on an I/O thread when asked to, then report.
 		std::optional<EditorCommandResult> ContinueCapture(EditorContext& context, const CaptureRequest& request, CaptureProgress& progress)
@@ -1001,6 +969,34 @@ namespace Strata
 			return EditorCommandResult::Ok(std::move(result));
 		}
 
+	}
+
+	nlohmann::json ListIncompleteCapture(const nlohmann::json& result, const SceneRendererStats& stats)
+	{
+		nlohmann::json incomplete = nlohmann::json::array();
+		const auto note = [&incomplete](bool pending, const char* pointer)
+		{
+			if (pending)
+				incomplete.push_back(pointer);
+		};
+		note(result["pendingAssets"].get<uint32_t>() > 0, "/pendingAssets");
+		note(result["texturesBelowWanted"].get<uint32_t>() > 0, "/texturesBelowWanted");
+		note(result["stalePoses"].get<uint32_t>() > 0, "/stalePoses");
+		note(result["pendingTextGlyphs"].get<uint32_t>() > 0, "/pendingTextGlyphs");
+		note(result["ui"]["pendingGlyphs"].get<uint32_t>() > 0, "/ui/pendingGlyphs");
+		note(result["localShadowViewsPending"].get<uint32_t>() > 0, "/localShadowViewsPending");
+		note(result["reflectionProbesPending"].get<uint32_t>() > 0, "/reflectionProbesPending");
+		note(result["renderStats"].value("deferredInstanceBytes", uint64_t(0)) > 0, "/renderStats/deferredInstanceBytes");
+		note(!stats.PreExposureSettled, "/preExposureSettled");
+		note(!stats.GlobalIlluminationSettled, "/globalIlluminationSettled");
+		note(result["previewLighting"].get<bool>(), "/previewLighting");
+		note(stats.TemporalAntiAliasing && stats.TemporalFrames < c_TemporalSettleFrames, "/temporalFrames");
+		note(stats.ScreenSpaceReflectionsPending, "/screenSpaceReflectionsPending");
+		const nlohmann::json& debugView = result["debugView"];
+		note(debugView.contains("shadows") && !debugView["shadows"]["complete"].get<bool>(), "/debugView/shadows/complete");
+		note(debugView.value("lightingPending", false), "/debugView/lightingPending");
+		note(result.contains("notice"), "/notice");
+		return incomplete;
 	}
 
 	void RegisterViewportCommands(EditorCommandRegistry& registry)
