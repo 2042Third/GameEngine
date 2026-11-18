@@ -23,7 +23,8 @@
 // - the culled view (SceneRenderOptions::ShowCulled) draws a box per entry of the frame's culled list, which Scene/Cull.comp's
 //   counting passes write on the GPU-driven path (u_Cull.CulledView) and the CPU's extraction on the CPU path
 //   (m_CulledProxies), from the scene copy's proxy records (Overlay/CulledView.vert).
-// Nothing of either exists until a frame shows it, and frames without them record nothing of them.
+// Nothing of either exists until a frame shows it, apart from the GPU-driven path's two one-entry buffers the cull layout
+// binds in every frame (EnsureCulledViewBuffers), and frames without them record nothing of them.
 
 namespace Strata
 {

@@ -3737,8 +3737,11 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   finished), so no view, other capture or game frame changes (`GPU.Editor.Viewport` checks the Scene view's frames and a
   capture without switches against those before, to the bit; the switches' waits are a capture's like any other's: a
   texture made resident whole without `TextureStreaming` stays resident as a capture's levels do). The result's `renderer`
-  echoes the switches set; live captures refuse them. **Live captures** (`viewport.capture {live: true, camera, atFixedStep?,
-  frames?, path?}`) render nothing: they read back what the Scene view (`"editor"`) or the Game view (`"scene"`) presented, its
+  echoes the switches set; live captures refuse them. A capture's exposure is metered from its own frames, so under
+  automatic exposure a switch that changes how much light there is (energy compensation, the bounces) re-exposes the whole
+  picture: pairs that show what a technique does are taken with a fixed exposure (`PostProcess` `AutoExposure` off), and
+  `renderStats.exposure` says what automatic exposure metered. **Live captures** (`viewport.capture {live: true, camera,
+  atFixedStep?, frames?, path?}`) render nothing: they read back what the Scene view (`"editor"`) or the Game view (`"scene"`) presented, its
   temporal history as it is, to see motion as it plays (trails, smearing, crawling). Every command poll runs before the
   views render in its frame, so a poll reads back the frame the view rendered in the previous one before it renders
   again; `ViewportRenderer::GetRenderStamp` pairs each render with the play session and the fixed steps it showed.
@@ -4824,14 +4827,17 @@ lights, Post Process and the sky), and never a resolution below the output's.
   texture. The replay leaves `DrawCommands` as the frame counted them. It needs the device's non-solid fill mode
   (`GraphicsDeviceInfo::SupportsWireframe`): without it the frame reports why and draws no lines. The culled view boxes the
   mesh renderers in the frustum that culling left out, over everything (no depth test): by their size (`CulledColors[0]`,
-  boxes grown to `RenderData::c_CulledViewMinPixels` across) and, on the GPU-driven path, by occlusion (`[1]`: hidden now and
-  not drawn by the first phase). Each path records them where it decides, so the boxes are its decisions, not a second
-  guess: the CPU's extraction into `m_CulledProxies` (uploaded at the overlay), `Scene/Cull.comp`'s counting passes into
-  `u_CulledViewList` with `u_CulledViewArguments` as the draw's indirect arguments (`CullConstants::CulledView`; the cull
+  boxes grown to `RenderData::c_CulledViewMinPixels` across their diagonal, about 5 pixels on a cube's face) and, on the
+  GPU-driven path, by occlusion (`[1]`: hidden now and not drawn by the first phase; `renderStats.occludedProxies` counts
+  every proxy the second phase found hidden, so while the camera moves it includes the ones the first phase drew once
+  more because the previous frame saw them, boxed from the next frame). Each path records them where it decides, so the
+  boxes are its decisions, not a second guess: the CPU's extraction into `m_CulledProxies` (uploaded at the overlay),
+  `Scene/Cull.comp`'s counting passes into `u_CulledViewList` with `u_CulledViewArguments` as the draw's indirect arguments (`CullConstants::CulledView`; the cull
   layout binds both every frame, one entry long while the view is off, and the branch is uniform). An entry is the proxy's
   index and the reason above `c_CulledReasonShift`; `Overlay/CulledView.vert` draws a box per entry from the scene copy's
   proxy records, one draw per reason so crossing lines of two colors do not depend on the GPU's recording order. Frames
-  without the views record nothing of them; their resources are made by the first frame that shows one.
+  without the views record nothing of them; their resources are made by the first frame that shows one, apart from the
+  GPU path's two one-entry buffers the cull layout binds.
 - `SceneRenderer::GetShadowViewStats()` (`ShadowViewStats`, `Strata/Renderer/ShadowView.h`) is the newest frame whose counts
   came back (2-3 frames late, never waited for: `Render` resolves them at its start, `ResolveShadowViewStats` for tools
   that wait without rendering, as `viewport.capture` does beside `ResolveGPUStats`): per cascade its layout (the frame's
@@ -6714,7 +6720,7 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   strata_describe)" when cut) and property descriptions cut to their first sentence (100 characters); types, enums,
   ranges and `required` stay (`McpToolsets::MakeCompactToolDefinition`). So the first sentence of a command's
   description says what it does, and a property's first sentence what it is. The default list stays at most 32 tools
-  and 30 KiB of `tools/list` JSON (`CLI.McpToolsets`). It is at the tool limit: 27 core commands and 5 generic tools, about 18.6 KB; every command
+  and 30 KiB of `tools/list` JSON (`CLI.McpToolsets`). It is at the tool limit: 27 core commands and 5 generic tools, about 21.8 KB; every command
   is about 101 KB of definitions (152 commands; `CLI.McpToolsets` prints the figure). A command added to `core` takes the place
   of another.
 

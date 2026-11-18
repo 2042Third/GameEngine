@@ -150,8 +150,10 @@ editor started with `--no-gpu` (use `--headless`):
   do (`SpecularAntiAliasing`, `SpecularEnergyCompensation`, `DitherOutput`, `HorizonFade`, `SpatialReflectionResolve`,
   `GPUDriven`, `OcclusionCulling`, `VisibilityFeedback`, `BatchAcrossMaterials`, `TextureStreaming`, `FadeLevelsOfDetail`:
   booleans; `GlobalIlluminationBounceGain` 0 for one bounce; `FXAASubpixel` 0.25 or 0.75); the editor's views and the game
-  never draw with them, and the result's `renderer` echoes them. Text is complete in the picture, and so are the view's meshes,
-  materials and textures: the capture renders again for up to about five seconds of frames while they load, up to about
+  never draw with them, and the result's `renderer` echoes them. Automatic exposure meters each capture alone, so a switch
+  that changes how much light there is re-exposes the whole picture: take such off/on pairs with the Post Process's
+  `AutoExposure` off (`renderStats.exposure` says what automatic exposure metered). Text is complete in the picture, and
+  so are the view's meshes, materials and textures: the capture renders again for up to about five seconds of frames while they load, up to about
   two more while textures still lack the finer mip levels the view wants, and a few while animated characters that
   animate only while seen (`CullingMode: WhenVisible`) still show an older pose, also while paused, and while mesh renderers
   the scene just gained are still on their way to the GPU (a few frames for a million; `waitForAssets: false` takes it
@@ -194,11 +196,12 @@ editor started with `--no-gpu` (use `--headless`):
   (shares of the image; pixels per texel over covered receivers: about 1 or less means shadows as fine as the screen; the
   cascades are stable, the view's alone, so the first frame is final);
   `"culled"` draws over everything a box around each mesh renderer in view that culling left out: yellow (Sulfur) those
-  too small on screen (`RendererQualitySettings::MinProjectedPixels`; each box at least 6 pixels wide so it shows), red
-  (Cinnabar) those hidden behind what is drawn (occlusion culling, which only the GPU-driven path does: pass `renderer:
-  {"OcclusionCulling": false}` to see the CPU path's boxes), counted by `renderStats.sizeCulledProxies` and
-  `occludedProxies`; `"wireframe"` draws the edges of every triangle drawn (each level of detail as chosen, skins as posed)
-  over the image where nothing is in front of them (devices without a non-solid fill mode draw no lines and log why);
+  too small on screen (`RendererQualitySettings::MinProjectedPixels`; each box grown to about 6 pixels across so it
+  shows), red (Cinnabar) those hidden behind what is drawn (occlusion culling, which only the GPU-driven path does: pass
+  `renderer: {"OcclusionCulling": false}` to see the CPU path's boxes), counted by `renderStats.sizeCulledProxies` and
+  `occludedProxies` (every proxy found hidden: while the camera moves also those drawn once more because the frame before
+  saw them, boxed from the next frame); `"wireframe"` draws the edges of every triangle drawn (each level of detail as
+  chosen, skins as posed) over the image where nothing is in front of them (devices without a non-solid fill mode draw no lines and log why);
   `"none"` is the plain image. Pass it to `viewport.capture` for one picture, or set it for the viewport with
   `viewport.setSettings {"debugView": ...}` (it then colors the person's viewport too, also the Game view). The result's
   `debugView` counts what it found among the entities in view: `{view, tintedEntities, pendingEntities, failedEntities,
@@ -212,9 +215,10 @@ editor started with `--no-gpu` (use `--headless`):
   through the scene's exposure), `"ao"` the ambient occlusion that darkens indirect light (white: none), `"indirect"` only the
   sky's, probes' and reflected light, `"luminance"` the scene's luminance as EV100 bands (log2 of nits plus 3: an overcast
   day's ground about 12, a sunlit one about 15), `"albedo"` the base colors with values below 0.03 marked blue and above 0.85
-  striped red (no real material lies outside), `"specular"` and `"diffuse"` one kind of light alone (no emission or fog),
-  `"clusters"` how many lights each pixel's light cluster lists, as bands (none, 1, 2-3, 4-7, ...; `value` is a share of a
-  cluster's capacity). `viewport.capture` measures the frame it captured (the statistics come back
+  striped red (no real material lies outside), `"specular"` and `"diffuse"` one kind of light alone (no emission or fog;
+  each exposed on its own, so they do not add up to the picture), `"clusters"` how many lights each pixel's light cluster
+  lists, as bands (none, 1, 2-3, 4-7, ..., up to a full cluster, 256 lights by default; `value` is a share of a cluster's
+  capacity). `viewport.capture` measures the frame it captured (the statistics come back
   with the image) and adds `debugView.lighting: {view, surfaceShare, surfaceEv100: {p05, p50, p95}, backgroundEv100, value:
   {median, p05}, belowRangeShare, aboveRangeShare, sunIlluminance, skyIlluminance, sunToSkyRatio}` (null where the view
   measures nothing):

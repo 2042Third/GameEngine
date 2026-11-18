@@ -44,9 +44,10 @@ what each one costs:
 - **Level of detail error** and **Smallest drawn size** decide how much geometry a frame draws. Two debug views of the
   Scene view's debug view chip show it: **Wireframe** draws the edges of every triangle drawn over the image, so you see
   which level of detail each mesh is drawn at; **Culled** draws a box over everything around each mesh in view the frame
-  left out, yellow where it is smaller on screen than the smallest drawn size (each box at least 6 pixels wide so it
-  shows), red where it is hidden behind what is drawn (occlusion culling, on GPUs that cull on the GPU), with the counts in
-  its legend.
+  left out, yellow where it is smaller on screen than the smallest drawn size (each box grown to about 6 pixels across so
+  it shows), red where it is hidden behind what is drawn (occlusion culling, on GPUs that cull on the GPU), with the counts
+  in its legend. While the camera moves, the Occluded count may be a little ahead of the red boxes: it counts what the
+  frame found hidden, and what was in view a frame before is drawn once more and gets its box in the next frame.
 - **Ambient occlusion samples** set how finely the ambient occlusion that darkens creases and contacts is traced, in
   scenes whose Post Process turns it on: more samples give smoother, truer occlusion for GPU time in the `GPU.AO` stage
   (Medium's 2 x 6 is Strata 0.6.0's), into the same targets at every preset.
@@ -99,7 +100,10 @@ what each one costs:
   `complete` says whether it got there, and `incomplete` names what it still lacked. A picture can also switch techniques
   off or on for itself alone, to show what they do (`{"renderer": {"SpecularAntiAliasing": false}}`, and the energy
   compensation, dithering, FXAA's sub-pixel amount, one bounce of global illumination...); the views and the game never
-  draw with them.
+  draw with them. With automatic exposure each picture is exposed for its own light, so a switch that changes how much
+  light there is (energy compensation, the bounces) brightens or darkens the whole picture too: compare such pairs with a
+  fixed exposure (the Post Process's Auto Exposure off). The result's `renderStats.exposure` says what automatic
+  exposure metered (null with a fixed exposure).
 - **One run of a game**: `<Game> --quality low` (or `medium`, `high`, `ultra`) plays at that preset without saving
   anything.
 

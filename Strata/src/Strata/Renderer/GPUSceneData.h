@@ -228,7 +228,8 @@ namespace Strata::RenderData
 	constexpr uint32_t c_CulledReasonShift = 30;
 	constexpr uint32_t c_CulledBySize = 1;      // In the frustum, below RendererQualitySettings::MinProjectedPixels
 	constexpr uint32_t c_CulledByOcclusion = 2; // In the frustum, hidden behind what the view drew (not drawn this frame)
-	// The culled view draws a box of a proxy culled by its size at least this many pixels wide, so that it can be seen.
+	// The culled view draws a box of a proxy culled by its size at least this many pixels across its diagonal (a cube's face then
+	// shows about 5 pixels wide), so that it can be seen.
 	constexpr float c_CulledViewMinPixels = 6.0f;
 
 	// What a frame's culling counted (read back frames later: SceneRendererGPUStats).

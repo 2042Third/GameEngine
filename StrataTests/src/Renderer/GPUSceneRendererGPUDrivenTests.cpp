@@ -886,7 +886,7 @@ TEST_SUITE("GPU.SceneRenderer.GPUDriven")
 			REQUIRE(comparison.GPU.GetGPUStats().HasCounters);
 			CHECK(comparison.CPU.GetStats().SizeCulledProxies > 0);
 			CHECK(comparison.GPU.GetGPUStats().OccludedProxies == 0);
-			// Each box at least six pixels wide: the far grains' boxes cover a good part of the image's far half.
+			// Each box grown to six pixels across its diagonal: the far grains' boxes cover a good part of the image's far half.
 			CHECK(CountColor(boxed.Color, c_SizeCulledColor) > 300);
 			CHECK(CountColor(boxed.Color, c_OccludedColor) == 0);
 			CHECK(CountDifferentIDs(lit.IDs, boxed.IDs) == 0);

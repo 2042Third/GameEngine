@@ -523,7 +523,7 @@ namespace Strata
 		glm::vec4 WireframeColor = { 0.93f, 0.92f, 0.89f, 0.8f };
 		// The culled debug view (SceneRendererGeometryViews.cpp): the bounds of the mesh renderers in the frustum that the frame's
 		// culling left out, as boxes over everything: CulledColors[0] those below RendererQualitySettings::MinProjectedPixels (each
-		// box drawn at least RenderData::c_CulledViewMinPixels wide), [1] those hidden behind what the view drew (occlusion culling, which only
+		// box grown to RenderData::c_CulledViewMinPixels across its diagonal), [1] those hidden behind what the view drew (occlusion culling, which only
 		// the GPU-driven path does). Both paths record them where they decide (the CPU's extraction, Scene/Cull.comp's counting
 		// passes). Display colors (sRGB; alpha unused).
 		bool ShowCulled = false;

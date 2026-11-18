@@ -1153,7 +1153,7 @@ namespace Strata
 					"lights' highlights and image light's reflections) and \"diffuse\" only the diffuse light, both without emission and fog, "
 					"\"clusters\" how many lights each pixel's light cluster lists (bands: none, 1, 2-3, 4-7, ...; what its shading walks), "
 					"\"culled\" the bounds of the mesh renderers in view that culling left out, as boxes over everything: Sulfur those too small "
-					"on screen (drawn at least 6 pixels wide), Cinnabar those hidden behind what is drawn (occlusion culling, on the GPU-driven "
+					"on screen (grown to about 6 pixels across), Cinnabar those hidden behind what is drawn (occlusion culling, on the GPU-driven "
 					"path only), \"wireframe\" the edges of every triangle drawn (all levels of detail, skins as posed) over the image, \"none\" "
 					"shows the image as rendered") },
 				{ "gameView", ObjectSchema({
@@ -1291,8 +1291,9 @@ namespace Strata
 					"(lux on flat ground), sunToSkyRatio}; \"voxels\" the GI's voxels, with debugView.globalIllumination {ran, settled, voxelLevels, memoryMiB}; \"specular\" and "
 					"\"diffuse\" the light of one kind (no emission, no fog), \"clusters\" the lights each pixel's light cluster lists as bands "
 					"(none, 1, 2-3, 4-7, ...; debugView.lighting.value: shares of a cluster's capacity); \"culled\" boxes of the mesh renderers in "
-					"view that culling left out (too small: Sulfur, at least 6 pixels wide; hidden behind what is drawn: Cinnabar, the GPU-driven "
-					"path's occlusion culling; renderStats.sizeCulledProxies and occludedProxies count them), \"wireframe\" the edges of every "
+					"view that culling left out (too small: Sulfur, about 6 pixels across; hidden behind what is drawn: Cinnabar, the GPU-driven "
+					"path's occlusion culling; renderStats.sizeCulledProxies counts the first, occludedProxies all found hidden, also those the "
+					"frame drew once more while the camera moves), \"wireframe\" the edges of every "
 					"triangle drawn over the image (it needs the device's non-solid fill mode: without it the lines are left out and the log "
 					"says why); "
 					"\"none\" not at all (default: the viewport's debug view)") },
@@ -1307,7 +1308,8 @@ namespace Strata
 				{ "frames", IntegerSchema("live: that frame and the next ones, as numbered files beside path above 1 (default 1)", 1, c_MaxLiveCaptureFrames) },
 				{ "renderer", CaptureRendererSwitches::GetSchema("Switches of the renderer for this capture alone, named as SceneRendererSpecification's "
 					"fields, to show what a technique does (e.g. {\"SpecularAntiAliasing\": false}); the editor's views, other captures and the game "
-					"never draw with them. Unset ones keep the capture's own values") } }),
+					"never draw with them. Unset ones keep the capture's own values. Automatic exposure meters each capture alone: compare "
+					"switches that change the light with a fixed exposure") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
