@@ -5093,8 +5093,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   (`c_AreaShadowMiddleTap`), an occluder nearer than the path blocks it where the surface the first look saw is nearer than
   the path there too: the path entered a solid whose face continues between the looks (the near face of a wall under its
   top), not passed behind an occluder's silhouette. At a third (`c_AreaShadowNearTap`), an occluder nearer than the plane
-  blocks it where it is also deeper than the path at the kernel's depth: solid blockers just above the receiver (a sphere's
-  or a post's foot), not the blocker the kernel was made from counted again as solid down to the receiver. The first two
+  blocks it where it also lies within the face's reach (nearer than the path from the face's farthest point through the look:
+  between some point of the face and the receiver) and deeper than the path at the kernel's depth: solid blockers just above
+  the receiver (a sphere's or a post's foot), not a wall rising beside it (the Cornell box's back wall beside the red wall
+  read 0.19 dark with the plane alone) nor the blocker the kernel was made from counted again as solid down to the receiver. The first two
   looks compare from one gather of the atlas (`CompareAreaShadowTwice`, the linear clamp sampler s8), as do the near look's
   two tests. Under a texel of kernel the
   sun's four-tap tent filters; from one to two texels a lattice of `c_AreaShadowTapsPerFilterTap` (2) times
@@ -5113,15 +5115,16 @@ lights, Post Process and the sky), and never a resolution below the output's.
   ranges cannot be made draws its rect lights unshadowed (reported). Transparent surfaces filter per pixel, without the blur.
   The last masked light's evaluation (`GetAreaShadowEvaluation`) marks every pixel that compared depths.
   Measured (`GPU.SceneRenderer.AreaShadows` and `.AreaLightCornell`, both paths alike to the code): the Cornell box's floor
-  seen from under its ceiling within 0.124 of the reference outside the penumbrae (at one point under the sphere's foot that
-  the light's center sees, where the filter misses part of the sphere just above the floor; elsewhere within 0.03) and 0.199
+  seen from under its ceiling within 0.110 of the reference outside the penumbrae (at one point under the sphere's foot that
+  the light's center sees, where the filter misses part of the sphere just above the floor; elsewhere within 0.03) and 0.129
   inside them (the spec's 0.03 and 0.1), no step between neighbours beyond 0.016 where the reference is flat; a wall's
   penumbra under a 1 x 0.5 m light within 0.063 of the reference and 8.4% wider (the spec's 0.12 and 25%; with the path's
   crossing at the kernel's depth and the plane at a third of it alone 0.167 and 38% narrow); a 6 cm post's shadow 5 mm behind
   it 2.1 cm wide (the reference's 1.2 cm: the spec's two shadow texels are not met, the blockers' depth comes from cells
   holding the post's lower part), 1 m on within 0.031 of the reference (that shadow is 15% deep, where its 10-90% width, the
   spec's measure, turns on a few hundredths: 0.132 m against 0.090 m); the Cornell box's back wall in the 0.3 m band under
-  its ceiling light's plane within 0.015 of the reference (0.21 without leaving out the taps behind the plane); a blocker
+  its ceiling light's plane as the reference (0.21 off without leaving out the taps behind the plane), its back wall beside the
+  red wall within 0.016 where the reference sees the whole light; a blocker
   0.3 m under a 2 m light gets 16% of the reference's width: the **reach clamp**, the known limit of very wide penumbrae (a
   blocker within about a third of the receiver's distance of a large light); in the Cornell box 46% of the fully lit pixels
   still reach the taps (the spec's 30% is not met: by walls and corners geometry nearer than the receiver lies within its own

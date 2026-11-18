@@ -358,12 +358,13 @@ TEST_SUITE("GPU.SceneRenderer.AreaLightCornell")
 			worstInside, inside));
 		CHECK(outside >= 9);
 		CHECK(inside >= 3);
-		// The spec asks 0.03 outside the penumbrae and 0.1 inside. Measured: 0.124, at one point under the sphere's foot that the
+		// The spec asks 0.03 outside the penumbrae and 0.1 inside. Measured: 0.110, at one point under the sphere's foot that the
 		// light's center sees (the filter, which looks from the center, misses some of the sphere just above the receiver
-		// there), and 0.199 in the penumbrae (Known issue); the bounds are 1.5 times that. The receiver's plane as the taps' only
-		// reference (stage 2's filter) read 0.40 outside: a band along every wall and the back wall's foot.
-		CHECK(worstOutside <= 0.19);
-		CHECK(worstInside <= 0.3);
+		// there), and 0.129 in the penumbrae (Known issue); the bounds are 1.5 times that. Stage 3's filter read 0.124 and 0.199;
+		// the receiver's plane as the taps' only reference (stage 2's) 0.40 outside: a band along every wall and the back wall's
+		// foot.
+		CHECK(worstOutside <= 0.165);
+		CHECK(worstInside <= 0.195);
 
 		uint32_t pairs = 0;
 		double floorStep = 0.0;
@@ -387,6 +388,36 @@ TEST_SUITE("GPU.SceneRenderer.AreaLightCornell")
 		CHECK(wallPairs > 20);
 		CHECK(floorStep <= 0.02);
 		CHECK(wallStep <= 0.02);
+
+		// The back wall beside its corner with the red wall, where the reference sees the whole light: the red wall, rising
+		// beside these points, stands between no point of the face and them. The near look compared with the receiver's plane
+		// alone read a band of it 0.19 dark (the red wall nearer than the back wall's plane extended behind it).
+		uint32_t cornerPoints = 0;
+		double cornerWorst = 0.0;
+		for (int column = 0; column < 6; column++)
+		{
+			for (int row = 0; row < 19; row++)
+			{
+				const glm::dvec3 point(-2.72 + 0.05 * column, 0.5 + 0.25 * row, -2.75);
+				if (blockers.Blocks(glm::dvec3(front.Position), point))
+					continue;
+				const glm::uvec2 pixel = ProjectToPixel(front, glm::vec3(point), c_Size);
+				if (pixel.x >= c_Size || pixel.y >= c_Size)
+					continue;
+				const std::optional<glm::dvec3> seen = FindPlanePoint(front, pixel.x, pixel.y, 2, -2.75);
+				const float visibility = frontFrames.Visibility(pixel.x, pixel.y);
+				if (!seen || seen->x > -2.45 || visibility < 0.0f)
+					continue;
+				const double reference = CornellVisibility(*seen, glm::dvec3(0.0, 0.0, 1.0), light, blockers);
+				if (reference < 0.98)
+					continue;
+				cornerWorst = std::max(cornerWorst, std::abs(visibility - reference));
+				cornerPoints++;
+			}
+		}
+		MESSAGE(fmt::format("L4: the back wall beside the red wall, fully lit: {:.4f} from the reference at most ({} points)", cornerWorst, cornerPoints));
+		CHECK(cornerPoints >= 30);
+		CHECK(cornerWorst <= 0.03);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

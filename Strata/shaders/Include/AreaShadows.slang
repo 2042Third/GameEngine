@@ -74,9 +74,9 @@ struct AreaShadowView
 // Where a tap looks along its path besides the kernel's depth, as fractions of its offset from the receiver (EvaluateAreaLightShadow's
 // taps): the middle look finds the paths that enter a solid blocker between the two (the near face of S1's wall, under its top);
 // the near look, compared with the receiver's plane, the solid blockers just above the receiver, as at a sphere's or a post's
-// foot. In the Cornell box a near look at a third gave the floor within 0.124 of the reference outside the penumbrae and 0.199
-// inside; a half 0.216 and 0.312, and a ninth more (with every look on the path) closed the light under the sphere's foot but
-// darkened its penumbra by 0.24.
+// foot. In stage 3's filter (the plane alone at the near look) a third gave the Cornell box's floor within 0.124 of the reference
+// outside the penumbrae and 0.199 inside; a half 0.216 and 0.312, and a ninth more (with every look on the path) closed the light
+// under the sphere's foot but darkened its penumbra by 0.24.
 static const float c_AreaShadowMiddleTap = 2.0 / 3.0;
 static const float c_AreaShadowNearTap = 1.0 / 3.0;
 
@@ -382,9 +382,12 @@ AreaShadowSample EvaluateAreaLightShadow(uint slot, float3 relativePosition, flo
 			// condition an occluder the path only passed behind blocks it (P hidden by the wall's top from the light's center, the
 			// light's point beyond the top): S1 read 0.10 off and the strafe's flicker rose to 1.17% of blocks at the 99th
 			// percentile against the sun's 0.84%; without the look the wall's umbra edge read 0.21 lit. At a third: an occluder
-			// nearer than the receiver's plane blocks it only where it is also deeper than the path at the kernel's depth (the
-			// first look could not see it): stage 3's near look, the plane alone, counted the blocker the kernel was made from as
-			// solid down to the receiver: S1 read 0.19 off, dark beside its umbra, and the 6 cm post's shadow 1 m on 0.29 dark.
+			// nearer than the receiver's plane blocks it where it also lies between some point of the face and the receiver (the
+			// face's reach: the depth of the path from the face's farthest point, the lattice's corner, through the look), and is
+			// deeper than the path at the kernel's depth (the first look could not see it). Stage 3's near look, the plane alone,
+			// counted the blocker the kernel was made from as solid down to the receiver (S1 0.19 off, dark beside its umbra; the
+			// 6 cm post's shadow 1 m on 0.29 dark) and a wall rising beside a receiver as a contact (the Cornell box's back wall
+			// beside the red wall 0.19 dark, its floor's penumbrae 0.199 off where they are 0.129 with the face's reach).
 			float2 tapOffset = tapTexel - texel;
 			float pathReference = GetAreaShadowPathReference(shadowView, tapOffset, lattice);
 			float2 middleOffset = tapOffset * c_AreaShadowMiddleTap;
@@ -395,7 +398,7 @@ AreaShadowSample EvaluateAreaLightShadow(uint slot, float3 relativePosition, flo
 				* u_LocalShadowAtlas.SampleCmpLevelZero(u_ShadowCompareSampler, clamp(texel + middleOffset, lowest, highest) * atlasTexel, middleReference);
 			float2 nearOffset = tapOffset * c_AreaShadowNearTap;
 			float2 nearLook = CompareAreaShadowTwice(clamp(texel + nearOffset, lowest, highest) * atlasTexel, float2(atlasSize, atlasSize),
-				GetAreaShadowPlaneReference(shadowView, nearOffset), pathReference);
+				max(GetAreaShadowPlaneReference(shadowView, nearOffset), GetAreaShadowPathReference(shadowView, nearOffset, float2(1.0, 1.0))), pathReference);
 			disk += max(pathLook.x, max(middleBlocked, nearLook.x * (1.0 - nearLook.y)));
 			counted += 1.0;
 		}
