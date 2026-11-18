@@ -96,19 +96,25 @@ linearly transformed cosines), the same in every frame.
   the faces share the power (each half as bright).
 - **Range** fades the light smoothly to zero at that distance from the face. It does not change how the light falls off
   before that: a panel's own falloff is physical. Make it reach what the light should light; a smaller range costs less.
-- **Shadows**: with **Cast Shadows** a rect light casts soft shadows filtered with its own size: sharp where an object meets
-  the floor, wider and softer further from it and the larger the light. It takes six views of the point and spot lights'
-  shadow atlas (five for a one-sided ceiling panel: nothing behind it needs a shadow) from the same budget (Max Shadowed
-  Local Lights, the atlas size and largest tile), and at most four rect lights cast shadows at once: a fifth waits until one
-  leaves the view or matters less, and a light losing its shadow fades it out. Very wide penumbrae (a large light close above
-  an object) come out narrower than real ones: the filter reaches at most an eighth of the light's shadow tile. Walls beside
-  a lit floor do not shadow it. Each view is drawn twice, its front and its back faces, so the filter knows where a closed
-  object's inside is and lets no light through at a box's foot; an open mesh (a single plane) is known only by its front.
-  A little light still passes the corner of a box at its foot, the outer edge of a shadow under a ball reads a little dark,
-  and the soft edge behind a thick object's top comes out narrower than a real one. The back faces take a second atlas of
-  the point and spot atlas's size, made with the first rect light that casts a shadow. Shadows of shadowed rect lights cost
-  every pixel near their penumbrae a filter of twice the Shadow Filter Quality's taps: four of them over a whole 4K view
-  take about 7 ms of GPU time at High.
+- **Shadows**: with **Cast Shadows** a rect light casts soft shadows filtered with its own size: sharp where an object
+  meets the floor, wider and softer further from it and the larger the light. It takes six tiles of the point and spot
+  lights' shadow atlas (a one-sided ceiling panel draws only five of them: nothing behind it needs a shadow, and that
+  face's tile stays cleared) from the same budget (Max Shadowed Local Lights, the atlas size and largest tile), and at
+  most four rect lights cast shadows at once: a fifth waits until one leaves the view or matters less, and a light
+  losing its shadow fades it out. Very wide penumbrae (a large light close above an object) come out narrower than real
+  ones: the filter reaches at most an eighth of the light's shadow tile; a light whose tile halves as you move away also
+  draws its penumbrae about 9% narrower. Walls beside a lit floor do not shadow it. Each view is drawn twice, its front
+  and its back faces, so the filter knows where a closed object's inside is and lets far less light through at a box's
+  foot. An open mesh (a single plane) is known only by its front, and where one lies in front of a closed object the
+  space between them counts as solid; a double-sided mesh is known only by its front. Some light still passes the corner
+  of a box at its foot, the outer edge of a shadow under a ball reads a little dark, a shadow cast on a wall can read a
+  little dark at its outer edge and light inside it, and the soft edge behind a thick object's top comes out slightly
+  wider (8%) than a real one. The side of an object that faces away from the light's center but sees part of it (a post
+  under a strip light) takes that part's light; a blocker in front of it is found, but not one hidden from the light's
+  center by the object itself. The back faces take a second atlas of the point and spot atlas's size, made with the
+  first rect light that casts a shadow. Shadows of shadowed rect lights cost every pixel near their penumbrae a filter
+  of twice the Shadow Filter Quality's taps: four of them over a whole 4K view take about 7 ms of GPU time at High, so
+  budget about 1.7 ms for each shadowed rect light that covers the view.
 - **An emissive panel is not a light by itself.** A mesh with an emissive material shows its glow, but it lights the scene
   only through global illumination's probes, with their coarse resolution. To make a panel light the room, right-click it
   in the Hierarchy and choose **Make Area Light** (also in the Mesh Renderer's menu in the Inspector; agents:
