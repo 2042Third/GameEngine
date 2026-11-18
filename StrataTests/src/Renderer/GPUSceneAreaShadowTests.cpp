@@ -403,6 +403,23 @@ namespace
 		return image;
 	}
 
+	// Where a pixel's ray meets the plane x = `planeX`, in world space.
+	std::optional<glm::vec3> FindPlanePointX(const SceneCamera& camera, double x, double y, uint32_t width, uint32_t height, double planeX)
+	{
+		const glm::dmat4 inverse = glm::inverse(glm::dmat4(camera.Projection) * glm::dmat4(camera.View));
+		const glm::dvec2 ndc((x + 0.5) / width * 2.0 - 1.0, 1.0 - (y + 0.5) / height * 2.0);
+		const glm::dvec4 nearPoint = inverse * glm::dvec4(ndc, 1.0, 1.0);
+		const glm::dvec4 farPoint = inverse * glm::dvec4(ndc, 0.5, 1.0);
+		const glm::dvec3 start = glm::dvec3(nearPoint) / nearPoint.w;
+		const glm::dvec3 direction = glm::dvec3(farPoint) / farPoint.w - start;
+		if (std::abs(direction.x) < 1e-12)
+			return std::nullopt;
+		const double t = (planeX - start.x) / direction.x;
+		if (!(t > 0.0))
+			return std::nullopt;
+		return glm::vec3(start + direction * t);
+	}
+
 	uint32_t CountDifferent(const ReadbackImage& a, const ReadbackImage& b)
 	{
 		REQUIRE(a.Pixels.size() == b.Pixels.size());
@@ -1251,6 +1268,84 @@ TEST_SUITE("GPU.SceneRenderer.AreaShadows")
 			MESSAGE(fmt::format("S9: tagged, {:.4f} to {:.4f} (the reference 1)", lowest, highest));
 			CHECK(lowest >= 0.97);
 			CHECK(highest <= 1.03);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A side whose plane has the light's center behind it takes the light of the face's part in front, as the reference does")
+	{
+		// S13: a slab 5 cm thick, 0.6 m tall and 0.4 m wide under a one-sided 1.5 x 0.05 m strip 0.6 m above its top, the strip's
+		// center 0.3 m behind the slab's +X side: that side sees the strip's last 0.45 m, past nothing. The views, drawn from the
+		// center, do not see the side, and what they show nearer than its plane (the slab's top) lies behind it: read as a blocker,
+		// the side came out in umbra with blotches of light. Then a bar in front of the side, between it and the strip's part it
+		// sees, which the side's taps must find along their paths. Seen head-on, against the reference's visibility (normal +X).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		constexpr uint32_t c_Size = 256;
+		constexpr double c_SideX = 0.3;
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			if (mode == GPUDrivenMode::Auto && !DeviceDrawsGPUDriven())
+				continue;
+			CAPTURE(static_cast<int>(mode));
+			for (const bool withBar : { false, true })
+			{
+				CAPTURE(withBar);
+				AreaShadowScene scene;
+				BuildAreaShadowScene(scene, assets, glm::vec3(0.0f, 1.2f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), 1.5f, 0.05f);
+				AddBox(scene, Box { glm::vec3(0.275f, 0.3f, 0.0f), glm::vec3(0.05f, 0.6f, 0.4f) }, "Slab");
+				if (withBar)
+					AddBox(scene, Box { glm::vec3(0.36f, 0.66f, 0.0f), glm::vec3(0.04f, 0.04f, 0.6f) }, "Bar");
+				SceneRenderer shadowed(AreaShadowSpecification(mode));
+				SceneRenderer unshadowed(AreaShadowSpecification(mode));
+				shadowed.SetViewportSize(c_Size, c_Size);
+				unshadowed.SetViewportSize(c_Size, c_Size);
+				const SceneCamera camera = OrthographicLookAt(glm::vec3(3.0f, 0.3f, 0.0f), glm::vec3(0.3f, 0.3f, 0.0f), 0.8f);
+				const VisibilityImage image = RenderVisibility(shadowed, unshadowed, scene, camera);
+				CHECK(shadowed.GetStats().AreaShadowMasks == 1);
+				const AreaLights::Record light = GetLightRecord(scene.Light);
+				double worst = 0.0;
+				double sum = 0.0;
+				double signedSum = 0.0;
+				double referenceLeast = 1.0;
+				uint32_t count = 0;
+				for (uint32_t y = 0; y < image.Height; y += 2)
+				{
+					for (uint32_t x = 0; x < image.Width; x += 2)
+					{
+						const std::optional<glm::vec3> point = FindPlanePointX(camera, x, y, image.Width, image.Height, c_SideX);
+						// The side, 2 cm in from its edges.
+						if (!point || std::abs(point->z) > 0.18f || point->y < 0.02f || point->y > 0.58f || image.At(x, y) < 0.0f)
+							continue;
+						const double reference = AreaShadowReference(glm::dvec3(*point), glm::dvec3(1.0, 0.0, 0.0), light, scene.Boxes, 48);
+						const double difference = std::abs(image.At(x, y) - reference);
+						worst = std::max(worst, difference);
+						sum += difference;
+						signedSum += image.At(x, y) - reference;
+						referenceLeast = std::min(referenceLeast, reference);
+						count++;
+					}
+				}
+				REQUIRE(count > 1000);
+				MESSAGE(fmt::format("S13{}: the side's {} pixels: {:.4f} from the reference on average ({:+.4f} signed), {:.4f} at worst (the reference's "
+					"least {:.4f})", withBar ? " with the bar" : "", count, sum / count, signedSum / count, worst, referenceLeast));
+				if (withBar)
+				{
+					// Measured 0.1155 on average (+0.017 signed: as much too dark as too light) and 0.286 at worst; the bounds are
+					// 1.5 times that. A look whose ray from the center meets the bar counts its path as blocked, as the filter's
+					// looks do elsewhere: the bar's penumbra on the side lies within the reach.
+					CHECK(referenceLeast < 0.8);
+					CHECK(sum / count <= 0.173);
+					CHECK(worst <= 0.429);
+				}
+				else
+				{
+					// Measured 0 to the fourth decimal (the side lit as without the shadow); before, umbra with blotches of light.
+					CHECK(referenceLeast == 1.0);
+					CHECK(worst <= 1e-4);
+				}
+			}
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

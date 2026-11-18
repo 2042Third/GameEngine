@@ -381,6 +381,12 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   of the floor is more than 0.3 off the true visibility (0.23% before). The back faces take a second shadow atlas of the
   point and spot atlas's size (64 MiB at Medium and High, 256 MiB at Ultra), made with the first rect light that casts a
   shadow.
+- Rect light shadows no longer put the side of an object that faces away from the light's center in shadow when it sees
+  part of the light past nothing: under a strip light, a post's side that sees the strip's far part was drawn in umbra
+  with blotches of light. The light's shadow views, drawn from its center, do not see such a side, so its filter now
+  follows each path from the part of the light in front of it instead (with nothing in front of the side it reads the
+  true visibility exactly). Points of a light behind a surface's own plane no longer count in its shadow, as the shading
+  counts none of their light.
 - A frame whose shadow atlas of point, spot and rect lights cannot be made no longer crashes with a one-sided rect light
   casting shadows in view: the face behind the light kept its tile to clear in an atlas that did not exist.
 - Rect light shadows are right from the first frame a light casts one: views drawn before its shadow had faded in (a

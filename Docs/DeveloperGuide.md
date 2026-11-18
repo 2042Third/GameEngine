@@ -5117,8 +5117,20 @@ lights, Post Process and the sky), and never a resolution below the output's.
   sun's four-tap tent filters; from one to two texels a lattice of `c_AreaShadowTapsPerFilterTap` (2) times
   `ShadowFilterQuality` taps (a golden-ratio rank-1 lattice over the face, shifted per pixel by the blue-noise tile's far
   shifts (17, 43) and (43, 17)) takes over; nothing turns with the frame. Taps and cells whose rays leave the center behind a
-  one-sided light's plane are left out (no path from the face meets what they see: the lamp's housing, the ceiling). The
-  light's strength (its fade) mixes the result toward lit. **Opaque surfaces** read **masks** (`Effects/AreaScreenShadows.frag`,
+  one-sided light's plane are left out (no path from the face meets what they see: the lamp's housing, the ceiling), and so,
+  always, are taps standing for points of the face behind the receiver's own plane (`IsAreaShadowTapAboveHorizon`): the
+  shading takes none of their light, and their paths lie behind the plane. A receiver whose plane has the light's center
+  behind it (the side of a post that sees a strip light's far part) is not seen by the views, and what they show nearer than
+  its plane lies behind it (its own solid): the classification and the comparisons with the plane read that as a blocker (a
+  false umbra with blotches of light: a reviewer's `lookdev.rect.strip`). Such a receiver skips both
+  (`EvaluateAreaShadowBeyondCenter`): each tap of the face's part in front of the plane marches its path from the whole
+  reach (the columns scaled together, so the offsets stay on the paths) toward the receiver, `c_AreaShadowBeyondLooks` (11)
+  looks each `c_AreaShadowBeyondRatio` (1 / sqrt(2)) of the one before, blocked where the view shows a surface nearer than the
+  path's point but beyond the plane (`CompareAreaShadowTwice` at the two references). S13 of `GPU.SceneRenderer.AreaShadows`:
+  a slab's side 0.3 m in front of a strip's center reads the reference exactly with nothing in front of it, and with a bar
+  in front within the reach 0.12 off on average, 0.29 at worst; a blocker the receiver's own solid hides from the center is
+  not found. The light's strength (its fade) mixes the result toward lit. **Opaque surfaces** read **masks**
+  (`Effects/AreaScreenShadows.frag`,
   `RenderAreaShadowMasks`, in `GPU.ScreenShadows` after the sun's): per shadowed rect light in view (at most four:
   `SceneRendererStats::AreaShadowMasks`) the filter at every prepass pixel within the light's bounds on screen (the pass's
   scissor, grown by the blur's reach), with a blur radius of 0.35 of the penumbra's half-width in pixels as the sun's, then

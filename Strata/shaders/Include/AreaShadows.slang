@@ -19,7 +19,9 @@
 // (u_LocalShadowBackAtlas): one depth per texel cannot tell a solid's hidden lower part from the space under an overhang. The
 // kernel is clamped to RenderData::c_AreaShadowReach of the tile, which the views' guard band holds, so penumbrae cross the
 // cube's seams without a step. For a one-sided light, taps whose ray from the center lies behind the light's plane (no path from
-// the face meets what they see) and cells wholly behind it are left out.
+// the face meets what they see) and cells wholly behind it are left out, and taps standing for points of the face behind the
+// receiver's plane always (the shading's horizon). A receiver whose plane has the light's center behind it is not seen by the
+// views: its taps march their paths instead (EvaluateAreaShadowBeyondCenter).
 
 #ifndef ST_LOCAL_SHADOW_SAMPLING
 #define ST_LOCAL_SHADOW_SAMPLING
@@ -75,6 +77,8 @@ struct AreaShadowView
 	bool OneSided;        // Leave out what lies behind the light's plane: a ray's side of it is Front + dot(FrontGradient, texel -
 	float Front;          // TileMin), positive in front
 	float2 FrontGradient;
+	float HorizonCenter;  // The receiver's horizon: the light's point at `lattice` on its face lies in front of the receiver's
+	float2 HorizonGradient; // plane where HorizonCenter + dot(HorizonGradient, lattice) > 0
 };
 
 // Where a tap looks along its path besides the kernel's depth, as fractions of its offset from the receiver (EvaluateAreaLightShadow's
@@ -93,6 +97,18 @@ static const float c_AreaShadowNearTap = 1.0 / 3.0;
 static const int c_AreaShadowInsideLooks = 10;
 static const float c_AreaShadowInsideFirst = 0.5;
 static const float c_AreaShadowInsideRatio = 0.70710678;
+
+// Beyond the center, the looks along each tap's path from the light toward the receiver (EvaluateAreaShadowBeyondCenter): this
+// many, the first at the tap's whole offset, each next at this fraction of the one before, down to a thirty-second of it.
+static const int c_AreaShadowBeyondLooks = 11;
+static const float c_AreaShadowBeyondRatio = 0.70710678;
+
+// Whether the light's point at `lattice` on its face lies in front of the receiver's plane: the shading counts no light from
+// behind it (AreaLights' horizon), so a tap standing for such a point is left out of the shadow too.
+bool IsAreaShadowTapAboveHorizon(AreaShadowView view, float2 lattice)
+{
+	return view.HorizonCenter + dot(view.HorizonGradient, lattice) > 0.0;
+}
 
 // The receiver's plane's NDC depth at `offset` atlas texels from its lookup, kept from half the receiver's depth to its own:
 // what lies beyond the receiver shadows nothing.
@@ -273,6 +289,64 @@ int GetAreaShadowLevel(float2 region, float tileTexels)
 	return level;
 }
 
+// A receiver whose plane has the light's center behind it (the side of a post under a strip light that sees the strip's far
+// part): the views, drawn from the center, do not see it, and what they show nearer than its plane lies behind it, so neither
+// the depth ranges' classification nor the comparisons with the plane tell anything (both read the receiver's own solid as a
+// blocker: a false umbra with blotches of light). Only the face's part in front of the plane lights it, along paths that stay
+// in front of the plane. Each of that part's taps marches its path from the light toward the receiver: at a look, a surface
+// the view shows nearer than the path's point but beyond the plane (in front of the receiver) blocks it. The kernel is the
+// whole reach along the light's axes, so a tap's offset lies on its path at every look. A blocker the receiver's own solid
+// hides from the center is not found.
+AreaShadowSample EvaluateAreaShadowBeyondCenter(AreaShadowView view, int2 pixel, float filterTaps, float strength, float texelWorld, float atlasSize)
+{
+	AreaShadowSample result;
+	result.Visibility = 1.0;
+	result.PenumbraWorld = 0.0;
+	result.DiskWeight = 0.0;
+	result.Compared = false;
+	// No part of the face in front of the plane (the shading has none of its light), or the face seen edge-on: lit.
+	if (!(view.HorizonCenter + abs(view.HorizonGradient.x) + abs(view.HorizonGradient.y) > 0.0) || !view.HasPyramid)
+		return result;
+	float scale = view.Reach / max(length(view.ColumnX) + length(view.ColumnY), 1e-12);
+	float2 lowest = view.TileMin + 0.5;
+	float2 highest = view.TileMax - 0.5;
+	float2 atlasTexel = 1.0 / float2(atlasSize);
+	int taps = max(int(filterTaps + 0.5), 1);
+	float2 shift = float2(BlueNoise(pixel, int2(17, 43)), BlueNoise(pixel, int2(43, 17)));
+	float shadowed = 0.0;
+	float counted = 0.0;
+	for (int tap = 0; tap < taps; tap++)
+	{
+		float2 lattice = frac(float2((float(tap) + 0.5) / float(taps), (float(tap) + 0.5) * c_InverseGoldenRatio) + shift) * 2.0 - 1.0;
+		if (!IsAreaShadowTapAboveHorizon(view, lattice))
+			continue;
+		float2 offset = (view.ColumnX * lattice.x + view.ColumnY * lattice.y) * scale;
+		float blocked = 0.0;
+		float fraction = 1.0;
+		for (int look = 0; look < c_AreaShadowBeyondLooks && blocked < 1.0; look++)
+		{
+			float2 lookOffset = clamp(view.Texel + offset * fraction, lowest, highest) - view.Texel;
+			float spread = scale * fraction;
+			float margin = view.TieMargin * (1.0 + view.ReceiverDepth * spread);
+			float pathReference = view.Unbiased + view.DepthB * spread - margin;
+			float planeReference = view.Reference + dot(view.Gradient, lookOffset) - margin;
+			// Stored nearer than the path's point, and not nearer than the plane (which lies behind the receiver here).
+			float2 look = CompareAreaShadowTwice((view.Texel + lookOffset) * atlasTexel, float2(atlasSize, atlasSize), pathReference, planeReference);
+			blocked = max(blocked, look.x - look.y);
+			fraction *= c_AreaShadowBeyondRatio;
+		}
+		shadowed += blocked;
+		counted += 1.0;
+	}
+	if (!(counted > 0.0))
+		return result;
+	result.Visibility = lerp(1.0, 1.0 - shadowed / counted, strength);
+	result.PenumbraWorld = view.Reach * texelWorld;
+	result.DiskWeight = 1.0;
+	result.Compared = true;
+	return result;
+}
+
 // A rect light's shadow at a camera-relative position with its geometric normal (facing the viewer), at a screen pixel (which
 // picks the lattice's fixed shift), from the shadow slot `slot` (its LocalShadowData) and the light as the shading takes it.
 AreaShadowSample EvaluateAreaLightShadow(uint slot, float3 relativePosition, float3 normal, int2 pixel, AreaLight light)
@@ -355,6 +429,10 @@ AreaShadowSample EvaluateAreaLightShadow(uint slot, float3 relativePosition, flo
 	shadowView.Inverse = shadowView.HasPyramid
 		? float4(shadowView.ColumnY.y, -shadowView.ColumnY.x, -shadowView.ColumnX.y, shadowView.ColumnX.x) / determinant : float4(0.0);
 	shadowView.Reach = c_AreaShadowReach * shadowView.TileTexels;
+	shadowView.HorizonCenter = dot(normal, light.Center - relativePosition);
+	shadowView.HorizonGradient = float2(dot(normal, light.AxisX), dot(normal, light.AxisY));
+	if (planeOffset > 1e-6 * shadowView.ReceiverDepth)
+		return EvaluateAreaShadowBeyondCenter(shadowView, pixel, parameters.z, strength, texelWorld, atlasSize);
 
 	// The search: blockers anywhere from the view's near plane to the receiver, within the reach; then, as long as it lets a finer
 	// level hold the region, again over the region the nearest blocker that reaches the receiver can shadow (at a contact the
@@ -419,6 +497,10 @@ AreaShadowSample EvaluateAreaLightShadow(uint slot, float3 relativePosition, flo
 		for (int tap = 0; tap < taps; tap++)
 		{
 			float2 lattice = frac(float2((float(tap) + 0.5) / float(taps), (float(tap) + 0.5) * c_InverseGoldenRatio) + shift) * 2.0 - 1.0;
+			// A point of the face behind the receiver's plane gives it no light (the shading's horizon): its tap, whose path lies
+			// behind the plane, would weigh in whatever its looks read there.
+			if (!IsAreaShadowTapAboveHorizon(shadowView, lattice))
+				continue;
 			float2 offset = kernelX * lattice.x + kernelY * lattice.y;
 			float2 tapTexel = clamp(texel + offset, lowest, highest);
 			if (shadowView.OneSided && !(shadowView.Front + dot(shadowView.FrontGradient, tapTexel - shadowView.TileMin) > 0.0))
