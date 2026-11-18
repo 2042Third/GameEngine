@@ -4776,8 +4776,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   0.006 with the band). At most `RenderData::c_MaxAreaShadowMasks` (4) rect lights
   hold a shadow at once (each takes a layer of the area shadow masks while it does, fading out included; `RankLocalShadowLights`):
   one holding a shadow keeps it while it ranks among the first four rect lights in view, else it fades out; a new one takes a
-  place only when one is free. So no light ever switches filter, and a fifth waits. Their filter, depth ranges and masks:
-  "Area lights".
+  place only when one is free. So no light ever switches filter, and a fifth waits. `SceneRendererStats::AreaShadowTiles`
+  (`editor.perf`'s `areaShadowTiles`, the Scene view's statistics) counts the tiles they hold: six each, a face not needed
+  keeping its cleared tile. Their filter, depth ranges and masks: "Area lights".
 - Point and spot lights cast shadows with `CastShadows` (off by default, so scenes saved before it render as they did), with
   `ShadowBias` and `ShadowNormalBias` (texels of the light's tiles) and `ShadowFilterRadius` (texels, at most 8). A renderer
   gives tiles of one D32 atlas (`RendererQualitySettings::LocalShadowAtlasSize`: 4096 texels, 64 MiB; made with the first

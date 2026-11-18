@@ -113,14 +113,16 @@ namespace Strata::ViewportToolbar
 			if (shown > 0)
 				gpuLine += ")";
 		}
-		// Shadowed point and spot lights: those in view that ask for a shadow, those given one with their tiles' sizes (largest
-		// first), and those fading theirs out.
+		// Shadowed point, spot and rect lights: those in view that ask for a shadow, those given one with their tiles' sizes
+		// (largest first), the rect lights' tiles, and those fading theirs out.
 		std::string localShadowLine = fmt::format("{} of {} shadowed lights", stats.LocalShadowLights, stats.LocalShadowRequested);
 		for (size_t sizeClass = stats.LocalShadowSizeCounts.size(); sizeClass-- > 0;)
 		{
 			if (stats.LocalShadowSizeCounts[sizeClass] > 0)
 				localShadowLine += fmt::format(", {} x {}", stats.LocalShadowSizeCounts[sizeClass], 128u << sizeClass);
 		}
+		if (stats.AreaShadowTiles > 0)
+			localShadowLine += fmt::format(" ({} tiles of rect lights)", stats.AreaShadowTiles);
 		if (stats.LocalShadowFading > 0)
 			localShadowLine += fmt::format(", {} fading", stats.LocalShadowFading);
 		localShadowLine += fmt::format("; {} views drawn, {} waiting", stats.LocalShadowViewsDrawn, stats.LocalShadowViewsPending);

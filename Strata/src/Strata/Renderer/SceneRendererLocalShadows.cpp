@@ -1115,6 +1115,7 @@ namespace Strata
 		m_Stats.LocalShadowLights = 0;
 		m_Stats.LocalShadowFading = 0;
 		m_Stats.LocalShadowFadingIn = 0;
+		m_Stats.AreaShadowTiles = 0;
 		m_Stats.LocalShadowTileSizes = {};
 		m_Stats.LocalShadowSizeCounts = {};
 		for (LocalShadowLight& light : m_LocalShadowLights)
@@ -1145,6 +1146,8 @@ namespace Strata
 			if (m_Stats.LocalShadowLights < m_Stats.LocalShadowTileSizes.size())
 				m_Stats.LocalShadowTileSizes[m_Stats.LocalShadowLights] = static_cast<uint16_t>(std::min(light.TileSize, 65535u));
 			m_Stats.LocalShadowLights++;
+			if (light.Type == RenderData::c_LightRect)
+				m_Stats.AreaShadowTiles += light.ViewCount;
 			const uint32_t sizeClass = static_cast<uint32_t>(std::countr_zero(std::max(light.TileSize / c_MinLocalShadowTile, 1u)));
 			m_Stats.LocalShadowSizeCounts[std::min<size_t>(sizeClass, m_Stats.LocalShadowSizeCounts.size() - 1)]++;
 		}

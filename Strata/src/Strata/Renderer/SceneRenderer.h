@@ -651,6 +651,9 @@ namespace Strata
 		uint32_t LocalShadowFadingIn = 0;
 		uint32_t LocalShadowViewsDrawn = 0;
 		uint32_t LocalShadowViewsPending = 0;
+		// Of the lights given a shadow, the atlas tiles the rect lights hold: six each, a face no receiver needs (behind a
+		// one-sided light) keeping its cleared tile.
+		uint32_t AreaShadowTiles = 0;
 		// CPU time of deciding the frame's local shadows, a part of ExtractMs: the lights' ranks and tiles, the changes that
 		// reach their views, the views to draw and those views' casters (what grows with lights times moved proxies).
 		float LocalShadowFindMs = 0.0f;

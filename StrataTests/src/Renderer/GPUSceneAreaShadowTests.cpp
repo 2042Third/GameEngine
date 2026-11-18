@@ -685,8 +685,15 @@ TEST_SUITE("GPU.SceneRenderer.AreaShadows")
 			RenderHDR(renderer, scene.SceneData, TopDown(glm::vec3(0.0f), 6.0f));
 			CHECK(renderer.GetStats().LocalShadowViewsDrawn == entry.Views);
 			CHECK(renderer.GetStats().LocalShadowLights == 1);
+			// Six tiles whatever is drawn: the face behind a one-sided light keeps its cleared tile.
+			CHECK(renderer.GetStats().AreaShadowTiles == RenderData::c_LocalShadowFaces);
 			RenderHDR(renderer, scene.SceneData, TopDown(glm::vec3(0.0f), 6.0f));
 			CHECK(renderer.GetStats().LocalShadowViewsDrawn == 0);
+			CHECK(renderer.GetStats().AreaShadowTiles == RenderData::c_LocalShadowFaces);
+			// Without Cast Shadows it holds none.
+			SetCastShadows(scene.Light, false);
+			RenderHDR(renderer, scene.SceneData, TopDown(glm::vec3(0.0f), 6.0f));
+			CHECK(renderer.GetStats().AreaShadowTiles == 0);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

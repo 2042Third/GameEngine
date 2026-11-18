@@ -335,7 +335,8 @@ TEST_SUITE("GPU.Editor.Viewport")
 		const nlohmann::json& stats = result["renderStats"];
 		INFO(stats.dump(1));
 		for (const char* key : { "gpuDriven", "gpuCulled", "drawCommands", "draws", "opaqueDraws", "shadowDraws", "instances", "shadowCasters", "triangles", "visibleProxies",
-			"occludedProxies", "occludedCasters", "cachedCascades", "culledProxies", "instancesPerLod", "lights", "areaLights", "areaLightShading", "areaShadowMasks", "droppedLights", "materials", "pendingAssets",
+			"occludedProxies", "occludedCasters", "cachedCascades", "culledProxies", "instancesPerLod", "lights", "areaLights", "areaLightShading", "areaShadowMasks", "areaShadowTiles",
+			"droppedLights", "materials", "pendingAssets",
 			"extractMs", "sortMs", "proxyUpdates",
 			"instanceBytesUploaded", "deferredInstanceBytes", "geometryPool", "gpuMs", "gpuStatsFrame" })
 		{
@@ -353,6 +354,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(stats["areaLights"] == 0);
 		CHECK(stats["areaLightShading"] == false);
 		CHECK(stats["areaShadowMasks"] == 0);
+		CHECK(stats["areaShadowTiles"] == 0);
 		CHECK(stats["instancesPerLod"].size() == SceneRendererStats::c_LODStatCount);
 		// The meshes' geometry lives in the renderer's pool.
 		REQUIRE(stats["geometryPool"].is_object());

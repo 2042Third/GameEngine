@@ -270,6 +270,7 @@ namespace Strata
 				{ "areaLights", stats.AreaLights },
 				{ "areaLightShading", stats.AreaLightShading },
 				{ "areaShadowMasks", stats.AreaShadowMasks },
+				{ "areaShadowTiles", stats.AreaShadowTiles },
 				{ "droppedLights", stats.DroppedLights },
 				{ "materials", stats.Materials },
 				{ "pendingAssets", stats.PendingAssets },
