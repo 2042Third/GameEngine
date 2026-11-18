@@ -546,6 +546,20 @@ namespace
 		REQUIRE(renderer.ReadGlobalIlluminationField(outField));
 	}
 
+	// Bytes of the field (4.4 million at High) that two renderers of equal voxels may differ in: the driver behaviour "A still
+	// camera's field repeats frame after frame" describes showed as one byte; a brick the dynamic layer left behind would
+	// change thousands.
+	constexpr size_t c_FieldBytes = 16;
+
+	size_t CountDifferingBytes(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b)
+	{
+		REQUIRE(a.size() == b.size());
+		size_t differing = 0;
+		for (size_t index = 0; index < a.size(); index++)
+			differing += a[index] != b[index] ? 1u : 0u;
+		return differing;
+	}
+
 }
 
 TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
@@ -1881,7 +1895,8 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		// The dynamic layer is empty while nothing moves: no brick, no dispatch of its pass (GIMoverDispatches: the frames run
 		// the passes they ran before the layer existed), the same field every frame. What a mover's bricks held is put back as
 		// it was: once it has rested and its voxels have faded (three quarters of a second here for the half both take), every
-		// level's textures and the field are a fresh renderer's, to the byte.
+		// level's textures are a fresh renderer's, to the byte, and so is the field but for what one driver does between two
+		// renderers (c_FieldBytes).
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		const std::vector<RoomPoint> points = GetMoverPoints();
@@ -1938,7 +1953,13 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 			CAPTURE(index);
 			CHECK(levels[index] == freshLevels[index]);
 		}
-		CHECK(field == freshField);
+		// Two renderers' fields: made of equal voxels by the same passes, so equal, but for the driver behaviour "A still
+		// camera's field repeats frame after frame" describes (a unit in the last place of a probe's face from one dispatch to
+		// another on a busy machine; "A prop that moves, pauses and moves on" saw one byte differ between two renderers
+		// without a mover in one run of seven).
+		const size_t differing = CountDifferingBytes(field, freshField);
+		MESSAGE("the mover's field after its rest differs from the fresh renderer's in " << differing << " bytes");
+		CHECK(differing <= c_FieldBytes);
 		moved.Renderer.reset();
 		CollectReleases();
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -1951,8 +1972,9 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		// the coarser levels less often), one past a prop that stands at the path's end all along, the other past one that
 		// slides there in two moves with a pause between them: long enough to rest (its triangles enter the voxels again and
 		// the voxels around it fade) and short enough that it starts again while they still fade (the fade starts over from
-		// what the voxels show). A second after both stopped, the mover's levels are the still prop's, to the byte, and so is
-		// its field: the backup put back the right texels whichever way the windows went, and no brick or fade is left.
+		// what the voxels show). A second after both stopped, the mover's levels are the still prop's, to the byte, and its
+		// field is the still prop's within c_FieldBytes: the backup put back the right texels whichever way the windows went,
+		// and no brick or fade is left.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		const std::vector<RoomPoint> points = GetMoverPoints();
@@ -2020,11 +2042,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 			// does on a busy machine ("A still camera's field repeats frame after frame": a unit in the last place of a probe's
 			// face from one dispatch to the next; here a fresh renderer's field, with no mover anywhere, differed from the still
 			// prop's by one byte in one run of seven). What a brick left behind would change is thousands of bytes.
-			REQUIRE(field.size() == stillField.size());
-			size_t differing = 0;
-			for (size_t index = 0; index < field.size(); index++)
-				differing += field[index] != stillField[index] ? 1u : 0u;
-			CHECK(differing <= 16);
+			CHECK(CountDifferingBytes(field, stillField) <= c_FieldBytes);
 			moved.Renderer.reset();
 			CollectReleases();
 		}
