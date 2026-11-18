@@ -560,6 +560,117 @@ namespace
 		return differing;
 	}
 
+	// How far a point's light leaves the range between two states of it while it goes from the one to the other: the largest
+	// excursion of any channel past both `from` and `to` over `frames`, over the point's light at `to` (its largest channel).
+	// 0: every point's every channel stays between its two ends.
+	float GetLargestExcursion(const std::vector<std::vector<glm::vec3>>& frames, size_t first, const std::vector<glm::vec3>& from, const std::vector<glm::vec3>& to)
+	{
+		float largest = 0.0f;
+		for (size_t frame = first; frame < frames.size(); frame++)
+		{
+			for (size_t point = 0; point < to.size(); point++)
+			{
+				const glm::vec3 low = glm::min(from[point], to[point]);
+				const glm::vec3 high = glm::max(from[point], to[point]);
+				const glm::vec3 outside = glm::max(glm::max(frames[frame][point] - high, low - frames[frame][point]), glm::vec3(0.0f));
+				largest = std::max(largest, LargestComponent(outside) / std::max(LargestComponent(to[point]), 1e-3f));
+			}
+		}
+		return largest;
+	}
+
+	// The movers' closed room: the Cornell box (BuildCornellBox: lit by its ceiling panel alone, so every light in it is the
+	// field's, with every bounce) and a blue box of 0.7 m off the voxel grid that slides c_ClosedStep a frame along +x across
+	// the floor before the tall box, toward the sphere, and stops at c_ClosedEnd (the look-dev's shot of the unit).
+	constexpr float c_ClosedSize = 0.7f;
+	constexpr float c_ClosedZ = 0.83f;
+	constexpr float c_ClosedEnd = -0.43f;
+	constexpr float c_ClosedStep = 0.025f;
+
+	// What the box shades and tints where it stops: the floor beside and behind it, the tall box's face behind it and
+	// the sphere's side toward it. Every point is in the camera's view past the stopped box.
+	std::vector<RoomPoint> GetClosedRoomPoints()
+	{
+		const float left = c_ClosedEnd - 0.5f * c_ClosedSize;
+		const float right = c_ClosedEnd + 0.5f * c_ClosedSize;
+		const float back = c_ClosedZ - 0.5f * c_ClosedSize;
+		// The tall box's face toward the camera: turned 18 degrees about y.
+		const float angle = glm::radians(18.0f);
+		const glm::vec3 faceNormal(std::sin(angle), 0.0f, std::cos(angle));
+		const glm::vec3 faceAlong(std::cos(angle), 0.0f, -std::sin(angle));
+		const glm::vec3 faceCenter = glm::vec3(-1.05f, 0.0f, -1.0f) + 0.8f * faceNormal;
+		const glm::vec3 sphere(1.15f, 0.9f, -0.3f);
+		const glm::vec3 sphereSide = glm::normalize(glm::vec3(-1.0f, 0.0f, 0.3f));
+		const glm::vec3 sphereLow = glm::normalize(glm::vec3(-0.8f, -0.45f, 0.4f));
+		return {
+			{ "floor 0.2 m left of the box", { left - 0.2f, 0.0f, c_ClosedZ }, c_Up },
+			{ "floor 0.5 m left of the box", { left - 0.5f, 0.0f, c_ClosedZ }, c_Up },
+			{ "floor 0.2 m right of the box", { right + 0.2f, 0.0f, c_ClosedZ }, c_Up },
+			{ "floor 0.5 m right of the box", { right + 0.5f, 0.0f, c_ClosedZ }, c_Up },
+			{ "floor behind the box's left", { left - 0.3f, 0.0f, back - 0.05f }, c_Up },
+			{ "floor behind the box's right", { right + 0.2f, 0.0f, back - 0.05f }, c_Up },
+			{ "tall box low, left", faceCenter + glm::vec3(0.0f, 0.8f, 0.0f) - 0.3f * faceAlong, faceNormal },
+			{ "tall box low, right", faceCenter + glm::vec3(0.0f, 0.8f, 0.0f) + 0.3f * faceAlong, faceNormal },
+			{ "tall box middle, left", faceCenter + glm::vec3(0.0f, 1.3f, 0.0f) - 0.3f * faceAlong, faceNormal },
+			{ "tall box middle, right", faceCenter + glm::vec3(0.0f, 1.3f, 0.0f) + 0.3f * faceAlong, faceNormal },
+			{ "sphere toward the box", sphere + 0.9f * sphereSide, sphereSide },
+			{ "sphere toward the box, low", sphere + 0.9f * sphereLow, sphereLow },
+		};
+	}
+
+	struct ClosedRoomRender
+	{
+		SceneTestAssets Assets;
+		Scene SceneData;
+		Entity Prop;
+		Scope<SceneRenderer> Renderer;
+		SceneCamera Camera;
+
+		// `prop` false: the room alone.
+		ClosedRoomRender(bool prop, float propX)
+		{
+			BuildCornellBox(SceneData, Assets);
+			if (prop)
+			{
+				MaterialProperties blue;
+				blue.BaseColor = glm::vec4(0.08f, 0.2f, 0.8f, 1.0f);
+				blue.Roughness = 0.9f;
+				Prop = AddMesh(SceneData, BuiltinAssets::CubeMesh, Assets.AddMaterial(blue), glm::vec3(propX, 0.5f * c_ClosedSize, c_ClosedZ), "Prop");
+				Prop.GetComponent<TransformComponent>().Scale = glm::vec3(c_ClosedSize);
+			}
+			Renderer = CreateScope<SceneRenderer>(RoomSpecification(GlobalIlluminationLevel::High, 1.0f));
+			Renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+			Camera = CornellCamera(static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y));
+		}
+
+		void MoveTo(float x)
+		{
+			Prop.GetComponent<TransformComponent>().Translation.x = x;
+			Prop.MarkModified<TransformComponent>();
+		}
+
+		// A frame c_MoverFrameSeconds after the one before by the renderer's clock, and the points' light.
+		std::vector<glm::vec3> Frame(const std::vector<RoomPoint>& points)
+		{
+			AssetManager::SetActive(Assets.Manager);
+			SceneRenderOptions options = GIViewOptions();
+			options.AdaptationSeconds = c_MoverFrameSeconds;
+			REQUIRE(RenderGIFrame(*Renderer, SceneData, Camera, options));
+			REQUIRE(Renderer->GetStats().GlobalIllumination);
+			REQUIRE_FALSE(Renderer->GetStats().GlobalIlluminationPending);
+			return ReadPoints(*Renderer, Camera, points);
+		}
+
+		// Until every bounce has settled (the Cornell box's take 18 frames; twice that).
+		std::vector<glm::vec3> Settle(const std::vector<RoomPoint>& points)
+		{
+			std::vector<glm::vec3> values;
+			for (uint32_t frame = 0; frame < 36; frame++)
+				values = Frame(points);
+			return values;
+		}
+	};
+
 }
 
 TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
@@ -1778,24 +1889,29 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("A prop's light is in place the frame it stops")
+	TEST_CASE("A prop that stops keeps its light to within its two forms' difference")
 	{
 		// The red box in the sun rests, slides for longer than a fade lasts and stops off the voxel grid. The frame of its last
-		// step already holds its shadow on the sky and its bounce: within c_FormStep of a fresh renderer's resting prop (20.7%
-		// at the worst point and channel here; it depends on where on the grid the box stops), which is what the box's two forms
-		// differ by: its triangles' voxels are whole ones, fatter than the box with soft edges the dynamic layer holds, and a
-		// probe the box covers finds its way out of the one elsewhere than out of the other.
+		// step holds its shadow on the sky and its bounce, but not yet the resting prop's light: it is within c_FormStep of a
+		// fresh renderer's resting prop (20.7% at the worst point and channel here; it depends on where on the grid the box
+		// stops), which is what the box's two forms differ by: its triangles' voxels are whole ones, fatter than the box with
+		// soft edges the dynamic layer holds, and a probe the box covers finds its way out of the one elsewhere than out of the
+		// other. So "its light is in place the frame it stops" (the owner's ruling) is met in part: the object's light is
+		// there, and up to a fifth of a point's light still changes in the half second after (more in a closed room: "A box
+		// that stops in a closed room", below).
 		// Where one form takes the other's place, the frame it starts and the frame its triangles are voxelized again
 		// (c_GIMoverRestSeconds after its last step by the renderer's clock, not frames), the voxels fade over
 		// c_GIMoverFadeSeconds instead of changing in that frame, which stepped a point's light by 26.5% and 26.1% here (a
 		// second difference of 4.9% over the run):
 		// - the frame it starts changes nothing (c_StartStep), and the frames of the move step by at most c_MoveStep: 10.1% once,
 		//   12 frames in, where the sun's walk lets go of the voxels that leave (it passes voxels under c_GITouchOccupancy), and
-		//   at most 4.5% otherwise, as the frames after the fade do by the move itself (5.3%);
+		//   at most 5.3% otherwise, which is what the move itself steps by once the fade is over;
 		// - no frame after the last step changes a point's light by more than c_HandoverStep (4.3%: the steps left are probes
 		//   whose way out of the box changes and voxels changing kind, a few a frame);
 		// - the largest second difference of the points' light over the whole run stays under c_Second (3.1%; the spec's flicker
-		//   measure, 2% for a steady move, which "A moving prop occludes the ground beside it" holds).
+		//   measure, 2% for a steady move, which "A moving prop occludes the ground beside it" holds);
+		// - through the hand-over a point's light stays between the box's (the wait's last frame) and the voxels' (faded) but
+		//   for c_Excursion of its light (3.3%).
 		// Faded, it is a fresh renderer's resting prop to the bit.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -1804,6 +1920,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		constexpr float c_MoveStep = 0.12f;
 		constexpr float c_HandoverStep = 0.06f;
 		constexpr float c_Second = 0.04f;
+		constexpr float c_Excursion = 0.045f;
 		const std::vector<RoomPoint> points = GetMoverPoints();
 		const glm::vec3 red(0.8f, 0.05f, 0.05f);
 		constexpr uint32_t c_Steps = 22;
@@ -1820,6 +1937,8 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		frames.push_back(moving.Settle(points));
 		float largestStart = 0.0f;
 		float largestMoving = 0.0f;
+		float nextMoving = 0.0f; // The largest step of the move but one
+		float largestSteady = 0.0f; // The largest once the voxels it left have faded
 		for (uint32_t frame = 1; frame <= c_Steps; frame++)
 		{
 			moving.MoveTo(c_MoverStart + c_MoverStep * static_cast<float>(frame));
@@ -1831,6 +1950,9 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 				largestStart = step;
 				CHECK(moving.Renderer->GetStats().GIMoverFades > 0);
 			}
+			if (moving.Renderer->GetStats().GIMoverFades == 0)
+				largestSteady = std::max(largestSteady, step);
+			nextMoving = std::max(nextMoving, std::min(step, largestMoving));
 			largestMoving = std::max(largestMoving, step);
 		}
 		const std::vector<glm::vec3> stopped = frames.back();
@@ -1870,7 +1992,12 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 				largestSecond = std::max(largestSecond, std::abs(Luminance(frames[frame + 1][point]) - 2.0f * value + Luminance(frames[frame - 1][point])) / std::max(value, 1e-3f));
 			}
 		}
-		MESSAGE("a frame steps at most " << 100.0f * largestStart << "% when it starts, " << 100.0f * largestMoving << "% while it moves and " << 100.0f * largestLater
+		// From the wait's last frame (the box alone) to the faded one (its triangles' voxels alone).
+		const size_t waited = c_Steps + restFrames;
+		const float largestOutside = GetLargestExcursion(frames, waited, frames[waited], frames.back());
+		MESSAGE("through the hand-over a point's light leaves the range between the box's and the voxels' by at most " << 100.0f * largestOutside << "%");
+		MESSAGE("a frame steps at most " << 100.0f * largestStart << "% when it starts, " << 100.0f * largestMoving << "% while it moves (" << 100.0f * nextMoving
+			<< "% but for that frame, " << 100.0f * largestSteady << "% once the voxels it left have faded) and " << 100.0f * largestLater
 			<< "% after it stopped; second difference over the value at most " << 100.0f * largestSecond << "%");
 		MESSAGE("the frame it stops is within " << 100.0f * largestFresh << "% of a fresh renderer's resting prop; later frames drift at most " << 100.0f * largestDrift
 			<< "% from it; it waited " << restFrames << " frames (" << static_cast<float>(restFrames) * c_MoverFrameSeconds << " s) in the dynamic layer and faded for "
@@ -1879,6 +2006,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		CHECK(largestMoving <= c_MoveStep);
 		CHECK(largestLater <= c_HandoverStep);
 		CHECK(largestSecond <= c_Second);
+		CHECK(largestOutside <= c_Excursion);
 		CHECK(largestFresh <= c_FormStep);
 		CHECK(largestRested <= 1e-4f);
 		// The waits are the clock's: c_GIMoverRestSeconds and c_GIMoverFadeSeconds at 60 frames a second, whatever the frame rate.
@@ -2046,6 +2174,152 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 			moved.Renderer.reset();
 			CollectReleases();
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A box that stops in a closed room holds most of its shade, and its hand-over stays within bounds")
+	{
+		// The Cornell box, every bounce, and a blue 0.7 m box that slides 2.5 cm a frame across the floor and stops off the voxel
+		// grid (the look-dev's shot of the unit). Here every light is the field's, and what the box's two forms differ by shows
+		// more than under an open sky ("A prop that stops keeps its light to within its two forms' difference"):
+		// - While it moves steadily the light before its leading face is not smooth: the largest second difference over the
+		//   value is c_MoveSecond (19.1% at the floor 0.2 to 0.45 m before the face, 8.7% beside its corner, 3.4% on the tall
+		//   box, under 1.6% elsewhere; under the open sky, beside the box's way, 0.53%: "A moving prop occludes the ground
+		//   beside it"). The floor's light there rises for the four frames the face takes through a voxel and falls when it
+		//   enters the next (100.4, 101.7, 104.0, 110.5, then 97.1 nits per albedo): a pop per voxel crossed, above the 2% of
+		//   the flicker measure. Found by this case, not explained yet: Known issues.
+		// - The frame of the last step the box takes c_ShadeLeast of the light a resting box takes from the points around it
+		//   (69.1% of it, summed over the points; none of it while it was out of the voxels until it rested), and a point is
+		//   up to 50.7% of its light off the resting box's. That is the forms' difference: the box's soft edge against the
+		//   whole voxels its triangles make. Written as whole voxels (every voxel the box overlaps full: an experiment,
+		//   2026-11-18, not kept, because whole voxels pop as the box crosses them), the wait's last frame was the resting box's
+		//   within 2.3% of every point's red, where the soft box's is up to 73% off.
+		// - While it waits (c_GIMoverRestSeconds) no frame steps a point by more than c_WaitStep (2.5%: the bounces of its last
+		//   steps).
+		// - Through the hand-over (c_GIMoverFadeSeconds) a point's light is not between its two ends all the way: it leaves
+		//   their range by up to c_Excursion of its light (14.8%: the blue on the tall box behind the box rises 11% before it
+		//   falls to 27% under where it began), and one frame steps a point by up to c_HandoverStep (27.6%: the floor 0.3 m
+		//   beside the box's back, two thirds into the fade). That step is one event: with the leaving form held until the
+		//   arriving one stood (an experiment, not kept: it made the open ground's steps 7.4% for 4.3%) it came three frames
+		//   earlier, 27.2% large. Most likely a probe the box covers finds another way out there (GI/ProbeValidity.comp's
+		//   relocation takes the lowest of some occupancies, a choice no blend of voxels divides; not traced).
+		//   Docs/DeveloperGuide.md, "Global illumination": What it cannot do.
+		// - Faded, it is a fresh renderer's resting box (every bounce settles toward it: within c_Rested).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		constexpr float c_MoveSecond = 0.22f;
+		constexpr float c_ShadeLeast = 0.55f;
+		constexpr float c_WaitStep = 0.03f;
+		constexpr float c_HandoverStep = 0.32f;
+		constexpr float c_Excursion = 0.18f;
+		constexpr float c_Rested = 0.002f;
+		constexpr uint32_t c_Steps = 30;
+		const std::vector<RoomPoint> points = GetClosedRoomPoints();
+		std::vector<glm::vec3> open;
+		std::vector<glm::vec3> fresh;
+		{
+			ClosedRoomRender empty(false, 0.0f);
+			open = empty.Settle(points);
+			ClosedRoomRender resting(true, c_ClosedEnd);
+			fresh = resting.Settle(points);
+		}
+		CollectReleases();
+		const float restingShade = SumLuminance(open) - SumLuminance(fresh);
+		REQUIRE(restingShade > 0.1f * SumLuminance(open));
+
+		ClosedRoomRender moving(true, c_ClosedEnd - c_ClosedStep * static_cast<float>(c_Steps));
+		moving.Settle(points);
+		// steps[index]: the frame of step index + 1.
+		std::vector<std::vector<glm::vec3>> steps;
+		size_t steady = 0;
+		for (uint32_t step = 1; step <= c_Steps; step++)
+		{
+			moving.MoveTo(c_ClosedEnd - c_ClosedStep * static_cast<float>(c_Steps - step));
+			steps.push_back(moving.Frame(points));
+			CHECK(moving.Renderer->GetStats().GIMovingProxies == 1);
+			CHECK(moving.Renderer->GetStats().GIMoversLeftOut == 0);
+			if (moving.Renderer->GetStats().GIMoverFades > 0)
+				steady = steps.size();
+		}
+		CHECK(moving.Renderer->GetStats().GIMoverFades == 0);
+		REQUIRE(steady + 3 < steps.size());
+		// The steady move, once the voxels it left have faded: the second difference over the value, at the points the box
+		// never covers on its way (all but the floor left of where it stops).
+		float largestMoveSecond = 0.0f;
+		std::string moveSecondPoint;
+		for (size_t frame = steady + 1; frame + 1 < steps.size(); frame++)
+		{
+			for (size_t point = 0; point < points.size(); point++)
+			{
+				if (points[point].Normal == c_Up && points[point].Point.x < c_ClosedEnd)
+					continue;
+				const float value = Luminance(steps[frame][point]);
+				const float second = std::abs(Luminance(steps[frame + 1][point]) - 2.0f * value + Luminance(steps[frame - 1][point])) / std::max(value, 1e-3f);
+				if (second > largestMoveSecond)
+				{
+					largestMoveSecond = second;
+					moveSecondPoint = points[point].Name;
+				}
+			}
+		}
+		MESSAGE("while it moves steadily (steps " << steady + 1 << " to " << steps.size() << ") the largest second difference over the value is " << 100.0f * largestMoveSecond
+			<< "%, at: " << moveSecondPoint);
+		CHECK(largestMoveSecond <= c_MoveSecond);
+		// frames[index]: index frames after the last step.
+		std::vector<std::vector<glm::vec3>> frames { steps.back() };
+		const float stoppedShade = SumLuminance(open) - SumLuminance(frames.front());
+		size_t waited = 0;
+		size_t faded = 0;
+		float largestWait = 0.0f;
+		float largestHandover = 0.0f;
+		// A second and a half of the renderer's clock: the wait, the fade and the bounces after it.
+		for (size_t frame = 1; frame <= 90; frame++)
+		{
+			frames.push_back(moving.Frame(points));
+			const SceneRendererStats& stats = moving.Renderer->GetStats();
+			const float step = GetLargestStep(frames[frame - 1], frames[frame]);
+			if (stats.GIMovingProxies == 1 && stats.GIMoverFades == 0)
+			{
+				waited = frame;
+				largestWait = std::max(largestWait, step);
+			}
+			else
+			{
+				largestHandover = std::max(largestHandover, step);
+			}
+			if (stats.GIMoverFades > 0)
+				faded = frame;
+		}
+		CHECK(moving.Renderer->GetStats().GIMovingProxies == 0);
+		CHECK(moving.Renderer->GetStats().GIMoverBricks == 0);
+		CHECK(moving.Renderer->GetStats().GIMoverDispatches == 0);
+		REQUIRE(waited > 0);
+		REQUIRE(faded > waited);
+		const float largestOutside = GetLargestExcursion(frames, waited, frames[waited], frames.back());
+		float largestRested = 0.0f;
+		float largestForm = 0.0f;
+		for (size_t point = 0; point < points.size(); point++)
+		{
+			const float scale = std::max(LargestComponent(fresh[point]), 1e-3f);
+			largestRested = std::max(largestRested, LargestComponent(glm::abs(frames.back()[point] - fresh[point])) / scale);
+			largestForm = std::max(largestForm, LargestComponent(glm::abs(frames.front()[point] - fresh[point])) / scale);
+		}
+		MESSAGE("the frame it stops the box takes " << 100.0f * stoppedShade / restingShade << "% of the light a resting box takes from the points (" << restingShade
+			<< " of " << SumLuminance(open) << " nits per albedo), and a point is up to " << 100.0f * largestForm << "% of its light off the resting box's");
+		MESSAGE("it waited " << waited << " frames, stepping at most " << 100.0f * largestWait << "%, and faded until frame " << faded << ": a frame steps a point by at most "
+			<< 100.0f * largestHandover << "%, and a point leaves the range between the box's light and the voxels' by at most " << 100.0f * largestOutside
+			<< "%; faded, within " << 100.0f * largestRested << "% of a fresh renderer's resting box");
+		CHECK(stoppedShade >= c_ShadeLeast * restingShade);
+		CHECK(stoppedShade <= restingShade);
+		CHECK(largestWait <= c_WaitStep);
+		CHECK(largestHandover <= c_HandoverStep);
+		CHECK(largestOutside <= c_Excursion);
+		CHECK(largestRested <= c_Rested);
+		// The waits are the clock's.
+		CHECK(static_cast<float>(waited) * c_MoverFrameSeconds <= RenderData::c_GIMoverRestSeconds + c_MoverFrameSeconds);
+		CHECK(static_cast<float>(faded - waited) * c_MoverFrameSeconds <= RenderData::c_GIMoverFadeSeconds + c_MoverFrameSeconds);
+		moving.Renderer.reset();
+		CollectReleases();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }
