@@ -644,12 +644,15 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   that costs was not measured. Compiling them ahead, or on a worker thread while the old forms draw, is left for later:
   every pipeline the renderer has is made on first use, and making them ahead is a change to all of them.
 - Until area lights reach global illumination (the stream's stage 4), a scene with GI on counts a light surface's light
-  twice: once per pixel from its rect light and once through the GI, which still takes the panel's glow. In the Cornell box
-  with its panel made a light, the floor's center reads 162 nits with GI on against 43.8 from the light alone (+270%); the
-  emissive panel alone with GI gives 118 nits there, 2.7 times the direct light, so nearly all of the excess is the second
-  count. Along the floor's row through the center no staircase shows (the largest step between neighbours 0.0034 of the
-  light with GI on, 0.0032 off); the GI's own staircases and bands at the box's foot and the red wall (decisions.md) are
-  those of GI scenes generally. Look at Cornell scenes with GI off until then (`lookdev.cornell.rect` is).
+  twice: once per pixel from its rect light and once through the GI, which still takes the panel's glow. In the Cornell
+  box with its panel made a light, the floor's center reads 162 nits with GI on against 43.8 from the light alone
+  (+270%); the emissive panel alone with GI gives 118 nits there, 2.7 times the direct light, so nearly all of the
+  excess is the second count. Along the floor's row through the center no staircase shows (the largest step between
+  neighbours 0.0034 of the light with GI on, 0.0032 off). Along the floor lines and the red wall's line the shadows'
+  test reads (seen from the front, where the direct light's true visibility is flat), the largest step between
+  neighbours is 0.024 of the light on the floor and 0.029 on the red wall with GI on, against 0.006 and 0.008 with it
+  off and 0.040 and 0.052 for the emissive panel with GI alone: the GI's own staircases and bands (decisions.md), above
+  the 0.02 the direct light's shadows keep. Look at Cornell scenes with GI off until then (`lookdev.cornell.rect` is).
 
 **Showcase (the reflections' adoption)**
 

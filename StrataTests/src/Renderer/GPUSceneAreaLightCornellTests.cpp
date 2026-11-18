@@ -14,6 +14,8 @@
 #include <array>
 #include <cmath>
 #include <optional>
+#include <span>
+#include <utility>
 #include <vector>
 
 using namespace Strata;
@@ -257,6 +259,31 @@ namespace
 		return largest;
 	}
 
+	// LargestFlatStep for a frame with global illumination, which no visibility describes: the largest step of the frame's
+	// luminance between neighbours along a line, relative to the larger of the two, where the reference visibility is flat.
+	double LargestFlatLuminanceStep(const ReadbackImage& image, std::span<const LinePixel> pixels, const glm::dvec3& normal, const AreaLights::Record& light,
+		const CornellBlockers& blockers, uint32_t& outPairs)
+	{
+		double largest = 0.0;
+		outPairs = 0;
+		for (size_t index = 1; index < pixels.size(); index++)
+		{
+			const LinePixel& a = pixels[index - 1];
+			const LinePixel& b = pixels[index];
+			if (a.X == b.X && a.Y == b.Y)
+				continue;
+			const double referenceA = CornellVisibility(a.Point, normal, light, blockers, 24);
+			const double referenceB = CornellVisibility(b.Point, normal, light, blockers, 24);
+			if (!((referenceA > 0.98 && referenceB > 0.98) || (referenceA < 0.02 && referenceB < 0.02)))
+				continue;
+			const double luminanceA = Luminance(ReadHalfTexel(image, a.X, a.Y));
+			const double luminanceB = Luminance(ReadHalfTexel(image, b.X, b.Y));
+			largest = std::max(largest, std::abs(luminanceB - luminanceA) / std::max(std::max(luminanceA, luminanceB), 1e-6));
+			outPairs++;
+		}
+		return largest;
+	}
+
 	// The radiance a probe at `center` captures, averaged over every direction (its irradiance's constant term up to a
 	// factor): six 90-degree views of a capture, each pixel weighted by the solid angle it covers.
 	double CaptureAverage(SceneRenderer& renderer, Scene& scene, const glm::vec3& center, uint32_t size)
@@ -418,6 +445,41 @@ TEST_SUITE("GPU.SceneRenderer.AreaLightCornell")
 		CHECK(cornerPoints >= 30);
 		CHECK(cornerWorst <= 0.03);
 
+		// The red wall's penumbrae where the front camera sees it (the tall box's shadow): the rendered visibility's largest
+		// excess over the reference and its largest shortfall where the reference lies within (0.02, 0.98). The shadow's outer
+		// edge reads too dark and a strip inside it too light (Known issue), which the steps above, taken where the reference is
+		// flat, do not see. Measured 0.078 lighter and 0.185 darker at most (399 points); the bounds are 1.5 times that.
+		uint32_t wallPenumbra = 0;
+		double wallBright = 0.0;
+		double wallDark = 0.0;
+		for (int row = 0; row < 52; row++)
+		{
+			for (int column = 0; column < 54; column++)
+			{
+				const glm::dvec3 point(-2.75, 0.05 + 0.1 * row, -2.65 + 0.1 * column);
+				if (blockers.Blocks(glm::dvec3(front.Position), point))
+					continue;
+				const glm::uvec2 pixel = ProjectToPixel(front, glm::vec3(point), c_Size);
+				if (pixel.x >= c_Size || pixel.y >= c_Size)
+					continue;
+				const std::optional<glm::dvec3> seen = FindPlanePoint(front, pixel.x, pixel.y, 0, -2.75);
+				const float visibility = frontFrames.Visibility(pixel.x, pixel.y);
+				if (!seen || std::abs(seen->z) > 2.7 || seen->y < 0.02 || seen->y > 5.15 || visibility < 0.0f)
+					continue;
+				const double reference = CornellVisibility(*seen, glm::dvec3(1.0, 0.0, 0.0), light, blockers, 24);
+				if (reference <= 0.02 || reference >= 0.98)
+					continue;
+				wallBright = std::max(wallBright, visibility - reference);
+				wallDark = std::max(wallDark, reference - visibility);
+				wallPenumbra++;
+			}
+		}
+		MESSAGE(fmt::format("L4: the red wall's penumbrae, {} points: {:.4f} lighter than the reference at most, {:.4f} darker", wallPenumbra, wallBright,
+			wallDark));
+		CHECK(wallPenumbra >= 30);
+		CHECK(wallBright <= 0.117);
+		CHECK(wallDark <= 0.277);
+
 		// The whole floor the camera sees, every other pixel each way, away from the blockers' outlines (pixels whose 7 x 7
 		// neighbours all show the floor), where the 0.5 m grid above samples too little: the shares of pixels more than 0.1 and
 		// 0.3 off the reference. Measured 1.33% and 0.030% (401 and 9 of 30142 pixels; 0.45 at worst), the bounds 1.5 times the
@@ -505,18 +567,38 @@ TEST_SUITE("GPU.SceneRenderer.AreaLightCornell")
 		// L4b (a Known issue until stage 4): with GI on, the floor's center under the panel made a light reads its direct light
 		// plus the field's, which takes the panel's emission as if no light stood for it; the emissive box alone with GI gives
 		// about that much again. Along the floor's row through the center (the floor band the camera sees) the largest step
-		// between neighbours, relative to the light there, measures the field's staircases. The numbers go into the release
-		// notes; the case asserts only that the GI runs and adds light.
+		// between neighbours, relative to the light there, measures the field's staircases; so do L4's step measures (review
+		// correction 7), along L4's three floor lines and its red wall line as the front camera sees them, on the frame's
+		// luminance where the reference visibility is flat. The numbers go into the release notes; the case asserts only that
+		// the GI runs and adds light.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		const SceneCamera camera = CornellCamera(1.0f);
 		const glm::uvec2 floorCenter = ProjectToPixel(camera, glm::vec3(0.0f, 0.0f, 1.2f), c_Size);
 		REQUIRE(floorCenter.x < c_Size);
 		REQUIRE(floorCenter.y < c_Size);
+		const CornellBlockers blockers;
+		const AreaLights::Record light = [&]
+		{
+			SceneTestAssets lightAssets;
+			Scene lightScene;
+			BuildCornellBox(lightScene, lightAssets, CornellLight::RectLight);
+			return GetCornellRecord(lightScene);
+		}();
+		const std::array<std::pair<glm::dvec3, glm::dvec3>, 3> floorEnds = { { { { -2.6, 0.0, 1.0 }, { 2.6, 0.0, 1.0 } }, { { -2.6, 0.0, -2.2 }, { 2.6, 0.0, -2.2 } },
+			{ { 0.2, 0.0, -2.6 }, { 0.2, 0.0, 2.6 } } } };
+		std::vector<std::vector<LinePixel>> floorLines;
+		for (const auto& [from, to] : floorEnds)
+			floorLines.push_back(FindLinePixels(camera, 1, 0.0, from, to, blockers));
+		const std::vector<LinePixel> wallLine = FindLinePixels(camera, 0, -2.75, glm::dvec3(-2.75, 2.5, -1.0), glm::dvec3(-2.75, 2.5, 0.6), blockers);
 		struct Reading
 		{
 			double Center = 0.0;
 			double LargestStep = 0.0;
+			double FloorStep = 0.0; // L4's floor lines and red wall line, relative steps where the reference is flat
+			double WallStep = 0.0;
+			uint32_t FloorPairs = 0;
+			uint32_t WallPairs = 0;
 		};
 		const auto measure = [&](CornellLight option, GlobalIlluminationLevel level)
 		{
@@ -558,6 +640,13 @@ TEST_SUITE("GPU.SceneRenderer.AreaLightCornell")
 				const double current = Luminance(ReadHalfTexel(image, x, floorCenter.y));
 				reading.LargestStep = std::max(reading.LargestStep, std::abs(current - previous) / std::max(std::max(current, previous), 1e-6));
 			}
+			for (const std::vector<LinePixel>& line : floorLines)
+			{
+				uint32_t pairs = 0;
+				reading.FloorStep = std::max(reading.FloorStep, LargestFlatLuminanceStep(image, line, glm::dvec3(0.0, 1.0, 0.0), light, blockers, pairs));
+				reading.FloorPairs += pairs;
+			}
+			reading.WallStep = LargestFlatLuminanceStep(image, wallLine, glm::dvec3(1.0, 0.0, 0.0), light, blockers, reading.WallPairs);
 			return reading;
 		};
 		const Reading direct = measure(CornellLight::RectLight, GlobalIlluminationLevel::Off);
@@ -567,8 +656,13 @@ TEST_SUITE("GPU.SceneRenderer.AreaLightCornell")
 			"light). The floor row's largest step between neighbours: direct {:.4f}, with GI {:.4f}, the emissive panel with GI {:.4f}", direct.Center,
 			withGI.Center, 100.0 * (withGI.Center / direct.Center - 1.0), emissiveGI.Center, 100.0 * emissiveGI.Center / direct.Center, direct.LargestStep,
 			withGI.LargestStep, emissiveGI.LargestStep));
+		MESSAGE(fmt::format("L4b, L4's measures on the luminance where the reference is flat: the floor's lines direct {:.4f}, with GI {:.4f}, the emissive "
+			"panel with GI {:.4f} ({} pairs); the red wall's line {:.4f}, {:.4f} and {:.4f} ({} pairs)", direct.FloorStep, withGI.FloorStep, emissiveGI.FloorStep,
+			withGI.FloorPairs, direct.WallStep, withGI.WallStep, emissiveGI.WallStep, withGI.WallPairs));
 		CHECK(direct.Center > 0.0);
 		CHECK(withGI.Center > direct.Center);
+		CHECK(withGI.FloorPairs > 50);
+		CHECK(withGI.WallPairs > 10);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }
