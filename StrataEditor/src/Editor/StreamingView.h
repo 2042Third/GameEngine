@@ -124,9 +124,13 @@ namespace Strata
 	// The luminance view's legend name of band `band` of `bands`, each one EV100 wide from the floor of `firstEV100`
 	// (LightingViewColors): "EV 9"; the first takes what lies below ("EV <6"), the last what lies above ("EV 16+").
 	std::string GetLuminanceLegendName(size_t band, size_t bands, float firstEV100);
-	// The name of a band of the clusters view (Overlay/LightingView.frag): "No lights", "1 light", "2-3 lights", ..., the last
-	// "1024+ lights" (bands of the luminance view's colors).
-	std::string GetClusterLegendName(size_t band, size_t bands);
+	// The clusters view's bands (Overlay/LightingView.frag, in the luminance view's `bands` colors): none, 1, 2-3, 4-7, ...,
+	// the last color taking what lies beyond. A cluster lists at most `capacity` lights (SceneRendererSpecification::
+	// MaxLightsPerCluster, the frame's ClusterGrid.w), so only the bands up to the one holding the capacity can show: how many
+	// those are, and each one's name, "No lights", "1 light", "2-3 lights", ..., the last "256 lights (full)" or
+	// "256-300 lights (full at 300)".
+	size_t GetClusterLegendBands(size_t bands, uint32_t capacity);
+	std::string GetClusterLegendName(size_t band, size_t bands, uint32_t capacity);
 
 	// The note under a lighting view's legend: the sun to sky ratio on flat ground and, for the occlusion and open views, their
 	// value's median or, for the light views (not the albedo), the surfaces' EV100 median; "Measuring..." until statistics arrived.

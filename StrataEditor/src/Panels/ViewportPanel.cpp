@@ -817,9 +817,12 @@ namespace Strata
 		}
 		else if (settings.DebugView == ViewportDebugView::Clusters)
 		{
-			// The bands of Overlay/LightingView.frag: none, then one per power of two (the last takes what lies beyond).
-			for (size_t band = lightingColors.Luminance.size(); band-- > 0;)
-				lines.push_back({ toColor(lightingColors.Luminance[band]), GetClusterLegendName(band, lightingColors.Luminance.size()), std::string() });
+			// The bands of Overlay/LightingView.frag: none, then one per power of two, up to the one of a full cluster (the counts
+			// stop at the capacity).
+			const size_t bands = lightingColors.Luminance.size();
+			const uint32_t capacity = renderer->GetSceneRenderer().GetSpecification().MaxLightsPerCluster;
+			for (size_t band = GetClusterLegendBands(bands, capacity); band-- > 0;)
+				lines.push_back({ toColor(lightingColors.Luminance[band]), GetClusterLegendName(band, bands, capacity), std::string() });
 		}
 		std::string note;
 		if (settings.DebugView == ViewportDebugView::Streaming && stats.PlaceholderBoxes > 0)

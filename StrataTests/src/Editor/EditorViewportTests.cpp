@@ -975,12 +975,25 @@ TEST_SUITE("Editor.Viewport")
 		stats.SunToSkyRatio = 0.0f;
 		stats.SurfaceEV100 = glm::vec3(std::numeric_limits<float>::quiet_NaN());
 		CHECK(GetLightingLegendNote(ViewportDebugView::Indirect, stats) == "Sun : sky -");
-		// The clusters view's bands: none, then one per power of two, the last open.
-		CHECK(GetClusterLegendName(0, 12) == "No lights");
-		CHECK(GetClusterLegendName(1, 12) == "1 light");
-		CHECK(GetClusterLegendName(2, 12) == "2-3 lights");
-		CHECK(GetClusterLegendName(3, 12) == "4-7 lights");
-		CHECK(GetClusterLegendName(11, 12) == "1024+ lights");
+		// The clusters view's bands: none, then one per power of two, up to the one holding the capacity (the counts stop there).
+		CHECK(GetClusterLegendBands(12, 256) == 10);
+		CHECK(GetClusterLegendName(0, 12, 256) == "No lights");
+		CHECK(GetClusterLegendName(1, 12, 256) == "1 light");
+		CHECK(GetClusterLegendName(2, 12, 256) == "2-3 lights");
+		CHECK(GetClusterLegendName(3, 12, 256) == "4-7 lights");
+		CHECK(GetClusterLegendName(8, 12, 256) == "128-255 lights");
+		CHECK(GetClusterLegendName(9, 12, 256) == "256 lights (full)");
+		// A capacity between powers of two shares the last band; the largest (1024) fills the last color's band.
+		CHECK(GetClusterLegendBands(12, 300) == 10);
+		CHECK(GetClusterLegendName(9, 12, 300) == "256-300 lights (full at 300)");
+		CHECK(GetClusterLegendBands(12, 1024) == 12);
+		CHECK(GetClusterLegendName(10, 12, 1024) == "512-1023 lights");
+		CHECK(GetClusterLegendName(11, 12, 1024) == "1024 lights (full)");
+		CHECK(GetClusterLegendBands(12, 1) == 2);
+		CHECK(GetClusterLegendName(1, 12, 1) == "1 light (full)");
+		// Fewer colors than bands: the last color takes what lies beyond.
+		CHECK(GetClusterLegendBands(4, 256) == 4);
+		CHECK(GetClusterLegendName(3, 4, 256) == "4-256 lights (full at 256)");
 
 		// The voxels view's note: the clipmap's levels, their voxel sizes and how many hold valid voxels.
 		CHECK(GetVoxelLegendNote(nullptr) == "No GI");

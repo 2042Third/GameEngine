@@ -5025,7 +5025,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
   in (a multiply would let the compiler fuse differently). **Clusters** is a value view: the lights the pixel's light
   cluster lists (what its shading walks, lit surfaces or not), written as a share of the cluster's capacity
   (`ClusterGrid.w`, the overlay's `ClusterCapacity`), drawn by the overlay as bands of the luminance view's colors (none, 1,
-  2-3, 4-7, ...; `GetClusterLegendName`), so its statistics' `value` reads shares of the capacity. Lighting, Indirect,
+  2-3, 4-7, ...; the counts stop at the capacity, so the legend lists the bands up to a full cluster's:
+  `GetClusterLegendBands`, `GetClusterLegendName`), so its statistics' `value` reads shares of the capacity. Lighting, Indirect,
   Specular and Diffuse go through exposure and tone mapping as the image does; for the
   value views and Luminance, `Overlay/LightingView.frag` replaces the finished image, first among the overlays (the motion
   view is skipped with one), from the frame's own HDR target (never the temporal history, which would blend values of

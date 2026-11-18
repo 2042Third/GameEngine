@@ -109,15 +109,26 @@ namespace Strata
 		return fmt::format("LOD {}{}", level, last ? "+" : "");
 	}
 
-	std::string GetClusterLegendName(size_t band, size_t bands)
+	size_t GetClusterLegendBands(size_t bands, uint32_t capacity)
+	{
+		// The band of the capacity: 1 + its highest bit (1 for one light, 2 for 2-3...), as the shader's firstbithigh.
+		size_t band = 0;
+		for (uint32_t lights = capacity; lights > 0; lights >>= 1)
+			band++;
+		return std::min(bands, band + 1);
+	}
+
+	std::string GetClusterLegendName(size_t band, size_t bands, uint32_t capacity)
 	{
 		if (band == 0)
 			return "No lights";
 		const uint64_t lower = uint64_t(1) << (band - 1);
-		if (band + 1 >= bands)
-			return fmt::format("{}+ lights", lower);
-		const uint64_t upper = (uint64_t(1) << band) - 1;
-		return lower == upper ? std::string("1 light") : fmt::format("{}-{} lights", lower, upper);
+		// The last color takes every count beyond; counts stop at the capacity.
+		const uint64_t upper = band + 1 >= bands ? uint64_t(capacity) : std::min<uint64_t>((uint64_t(1) << band) - 1, capacity);
+		const std::string lights = lower >= upper ? fmt::format("{} light{}", upper, upper == 1 ? "" : "s") : fmt::format("{}-{} lights", lower, upper);
+		if (upper != capacity)
+			return lights;
+		return lower >= upper ? fmt::format("{} (full)", lights) : fmt::format("{} (full at {})", lights, capacity);
 	}
 
 	std::string GetLuminanceLegendName(size_t band, size_t bands, float firstEV100)
