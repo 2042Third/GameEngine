@@ -3283,7 +3283,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   than the display, and a display whose screen coordinates are more than a pixel makes only the sizes its scale steps
   through (a Retina display's 2: even ones; `MatchWindowPixels` tells the two apart, and the message then names the
   nearest size the scale makes), logged and never in a dialog (a run with `--window-size` is a Console run):
-  `StrataCLI launch` then fails at once, naming the editor's exit code (`LaunchEditor`). `--ui-scale <factor>` draws the
+  `StrataCLI launch` then fails at once, naming the editor's exit code (`LaunchEditor`). Only the start is checked: the
+  window stays resizable, so a person, a snap or a window manager can change its size later (`editor.screenshot`'s
+  `width` and `height` say what a picture got). `--ui-scale <factor>` draws the
   UI at a fixed scale instead of the display's and the person's preference (e.g. 1 to check it at 100% on a 150%
   display; `StrataCLI launch --ui-scale` passes it on); with `--window-size` it gives pictures of the editor that compare
   across machines. `--layout <file>` keeps
