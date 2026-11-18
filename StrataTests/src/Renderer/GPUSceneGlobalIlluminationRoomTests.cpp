@@ -392,9 +392,10 @@ namespace
 	constexpr uint32_t c_MoverFrames = 40;
 	const glm::vec3 c_MoverSky(4000.0f);
 
-	SceneCamera MoverCamera()
+	// Straight down at the ground before the prop, `x` along the prop's way.
+	SceneCamera MoverCamera(float x = 0.0f)
 	{
-		return MakeCamera(glm::vec3(0.0f, 2.9f, -1.2f), glm::vec3(0.0f, 0.0f, -1.199f), 100.0f, c_FloorSize);
+		return MakeCamera(glm::vec3(x, 2.9f, -1.2f), glm::vec3(x, 0.0f, -1.199f), 100.0f, c_FloorSize);
 	}
 
 	std::vector<RoomPoint> GetMoverPoints()
@@ -411,9 +412,10 @@ namespace
 		Scene SceneData;
 		Entity Prop;
 		Scope<SceneRenderer> Renderer;
+		float CameraX = 0.0f; // Where the camera stands along the prop's way (MoverCamera)
 
 		// `propAlbedo` null: the ground alone.
-		MoverRender(bool sun, const glm::vec3* propAlbedo, float propX)
+		MoverRender(bool sun, const glm::vec3* propAlbedo, float propX, GlobalIlluminationLevel level = GlobalIlluminationLevel::High)
 		{
 			AddNeutralPostProcess(SceneData);
 			MaterialProperties ground;
@@ -432,7 +434,7 @@ namespace
 				Prop = AddMesh(SceneData, BuiltinAssets::CubeMesh, Assets.AddMaterial(material), glm::vec3(propX, 0.5f * c_MoverSize.y, c_MoverZ), "Prop");
 				Prop.GetComponent<TransformComponent>().Scale = c_MoverSize;
 			}
-			Renderer = CreateScope<SceneRenderer>(RoomSpecification());
+			Renderer = CreateScope<SceneRenderer>(RoomSpecification(level));
 			Renderer->SetViewportSize(c_FloorSize.x, c_FloorSize.y);
 		}
 
@@ -448,10 +450,10 @@ namespace
 			AssetManager::SetActive(Assets.Manager);
 			SceneRenderOptions options = GIViewOptions();
 			options.AdaptationSeconds = c_MoverFrameSeconds;
-			REQUIRE(RenderGIFrame(*Renderer, SceneData, MoverCamera(), options));
+			REQUIRE(RenderGIFrame(*Renderer, SceneData, MoverCamera(CameraX), options));
 			REQUIRE(Renderer->GetStats().GlobalIllumination);
 			REQUIRE_FALSE(Renderer->GetStats().GlobalIlluminationPending);
-			return ReadPoints(*Renderer, MoverCamera(), points);
+			return ReadPoints(*Renderer, MoverCamera(CameraX), points);
 		}
 
 		std::vector<glm::vec3> Settle(const std::vector<RoomPoint>& points)
@@ -527,6 +529,21 @@ namespace
 			green += value.g;
 		}
 		return red / std::max(green, 1e-6f);
+	}
+
+	// A renderer's voxels (the material, emission and normal textures of its `levelCount` levels, as stored) and its field.
+	void ReadVoxelsAndField(SceneRenderer& renderer, uint32_t levelCount, std::vector<std::vector<uint8_t>>& outLevels, std::vector<uint8_t>& outField)
+	{
+		outLevels.clear();
+		for (uint32_t level = 0; level < levelCount; level++)
+		{
+			for (SceneRenderer::GlobalIlluminationTexture texture : { SceneRenderer::GlobalIlluminationTexture::Material, SceneRenderer::GlobalIlluminationTexture::Emission,
+				SceneRenderer::GlobalIlluminationTexture::Normal })
+			{
+				REQUIRE(renderer.ReadGlobalIlluminationVoxels(level, texture, outLevels.emplace_back()));
+			}
+		}
+		REQUIRE(renderer.ReadGlobalIlluminationField(outField));
 	}
 
 }
@@ -1868,19 +1885,6 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		const std::vector<RoomPoint> points = GetMoverPoints();
 		const glm::vec3 red(0.8f, 0.05f, 0.05f);
 		const float end = c_MoverStart + 0.03f * 11.0f;
-		const auto read = [](SceneRenderer& renderer, std::vector<std::vector<uint8_t>>& outLevels, std::vector<uint8_t>& outField)
-		{
-			outLevels.clear();
-			for (uint32_t level = 0; level < 4; level++)
-			{
-				for (SceneRenderer::GlobalIlluminationTexture texture : { SceneRenderer::GlobalIlluminationTexture::Material, SceneRenderer::GlobalIlluminationTexture::Emission,
-					SceneRenderer::GlobalIlluminationTexture::Normal })
-				{
-					REQUIRE(renderer.ReadGlobalIlluminationVoxels(level, texture, outLevels.emplace_back()));
-				}
-			}
-			REQUIRE(renderer.ReadGlobalIlluminationField(outField));
-		};
 		std::vector<std::vector<uint8_t>> freshLevels;
 		std::vector<uint8_t> freshField;
 		std::vector<uint8_t> field;
@@ -1893,10 +1897,10 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 				CHECK(fresh.Renderer->GetStats().GIMovingProxies == 0);
 				CHECK(fresh.Renderer->GetStats().GIMoverBricks == 0);
 				if (frame == 2)
-					read(*fresh.Renderer, freshLevels, freshField);
+					ReadVoxelsAndField(*fresh.Renderer, 4, freshLevels, freshField);
 				if (frame > 2)
 				{
-					read(*fresh.Renderer, levels, field);
+					ReadVoxelsAndField(*fresh.Renderer, 4, levels, field);
 					CHECK(levels == freshLevels);
 					CHECK(field == freshField);
 				}
@@ -1922,7 +1926,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 			moved.Frame(points);
 		CHECK(moved.Renderer->GetStats().GIMovingProxies == 0);
 		CHECK(moved.Renderer->GetStats().GIMoverBricks == 0);
-		read(*moved.Renderer, levels, field);
+		ReadVoxelsAndField(*moved.Renderer, 4, levels, field);
 		REQUIRE(levels.size() == freshLevels.size());
 		for (size_t index = 0; index < levels.size(); index++)
 		{
@@ -1932,6 +1936,93 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		CHECK(field == freshField);
 		moved.Renderer.reset();
 		CollectReleases();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A prop that moves, pauses and moves on while the camera walks leaves a still prop's voxels")
+	{
+		// What the dynamic layer puts back holds while the levels' windows scroll under it, at both layouts. Two renderers walk
+		// the same camera path (c_Walk a frame for c_WalkFrames: level 0's window scrolls every 0.4 m at High and 0.8 m at Low,
+		// the coarser levels less often), one past a prop that stands at the path's end all along, the other past one that
+		// slides there in two moves with a pause between them: long enough to rest (its triangles enter the voxels again and
+		// the voxels around it fade) and short enough that it starts again while they still fade (the fade starts over from
+		// what the voxels show). A second after both stopped, the mover's levels are the still prop's, to the byte, and so is
+		// its field: the backup put back the right texels whichever way the windows went, and no brick or fade is left.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::vector<RoomPoint> points = GetMoverPoints();
+		const glm::vec3 red(0.8f, 0.05f, 0.05f);
+		constexpr float c_Walk = 0.06f;
+		constexpr uint32_t c_WalkFrames = 40;
+		constexpr uint32_t c_FirstMove = 8;   // The prop slides in frames 1 to 8
+		constexpr uint32_t c_SecondMove = 31; // and in frames 31 to 40
+		constexpr float c_Slide = 0.03f;
+		const float end = c_MoverStart + c_Slide * static_cast<float>(c_FirstMove + c_WalkFrames - c_SecondMove + 1);
+		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
+		{
+			CAPTURE(static_cast<int>(level));
+			const uint32_t levelCount = level == GlobalIlluminationLevel::High ? 4 : 3;
+			std::vector<std::vector<uint8_t>> stillLevels;
+			std::vector<uint8_t> stillField;
+			{
+				MoverRender still(true, &red, end, level);
+				still.Settle(points);
+				for (uint32_t frame = 1; frame <= c_WalkFrames + 60; frame++)
+				{
+					still.CameraX = c_Walk * static_cast<float>(std::min(frame, c_WalkFrames));
+					still.Frame(points);
+					CHECK(still.Renderer->GetStats().GIMoverBricks == 0);
+				}
+				ReadVoxelsAndField(*still.Renderer, levelCount, stillLevels, stillField);
+			}
+			CollectReleases();
+
+			MoverRender moved(true, &red, c_MoverStart, level);
+			moved.Settle(points);
+			uint32_t steps = 0;
+			uint32_t bricks = 0;
+			bool restedInPause = false;
+			bool fadingAtRestart = false;
+			for (uint32_t frame = 1; frame <= c_WalkFrames + 60; frame++)
+			{
+				moved.CameraX = c_Walk * static_cast<float>(std::min(frame, c_WalkFrames));
+				if (frame <= c_FirstMove || (frame >= c_SecondMove && frame <= c_WalkFrames))
+					moved.MoveTo(c_MoverStart + c_Slide * static_cast<float>(++steps));
+				moved.Frame(points);
+				const SceneRendererStats& stats = moved.Renderer->GetStats();
+				bricks = std::max(bricks, stats.GIMoverBricks);
+				if (frame + 1 == c_SecondMove)
+					restedInPause = stats.GIMovingProxies == 0 && stats.GIMoverFades > 0;
+				if (frame == c_SecondMove)
+					fadingAtRestart = stats.GIMovingProxies == 1 && stats.GIMoverFades > 0;
+			}
+			CHECK(bricks > 0);
+			CHECK(restedInPause);
+			CHECK(fadingAtRestart);
+			CHECK(moved.Renderer->GetStats().GIMovingProxies == 0);
+			CHECK(moved.Renderer->GetStats().GIMoverBricks == 0);
+			CHECK(moved.Renderer->GetStats().GIMoverFades == 0);
+			std::vector<std::vector<uint8_t>> levels;
+			std::vector<uint8_t> field;
+			ReadVoxelsAndField(*moved.Renderer, levelCount, levels, field);
+			REQUIRE(levels.size() == stillLevels.size());
+			for (size_t index = 0; index < levels.size(); index++)
+			{
+				CAPTURE(index);
+				CHECK(levels[index] == stillLevels[index]);
+			}
+			// The field is made of the voxels by the passes of every frame, so it is the still prop's too, but for what one driver
+			// does on a busy machine ("A still camera's field repeats frame after frame": a unit in the last place of a probe's
+			// face from one dispatch to the next; here a fresh renderer's field, with no mover anywhere, differed from the still
+			// prop's by one byte in one run of seven). What a brick left behind would change is thousands of bytes.
+			REQUIRE(field.size() == stillField.size());
+			size_t differing = 0;
+			for (size_t index = 0; index < field.size(); index++)
+				differing += field[index] != stillField[index] ? 1u : 0u;
+			CHECK(differing <= 16);
+			moved.Renderer.reset();
+			CollectReleases();
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

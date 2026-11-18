@@ -5532,7 +5532,7 @@ probe-field levels and local lights follow.
   `Renderer.GlobalIlluminationLayout`'s "High bounces on, Low once" and "Bounces settle by the scene's brightest albedo",
   `Renderer.VoxelClipmap`'s "The brightest albedo voxelized bounds the bounces", and `PerfGPU.Renderer`'s "Global
   illumination's bounces' cost at 3840x2160" (the gain 0 against 1 in one process). Moving objects:
-  `GlobalIlluminationRoom`'s four cases of a box sliding a fifth of a voxel a frame over open ground (it takes the share
+  `GlobalIlluminationRoom`'s five cases of a box sliding a fifth of a voxel a frame over open ground (it takes the share
   of the points' sky the box itself hides within 15%, in every frame at least half of what it takes at rest, and their
   light's largest second difference stays under 2% once the voxels it left have faded: 0.53%, and under 4% from rest
   through that fade: 2.9%, for 15.8% without the fade; a red box in the sun adds 0.75-1.25 of what it adds at rest to
@@ -5540,9 +5540,12 @@ probe-field levels and local lights follow.
   one frame of the fade, at most 4.5% in the others, as the move itself does: 5.3%), the frame it stops holds its light,
   and no later frame steps by more than 6% (4.3%), the handover to its static voxels included, c_GIMoverRestSeconds
   later by the renderer's clock, where without the fade one frame stepped 26.1%; a resting prop makes no brick, and one
-  that moved, rested and faded leaves a fresh renderer's voxel textures and field to the byte), `GlobalIllumination`'s "A
-  moved object leaves no trace", `Renderer.VoxelClipmap`'s "A moving proxy is listed for the dynamic layer, and nothing
-  is while nothing moves", "A proxy that rested stays in the dynamic layer until its regions are taken", "Movers past the
+  that moved, rested and faded leaves a fresh renderer's voxel textures and field to the byte; one that moves, pauses
+  until it has rested and moves on while its voxels still fade, all while the camera walks and the levels' windows
+  scroll under its bricks, leaves the voxel textures of a prop that stood still, to the byte, at High and at Low),
+  `GlobalIllumination`'s "A moved object leaves no trace", `Renderer.VoxelClipmap`'s "A moving proxy is listed for the
+  dynamic layer, and nothing is while nothing moves", "A proxy that rested stays in the dynamic layer until its regions
+  are taken", "Movers past the
   dynamic layer's bricks or boxes are left out", "Where a proxy starts to move or rests, the bricks around it fade by the
   clock" and "Movers come before fades in the dynamic layer's slots", and `PerfGPU.Renderer`'s "Global illumination's
   moving objects' cost at 3840x2160".
