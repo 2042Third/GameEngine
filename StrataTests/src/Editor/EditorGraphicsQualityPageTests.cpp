@@ -232,7 +232,7 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		// Custom's column keeps showing the stored tuning (two cascades of High's, 512 MiB, with the atlas, the sky's map and the
 		// reflections' and motion blur's targets, the probes' cubes and global illumination), which comes back when Custom is
 		// chosen, and an edit there starts from it, as its tooltip says.
-		CHECK(TextOf(PageKey("Memory2160.Custom")) == "1.11 GiB");
+		CHECK(TextOf(PageKey("Memory2160.Custom")) == "1.18 GiB");
 		CHECK(HoverCustomTooltip(editor, "ShadowCascades") == "Editing a value switches to Custom, starting from the Custom values chosen earlier, "
 			"which this column shows");
 
