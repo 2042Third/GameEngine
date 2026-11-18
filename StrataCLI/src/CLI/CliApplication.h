@@ -42,6 +42,8 @@ namespace Strata::CLI
 		std::optional<int64_t> IdleTimeoutSeconds;
 		// launch: the editor's window, "<width>x<height>" pixels (--window-size)
 		std::optional<std::string> WindowSize;
+		// launch: the scale the editor draws its UI at instead of the display's (--ui-scale; 1 is 100%)
+		std::optional<float> UIScale;
 		// launch/mcp: how long the project's opening may go without progress before the launch fails (--stall-timeout)
 		std::optional<int64_t> StallTimeoutSeconds;
 		bool NoWaitScan = false; // launch: return once the session answers, without waiting for the project (--no-wait-scan)

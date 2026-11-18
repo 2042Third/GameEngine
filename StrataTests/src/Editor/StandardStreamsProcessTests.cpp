@@ -313,4 +313,20 @@ TEST_SUITE("GPU.Startup")
 		CHECK(Contains(*shown, "The log has the details: "));
 		CHECK(Contains(*shown, "StrataEditor.log"));
 	}
+
+#if defined(ST_PLATFORM_WINDOWS)
+	TEST_CASE("An editor whose window cannot have the pixels --window-size asks for does not start")
+	{
+		// Windows makes no window larger than the display (X11 and Wayland may make one, which is why this runs on Windows only):
+		// the editor would take pictures of another size than asked for, so it ends its start with the sizes asked for and made.
+		const std::filesystem::path editor = FindBuiltExecutable("STRATA_TEST_EDITOR_PATH", "StrataEditor");
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("WindowTooLarge");
+		const Process::RunResult run = RunCaptured(editor, { "--window-size", "65535x65535", "--no-automation", "--frames", "1",
+			"--layout", FileSystem::ToUTF8(directory / "Layout.ini") });
+		const std::string output = run.Output + run.ErrorOutput;
+		INFO(output);
+		CHECK(run.ExitCode == 1);
+		CHECK(Contains(output, "Strata Editor cannot start: the display cannot hold a window of 65535 x 65535 pixels (--window-size), the system made it "));
+	}
+#endif
 }

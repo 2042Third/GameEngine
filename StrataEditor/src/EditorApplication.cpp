@@ -40,6 +40,10 @@ namespace Strata
 
 	constexpr uint32_t c_HeadlessFrameRate = 60;
 	constexpr int64_t c_MaxIdleTimeoutSeconds = 7 * 24 * 60 * 60; // A week
+	// The smallest window --window-size asks for: the size the editor's panels are laid out for, which every desktop can make
+	// (Windows makes no window narrower than its title bar, about 176 pixels). StrataCLI launch checks the same.
+	constexpr uint32_t c_MinWindowWidth = 640;
+	constexpr uint32_t c_MinWindowHeight = 360;
 
 	namespace
 	{
@@ -70,7 +74,7 @@ namespace Strata
 			{ "--headless", nullptr, "Run without a window (rendering stays available for captures)" },
 			{ "--no-gpu", nullptr, "Run without a graphics device (implies --headless)" },
 			{ "--windowed", nullptr, "Open a 1600x900 window instead of a maximized one" },
-			{ "--window-size", "<width>x<height>", "Open a window of exactly this many pixels instead of a maximized one" },
+			{ "--window-size", "<width>x<height>", "Open a window of exactly this many pixels (at least 640x360) instead of a maximized one" },
 			{ "--ui-scale", "<factor>", "Draw the UI at this scale instead of the display's (1 is 100%)" },
 			{ "--layout", "<file.ini>", "Keep the panel layout in this file" },
 			{ "--no-automation", nullptr, "Do not serve automation (StrataCLI, MCP)" },
@@ -121,8 +125,12 @@ namespace Strata
 				return fmt::format("--ui-scale expects a factor from {} to {} (1 is 100%)", ImGuiLayer::c_MinScale, ImGuiLayer::c_MaxScale);
 			if (commandLine.HasFlag("--window-size"))
 			{
-				if (!commandLine.GetSizeOption("--window-size"))
-					return fmt::format("--window-size expects the window's pixels as <width>x<height> (e.g. 1600x900), each from 1 to {}", CommandLine::c_MaxSizeOption);
+				const std::optional<std::pair<uint32_t, uint32_t>> size = commandLine.GetSizeOption("--window-size");
+				if (!size || size->first < c_MinWindowWidth || size->second < c_MinWindowHeight)
+				{
+					return fmt::format("--window-size expects the window's pixels as <width>x<height> (e.g. 1600x900), at least {} wide and {} high, "
+						"each at most {}", c_MinWindowWidth, c_MinWindowHeight, CommandLine::c_MaxSizeOption);
+				}
 				if (commandLine.HasFlag("--headless") || commandLine.HasFlag("--no-gpu"))
 					return std::string("--window-size sizes the editor's window: it cannot be combined with --headless or --no-gpu, which open none");
 			}
@@ -240,6 +248,8 @@ namespace Strata
 				SetEditorWindowIcon(*window);
 			if (!IsRunning())
 				return;
+			if (!HasRequestedPixels(specification))
+				return;
 			// The editor's look: the Bedrock theme at the UI scale, and its own fonts (ImGui's built-in font is never used).
 			const ImGuiModule* imguiModule = GetModules().Find<ImGuiModule>();
 			if (ImGuiLayer* imgui = imguiModule ? imguiModule->GetLayer() : nullptr)
@@ -254,6 +264,26 @@ namespace Strata
 			}
 			// The layer owns its host; the application outlives its layers.
 			PushLayer(new EditorLayer(options, CreateScope<ApplicationEditorHost>(*this)));
+		}
+	private:
+		// --window-size promises a window of exactly that many pixels, so that its pictures have that size: a window the system
+		// made another size (Windows shrinks one larger than the display to fit it) ends the start, as a failure, instead of
+		// giving pictures of another size. False then, the application closing with exit code 1.
+		bool HasRequestedPixels(const ApplicationSpecification& specification)
+		{
+			const Window* window = GetWindow();
+			if (!window || !specification.Window.SizeInPixels)
+				return true;
+			const glm::uvec2 requested(specification.Window.Width, specification.Window.Height);
+			const glm::uvec2 pixels = window->GetFramebufferSize();
+			if (pixels == requested)
+				return true;
+			ReportFatalError(specification.Name, fmt::format("{} cannot start: the display cannot hold a window of {} x {} pixels (--window-size), "
+				"the system made it {} x {}.", specification.Name, requested.x, requested.y, pixels.x, pixels.y),
+				"Ask for a window that fits on the display, or leave out --window-size.");
+			SetExitCode(1);
+			Close();
+			return false;
 		}
 	};
 

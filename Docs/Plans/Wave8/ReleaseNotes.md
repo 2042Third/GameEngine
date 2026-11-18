@@ -428,8 +428,10 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   `waitsForAssets` (it waits for the asset scan) and `results` (`content` or `session`).
 - AI agents: `asset.types` lists the asset types with the extension of the engine's own documents and their importers'
   names, versions and file extensions.
-- Editor: `--window-size <width>x<height>` opens a window of exactly that many pixels instead of a maximized one, for
-  screenshots that compare across machines; `StrataCLI launch --window-size` passes it on.
+- Editor: `--window-size <width>x<height>` opens a window of exactly that many pixels instead of a maximized one, at
+  least 640x360; an editor whose window the system makes another size (larger than the display) does not start, so a
+  picture never has another size than asked for. With `--ui-scale 1` (or another fixed scale) beside it, screenshots of
+  the editor compare across machines; `StrataCLI launch --window-size` and `--ui-scale` pass them on.
 - AI agents: `editor.screenshot {path?, overwrite?, panel?}` takes a picture of the whole editor window as the person sees
   it, UI and all, or of one panel, two frames after the command (so `editor.showPanel`, `editor.showDialog` and the other
   commands before it show), without stalling a frame; it needs a window.

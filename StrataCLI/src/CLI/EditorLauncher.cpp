@@ -54,6 +54,40 @@ namespace Strata::CLI
 		return (error ? path : absolute).lexically_normal();
 	}
 
+	std::vector<std::string> GetEditorArguments(const EditorLaunchSpecification& specification)
+	{
+		std::vector<std::string> arguments;
+		if (!specification.ProjectDirectory.empty())
+		{
+			std::error_code error;
+			std::filesystem::path projectDirectory = std::filesystem::absolute(specification.ProjectDirectory, error);
+			if (error)
+				projectDirectory = specification.ProjectDirectory;
+			arguments = { "--project", FileSystem::ToUTF8(projectDirectory.lexically_normal()) };
+		}
+		if (specification.Headless)
+			arguments.push_back("--headless");
+		if (specification.NoGpu)
+			arguments.push_back("--no-gpu");
+		if (!specification.WindowSize.empty())
+		{
+			arguments.push_back("--window-size");
+			arguments.push_back(specification.WindowSize);
+		}
+		if (specification.UIScale)
+		{
+			// The shortest form that reads back as the same float (1, 1.5), as the editor parses it.
+			arguments.push_back("--ui-scale");
+			arguments.push_back(fmt::format("{}", *specification.UIScale));
+		}
+		if (specification.IdleTimeout)
+		{
+			arguments.push_back("--idle-timeout");
+			arguments.push_back(std::to_string(specification.IdleTimeout->count()));
+		}
+		return arguments;
+	}
+
 	EditorLaunchResult LaunchEditor(const EditorLaunchSpecification& specification)
 	{
 		EditorLaunchResult result;
@@ -81,28 +115,7 @@ namespace Strata::CLI
 
 		ProcessSpecification processSpecification;
 		processSpecification.Executable = specification.EditorPath;
-		if (!specification.ProjectDirectory.empty())
-		{
-			std::error_code error;
-			std::filesystem::path projectDirectory = std::filesystem::absolute(specification.ProjectDirectory, error);
-			if (error)
-				projectDirectory = specification.ProjectDirectory;
-			processSpecification.Arguments = { "--project", FileSystem::ToUTF8(projectDirectory.lexically_normal()) };
-		}
-		if (specification.Headless)
-			processSpecification.Arguments.push_back("--headless");
-		if (specification.NoGpu)
-			processSpecification.Arguments.push_back("--no-gpu");
-		if (!specification.WindowSize.empty())
-		{
-			processSpecification.Arguments.push_back("--window-size");
-			processSpecification.Arguments.push_back(specification.WindowSize);
-		}
-		if (specification.IdleTimeout)
-		{
-			processSpecification.Arguments.push_back("--idle-timeout");
-			processSpecification.Arguments.push_back(std::to_string(specification.IdleTimeout->count()));
-		}
+		processSpecification.Arguments = GetEditorArguments(specification);
 		processSpecification.Output = ProcessOutputMode::Discard;
 		processSpecification.Detached = true;
 

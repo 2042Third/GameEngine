@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 
 #include "CLI/CliApplication.h"
+#include "CLI/EditorLauncher.h"
 #include "CLI/FakeEditor.h"
 #include "CLI/ImageOutput.h"
 #include "Strata/Core/Version.h"
@@ -10,6 +11,7 @@
 #include "Strata/Network/Socket.h"
 #include "TestHelpers.h"
 
+#include <algorithm>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -108,12 +110,43 @@ TEST_SUITE("CLI.Commands")
 		REQUIRE_MESSAGE(sized.has_value(), error);
 		CHECK(sized->WindowSize.value() == "1600x900");
 		CHECK_FALSE(ParseCliArguments({ "launch" }, error)->WindowSize.has_value());
-		for (const char* wrong : { "1600", "0x900", "1600x", "x900", "1600x900x2", "70000x900", "-5x9" })
+		CHECK(ParseCliArguments({ "launch", "--window-size", "640x360" }, error)->WindowSize.value() == "640x360");
+		for (const char* wrong : { "1600", "0x900", "1600x", "x900", "1600x900x2", "70000x900", "-5x9", "320x180", "639x900", "1600x359" })
 		{
 			CAPTURE(wrong);
 			CHECK_FALSE(ParseCliArguments({ "launch", "--window-size", wrong }, error).has_value());
 			CHECK(error.find("--window-size expects") != std::string::npos);
 		}
+		// --ui-scale too, as the editor takes it (a factor from 0.5 to 4): pictures of the editor that compare across machines
+		// need both, the UI otherwise following the display's scale.
+		std::optional<CliArguments> scaled = ParseCliArguments({ "launch", "--window-size", "1600x900", "--ui-scale", "1.5" }, error);
+		REQUIRE_MESSAGE(scaled.has_value(), error);
+		CHECK(scaled->UIScale.value() == 1.5f);
+		CHECK(ParseCliArguments({ "launch", "--ui-scale", "1" }, error)->UIScale.value() == 1.0f);
+		CHECK_FALSE(ParseCliArguments({ "launch" }, error)->UIScale.has_value());
+		for (const char* wrong : { "0.25", "5", "x", "-1", "1,5", "" })
+		{
+			CAPTURE(wrong);
+			CHECK_FALSE(ParseCliArguments({ "launch", "--ui-scale", wrong }, error).has_value());
+			CHECK(error.find("--ui-scale expects") != std::string::npos);
+		}
+		// What the launcher starts the editor with.
+		EditorLaunchSpecification launch;
+		launch.Headless = false;
+		launch.WindowSize = "1600x900";
+		launch.UIScale = 1.0f;
+		const std::vector<std::string> editorArguments = GetEditorArguments(launch);
+		const auto follows = [&editorArguments](const char* option, const char* value)
+		{
+			const auto found = std::find(editorArguments.begin(), editorArguments.end(), option);
+			return found != editorArguments.end() && found + 1 != editorArguments.end() && *(found + 1) == value;
+		};
+		CHECK(follows("--window-size", "1600x900"));
+		CHECK(follows("--ui-scale", "1"));
+		CHECK(std::find(editorArguments.begin(), editorArguments.end(), "--headless") == editorArguments.end());
+		const std::vector<std::string> plainArguments = GetEditorArguments({});
+		CHECK(std::find(plainArguments.begin(), plainArguments.end(), "--ui-scale") == plainArguments.end());
+		CHECK(std::find(plainArguments.begin(), plainArguments.end(), "--window-size") == plainArguments.end());
 
 		std::optional<CliArguments> scan = ParseCliArguments({ "launch", "--stall-timeout", "90", "--no-wait-scan" }, error);
 		REQUIRE_MESSAGE(scan.has_value(), error);

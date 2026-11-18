@@ -2857,8 +2857,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     frame stalls (`--screenshot`'s `RequestScreenshot` blocks its last frame). The picture is encoded and saved on job
     threads (`CommandUtils::SubmitEncodePNG`, `SubmitSavePNG`, which `viewport.capture` uses too). It fails without side
     effects for an unknown panel, a closed one, one another tab covers, a panel while the launcher shows, an existing file
-    without `overwrite` and a run without a window; the window's size is the person's, or `--window-size`'s for pictures
-    that compare across machines. Glyphs a font lacks show as its fallback glyph: draw color swatches as rectangles (the monospaced font has no
+    without `overwrite` and a run without a window; the window's size is the person's, or `--window-size`'s, and the UI's
+    scale the display's, or `--ui-scale`'s: pictures that compare across machines need both (`StrataCLI launch` takes both).
+    Glyphs a font lacks show as its fallback glyph: draw color swatches as rectangles (the monospaced font has no
     icons), and check panels with `ImGuiHarness::CountFallbackGlyphs`.
 
 ### Changes go through commands
@@ -3269,10 +3270,14 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   table of arguments is `c_Arguments` in `EditorApplication.cpp`: add new ones there; the runtime's is in
   `RuntimeApplication.cpp`, and both check and print theirs through `Core/CommandLineOptions`). `--window-size
   <width>x<height>` opens a window of exactly that many pixels, whatever the display's scale, instead of a maximized one
-  (screenshots that compare across machines; it needs a window, so `--headless` and `--no-gpu` refuse it, and
-  `StrataCLI launch --window-size` passes it on). `--ui-scale <factor>` draws the
+  (screenshots of a fixed size; it needs a window, so `--headless` and `--no-gpu` refuse it, and `StrataCLI launch
+  --window-size` passes it on). It takes no window smaller than 640x360 (`c_MinWindowWidth`, `c_MinWindowHeight`: the
+  size the panels are laid out for; Windows widens a window narrower than its title bar anyway), and a window the system
+  made another size (Windows shrinks one larger than the display) ends the start with exit code 1 and both sizes
+  (`HasRequestedPixels`). `--ui-scale <factor>` draws the
   UI at a fixed scale instead of the display's and the person's preference (e.g. 1 to check it at 100% on a 150%
-  display), `--layout <file>` keeps
+  display; `StrataCLI launch --ui-scale` passes it on); with `--window-size` it gives pictures of the editor that compare
+  across machines. `--layout <file>` keeps
   the panel layout in that file instead of the user's (`<user data>/Strata/EditorLayout.ini`), and `--imgui-demo` offers
   ImGui's demo window (Help menu) for UI work.
   Without `--frames`, a headless editor runs until `editor.quit` (which, like the other commands that replace the scene,
