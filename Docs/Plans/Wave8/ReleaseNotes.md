@@ -678,15 +678,26 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   steps under the open sky). What would: static voxels that hold fractions as the moving box does, which changes
   every still scene's bits; deferred, for the owner to decide. An object that moves
   away fast leaves its old place's shade fading for that quarter second.
-- Moving objects: the floor right before a moving box's leading face pulses once per voxel the face crosses (every
-  fourth frame at 2.5 cm a frame). In the Cornell box test the floor's light 0.2 to 0.45 m before the face rises over
-  the four frames and falls back in one (100.4, 101.7, 104.0, 110.5, then 97.1 nits per albedo): second differences of
-  19.1% of the light there, 8.7% beside the box's corner and 3.4% on the tall box behind it, against the 2% of the
-  flicker measure, which holds beside the box's way (0.53% under the open sky). In the look-dev's consecutive 3840 x
-  2160 frames (`lookdev/gi-movers/2026-11-18-frames`) the mean of a 180 x 110 pixel patch of floor before the face
-  rises from 161.5 to 170.0 of 255 over four frames and falls to 160.0 in the next, with no anti-aliasing, FXAA and
-  TAA alike; the tall box's and the sphere's regions change by a code a frame at most. Found by the fix round's
-  closed-room test and frames; not explained and not fixed yet.
+- Moving objects: in a room lit by its bounces, the floor right before a moving box's leading face flickers while the
+  face passes a row of the light field's probes (0.5 m apart at High): it darkens, brightens over a few frames, falls
+  back in one and steps on, by about a tenth of its light. In the Cornell box test the floor's light 0.2 to 0.45 m
+  before the face reads 100.4, 101.7, 104.0, 110.5, then 97.1 nits per albedo in consecutive frames at 2.5 cm a frame:
+  second differences of 19.1% of the light there, 8.7% beside the box's corner and 3.4% on the tall box behind it,
+  against the 2% of the flicker measure, which holds beside the box's way (0.53% under the open sky). In the look-dev's
+  consecutive 3840 x 2160 frames (`lookdev/gi-movers/2026-11-18-frames`) the mean of a 180 x 110 pixel patch of floor
+  before the face rises from 161.5 to 170.0 of 255 over four frames and falls to 160.0 in the next, with no
+  anti-aliasing, FXAA and TAA alike; the tall box's and the sphere's regions change by a code a frame at most. Between
+  two rows of probes the same floor changes smoothly (a longer run of the test: 127.7 to 117.5 nits per albedo over
+  eighteen frames, and the row 0.5 m back shows the same sequence twenty frames earlier). So the owner's "without a
+  pop per voxel crossed" holds beside a moving object's way and not before its front. The cause is
+  found (second fix round) and is not the voxels: a probe the box covers is moved off it by the rules made for still
+  surfaces, pushed along the face's normal while the face crosses the probe's voxel, then placed by a search among
+  fixed candidates, and each change of place steps the light around it. With the probes left in place in an
+  experiment the same floor changed smoothly (largest second difference 3.08%; it still dips by a sixth and recovers
+  as the face passes the row, which is the probes' spacing). Not fixed in this unit: moving objects must cover probes
+  without moving them, which needs a pass of its own and an answer for the frames an object starts and rests (the
+  still voxels change in one frame there); it is the moving objects' next step, with the still voxels' fractions
+  above.
 - Moving objects: at most 64 parts and 512 bricks of voxels (256 at Low) move at once; what is past them (a pile of many
   bodies falling together, an object tens of meters large) is left out of the bounce light until it rests, as every
   moving object was before. Objects thinner than a voxel are dark while they move, as thin walls are.

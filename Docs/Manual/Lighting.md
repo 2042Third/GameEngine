@@ -379,7 +379,8 @@ fences.
     and a half times the bounce light of its shadowed part).
   - A moving ball, barrel or hollow object shades and bounces light as the box around it would, until it rests. More than
     64 parts moving at once, or very large moving objects, are left out of the bounce light until they rest. In a room
-    lit by bounce light, the floor right before a moving object can pulse faintly as it advances.
+    lit by bounce light, the floor right before a moving object visibly flickers as the object advances: by about a
+    tenth of its brightness, a few frames at a time, about every half meter at High.
   - It costs about 4 ms of GPU time at 3840 x 2160 at High.
 
   Use it for interiors and look at them with the **GI** debug view.

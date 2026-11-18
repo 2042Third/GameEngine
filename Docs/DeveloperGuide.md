@@ -5606,22 +5606,44 @@ probe-field levels and local lights follow.
   blue on the tall box rises 11% before it falls to 27% under where it began; a point leaves the range between the
   two forms' by up to 14.8% of its light), and one frame two thirds into the fade steps the floor 0.3 m beside the
   box's back by 27.6%: there the fade does not divide what the two forms differ by (117 against 86.5 nits per albedo).
-  And the steady move is smooth beside the box's way only: in the Cornell box the floor before the leading face pulses
-  once per voxel the face crosses, rising for the four frames a voxel takes at 2.5 cm a frame and falling when the face
-  enters the next (100.4, 101.7, 104.0, 110.5, then 97.1 nits per albedo 0.3 m before it): second differences of 19.1%
-  of the light 0.2 to 0.45 m before the face, 8.7% beside its corner, 3.4% on the tall box behind and under 1.6% at
-  the other points, for the flicker measure's 2% (0.53% beside the way under the open sky, where no measured point
-  lies before a face that moves along its normal). The look-dev's frames (`lookdev/gi-movers/2026-11-18-frames`, 3840
-  x 2160) show it too: the mean of a 180 x 110 pixel patch of floor before the face rises from 161.5 to 170.0 of 255
-  over four frames and falls to 160.0 in the next, the same with FXAA and TAA, while the tall box's and the sphere's
-  regions change by a code a frame at most. Found 2026-11-18 by the
-  closed room's case; its cause is not established (the occupancy a box writes rises evenly as a face advances; what
-  steps per voxel is which voxels carry the face's surface, and the thresholds the marches and the probes' moves read;
-  one lead ruled out: scaling the light of the floor's layer under the box's edge by its own share of the occupancy
-  left the 19.1% as it was).
-  What is left are single events a blend of voxels cannot divide: a probe the object covers changes its way out (the
-  relocation takes the lowest of some occupancies), the sun's walk lets go of voxels under `c_GITouchOccupancy` at once,
-  and a voxel is lit or not. Holding the leaving form until the arriving one stands (a larger of the two instead of
+  And the steady move is smooth beside the box's way only: where its leading face passes a row of cascade 0's probes
+  (0.5 m apart at High) the floor before it pops. In the Cornell box the floor 0.2 to 0.45 m before the face darkens as
+  the face nears the probes (116.6 to 99.7 nits per albedo over six frames at 2.5 cm a frame), rises for the four frames
+  the face takes through the probes' voxel, falls when it leaves it (100.4, 101.7, 104.0, 110.5, then 97.1) and steps on
+  (102.2, 108.7, 106.1, 103.2): second differences of 19.1% of the light there, 8.7% beside its corner, 3.4% on the tall
+  box behind and under 1.6% at the other points, for the flicker measure's 2% (0.53% beside the way under the open sky,
+  where no measured point lies before a face that moves along its normal). The look-dev's frames
+  (`lookdev/gi-movers/2026-11-18-frames`, 3840 x 2160) show it too: the mean of a 180 x 110 pixel patch of floor before
+  the face rises from 161.5 to 170.0 of 255 over four frames and falls to 160.0 in the next, the same with FXAA and TAA,
+  while the tall box's and the sphere's regions change by a code a frame at most. Found 2026-11-18 by the closed room's
+  case. The cause is the probes' move, not the voxels (the occupancy a box writes rises evenly as a face advances):
+  `GI/ProbeValidity.comp` reads the layer as it reads still surfaces, and its rules are choices. A probe the box's soft
+  edge covers is pushed off it along the surface's normal by the share covered, and only the voxels a face passes
+  through carry a normal: the probe (on a voxel's center at High) is pushed ahead of the face, out of the soft edge its
+  rays along the face are absorbed in, exactly while the face crosses the probe's own voxel (the four rising frames, by
+  the code and the frames' timing); then the normal is gone, the push with it, and the relocation's search places the
+  probe (the fall), among candidates 5 cm apart whose order changes every few frames as the face moves on. It
+  happens once per row of probes, not per voxel: with the case's move begun 0.5 m earlier (a run of the second fix
+  round) the same floor point changes smoothly while the face crosses the voxels between two rows (127.7 to 117.5 nits
+  per albedo over eighteen frames), and a floor point 0.37 m before the row 0.5 m back shows that row's sequence twenty
+  frames earlier (142.1, 146.5, 146.7, then 133.9). Two experiments of the second fix round, neither kept, measured
+  in the closed room's case: with cascade 0's probes left
+  where the grid puts them (every still scene's probes on walls then die) the largest second difference there is 3.08%
+  and no frame falls: the light dips from 117.8 to 98.4 as the face nears the probes and returns to 116.0 as the box
+  covers them (smooth: what a row of probes 0.5 m apart resolves of a face that passes it); with the way out of the
+  box written into all its voxels (a normal inside it too, so the push holds) 9.7%: the fall is gone, kinks where the
+  push starts and ends remain, and by the code the search still follows once the push no longer clears the box. So
+  nothing the layer writes removes it: the probes must take their places from the static voxels alone, and the
+  layer only cover them (lower their validity). That is another design: the placement pass run on the voxels with the
+  layer put back, a pass for the layer's cover, and an answer for the two hand-overs, where the static voxels change
+  in one frame under a fade (a probe the resting object had moved off its surface would step in the frame the object
+  starts). It is the movers' next step, with the fractions below. One lead was ruled out before: scaling the light of
+  the floor's layer under the box's edge by its own share of the occupancy left the 19.1% as it was.
+  What is left of the hand-over are single events a blend of voxels cannot divide: a probe the object covers changes
+  its way out (the relocation takes the lowest of some occupancies; not that of cascade 0 alone: with those probes left
+  in place, the experiment above, a frame of the Cornell box's hand-over still stepped a point by 30.7%), the sun's walk
+  lets go of voxels under `c_GITouchOccupancy` at once, and a voxel is lit or not. Holding the leaving form until the
+  arriving one stands (a larger of the two instead of
   their mean; tried 2026-11-18) moved the Cornell box's step three frames earlier without making it smaller (27.2%) and
   made the open ground's worse (steps of 7.4% for 4.3%, second differences of 8.1% for 3.1%). A fast object leaves its
   old place fading for that quarter second, and one that is set down

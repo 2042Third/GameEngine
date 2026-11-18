@@ -2189,9 +2189,15 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		// - While it moves steadily the light before its leading face is not smooth: the largest second difference over the
 		//   value is c_MoveSecond (19.1% at the floor 0.2 to 0.45 m before the face, 8.7% beside its corner, 3.4% on the tall
 		//   box, under 1.6% elsewhere; under the open sky, beside the box's way, 0.53%: "A moving prop occludes the ground
-		//   beside it"). The floor's light there rises for the four frames the face takes through a voxel and falls when it
-		//   enters the next (100.4, 101.7, 104.0, 110.5, then 97.1 nits per albedo): a pop per voxel crossed, above the 2% of
-		//   the flicker measure. Found by this case, not explained yet: Known issues.
+		//   beside it"). The floor's light there darkens as the face nears a row of cascade 0's probes (116.6 to 99.7 nits per
+		//   albedo over six frames), rises for the four frames the face takes through the probes' voxel and falls when it
+		//   leaves it (100.4, 101.7, 104.0, 110.5, then 97.1), and steps on (102.2, 108.7, 106.1, 103.2): pops, above the 2%
+		//   of the flicker measure. The cause is the probes' move, not the voxels (GI/ProbeValidity.comp reads the layer as
+		//   it reads still surfaces: it pushes a probe the box covers along the face's normal, which only the one layer of
+		//   voxels the face passes through carries, and then places it by its search among fixed candidates). With cascade
+		//   0's probes kept in place (an experiment of the second fix round, not kept: still scenes need the move) this
+		//   measure read 3.08% and no frame fell; with the box's way out written into all its voxels 9.7%. Not fixed in this
+		//   unit: Known issues, and Docs/DeveloperGuide.md, "Global illumination": What it cannot do.
 		// - The frame of the last step the box takes c_ShadeLeast of the light a resting box takes from the points around it
 		//   (69.1% of it, summed over the points; none of it while it was out of the voxels until it rested), and a point is
 		//   up to 50.7% of its light off the resting box's. That is the forms' difference: the box's soft edge against the
@@ -2205,8 +2211,9 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		//   falls to 27% under where it began), and one frame steps a point by up to c_HandoverStep (27.6%: the floor 0.3 m
 		//   beside the box's back, two thirds into the fade). That step is one event: with the leaving form held until the
 		//   arriving one stood (an experiment, not kept: it made the open ground's steps 7.4% for 4.3%) it came three frames
-		//   earlier, 27.2% large. Most likely a probe the box covers finds another way out there (GI/ProbeValidity.comp's
-		//   relocation takes the lowest of some occupancies, a choice no blend of voxels divides; not traced).
+		//   earlier, 27.2% large. It is not cascade 0's relocation alone (GI/ProbeValidity.comp's search takes the lowest of
+		//   some occupancies, a choice no blend of voxels divides): with those probes kept in place, the experiment above, a
+		//   frame of the hand-over still stepped a point by 30.7%. Not traced further.
 		//   Docs/DeveloperGuide.md, "Global illumination": What it cannot do.
 		// - Faded, it is a fresh renderer's resting box (every bounce settles toward it: within c_Rested).
 		GPUContext gpu;
