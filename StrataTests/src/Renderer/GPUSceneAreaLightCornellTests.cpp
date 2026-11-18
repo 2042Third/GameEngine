@@ -420,10 +420,11 @@ TEST_SUITE("GPU.SceneRenderer.AreaLightCornell")
 
 		// The whole floor the camera sees, every other pixel each way, away from the blockers' outlines (pixels whose 7 x 7
 		// neighbours all show the floor), where the 0.5 m grid above samples too little: the shares of pixels more than 0.1 and
-		// 0.3 off the reference. Measured 1.33% and 0.03% (0.45 at worst), the first bound 1.5 times its share. Without the looks
-		// inside solids the floor beside the tall box's foot on its side away from the light, where only the box's lower part
-		// blocks the paths, got up to 0.64 of the light the reference does not: 1.77% and 0.23%. Known issue: the outer edge of
-		// the sphere's penumbra reads darker, and a little light still passes the box's corner at its foot.
+		// 0.3 off the reference. Measured 1.33% and 0.030% (401 and 9 of 30142 pixels; 0.45 at worst), the bounds 1.5 times the
+		// shares. Without the looks inside solids the floor beside the tall box's foot on its side away from the light, where
+		// only the box's lower part blocks the paths, got up to 0.64 of the light the reference does not: 1.77% and 0.23%. Known
+		// issue: the outer edge of the sphere's penumbra reads darker, and up to 0.45 of the light still passes the box's corner
+		// at its foot.
 		std::vector<uint8_t> showsFloor(static_cast<size_t>(c_Size) * c_Size, 0);
 		for (uint32_t y = 0; y < c_Size; y++)
 		{
@@ -460,11 +461,11 @@ TEST_SUITE("GPU.SceneRenderer.AreaLightCornell")
 		}
 		const double shareTenth = static_cast<double>(beyondTenth) / std::max(mapPixels, 1u);
 		const double shareThreeTenths = static_cast<double>(beyondThreeTenths) / std::max(mapPixels, 1u);
-		MESSAGE(fmt::format("L4: the floor's map, {} pixels: {:.2f}% more than 0.1 off the reference, {:.2f}% more than 0.3, {:.4f} at worst", mapPixels,
-			100.0 * shareTenth, 100.0 * shareThreeTenths, mapWorst));
+		MESSAGE(fmt::format("L4: the floor's map, {} pixels: {:.2f}% ({}) more than 0.1 off the reference, {:.3f}% ({}) more than 0.3, {:.4f} at worst",
+			mapPixels, 100.0 * shareTenth, beyondTenth, 100.0 * shareThreeTenths, beyondThreeTenths, mapWorst));
 		CHECK(mapPixels > 20000);
 		CHECK(shareTenth <= 0.0199);
-		CHECK(shareThreeTenths <= 0.001);
+		CHECK(shareThreeTenths <= 0.00045);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

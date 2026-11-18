@@ -533,16 +533,16 @@ TEST_SUITE("GPU.SceneRenderer.AreaShadows")
 							"most, 1 m further {:.4f} m against {:.4f} m and {:.4f} from the reference at most",
 			footWidth, footWidth / texelWorld, texelWorld, footReference, footWorst, farWidth, farReference, farWorst));
 		// The foot is sharper than the shadow 1 m on, as the reference's is, but not by as much: the spec's 2 shadow texels at the
-		// foot (the reference's 1.5) are not met. 1.5 times stage 3's measured 2.48 texels (2.60 now, 2.1 cm against the reference's
+		// foot (the reference's 1.5) are not met. 1.5 times stage 3's measured 2.48 texels (2.57 now, 2.0 cm against the reference's
 		// 1.2 cm; 4.23 texels before the taps' look at a third of their offset): the blockers' depth there comes from cells that hold
 		// the post's lower part, whose mean lies above the foot.
 		CHECK(footWidth <= 0.5 * farWidth);
 		CHECK(footWidth <= 3.75 * texelWorld);
 		// 1 m on, the post's shadow is 15% deep (the reference's least visibility 0.847), where the 10-90% width of the rise the
 		// spec bounds (25%) turns on a few hundredths of visibility at the shadow's middle: measured 0.1317 m against 0.0896 m while
-		// the whole profile lies within 0.031 of the reference. Bounded instead: the profile's largest difference from the
-		// reference. Stage 3's filter read the profile 0.29 off here with the width matching (0.0896 m).
-		CHECK(farWorst <= 0.06);
+		// the whole profile lies within 0.0313 of the reference. Bounded instead: the profile's largest difference from the
+		// reference, at 1.5 times that. Stage 3's filter read the profile 0.29 off here with the width matching (0.0896 m).
+		CHECK(farWorst <= 0.047);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -606,8 +606,9 @@ TEST_SUITE("GPU.SceneRenderer.AreaShadows")
 			MESSAGE(fmt::format("S3, the Cornell box: {} of {} fully lit pixels reach the filter's comparisons ({:.1f}%); {} pixels compare", litCompared, lit,
 				100.0 * litCompared / std::max(lit, 1u), compared));
 			CHECK(lit > c_Size * c_Size / 4);
-			// 1.5 times the measured 42.4% (the spec's 30% is not met): pixels by walls and the floor's corners have nearer geometry
-			// within the reach of its own penumbra, which no classification by depth ranges can rule out.
+			// Measured 45.3% (the spec's 30% is not met; 42.4% when first bounded, at 1.5 times that): pixels by walls and the
+			// floor's corners have nearer geometry within the reach of its own penumbra, which no classification by depth ranges can
+			// rule out.
 			CHECK(litCompared <= lit * 64 / 100);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -768,9 +769,11 @@ TEST_SUITE("GPU.SceneRenderer.AreaShadows")
 	{
 		// S7: a quarter turn's frame equals a fresh renderer's at that view once its views are drawn, and every still frame the
 		// first; a strafe of 1 cm a frame across the Cornell box's penumbrae without anti-aliasing shimmers no more than the sun's
-		// soft shadows (its widest, 10 degrees) in the same room and meter, with the margins of the sun's own strafe test. With the
-		// row's taps alone (RenderData::c_AreaShadowTapsPerFilterTap 1) rect lights measured 0.092% of blocks and 1.46% at the 99th
-		// percentile against the sun's 0.062% and 0.84%; with twice as many 0.062% and 1.02%.
+		// soft shadows (its widest, 10 degrees) in the same room and meter: the spec's bound, the sun's value itself (repeated runs
+		// measure the same to the last digit). With the row's taps alone (RenderData::c_AreaShadowTapsPerFilterTap 1) rect lights
+		// measured 0.092% of blocks and 1.46% at the 99th percentile against the sun's 0.062% and 0.84%; with twice as many 0.059%
+		// and 0.83% (0.053% and 0.77% before the looks inside solids); with six looks inside solids from a quarter of the offset
+		// 0.90% at the 99th percentile.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		SceneTestAssets assets;
@@ -840,8 +843,8 @@ TEST_SUITE("GPU.SceneRenderer.AreaShadows")
 			area.Blocks * 100.0, area.BlocksP99 * 100.0, unshadowed.Blocks * 100.0, unshadowed.BlocksP99 * 100.0, sunShadows.Blocks * 100.0, sunShadows.BlocksP99 * 100.0,
 			area.MeasuredShare * 100.0));
 		CHECK(area.MeasuredShare > 0.5);
-		CHECK(area.Blocks <= std::max(sunShadows.Blocks, unshadowed.Blocks) + 0.0005);
-		CHECK(area.BlocksP99 <= std::max(sunShadows.BlocksP99, unshadowed.BlocksP99) + 0.002);
+		CHECK(area.Blocks <= std::max(sunShadows.Blocks, unshadowed.Blocks));
+		CHECK(area.BlocksP99 <= std::max(sunShadows.BlocksP99, unshadowed.BlocksP99));
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
