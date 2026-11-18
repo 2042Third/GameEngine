@@ -434,9 +434,11 @@ namespace Strata
 		// wrong place (lookdev.patch). (The procedural sky's disk is part of its environment cube, as for every surface's image
 		// light, and surfaces keep the image light's specular.)
 		bool ProbeCapture = false;
-		// The time since this renderer's previous frame that automatic exposure adapts over and point and spot shadows fade
-		// over (SceneRenderer::c_LocalShadowFadeSeconds); unset, the wall clock between its frames (at most 0.25 s, so pauses
-		// do not turn into one huge step). Tests and tools that step time, and tests that compare two renderers' frames, set it.
+		// The time since this renderer's previous frame: what automatic exposure adapts over, point and spot shadows fade over
+		// (SceneRenderer::c_LocalShadowFadeSeconds) and global illumination's moving objects rest and fade by
+		// (RenderData::c_GIMoverRestSeconds, c_GIMoverFadeSeconds); unset, the wall clock between its frames (at most 0.25 s, so
+		// pauses do not turn into one huge step). Tests and tools that step time, and tests that compare two renderers' frames,
+		// set it.
 		std::optional<float> AdaptationSeconds;
 		// The scene's motion blur applies (PostProcessComponent::MotionBlur, unless the quality turns it off). Editor views and
 		// renderers of single images (captures, thumbnails) turn it off: they never blur.
@@ -696,9 +698,14 @@ namespace Strata
 		uint32_t GIQueuedRegions = 0;
 		uint32_t GIWaitingProxies = 0;
 		uint32_t GIMovingProxies = 0;      // In the dynamic layer: moving, or resting for less than c_GIMoverRestSeconds
-		uint32_t GIMoverBricks = 0;        // Bricks of voxels the dynamic layer wrote this frame (0: none of its passes ran)
+		uint32_t GIMoverBricks = 0;        // Bricks of voxels the dynamic layer writes its boxes and fades into this frame
 		uint32_t GIMoverFades = 0;         // Of those: bricks fading, where a proxy started to move or rested within c_GIMoverFadeSeconds
-		uint32_t GIMoversLeftOut = 0;      // Moving proxies past the layer's boxes or bricks: in no voxel until they rest
+		// Moving proxies the layer does not hold: past its boxes or bricks, or not ready (their mesh or instances not resident). In
+		// no voxel until they rest.
+		uint32_t GIMoversLeftOut = 0;
+		// The dynamic layer's dispatches the frame recorded: 0 when none of its passes ran. The frame after the layer's last bricks
+		// still puts back what they held, with GIMoverBricks 0.
+		uint32_t GIMoverDispatches = 0;
 		uint32_t GIUnvoxelizedSubmeshes = 0;
 		uint32_t GISettleFrames = 0;
 		// Copies of the scene's color the frame made for transmissive surfaces and spatial reflections (CopySceneColor: 1 when

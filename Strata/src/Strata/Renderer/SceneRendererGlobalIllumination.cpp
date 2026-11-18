@@ -789,6 +789,7 @@ namespace Strata
 				commandList->setComputeState(state);
 				commandList->setPushConstants(&parameters, sizeof(parameters));
 				commandList->dispatch(parameters.BrickCount);
+				m_Stats.GIMoverDispatches++;
 				const GlobalIlluminationResources::Level& textures = gi.Levels[level];
 				commandList->setTextureState(textures.Material, nvrhi::AllSubresources, nvrhi::ResourceStates::UnorderedAccess);
 				commandList->setTextureState(textures.Emission, nvrhi::AllSubresources, nvrhi::ResourceStates::UnorderedAccess);

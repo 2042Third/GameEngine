@@ -74,7 +74,8 @@ namespace Strata
 		uint32_t QueuedRegions = 0;        // Regions left for later frames
 		uint32_t WaitingProxies = 0;       // Left out until they are resident with a loaded mesh
 		// Proxies moving, or resting for less than c_GIMoverRestSeconds: out of the voxels their triangles made, in the dynamic layer
-		// (Movers, MoverBricks) but for MoversLeftOut of them, which are past its boxes or bricks and in no voxel until they rest.
+		// (Movers, MoverBricks) but for MoversLeftOut of them, which are past its boxes or bricks, or not ready (IsReady), and in no
+		// voxel until they rest.
 		uint32_t MovingProxies = 0;
 		uint32_t MoversLeftOut = 0;
 		// The dynamic layer (GI/VoxelMovers.comp): the moving proxies' submeshes as oriented boxes, camera-relative, and the bricks

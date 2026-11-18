@@ -1838,6 +1838,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		}
 		CHECK(moving.Renderer->GetStats().GIMovingProxies == 0);
 		CHECK(moving.Renderer->GetStats().GIMoverBricks == 0);
+		CHECK(moving.Renderer->GetStats().GIMoverDispatches == 0);
 		float largestFresh = 0.0f;
 		float largestRested = 0.0f;
 		for (size_t point = 0; point < points.size(); point++)
@@ -1877,9 +1878,10 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 
 	TEST_CASE("A resting prop makes no mover work, and one that moved and rested leaves a fresh renderer's voxels")
 	{
-		// The dynamic layer is empty while nothing moves: no brick, no pass, the same field every frame. What a mover's bricks
-		// held is put back as it was: once it has rested and its voxels have faded (three quarters of a second here for the
-		// half both take), every level's textures and the field are a fresh renderer's, to the byte.
+		// The dynamic layer is empty while nothing moves: no brick, no dispatch of its pass (GIMoverDispatches: the frames run
+		// the passes they ran before the layer existed), the same field every frame. What a mover's bricks held is put back as
+		// it was: once it has rested and its voxels have faded (three quarters of a second here for the half both take), every
+		// level's textures and the field are a fresh renderer's, to the byte.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		const std::vector<RoomPoint> points = GetMoverPoints();
@@ -1896,6 +1898,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 				fresh.Frame(points);
 				CHECK(fresh.Renderer->GetStats().GIMovingProxies == 0);
 				CHECK(fresh.Renderer->GetStats().GIMoverBricks == 0);
+				CHECK(fresh.Renderer->GetStats().GIMoverDispatches == 0);
 				if (frame == 2)
 					ReadVoxelsAndField(*fresh.Renderer, 4, freshLevels, freshField);
 				if (frame > 2)
@@ -1920,12 +1923,14 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 			moved.MoveTo(c_MoverStart + 0.03f * static_cast<float>(frame));
 			moved.Frame(points);
 			bricks = std::max(bricks, moved.Renderer->GetStats().GIMoverBricks);
+			CHECK(moved.Renderer->GetStats().GIMoverDispatches > 0);
 		}
 		CHECK(bricks > 0);
 		for (uint32_t frame = 0; frame < 45; frame++)
 			moved.Frame(points);
 		CHECK(moved.Renderer->GetStats().GIMovingProxies == 0);
 		CHECK(moved.Renderer->GetStats().GIMoverBricks == 0);
+		CHECK(moved.Renderer->GetStats().GIMoverDispatches == 0);
 		ReadVoxelsAndField(*moved.Renderer, 4, levels, field);
 		REQUIRE(levels.size() == freshLevels.size());
 		for (size_t index = 0; index < levels.size(); index++)
