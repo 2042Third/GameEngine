@@ -388,7 +388,8 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   (`lookdev.rect.wet`, `.wet.low`), three softboxes over the polished, satin and glossy floors (`lookdev.rect.metal`) and a
   strip over the metal sheet (`lookdev.rect.strip`). Perf entries `PerfGPU.Renderer.AreaLights8` (a room under eight 2 x 1 m
   rect lights at 4K High: 1.27 ms on the GPU) and `.AreaShadows4` (four of them casting shadows: 8.65 ms, 7.3 ms of it
-  their masks).
+  their masks), both `Provisional`: measured on the temporary memory, they get budgets once the reference machine
+  measures them.
 
 ## Defaults that change
 

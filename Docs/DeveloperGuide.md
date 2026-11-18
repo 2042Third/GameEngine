@@ -5154,9 +5154,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   flicker meter, the sun's widest soft shadows in the same room 0.062% and 0.84% (with the row's taps alone rect lights
   measured 0.092% and 1.46%, hence the factor 2); the masks' grain in a still penumbra (RMS from the 9 x 9 mean) 0.0024
   against the sun's 0.026. **Cost**: `PerfGPU.Renderer.AreaShadows4` (a room seen whole at 3840 x 2160 and High, four rect
-  lights casting shadows over it, their views cached) measures 8.65 ms on the GPU, 7.3 ms of it the masks
+  lights casting shadows over it, their views cached) measured 8.65 ms on the GPU, 7.3 ms of it the masks
   (`GPU.ScreenShadows`), of which the looks inside solids take 1.9 ms; the entry first measured 2.18 ms in frames whose
-  ranges had never been built (the classification read an unfilled texture).
+  ranges had never been built (the classification read an unfilled texture). The machine ran on its temporary memory,
+  so it and `PerfGPU.Renderer.AreaLights8` (1.27 ms) are `Provisional` until the reference machine measures them.
 - **Light surfaces** (`LightSurfaceComponent`, Lighting, a tag): the emissive mesh that shows an area light's face, which
   `lighting.makeAreaLight` tags when it makes the panel a light (a child Rect Light on its emitting face, `auto` judging the
   face on the mesh's bounds times the panel's world scale; a second call finds the light: "already a light"). The light lights
