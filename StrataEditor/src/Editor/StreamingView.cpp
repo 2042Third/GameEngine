@@ -53,6 +53,8 @@ namespace Strata
 			case ViewportDebugView::Specular:  return "specular";
 			case ViewportDebugView::Diffuse:   return "diffuse";
 			case ViewportDebugView::Clusters:  return "clusters";
+			case ViewportDebugView::Culled:    return "culled";
+			case ViewportDebugView::Wireframe: return "wireframe";
 			case ViewportDebugView::None:      break;
 		}
 		return "none";
@@ -64,7 +66,7 @@ namespace Strata
 			ViewportDebugView::Motion, ViewportDebugView::Shadows, ViewportDebugView::Lighting, ViewportDebugView::AmbientOcclusion,
 			ViewportDebugView::Indirect, ViewportDebugView::Luminance, ViewportDebugView::Albedo, ViewportDebugView::Voxels,
 			ViewportDebugView::GlobalIllumination, ViewportDebugView::OpenShare, ViewportDebugView::Probes, ViewportDebugView::Specular,
-			ViewportDebugView::Diffuse, ViewportDebugView::Clusters })
+			ViewportDebugView::Diffuse, ViewportDebugView::Clusters, ViewportDebugView::Culled, ViewportDebugView::Wireframe })
 		{
 			if (name == ViewportDebugViewToString(view))
 				return view;
@@ -93,7 +95,9 @@ namespace Strata
 			case ViewportDebugView::LOD:
 			case ViewportDebugView::Mip:
 			case ViewportDebugView::Motion:
-			case ViewportDebugView::Shadows:          break;
+			case ViewportDebugView::Shadows:
+			case ViewportDebugView::Culled:
+			case ViewportDebugView::Wireframe:        break;
 		}
 		return SceneLightingView::None;
 	}

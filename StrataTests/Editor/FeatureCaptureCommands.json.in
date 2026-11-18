@@ -19,5 +19,9 @@
 	{ "command": "viewport.capture", "parameters": { "camera": "scene", "width": 320, "height": 180, "debugView": "diffuse",
 		"path": "@STRATA_FEATURE_CAPTURE_DIR@/Diffuse.png" }, "expect": { "/complete": { "equals": true }, "/debugView/view": { "equals": "diffuse" } } },
 	{ "command": "viewport.capture", "parameters": { "camera": "scene", "width": 320, "height": 180, "debugView": "clusters",
-		"path": "@STRATA_FEATURE_CAPTURE_DIR@/Clusters.png" }, "expect": { "/complete": { "equals": true }, "/debugView/view": { "equals": "clusters" } } }
+		"path": "@STRATA_FEATURE_CAPTURE_DIR@/Clusters.png" }, "expect": { "/complete": { "equals": true }, "/debugView/view": { "equals": "clusters" } } },
+	{ "command": "viewport.capture", "parameters": { "camera": "scene", "width": 320, "height": 180, "debugView": "culled",
+		"path": "@STRATA_FEATURE_CAPTURE_DIR@/Culled.png" }, "expect": { "/complete": { "equals": true }, "/debugView/view": { "equals": "culled" } } },
+	{ "command": "viewport.capture", "parameters": { "camera": "scene", "width": 320, "height": 180, "debugView": "wireframe",
+		"path": "@STRATA_FEATURE_CAPTURE_DIR@/Wireframe.png" }, "expect": { "/complete": { "equals": true }, "/debugView/view": { "equals": "wireframe" } } }
 ]

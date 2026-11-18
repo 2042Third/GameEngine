@@ -41,6 +41,12 @@ what each one costs:
   because they can shimmer in motion; each sun's Contact Shadow Length sets how far they reach:
   [Lighting.md](Lighting.md#shadows)). Neither takes memory of its own; both cost GPU time in the
   `GPU.ScreenShadows` stage.
+- **Level of detail error** and **Smallest drawn size** decide how much geometry a frame draws. Two debug views of the
+  Scene view's debug view chip show it: **Wireframe** draws the edges of every triangle drawn over the image, so you see
+  which level of detail each mesh is drawn at; **Culled** draws a box over everything around each mesh in view the frame
+  left out, yellow where it is smaller on screen than the smallest drawn size (each box at least 6 pixels wide so it
+  shows), red where it is hidden behind what is drawn (occlusion culling, on GPUs that cull on the GPU), with the counts in
+  its legend.
 - **Ambient occlusion samples** set how finely the ambient occlusion that darkens creases and contacts is traced, in
   scenes whose Post Process turns it on: more samples give smoother, truer occlusion for GPU time in the `GPU.AO` stage
   (Medium's 2 x 6 is Strata 0.6.0's), into the same targets at every preset.

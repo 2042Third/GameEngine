@@ -87,6 +87,7 @@ strata_add_shaders(Strata_Renderer
 		Scene/Mesh.vert
 		Scene/DepthPrepass.frag
 		Scene/Forward.frag
+		Scene/Wireframe.frag
 		Scene/Skybox.frag
 		Scene/ShadowMesh.vert
 		Scene/ShadowMask.frag
@@ -166,6 +167,7 @@ strata_add_shaders(Strata_Renderer
 		Overlay/LightingView.frag
 		Overlay/DebugLine.vert
 		Overlay/DebugLine.frag
+		Overlay/CulledView.vert
 		Overlay/Text.vert
 		Overlay/Text.frag
 		GameUI/UIQuad.vert

@@ -710,6 +710,19 @@ TEST_SUITE("Editor.Viewport")
 				CHECK(GetLightingView(view) != SceneLightingView::None);
 				CHECK(harness.Context.GetViewport().GetSettings().ToJson()["DebugView"] == name);
 			}
+			// The views of what is drawn and left out, which are no lighting views; "wire" is refused.
+			const std::pair<const char*, ViewportDebugView> geometryViews[] = { { "culled", ViewportDebugView::Culled },
+				{ "wireframe", ViewportDebugView::Wireframe } };
+			for (const auto& [name, view] : geometryViews)
+			{
+				CAPTURE(name);
+				CHECK(harness.Run("viewport.setSettings", { { "debugView", name } })["debugView"] == name);
+				CHECK(harness.Context.GetViewport().GetSettings().DebugView == view);
+				CHECK(GetLightingView(view) == SceneLightingView::None);
+				CHECK(ViewportDebugViewFromString(name) == view);
+				CHECK(harness.Context.GetViewport().GetSettings().ToJson()["DebugView"] == name);
+			}
+			CHECK(harness.Error("viewport.setSettings", { { "debugView", "wire" } }).find("'debugView'") != std::string::npos);
 			CHECK(harness.Error("viewport.setSettings", { { "debugView", "lit" } }).find("'debugView'") != std::string::npos);
 			settings = harness.Run("viewport.setSettings", { { "debugView", "streaming" } });
 			CHECK(harness.Run("viewport.getSettings") == settings);

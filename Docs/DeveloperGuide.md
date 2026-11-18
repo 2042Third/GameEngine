@@ -3618,7 +3618,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   snapping). A toolbar strip above the image holds the chips, so none ever covers the image (the game's HUD, its
   canvases): the camera settings, the overlay toggles (grid, outline, gizmos, stats), the editor-view settings (preview
   lighting, game UI) and the debug view (named after the view, "Lit" without one, and lit while one colors the image; a
-  click offers Lit, Streaming, LOD and Mip) from its left, the agent chip at its right (a strip narrower than the chips
+  click offers every view of `ViewportDebugView`) from its left, the agent chip at its right (a strip narrower than the chips
   with their labels draws the last ones as icons, labels in their tooltips, and one too narrow even for the icons puts the
   chips that pass its width on rows under the first, the toolbar growing by those rows: `UI::ChipStrip`, so every chip
   stays in reach); clicking a chip does not focus the panel; "Game camera" (F8, `ViewportSettings::PilotGameCamera`)
@@ -3666,7 +3666,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   fov?, overlays?, debugView?: "none" | "streaming" | "lod" | "mip" | "motion" | "shadows" | "lighting" | "ao" | "indirect" |
   "luminance" | "albedo" | "voxels" | "gi" | "open" | "probes" (global illumination's voxels, its bounce light on white
   surfaces, the share of the sky surfaces see and its probes, with `debugView.globalIllumination` and a wait for the
-  voxels to settle: [Global illumination](#global-illumination)), quality?: "project" | "low" | "medium" |
+  voxels to settle: [Global illumination](#global-illumination)) | "specular" | "diffuse" | "clusters" | "culled" |
+  "wireframe" (boxes of what culling left out, the edges of what was drawn: "Rendering"), quality?: "project" | "low" | "medium" |
   "high" | "ultra", waitForAssets?, path?, overwrite?}` renders on the
   next frame (again on the following frames, up to `c_MaxCaptureTextFrames`, while glyphs of the scene's text are still
   being rasterized, so text is never half drawn, up to `c_MaxCaptureExposureFrames` until its pre-exposure settled (the
@@ -4040,6 +4041,7 @@ mechanical, so a lighting bug in code nobody changed may be a conversion slip (i
   the ambient occlusion (GTAO and its denoiser, their resources and targets), `SceneRendererLightingView.cpp` the lighting
   debug views, `SceneRendererGlass.cpp`, `SceneRendererScreenShadows.cpp` the sun's screen-space shadow mask (its
   evaluation, contact shadows and blur), `SceneRendererShadowView.cpp` the shadows debug view,
+  `SceneRendererGeometryViews.cpp` the wireframe and culled debug views,
   `SceneRendererScreenReflections.cpp`, `SceneRendererReflectionProbes.cpp`, `SceneRendererAtmosphere.cpp`,
   `SceneRendererLocalShadows.cpp`, `SceneRendererExtraction.cpp` and `SceneRendererGPUDriven.cpp`. Their members stay
   declared in `SceneRenderer.h`, grouped under a comment naming their file. A feature's new pass goes into its file
@@ -4801,6 +4803,25 @@ lights, Post Process and the sky), and never a resolution below the output's.
   frames that show the view: its pipelines and buffers are made by the first such frame, its binding sets (which name the
   depth) are released with the targets, its counts' buffer and the ring of `c_GPURecordCount` readbacks stay with the
   renderer, so a capture's counts survive the release of its targets.
+- **The wireframe and culled debug views** (`SceneRenderOptions::ShowWireframe`, `ShowCulled`; the editor's `debugView:
+  "wireframe"`, `"culled"`; `SceneRendererGeometryViews.cpp`) show what the frame drew and what it left out, drawn into the
+  output texture in `GPU.Overlays` with the overlays' frame constants, after the tints and under the other overlays. The
+  wireframe replays the frame's own draws with `Pass::Wireframe` scene pipelines (non-solid fill, the batch's culling and
+  winding, so mirrored instances keep theirs, depth tested against the frame's depth with `SetJitteredDepthBias`, blended in
+  `WireframeColor`): the GPU-driven path's view buckets with the arguments its culling wrote (`DrawGPUView`), or the CPU's
+  opaque batches, then the transparent batches both paths draw on the CPU; the mesh vertex shaders (skinned ones for skinned
+  instances) and `Scene/Wireframe.frag`, which tests the level-of-detail fade's mask as the prepass does and reads no
+  texture. The replay leaves `DrawCommands` as the frame counted them. It needs the device's non-solid fill mode
+  (`GraphicsDeviceInfo::SupportsWireframe`): without it the frame reports why and draws no lines. The culled view boxes the
+  mesh renderers in the frustum that culling left out, over everything (no depth test): by their size (`CulledColors[0]`,
+  boxes grown to `RenderData::c_CulledViewMinPixels` across) and, on the GPU-driven path, by occlusion (`[1]`: hidden now and
+  not drawn by the first phase). Each path records them where it decides, so the boxes are its decisions, not a second
+  guess: the CPU's extraction into `m_CulledProxies` (uploaded at the overlay), `Scene/Cull.comp`'s counting passes into
+  `u_CulledViewList` with `u_CulledViewArguments` as the draw's indirect arguments (`CullConstants::CulledView`; the cull
+  layout binds both every frame, one entry long while the view is off, and the branch is uniform). An entry is the proxy's
+  index and the reason above `c_CulledReasonShift`; `Overlay/CulledView.vert` draws a box per entry from the scene copy's
+  proxy records, one draw per reason so crossing lines of two colors do not depend on the GPU's recording order. Frames
+  without the views record nothing of them; their resources are made by the first frame that shows one.
 - `SceneRenderer::GetShadowViewStats()` (`ShadowViewStats`, `Strata/Renderer/ShadowView.h`) is the newest frame whose counts
   came back (2-3 frames late, never waited for: `Render` resolves them at its start, `ResolveShadowViewStats` for tools
   that wait without rendering, as `viewport.capture` does beside `ResolveGPUStats`): per cascade its layout (the frame's
@@ -6683,7 +6704,7 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   ranges and `required` stay (`McpToolsets::MakeCompactToolDefinition`). So the first sentence of a command's
   description says what it does, and a property's first sentence what it is. The default list stays at most 32 tools
   and 30 KiB of `tools/list` JSON (`CLI.McpToolsets`). It is at the tool limit: 27 core commands and 5 generic tools, about 18.6 KB; every command
-  is about 99 KB of definitions (152 commands; `CLI.McpToolsets` prints the figure). A command added to `core` takes the place
+  is about 101 KB of definitions (152 commands; `CLI.McpToolsets` prints the figure). A command added to `core` takes the place
   of another.
 
 ### Other methods and tests

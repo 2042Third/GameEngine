@@ -125,7 +125,7 @@ struct CullConstants
 	uint ShadowPyramidLevels;
 	uint CachedCascades;     // The cascades that keep their layer: nothing is drawn into them
 	uint FirstLocalBucket;   // The dense index of the first local shadow view bucket (they come last)
-	uint Reserved1;
+	uint CulledView;         // 1: the view's counting passes record the proxies they leave out (u_CulledViewList)
 	uint Reserved2;
 };
 
@@ -180,6 +180,14 @@ RWStructuredBuffer<uint> u_Visibility : register(u11);
 // Per instance its level-of-detail cross-fade state (UpdateLODFade, LODSelection::LODFadeState), written by the view's
 // writing passes.
 RWStructuredBuffer<uint2> u_LODFades : register(u12);
+// The culled debug view (u_Cull.CulledView, SceneRenderOptions::ShowCulled): its draw's indirect arguments (DrawIndirectArguments:
+// 24 vertices, word 1 the entries, counted up), and per entry a proxy the view's counting passes left out, its index below
+// ST_CULLED_REASON_SHIFT and above it why (RenderData::c_CulledReasonShift; Overlay/CulledView.vert draws the boxes).
+RWStructuredBuffer<uint> u_CulledViewArguments : register(u13);
+RWStructuredBuffer<uint> u_CulledViewList : register(u14);
+#define ST_CULLED_REASON_SHIFT 30
+#define ST_CULLED_BY_SIZE      1u
+#define ST_CULLED_BY_OCCLUSION 2u
 // The depth pyramid of the first phase's depth (Scene/HZBBuild.comp): each texel the farthest (smallest, reversed-Z)
 // depth of the pixels it covers; level m's texel covers pixels p with p >> (m + 1) equal to it, its last row and column
 // also those past them (GetPyramidFootprint).

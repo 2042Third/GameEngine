@@ -515,6 +515,20 @@ namespace Strata
 		// Display colors (sRGB; alpha unused) of the ramp: green, yellow and red by default (the editor passes its theme's).
 		std::array<glm::vec4, 3> ShadowViewColors = { { { 0.24f, 0.75f, 0.55f, 1.0f }, { 0.91f, 0.76f, 0.30f, 1.0f }, { 0.90f, 0.33f, 0.29f, 1.0f } } };
 
+		// The wireframe debug view (SceneRendererGeometryViews.cpp): the edges of every triangle the frame drew (opaque, alpha-masked,
+		// glass and blended surfaces, at the levels of detail and with the skins drawn) in WireframeColor (sRGB, alpha its opacity) over
+		// the image, where no surface lies in front of them. It needs the device's non-solid fill mode (GraphicsDeviceInfo::
+		// SupportsWireframe): without it the image is drawn without the lines, and the frame reports why.
+		bool ShowWireframe = false;
+		glm::vec4 WireframeColor = { 0.93f, 0.92f, 0.89f, 0.8f };
+		// The culled debug view (SceneRendererGeometryViews.cpp): the bounds of the mesh renderers in the frustum that the frame's
+		// culling left out, as boxes over everything: CulledColors[0] those below RendererQualitySettings::MinProjectedPixels (each
+		// box drawn at least RenderData::c_CulledViewMinPixels wide), [1] those hidden behind what the view drew (occlusion culling, which only
+		// the GPU-driven path does). Both paths record them where they decide (the CPU's extraction, Scene/Cull.comp's counting
+		// passes). Display colors (sRGB; alpha unused).
+		bool ShowCulled = false;
+		std::array<glm::vec4, 2> CulledColors = { { { 0.91f, 0.76f, 0.30f, 1.0f }, { 0.90f, 0.33f, 0.29f, 1.0f } } };
+
 		// A lighting debug view (SceneLightingView). Lighting and Indirect change what the forward pass shades and are exposed and
 		// tone mapped as the image is; AmbientOcclusion and Albedo write their values (unexposed) and Luminance keeps the lit
 		// image, and the three replace the finished image with their values in LightingColors (Overlay/LightingView.frag,
@@ -1149,7 +1163,8 @@ namespace Strata
 			SelectionMask, // The selected instances into the selection mask (temporal anti-aliasing's outline)
 			Glass,         // Transmissive surfaces: the transparent pass's first draws, unblended, writing depth, entity ids and motion
 			LocalShadow,   // Into a point or spot light's shadow view (a tile of the local shadows' atlas)
-			LocalShadowMasked
+			LocalShadowMasked,
+			Wireframe      // The wireframe debug view's edges into the output texture (SceneRenderOptions::ShowWireframe)
 		};
 
 		struct PipelineKey
@@ -1286,6 +1301,7 @@ namespace Strata
 			std::vector<ShadowCaster> Casters;   // The chunk's shadow casters (FindShadowCasters)
 			uint32_t SubTexelCasters = 0;
 			uint32_t SizeCulled = 0;             // Visible proxies below RendererQualitySettings::MinProjectedPixels
+			std::vector<uint32_t> Culled;        // Those proxies, for the culled debug view (SceneRenderOptions::ShowCulled)
 			AABB Receivers; // The world bounds of the chunk's visible proxies (scenes with Skin proxies only)
 			uint32_t SkinnedInstances = 0;
 		};
@@ -2059,6 +2075,15 @@ namespace Strata
 		// (Debug/ShadowViewStats.comp, read back through m_ShadowViewReadbacks) and draws the view into the output texture;
 		// false when GPU resources failed (reported).
 		bool DrawShadowView(nvrhi::ICommandList* commandList, const SceneRenderOptions& options, const nvrhi::Viewport& viewport);
+		// The wireframe and culled debug views (SceneRenderOptions::ShowWireframe and ShowCulled, SceneRendererGeometryViews.cpp)
+		// into the output texture, with the overlays' frame constants; false when the view could not be drawn (reported). The
+		// wireframe replays the frame's draws (the GPU-driven path's buckets or the CPU's batches, then the transparent ones)
+		// with Pass::Wireframe; the culled view draws a box per entry of the frame's culled list (Overlay/CulledView.vert).
+		bool DrawWireframeView(nvrhi::ICommandList* commandList, const SceneRenderOptions& options);
+		bool DrawCulledView(nvrhi::ICommandList* commandList, const SceneRenderOptions& options);
+		// The buffers the GPU's culling records the culled view's proxies into (m_CulledViewArguments, m_CulledViewList), sized
+		// for the frame's proxies while the view shows and to one entry otherwise (the cull layout binds them every frame).
+		bool EnsureCulledViewBuffers(bool& outRecreated);
 		// After the executed command list of a frame that recorded the view's counts: the copy is pending.
 		void SubmitShadowViewReadback();
 		// The sun's screen-space shadow mask (SceneRendererScreenShadows.cpp): its targets (RG8, the viewport's size, made by the
@@ -2665,6 +2690,7 @@ namespace Strata
 		uint64_t m_RenderCount = 0;
 		bool m_GPUDrivenFrame = false;  // The frame being rendered culls on the GPU
 		bool m_GPUCullFrame = false;    // And its render scene has proxies to cull (SceneRendererStats::GPUCulled)
+		bool m_CulledViewFrame = false; // The frame shows the culled debug view: its culling records what it leaves out
 		nvrhi::BindingLayoutHandle m_CullBindingLayout;
 		nvrhi::ComputePipelineHandle m_CullViewPipeline;
 		nvrhi::ComputePipelineHandle m_CullShadowPipeline;
@@ -2891,6 +2917,23 @@ namespace Strata
 		nvrhi::BindingLayoutHandle m_MotionViewLayout;
 		nvrhi::BindingSetHandle m_MotionViewBindingSet;
 		nvrhi::GraphicsPipelineHandle m_MotionViewPipeline;
+		// The wireframe debug view (DrawWireframeView): its pixel shader and push constant layout (the line color), made by the
+		// first frame that shows it; its pipelines are scene pipelines (Pass::Wireframe).
+		nvrhi::ShaderHandle m_WireframePixelShader;
+		nvrhi::BindingLayoutHandle m_WireframePushLayout;
+		nvrhi::BindingSetHandle m_WireframePushBindingSet;
+		uint32_t m_WireframeColor = 0; // The frame's SceneRenderOptions::WireframeColor, RGBA8 (red in the low byte)
+		// The culled debug view (DrawCulledView): the GPU's culling's indirect arguments (24 vertices, an instance per entry) and
+		// its list of entries (a proxy index and why it was culled, RenderData::c_CulledReasonShift), which the CPU path writes
+		// itself from m_CulledProxies; the boxes' pipeline and its binding set (naming the scene copy's proxy records).
+		nvrhi::BufferHandle m_CulledViewArguments;
+		nvrhi::BufferHandle m_CulledViewList;
+		std::vector<uint32_t> m_CulledProxies; // The CPU path's entries of the frame
+		nvrhi::BindingLayoutHandle m_CulledViewLayout;
+		nvrhi::GraphicsPipelineHandle m_CulledViewPipeline;
+		nvrhi::BindingSetHandle m_CulledViewBindingSet;
+		nvrhi::IBuffer* m_CulledViewBoundProxies = nullptr; // The proxy records and list m_CulledViewBindingSet names
+		nvrhi::IBuffer* m_CulledViewBoundList = nullptr;
 		// The shadows debug view (DrawShadowView): the overlay's and the count's pipelines, their binding sets (which name the
 		// depth: released with the targets), the counts' buffer and the ring of their readbacks, each with the layout of the
 		// frame it copied (made by the first frame that shows the view, kept with the renderer so a capture's counts survive

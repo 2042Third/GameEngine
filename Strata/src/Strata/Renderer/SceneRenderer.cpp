@@ -2471,10 +2471,13 @@ namespace Strata
 				break;
 			case Pass::Opaque:       desc.PS = key.Field ? m_ForwardFieldPixelShader : m_ForwardPixelShader; break;
 			case Pass::SelectionMask: desc.PS = m_SelectionMaskPixelShader; break;
+			case Pass::Wireframe:    desc.PS = m_WireframePixelShader; break;
 		}
 		desc.bindingLayouts = { m_SceneBindingLayout, Renderer::GetBindlessTextures().GetLayout() };
 		if (shadowPass)
 			desc.bindingLayouts.push_back(m_ShadowPushLayout);
+		if (key.PassType == Pass::Wireframe)
+			desc.bindingLayouts.push_back(m_WireframePushLayout);
 		// Front faces are counter-clockwise; a mirroring transform reverses the winding on screen.
 		desc.renderState.rasterState.setFrontCounterClockwise(!key.Mirrored);
 		if (key.DoubleSided)
@@ -2513,6 +2516,22 @@ namespace Strata
 				depth.setDepthWriteEnable(false).setDepthFunc(nvrhi::ComparisonFunc::GreaterOrEqual);
 				SetJitteredDepthBias(desc.renderState.rasterState);
 				break;
+			case Pass::Wireframe:
+			{
+				// The triangles' edges where nothing is in front of them, blended over the image: drawn with the camera's own matrices
+				// against the frame's (jittered, with TAA) depth with its bias, which also lifts the edges off their own surfaces.
+				desc.renderState.rasterState.setFillWireframe();
+				depth.setDepthWriteEnable(false).setDepthFunc(nvrhi::ComparisonFunc::GreaterOrEqual);
+				SetJitteredDepthBias(desc.renderState.rasterState);
+				nvrhi::BlendState::RenderTarget blend;
+				blend.setBlendEnable(true)
+					.setSrcBlend(nvrhi::BlendFactor::SrcAlpha)
+					.setDestBlend(nvrhi::BlendFactor::InvSrcAlpha)
+					.setSrcBlendAlpha(nvrhi::BlendFactor::One)
+					.setDestBlendAlpha(nvrhi::BlendFactor::InvSrcAlpha);
+				desc.renderState.blendState.setRenderTarget(0, blend);
+				break;
+			}
 			case Pass::Transparent:
 			{
 				depth.setDepthWriteEnable(false).setDepthFunc(nvrhi::ComparisonFunc::GreaterOrEqual);
@@ -2532,7 +2551,7 @@ namespace Strata
 
 		nvrhi::IFramebuffer* framebuffer = localShadowPass ? m_LocalShadowFramebuffer.Get() : shadowPass ? m_ShadowFramebuffers[0].Get()
 			: (key.PassType == Pass::Prepass ? (key.Surface ? m_SurfacePrepassFramebuffer.Get() : key.Velocity ? m_MotionPrepassFramebuffer.Get() : m_PrepassFramebuffer.Get())
-			: (selectionMask ? m_SelectionMaskFramebuffer.Get()
+			: (selectionMask ? m_SelectionMaskFramebuffer.Get() : key.PassType == Pass::Wireframe ? m_OverlayFramebuffer.Get()
 			: (key.PassType == Pass::Glass ? (key.Velocity ? m_GlassMotionFramebuffer.Get() : m_GlassFramebuffer.Get()) : m_ForwardFramebuffer.Get())));
 		nvrhi::GraphicsPipelineHandle pipeline = m_Device->createGraphicsPipeline(desc, framebuffer->getFramebufferInfo());
 		ST_CORE_VERIFY(pipeline, "SceneRenderer: failed to create a scene pipeline");
@@ -3162,6 +3181,9 @@ namespace Strata
 		// A render scene without proxies gives the GPU nothing to cull or draw (scenes of empty entities, an editor's new scene).
 		m_GPUCullFrame = m_GPUDrivenFrame && renderScene.GetProxyCapacity() > 0;
 		m_Stats.GPUCulled = m_GPUCullFrame;
+		// The culled view's list: the GPU's culling or the CPU's extraction record into it (frames without it record nothing).
+		m_CulledViewFrame = options.ShowCulled && !options.HDROutput;
+		m_CulledProxies.clear();
 		CollectLights(scene, renderScene, camera, preview, frame);
 		const auto extractionStart = std::chrono::steady_clock::now();
 		// The CPU's culling works in world space (the spatial index holds world bounds).
@@ -3857,7 +3879,8 @@ namespace Strata
 	bool SceneRenderer::HasOverlays(const SceneRenderOptions& options)
 	{
 		return options.ShowGrid || !options.SelectedEntities.empty() || (options.DebugShapes && !options.DebugShapes->IsEmpty()) || !options.EntityTints.empty()
-			|| options.ShowMotionVectors || options.ShowShadowView || options.LightingView != SceneLightingView::None;
+			|| options.ShowMotionVectors || options.ShowShadowView || options.LightingView != SceneLightingView::None || options.ShowWireframe
+			|| options.ShowCulled;
 	}
 
 	bool SceneRenderer::DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport)
@@ -4113,6 +4136,12 @@ namespace Strata
 			return false;
 		if (entityIDs && !options.EntityTints.empty() && !DrawEntityTints(commandList, scene, options.EntityTints, viewport))
 			return false;
+		// The wireframe and culled views draw over the image and its tints, under the other overlays (each reported when it
+		// could not be drawn: the image is complete without it).
+		if (options.ShowWireframe && !DrawWireframeView(commandList, options))
+			complete = false;
+		if (options.ShowCulled && !DrawCulledView(commandList, options))
+			complete = false;
 
 		if (options.ShowGrid)
 		{

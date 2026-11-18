@@ -27,6 +27,7 @@
 #include <Strata/Core/StringUtils.h>
 #include <Strata/Input/Input.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Runtime/GameGraphicsService.h>
@@ -646,12 +647,17 @@ namespace Strata
 			label = "Diffuse";
 		else if (settings.DebugView == ViewportDebugView::Clusters)
 			label = "Clusters";
+		else if (settings.DebugView == ViewportDebugView::Culled)
+			label = "Culled";
+		else if (settings.DebugView == ViewportDebugView::Wireframe)
+			label = "Wireframe";
 		if (UI::ToggleChip("Viewport.DebugView", Icons::Layers, label, &clicked,
 			"Debug views: color the scene by streaming state (meshes, materials and textures still loading or failed), by the level of detail "
 			"meshes are drawn at, by the mip levels textures lack against what the view needs, by how each pixel moved since the previous frame, "
 			"or by how many screen pixels a texel of the sun's shadow cascades spans; or show its light: surfaces shaded white, ambient "
 			"occlusion, indirect light alone, luminance in EV100 bands, or albedo; or the GI's voxels, light, sky share and probes; or the "
-			"specular or diffuse light alone, or the lights each pixel's light cluster lists"))
+			"specular or diffuse light alone, or the lights each pixel's light cluster lists; or box what culling left out, or draw the "
+			"triangles' edges"))
 		{
 			ImGui::OpenPopup("DebugView");
 		}
@@ -675,7 +681,9 @@ namespace Strata
 			{ ViewportDebugView::Probes, "Probes: the GI's probes, dead ones red" },
 			{ ViewportDebugView::Specular, "Specular: highlights and reflections only" },
 			{ ViewportDebugView::Diffuse, "Diffuse: diffuse light only" },
-			{ ViewportDebugView::Clusters, "Clusters: lights per light cluster" }
+			{ ViewportDebugView::Clusters, "Clusters: lights per light cluster" },
+			{ ViewportDebugView::Culled, "Culled: boxes of what culling left out" },
+			{ ViewportDebugView::Wireframe, "Wireframe: the edges of the triangles drawn" }
 		};
 		for (const auto& [view, name] : views)
 		{
@@ -777,6 +785,13 @@ namespace Strata
 		}
 		else if (settings.DebugView == ViewportDebugView::Shadows)
 			AddShadowViewLegend(renderer->GetShadowViewStats(), settings.DebugColors.ShadowRatio, lines);
+		else if (settings.DebugView == ViewportDebugView::Culled)
+		{
+			// The frame's counts of what its culling left out (occlusion culling only on the GPU-driven path).
+			const SceneRendererStats frameStats = AddGPUCounts(renderer->GetSceneRenderer().GetStats(), renderer->GetSceneRenderer().GetGPUStats());
+			lines.push_back({ toColor(settings.DebugColors.Culled[0]), "Too small", std::to_string(frameStats.SizeCulledProxies) });
+			lines.push_back({ toColor(settings.DebugColors.Culled[1]), "Occluded", std::to_string(frameStats.OccludedProxies) });
+		}
 		const std::optional<LightingViewStats>& lighting = renderer->GetLightingViewStats();
 		const LightingViewColors& lightingColors = settings.DebugColors.Lighting;
 		const auto formatShare = [](float share) { return fmt::format("{:.1f}%", share * 100.0f); };
@@ -811,6 +826,16 @@ namespace Strata
 			note = "Hue: direction, strength: speed (full at 16 px)";
 		else if (settings.DebugView == ViewportDebugView::Shadows)
 			note = renderer->GetShadowViewStats().CascadeCount > 0 ? "White: cascade edges. Hatched: blend bands." : "No shadowed directional light";
+		else if (settings.DebugView == ViewportDebugView::Culled)
+			note = renderer->GetSceneRenderer().GetStats().GPUDriven ? "Boxes over everything" : "Boxes over everything; no occlusion culling on the CPU path";
+		else if (settings.DebugView == ViewportDebugView::Wireframe)
+		{
+			// The triangles the frame drew, whose edges the view shows (on the GPU-driven path its counts, frames late).
+			const SceneRenderer& sceneRenderer = renderer->GetSceneRenderer();
+			const uint64_t triangles = AddGPUCounts(sceneRenderer.GetStats(), sceneRenderer.GetGPUStats()).Triangles;
+			note = Renderer::GetGraphicsDevice().GetInfo().SupportsWireframe ? fmt::format("Edges of {} triangles", triangles)
+				: std::string("This GPU draws no wireframes");
+		}
 		else if (settings.DebugView == ViewportDebugView::Voxels)
 			note = GetVoxelLegendNote(renderer->GetSceneRenderer().GetVoxelClipmap());
 		else if (settings.DebugView == ViewportDebugView::Probes)

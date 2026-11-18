@@ -48,14 +48,18 @@ namespace Strata
 		// (SceneLightingView::Clusters).
 		Specular,
 		Diffuse,
-		Clusters
+		Clusters,
+		// What the frame's culling left out, as boxes (SceneRenderOptions::ShowCulled), and the edges of the triangles it drew
+		// (SceneRenderOptions::ShowWireframe).
+		Culled,
+		Wireframe
 	};
 
 	// The lighting view a debug view shows (SceneLightingView::None for the others).
 	SceneLightingView GetLightingView(ViewportDebugView view);
 
-	// "none", "streaming", "lod", "mip", "motion", "shadows", "lighting", "ao", "indirect", "luminance", "albedo" (the names commands
-	// and the saved viewport state use).
+	// "none", "streaming", "lod", "mip", "motion", "shadows", "lighting", "ao", "indirect", "luminance", "albedo", "voxels", "gi",
+	// "open", "probes", "specular", "diffuse", "clusters", "culled", "wireframe" (the names commands and the saved viewport state use).
 	const char* ViewportDebugViewToString(ViewportDebugView view);
 	std::optional<ViewportDebugView> ViewportDebugViewFromString(std::string_view name);
 
@@ -89,6 +93,10 @@ namespace Strata
 			{ 0.90f, 0.33f, 0.29f, 1.0f } } };
 		// The lighting views' luminance bands, albedo marks and background (SceneRenderOptions::LightingColors).
 		LightingViewColors Lighting;
+		// The wireframe view's lines (alpha their opacity) and the culled view's boxes: culled by their size, and by occlusion
+		// (SceneRenderOptions::WireframeColor, CulledColors; the text's light, Sulfur and Cinnabar).
+		glm::vec4 Wireframe = { 0.93f, 0.92f, 0.89f, 0.8f };
+		std::array<glm::vec4, 2> Culled = { { { 0.91f, 0.76f, 0.30f, 1.0f }, { 0.90f, 0.33f, 0.29f, 1.0f } } };
 	};
 
 	// What a debug view found in the last Build, among the entities in the camera's view.

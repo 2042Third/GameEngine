@@ -145,7 +145,7 @@ namespace Strata
 		nlohmann::json DebugViewSchema(std::string description)
 		{
 			return { { "type", "string" }, { "enum", { "none", "streaming", "lod", "mip", "motion", "shadows", "lighting", "ao", "indirect", "luminance",
-				"albedo", "voxels", "gi", "open", "probes", "specular", "diffuse", "clusters" } }, { "description", std::move(description) } };
+				"albedo", "voxels", "gi", "open", "probes", "specular", "diffuse", "clusters", "culled", "wireframe" } }, { "description", std::move(description) } };
 		}
 
 		// What the shadows debug view counted (SceneRenderer::GetShadowViewStats): shares of the image's pixels, and screen pixels
@@ -1110,7 +1110,7 @@ namespace Strata
 			"\"motion\" / \"shadows\": the image colored by streaming state, level of detail, the mip levels textures lack, motion or shadow texels "
 			"per pixel; or a lighting view: \"lighting\", \"ao\", \"indirect\", \"luminance\", \"albedo\", or global illumination's \"voxels\", "
 			"\"gi\", \"open\", \"probes\"; \"specular\" and \"diffuse\" the light of one kind, \"clusters\" the lights each pixel's light "
-			"cluster lists), gameView (the Game view's image: {mode, width, "
+			"cluster lists; \"culled\" boxes of what culling left out, \"wireframe\" the triangles' edges), gameView (the Game view's image: {mode, width, "
 			"height}, width and height for mode \"custom\"), pilotGameCamera (the Scene view looks through the scene's primary camera) and editPose "
 			"(\"rest\" or \"clipStart\": what skinned characters of the edited scene show while it does not play).",
 			ObjectSchema({}),
@@ -1156,7 +1156,10 @@ namespace Strata
 					"as gray, \"probes\" its first cascade's probes, dead ones (inside solids) dark red, \"specular\" only the specular light (the "
 					"lights' highlights and image light's reflections) and \"diffuse\" only the diffuse light, both without emission and fog, "
 					"\"clusters\" how many lights each pixel's light cluster lists (bands: none, 1, 2-3, 4-7, ...; what its shading walks), "
-					"\"none\" shows the image as rendered") },
+					"\"culled\" the bounds of the mesh renderers in view that culling left out, as boxes over everything: Sulfur those too small "
+					"on screen (drawn at least 6 pixels wide), Cinnabar those hidden behind what is drawn (occlusion culling, on the GPU-driven "
+					"path only), \"wireframe\" the edges of every triangle drawn (all levels of detail, skins as posed) over the image, \"none\" "
+					"shows the image as rendered") },
 				{ "gameView", ObjectSchema({
 					{ "mode", { { "type", "string" }, { "enum", { "free", "16:9", "16:10", "4:3", "21:9", "1920x1080", "1280x720", "custom", "game" } },
 						{ "description", "The Game view's image: free fills the panel, an aspect ratio is the largest image of it inside the panel "
@@ -1291,7 +1294,11 @@ namespace Strata
 					"p95}, backgroundEv100, value {median, p05} (ao, albedo), belowRangeShare, aboveRangeShare (albedo), sunIlluminance, skyIlluminance "
 					"(lux on flat ground), sunToSkyRatio}; \"voxels\" the GI's voxels, with debugView.globalIllumination {ran, settled, voxelLevels, memoryMiB}; \"specular\" and "
 					"\"diffuse\" the light of one kind (no emission, no fog), \"clusters\" the lights each pixel's light cluster lists as bands "
-					"(none, 1, 2-3, 4-7, ...; debugView.lighting.value: shares of a cluster's capacity); "
+					"(none, 1, 2-3, 4-7, ...; debugView.lighting.value: shares of a cluster's capacity); \"culled\" boxes of the mesh renderers in "
+					"view that culling left out (too small: Sulfur, at least 6 pixels wide; hidden behind what is drawn: Cinnabar, the GPU-driven "
+					"path's occlusion culling; renderStats.sizeCulledProxies and occludedProxies count them), \"wireframe\" the edges of every "
+					"triangle drawn over the image (it needs the device's non-solid fill mode: without it the lines are left out and the log "
+					"says why); "
 					"\"none\" not at all (default: the viewport's debug view)") },
 				{ "quality", QualitySchema("The quality the picture is drawn at (default: the quality of the view it shows: the Scene view's for the "
 					"editor camera and cameras of the capture's own, the game's for the scene's camera: the project's, with the players' options "
@@ -1344,8 +1351,8 @@ namespace Strata
 					request.DebugView = ViewportDebugViewFromString(arguments.GetString("debugView"));
 					if (!request.DebugView && arguments.IsValid())
 						arguments.SetError("Parameter 'debugView' must be \"none\", \"streaming\", \"lod\", \"mip\", \"motion\", \"shadows\", \"lighting\", "
-							"\"ao\", \"indirect\", \"luminance\", \"albedo\", \"voxels\", \"gi\", \"open\", \"probes\", \"specular\", \"diffuse\" or "
-							"\"clusters\"");
+							"\"ao\", \"indirect\", \"luminance\", \"albedo\", \"voxels\", \"gi\", \"open\", \"probes\", \"specular\", \"diffuse\", "
+							"\"clusters\", \"culled\" or \"wireframe\"");
 				}
 				if (arguments.Has("quality"))
 				{

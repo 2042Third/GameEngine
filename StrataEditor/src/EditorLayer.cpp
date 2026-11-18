@@ -94,6 +94,8 @@ namespace Strata
 		constexpr float c_DebugTintAlpha = 0.6f;
 		// The quieter box of a placement that is a guess (nothing under the pointer).
 		constexpr float c_PlacementGuessAlpha = 0.7f;
+		// The wireframe view's lines: dense meshes still show the surface under their edges.
+		constexpr float c_WireframeAlpha = 0.8f;
 
 		// editor.screenshot reads the window back in the second frame after the command: the commands before it (a panel
 		// brought to the front, a dialog opened, a selection) take effect in the first one's UI, and ImGui lays out what changed
@@ -542,6 +544,10 @@ namespace Strata
 		}
 		lightingColors.AlbedoLow = ToVec4(themeColors.Info);
 		lightingColors.AlbedoHigh = ToVec4(themeColors.Error);
+		// The wireframe in the text's light over the image; the culled boxes warn (too small) and err (hidden), as the LOD view's
+		// highest levels do.
+		viewportSettings.DebugColors.Wireframe = ToVec4(UI::WithAlpha(themeColors.Text, c_WireframeAlpha));
+		viewportSettings.DebugColors.Culled = { ToVec4(themeColors.Warning), ToVec4(themeColors.Error) };
 		lightingColors.Background = ToVec4(themeColors.TextDisabled);
 		lightingColors.TwoSided = ToVec4(themeColors.Error);
 		// Startup counts as activity: the layout settles at the full rate.

@@ -1925,6 +1925,56 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("viewport.capture shows the wireframe and culled views in the theme's colors, alike on the GPU-driven and the CPU path")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		// A grain far beyond the cube, far below a pixel: the culled view boxes it.
+		harness.Run("entity.create", { { "name", "Grain" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } },
+			{ "Transform", { { "Translation", { 0.0, 0.0, -150.0 } }, { "Scale", { 0.02, 0.02, 0.02 } } } } } } });
+		const auto capture = [&](const char* view, bool cpu = false, nlohmann::json* outResult = nullptr)
+		{
+			// Without occlusion culling, which only the GPU-driven path does: both paths leave out the same.
+			nlohmann::json parameters = { { "width", 96 }, { "height", 64 }, { "overlays", false }, { "debugView", view },
+				{ "renderer", { { "OcclusionCulling", false } } } };
+			if (cpu)
+				parameters["renderer"]["GPUDriven"] = false;
+			return harness.Capture(parameters, outResult);
+		};
+		const ViewportDebugColors& colors = harness.Context.GetViewport().GetSettings().DebugColors;
+		const auto countNear = [](const DecodedImage& image, const glm::vec4& color)
+		{
+			const glm::ivec3 code = glm::ivec3(glm::round(glm::clamp(glm::vec3(color), 0.0f, 1.0f) * 255.0f));
+			int pixels = 0;
+			for (int y = 0; y < image.Height; y++)
+			{
+				for (int x = 0; x < image.Width; x++)
+					pixels += glm::ivec3(image.At(x, y)) == code ? 1 : 0;
+			}
+			return pixels;
+		};
+		const DecodedImage lit = capture("none");
+		nlohmann::json result;
+		const DecodedImage culled = capture("culled", false, &result);
+		CHECK(result["debugView"]["view"] == "culled");
+		CHECK(result["complete"] == true);
+		CHECK(result["renderStats"]["sizeCulledProxies"].get<uint32_t>() >= 1);
+		CHECK(countNear(culled, colors.Culled[0]) > 0);
+		CHECK(countNear(lit, colors.Culled[0]) == 0);
+		CHECK(harness.CountDifferences(capture("culled", true), culled) == 0);
+		if (Renderer::GetGraphicsDevice().GetInfo().SupportsWireframe)
+		{
+			const DecodedImage wireframe = capture("wireframe", false, &result);
+			CHECK(result["debugView"]["view"] == "wireframe");
+			CHECK(result["complete"] == true);
+			CHECK(harness.CountDifferences(wireframe, lit) > 0);
+			CHECK(harness.CountDifferences(capture("wireframe", true), wireframe) == 0);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A capture of a scene with sixteen shadowed point lights shows every light's shadow in its first complete frame")
 	{
 		Tests::GPUContext gpu;

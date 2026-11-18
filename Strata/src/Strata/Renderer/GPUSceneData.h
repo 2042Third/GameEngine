@@ -216,10 +216,20 @@ namespace Strata::RenderData
 		uint32_t CachedCascades = 0;
 		// The dense index of the first local shadow view bucket (they come last; BucketCount without)
 		uint32_t FirstLocalBucket = 0;
-		uint32_t Reserved1 = 0;
+		// 1 while the frame shows the culled debug view: the view's counting passes record each proxy they leave out by its size
+		// or behind what the view draws (u_CulledViewList, an entry each: c_CulledReasonShift).
+		uint32_t CulledView = 0;
 		uint32_t Reserved2 = 0;
 	};
 	static_assert(sizeof(CullConstants) == 6 * 16 + 3 * 16 + 64 + 64 + 16 + 2 * c_CullMaxCascades * 16 + 64 + 2 * 16);
+
+	// An entry of the culled debug view's list (SceneRenderOptions::ShowCulled): the proxy's index in its low bits, above
+	// c_CulledReasonShift why the frame left it out (Scene/Cull.comp's ST_CULLED_* and Overlay/CulledView.vert agree).
+	constexpr uint32_t c_CulledReasonShift = 30;
+	constexpr uint32_t c_CulledBySize = 1;      // In the frustum, below RendererQualitySettings::MinProjectedPixels
+	constexpr uint32_t c_CulledByOcclusion = 2; // In the frustum, hidden behind what the view drew (not drawn this frame)
+	// The culled view draws a box of a proxy culled by its size at least this many pixels wide, so that it can be seen.
+	constexpr float c_CulledViewMinPixels = 6.0f;
 
 	// What a frame's culling counted (read back frames later: SceneRendererGPUStats).
 	struct CullCounters

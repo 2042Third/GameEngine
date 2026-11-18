@@ -439,6 +439,10 @@ namespace Strata
 		options.ShadowViewColors = settings.DebugColors.ShadowRatio;
 		options.LightingView = GetLightingView(settings.DebugView);
 		options.LightingColors = settings.DebugColors.Lighting;
+		options.ShowWireframe = settings.DebugView == ViewportDebugView::Wireframe;
+		options.WireframeColor = settings.DebugColors.Wireframe;
+		options.ShowCulled = settings.DebugView == ViewportDebugView::Culled;
+		options.CulledColors = settings.DebugColors.Culled;
 		if (!m_DebugDraw.IsEmpty())
 			options.DebugShapes = &m_DebugDraw;
 

@@ -446,6 +446,21 @@ bool IsDrawable(GPUProxy proxy, out uint mesh, out GeometryEntry entry)
 	return entry.SubmeshCount == proxy.InstanceCount; // Else instances of another layout of the mesh
 }
 
+#ifndef ST_CULL_SHADOW
+// The culled debug view's entry of a proxy the view leaves out (u_Cull.CulledView), recorded by the counting pass alone: each
+// proxy is culled at most once a frame (by its size in the first phase, or behind the first phase's depth in the second), so the
+// list, as long as the proxies, always has its room.
+void RecordCulled(uint proxyIndex, uint reason)
+{
+	if (u_Cull.CulledView == 0u || !IsCounting())
+		return;
+	uint slot;
+	InterlockedAdd(u_CulledViewArguments[1], 1u, slot);
+	if (slot < u_Cull.ProxyCount)
+		u_CulledViewList[slot] = proxyIndex | (reason << ST_CULLED_REASON_SHIFT);
+}
+#endif
+
 void CullProxy(uint proxyIndex)
 {
 	GPUProxy proxy = u_Proxies[proxyIndex];
@@ -483,9 +498,12 @@ void CullProxy(uint proxyIndex)
 	float pixels = fraction * u_Cull.ViewParameters.x;
 	if (u_Cull.LODParameters.w > 0.0 && pixels < u_Cull.LODParameters.w)
 	{
-		// Counted as the CPU path counts them: among the proxies it could draw.
+		// Counted (and shown by the culled view) as the CPU path counts them: among the proxies it could draw.
 		if (meshDrawable)
+		{
 			Count(ST_COUNTER_SIZE_CULLED);
+			RecordCulled(proxyIndex, ST_CULLED_BY_SIZE);
+		}
 		return;
 	}
 	if (feedback)
@@ -520,6 +538,7 @@ void CullSecondPhase(uint proxyIndex)
 	uint previousBit = 1u << u_Cull.VisibilityParity;
 	uint currentBit = previousBit ^ 3u;
 	bool visible = false;
+	bool occluded = false;
 	uint mesh = 0u;
 	GeometryEntry entry = GeometryEntry(0u, 0u, 0u, 0u);
 	const uint drawable = ST_PROXY_ACTIVE | ST_PROXY_INDEXED;
@@ -533,10 +552,14 @@ void CullSecondPhase(uint proxyIndex)
 		&& !(u_Cull.LODParameters.w > 0.0 && fraction * u_Cull.ViewParameters.x < u_Cull.LODParameters.w))
 	{
 		visible = !IsOccluded(relativeMin, relativeMax);
-		if (!visible)
+		occluded = !visible;
+		if (occluded)
 			Count(ST_COUNTER_OCCLUDED);
 	}
 	uint state = u_Visibility[proxyIndex];
+	// Left out of the frame: hidden now, and not drawn by the first phase (which drew what the previous frame saw).
+	if (occluded && (state & previousBit) == 0u)
+		RecordCulled(proxyIndex, ST_CULLED_BY_OCCLUSION);
 	if (IsCounting())
 		u_Visibility[proxyIndex] = (state & ~currentBit) | (visible ? currentBit : 0u);
 	if (!visible || (state & previousBit) != 0u)

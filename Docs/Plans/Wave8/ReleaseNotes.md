@@ -441,6 +441,10 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - Editor: three debug views (the Scene view's debug view chip, `viewport.capture` and `viewport.setSettings` `debugView`):
   **Specular** and **Diffuse** show one kind of light alone, **Clusters** how many lights each pixel's light cluster lists,
   in bands with a legend. Frames without them are drawn as before, to the bit.
+- Editor: two more debug views: **Wireframe** draws the edges of every triangle drawn (each level of detail as chosen,
+  skins as posed) over the image, **Culled** boxes the meshes in view that culling left out, over everything: too small
+  on screen (yellow) or hidden behind what is drawn (red, the GPU-driven path's occlusion culling), counted in its legend.
+  Both paths draw them from their own decisions; frames without them record nothing of them.
 - Fixed: a program (the editor, the runtime, an exported game) whose frame an exception left logged a critical line,
   ended in order and exited with code 0, so a script or CI read success; it now exits with code 1.
 - Fixed: script modules built with GCC or Clang (Linux, macOS) carried no debug information in Release and Dist, the

@@ -193,6 +193,12 @@ editor started with `--no-gpu` (use `--headless`):
   p90PixelsPerTexel, aboveFourShare, cascades: [{index, near, far, texelSize, screenShare, medianPixelsPerTexel, ...}]}`
   (shares of the image; pixels per texel over covered receivers: about 1 or less means shadows as fine as the screen; the
   cascades are stable, the view's alone, so the first frame is final);
+  `"culled"` draws over everything a box around each mesh renderer in view that culling left out: yellow (Sulfur) those
+  too small on screen (`RendererQualitySettings::MinProjectedPixels`; each box at least 6 pixels wide so it shows), red
+  (Cinnabar) those hidden behind what is drawn (occlusion culling, which only the GPU-driven path does: pass `renderer:
+  {"OcclusionCulling": false}` to see the CPU path's boxes), counted by `renderStats.sizeCulledProxies` and
+  `occludedProxies`; `"wireframe"` draws the edges of every triangle drawn (each level of detail as chosen, skins as posed)
+  over the image where nothing is in front of them (devices without a non-solid fill mode draw no lines and log why);
   `"none"` is the plain image. Pass it to `viewport.capture` for one picture, or set it for the viewport with
   `viewport.setSettings {"debugView": ...}` (it then colors the person's viewport too, also the Game view). The result's
   `debugView` counts what it found among the entities in view: `{view, tintedEntities, pendingEntities, failedEntities,
