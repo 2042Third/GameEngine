@@ -110,7 +110,7 @@ namespace Strata
 	nlohmann::json ListIncompleteCapture(const nlohmann::json& result, const SceneRendererStats& stats);
 
 	// Switches of SceneRendererSpecification one capture sets (viewport.capture {renderer}), to show what a technique does. A
-	// capture with any renders through a renderer of its own (EditorViewport::GetCaptureRenderer(switches)), made with the
+	// capture with any renders through a renderer of its own (EditorViewport::GetSwitchedCaptureRenderer), made with the
 	// capture renderer's specification and these over it, so no frame the editor, its views or a game draws changes; unset ones
 	// keep the capture renderer's values. Named as the specification's fields.
 	struct CaptureRendererSwitches

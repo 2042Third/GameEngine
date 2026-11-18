@@ -5,8 +5,8 @@
 #include <Strata/Asset/AssetTypes.h>
 #include <Strata/Core/FrameProfiler.h>
 #include <Strata/Core/JobSystem.h>
-#include <Strata/Renderer/Renderer.h>
 #include <Strata/Math/AABB.h>
+#include <Strata/Renderer/Renderer.h>
 #include <Strata/Scene/Entity.h>
 
 #include <glm/glm.hpp>

@@ -5,9 +5,9 @@
 #include "UI/Theme.h"
 
 #include <Strata/Core/Layer.h>
-#include <Strata/Renderer/Renderer.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Events/Event.h>
+#include <Strata/Renderer/Renderer.h>
 
 #include <imgui_internal.h>
 
