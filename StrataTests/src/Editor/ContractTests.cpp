@@ -22,6 +22,7 @@
 #include <imgui_internal.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <functional>
@@ -336,8 +337,10 @@ TEST_SUITE("Editor.UI.Dialogs")
 
 	TEST_CASE("editor.screenshot takes a frame laid out as the one before, also as the first command of an editor that just started")
 	{
-		// Where every window and every tab of a visible tab bar was in the frame just drawn.
-		const auto layoutOf = []()
+		// Where every window and every tab of a visible tab bar was in the frame just drawn: BeginTabBar's tab bars and the
+		// dock nodes' (each node owns its own), with how far each is scrolled.
+		size_t mostDockTabBars = 0;
+		const auto layoutOf = [&mostDockTabBars]()
 		{
 			ImGuiContext& imgui = *ImGui::GetCurrentContext();
 			std::vector<double> layout;
@@ -346,11 +349,23 @@ TEST_SUITE("Editor.UI.Dialogs")
 				if (window->Active)
 					layout.insert(layout.end(), { double(window->ID), window->Hidden ? 1.0 : 0.0, window->Pos.x, window->Pos.y, window->Size.x, window->Size.y });
 			}
+			std::vector<const ImGuiTabBar*> tabBars;
 			for (int index = 0; index < imgui.TabBars.GetMapSize(); index++)
+				tabBars.push_back(imgui.TabBars.TryGetMapData(index));
+			size_t dockTabBars = 0;
+			for (const ImGuiStoragePair& entry : imgui.DockContext.Nodes.Data)
 			{
-				const ImGuiTabBar* tabBar = imgui.TabBars.TryGetMapData(index);
+				const ImGuiDockNode* node = static_cast<const ImGuiDockNode*>(entry.val_p);
+				if (node && node->TabBar && node->TabBar->CurrFrameVisible == imgui.FrameCount)
+					dockTabBars++;
+				tabBars.push_back(node ? node->TabBar : nullptr);
+			}
+			mostDockTabBars = std::max(mostDockTabBars, dockTabBars);
+			for (const ImGuiTabBar* tabBar : tabBars)
+			{
 				if (!tabBar || tabBar->CurrFrameVisible != imgui.FrameCount)
 					continue;
+				layout.push_back(tabBar->ScrollingAnim);
 				for (const ImGuiTabItem& tab : tabBar->Tabs)
 					layout.insert(layout.end(), { double(tab.ID), tab.Offset, tab.Width });
 			}
@@ -392,6 +407,8 @@ TEST_SUITE("Editor.UI.Dialogs")
 		REQUIRE((*completed)->Success);
 		REQUIRE(readFrame.has_value());
 		REQUIRE(*readFrame >= 1);
+		// The editor's dock space shows tab bars of its own: they are among what held still.
+		CHECK(mostDockTabBars > 0);
 		CHECK(layouts[*readFrame] == layouts[*readFrame - 1]);
 		CHECK((*completed)->Value["settled"] == true);
 

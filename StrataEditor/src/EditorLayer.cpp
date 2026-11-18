@@ -111,9 +111,9 @@ namespace Strata
 		// A screenshot whose readback has not answered after this long fails.
 		constexpr std::chrono::seconds c_ScreenshotTimeout { 40 };
 
-		// Where ImGui put the windows and the tabs of their tab bars in the frame being drawn, as a hash: equal over two frames
-		// when nothing appeared, moved, resized or was laid out again (a dock node's tab bar lays out new tabs in the frame after
-		// they appeared, so an editor's first frames show their titles cut).
+		// Where ImGui put the windows and the tabs of the tab bars shown in the frame being drawn, as a hash: equal over two
+		// frames when nothing appeared, moved, resized, scrolled or was laid out again (a dock node's tab bar lays out new tabs
+		// in the frame after they appeared, so an editor's first frames show their titles cut).
 		uint64_t HashWindowLayout()
 		{
 			// Not const: ImPool's lookup is not.
@@ -129,6 +129,19 @@ namespace Strata
 				std::memcpy(&bits, &value, sizeof(bits));
 				mix(bits);
 			};
+			const auto mixTabBar = [&](const ImGuiTabBar& tabBar)
+			{
+				if (tabBar.CurrFrameVisible != imgui.FrameCount)
+					return;
+				mix(tabBar.ID);
+				mixFloat(tabBar.ScrollingAnim);
+				for (const ImGuiTabItem& tab : tabBar.Tabs)
+				{
+					mix(tab.ID);
+					mixFloat(tab.Offset);
+					mixFloat(tab.Width);
+				}
+			};
 			for (const ImGuiWindow* window : imgui.Windows)
 			{
 				if (!window->Active)
@@ -140,18 +153,17 @@ namespace Strata
 				mixFloat(window->Size.x);
 				mixFloat(window->Size.y);
 			}
+			// The tab bars BeginTabBar made, and those of the dock nodes, which each node owns apart from them.
 			for (int index = 0; index < imgui.TabBars.GetMapSize(); index++)
 			{
-				const ImGuiTabBar* tabBar = imgui.TabBars.TryGetMapData(index);
-				if (!tabBar || tabBar->CurrFrameVisible != imgui.FrameCount)
-					continue;
-				mix(tabBar->ID);
-				for (const ImGuiTabItem& tab : tabBar->Tabs)
-				{
-					mix(tab.ID);
-					mixFloat(tab.Offset);
-					mixFloat(tab.Width);
-				}
+				if (const ImGuiTabBar* tabBar = imgui.TabBars.TryGetMapData(index))
+					mixTabBar(*tabBar);
+			}
+			for (const ImGuiStoragePair& entry : imgui.DockContext.Nodes.Data)
+			{
+				const ImGuiDockNode* node = static_cast<const ImGuiDockNode*>(entry.val_p);
+				if (node && node->TabBar)
+					mixTabBar(*node->TabBar);
 			}
 			return hash;
 		}

@@ -2851,8 +2851,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     height, panel, region: {x, y, width, height}, settled, path?}`; `path` through `CommandUtils::ResolveOutputPath`). It is
     an `EditorHost` service: `StrataEditorCore` never reaches the UI. The command's poll waits `c_ScreenshotSettleFrames` (2)
     so the commands before it took effect, then arms the capture. At the end of each later frame's UI
-    (`EditorLayer::ReadBackScreenshots`) it compares where ImGui put the windows and the tabs of their tab bars with the
-    frame before (`HashWindowLayout`): ImGui lays out what appeared, resized or docked over a frame or more, and an editor
+    (`EditorLayer::ReadBackScreenshots`) it compares where ImGui put the windows and the tabs of the tab bars shown, and how
+    far each tab bar is scrolled, with the frame before (`HashWindowLayout`; a dock node owns its tab bar apart from
+    `BeginTabBar`'s, `ImGuiContext::TabBars`, so it walks both): ImGui lays out what appeared, resized or docked over a frame or more, and an editor
     that just started (a script's first command) shows its tabs' titles cut in its first frames. The first frame that lays
     out as the one before is read back (`settled` true), or the one `c_ScreenshotMaxSettleFrames` (30) frames in (`settled`
     false). What is still loading (the scene's assets, thumbnails) shows as the person sees it: scripts wait (`editor.wait`)
