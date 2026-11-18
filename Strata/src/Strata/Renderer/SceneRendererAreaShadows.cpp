@@ -20,7 +20,7 @@
 // screen-space masks (Effects/AreaScreenShadows.frag, then Effects/ScreenShadowsBlur.frag's two passes, in GPU.ScreenShadows
 // after the sun's): per shadowed rect light in view, at most RenderData::c_MaxAreaShadowMasks, the filter at every prepass
 // pixel within the light's reach on screen, blurred where its lattice's taps filtered into the light's layer of an R8 array.
-// Transparent surfaces filter per pixel. Nothing exists or runs without a shadowed rect light.
+// Transparent surfaces filter per pixel. Nothing exists or runs before a rect light first holds tiles.
 
 namespace Strata
 {
@@ -378,6 +378,7 @@ namespace Strata
 		m_LocalShadowRanges = std::move(ranges);
 		m_LocalShadowRangeSets = std::move(sets);
 		m_LocalShadowRangeLevels = levels;
+		m_LocalShadowRangesFresh = true;
 		return true;
 	}
 
@@ -404,6 +405,22 @@ namespace Strata
 		}
 		for (const ShadowAtlasTile& tile : m_LocalShadowClears)
 			add(tile);
+		if (m_LocalShadowRangesFresh)
+		{
+			// New ranges: also those of the views that hold what they were drawn with before (the atlas still has it).
+			for (const LocalShadowLight& light : m_LocalShadowLights)
+			{
+				if (light.Type != RenderData::c_LightRect)
+					continue;
+				for (uint32_t face = 0; face < light.ViewCount; face++)
+				{
+					const LocalShadowView& view = light.Views[face];
+					if (view.HasContent && !view.Drawing)
+						add(view.DrawnKey.Tile);
+				}
+			}
+			m_LocalShadowRangesFresh = false;
+		}
 		if (m_LocalShadowRangeTiles.empty())
 			return;
 		commandList->beginMarker("LocalShadowRanges");
@@ -443,9 +460,16 @@ namespace Strata
 		m_LocalShadowRanges = nullptr;
 		m_LocalShadowRangeSets.clear();
 		m_LocalShadowRangeLevels = 0;
+		m_LocalShadowRangesFresh = false;
 		// The scene's binding sets and the masks' evaluation name the ranges: made again by the next frame's comparison.
 		m_BoundLocalShadowRanges = nullptr;
 		m_AreaShadowBoundRanges = nullptr;
+	}
+
+	bool SceneRenderer::HoldsAreaShadowViews() const
+	{
+		return std::any_of(m_LocalShadowLights.begin(), m_LocalShadowLights.end(),
+			[](const LocalShadowLight& light) { return light.Type == RenderData::c_LightRect && light.TileSize > 0; });
 	}
 
 }

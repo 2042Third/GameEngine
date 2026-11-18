@@ -5111,8 +5111,11 @@ lights, Post Process and the sky), and never a resolution below the output's.
   to 16 pixels, the sun's 8) into the light's layer of an R8 array (scene SRV 58; a 1 x 1 dummy without masks). The light
   buffer's `SpotAngles.w` is a rect light's layer plus one (the CPU path writes it with the slot, the GPU-driven path packs it
   in the top byte of the slot table, t21, which `Scene/LightCompact.comp` unpacks). The masks and two RG8 scratch targets
-  (66 MB at 3840 x 2160) are made by the first frame with one and released with the render targets; a frame whose masks or
-  ranges cannot be made draws its rect lights unshadowed (reported). Transparent surfaces filter per pixel, without the blur.
+  (66 MB at 3840 x 2160) are made by the first frame with one and released with the render targets. The ranges are made by
+  the first frame in which a rect light holds tiles, before its shadow has faded in and before it has a mask: the views drawn
+  then need them too (a renderer's first frame has no time to fade by, and views drawn before the ranges existed kept ranges
+  never built: `GPU.SceneRenderer.AreaShadows`, "drawn before its shadow fades in"); new ranges are built for the views
+  holding content as well. A frame whose masks or ranges cannot be made draws its rect lights unshadowed (reported). Transparent surfaces filter per pixel, without the blur.
   The last masked light's evaluation (`GetAreaShadowEvaluation`) marks every pixel that compared depths.
   Measured (`GPU.SceneRenderer.AreaShadows` and `.AreaLightCornell`, both paths alike to the code): the Cornell box's floor
   seen from under its ceiling within 0.110 of the reference at the grid's points outside the penumbrae (at one point under the
@@ -5140,7 +5143,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   99th percentile on the
   flicker meter, the sun's widest soft shadows in the same room 0.062% and 0.84% (with the row's taps alone rect lights
   measured 0.092% and 1.46%, hence the factor 2); the masks' grain in a still penumbra (RMS from the 9 x 9 mean) 0.003
-  against the sun's 0.026.
+  against the sun's 0.026. **Cost**: `PerfGPU.Renderer.AreaShadows4` (a room seen whole at 3840 x 2160 and High, four rect
+  lights casting shadows over it, their views cached) measures 6.77 ms on the GPU, 5.3 ms of it the masks
+  (`GPU.ScreenShadows`); the entry first measured 2.18 ms in frames whose ranges had never been built (the classification
+  read an unfilled texture).
 - **Light surfaces** (`LightSurfaceComponent`, Lighting, a tag): the emissive mesh that shows an area light's face, which
   `lighting.makeAreaLight` tags when it makes the panel a light (a child Rect Light on its emitting face, `auto` judging the
   face on the mesh's bounds times the panel's world scale; a second call finds the light: "already a light"). The light lights

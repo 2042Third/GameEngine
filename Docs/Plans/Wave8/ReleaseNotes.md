@@ -374,10 +374,14 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   shadow keeps its true width: behind a thick wall's top edge the penumbra is within 0.063 of the true one and 8% wider
   (0.167 off and 38% narrower before), and a wall rising beside a surface no longer darkens it as a contact would (the
   Cornell box's back wall beside the red wall read a band 0.19 dark).
+- Rect light shadows are right from the first frame a light casts one: views drawn before its shadow had faded in (a
+  renderer's first frame, a light whose views are drawn over several frames) kept depth ranges that were never built, so
+  its shadow could be missing or wrong until its views were drawn again.
 - Look-dev: the Cornell box with its panel made a light (`lookdev.cornell.rect`, `.rect.top`), a shop light over wet ground
   (`lookdev.rect.wet`, `.wet.low`), three softboxes over the polished, satin and glossy floors (`lookdev.rect.metal`) and a
   strip over the metal sheet (`lookdev.rect.strip`). Perf entries `PerfGPU.Renderer.AreaLights8` (a room under eight 2 x 1 m
-  rect lights at 4K High: 1.27 ms on the GPU) and `.AreaShadows4` (four of them casting shadows: 2.18 ms).
+  rect lights at 4K High: 1.27 ms on the GPU) and `.AreaShadows4` (four of them casting shadows: 6.77 ms, 5.3 ms of it
+  their masks).
 
 ## Defaults that change
 

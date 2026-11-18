@@ -3264,9 +3264,12 @@ namespace Strata
 			degraded = true;
 		}
 		// Opaque surfaces take the shadowed rect lights' shadows from masks drawn after the prepass, which read the atlas's depth
-		// ranges: a frame whose masks or ranges cannot be made renders the rect lights without their shadows (reported).
+		// ranges. These are made with the first rect light view, also while its shadow has not faded in yet (no mask): the views
+		// drawn then need them as well. A frame whose masks or ranges cannot be made renders the rect lights without their
+		// shadows (reported); new ranges are built for the views holding content too.
 		AssignAreaShadowMasks(renderScene.GetLights(), camera);
-		if (!m_AreaShadowMasks.empty() && (!EnsureLocalShadowRanges() || !EnsureAreaShadowMasks()))
+		const bool areaViews = !m_AreaShadowMasks.empty() || HoldsAreaShadowViews();
+		if (areaViews && (!EnsureLocalShadowRanges() || (!m_AreaShadowMasks.empty() && !EnsureAreaShadowMasks())))
 		{
 			m_Errors.Report("failed to create the rect lights' shadow masks or depth ranges; rendering rect lights without shadows");
 			for (LocalShadowLight& light : m_LocalShadowLights)
@@ -3499,7 +3502,8 @@ namespace Strata
 			commandList->endMarker();
 		}
 
-		if (frame.ShadowParams.w > 0.0f || !m_LocalShadowViews.empty() || !m_LocalShadowClears.empty())
+		const bool localShadowWork = !m_LocalShadowViews.empty() || !m_LocalShadowClears.empty() || m_LocalShadowRangesFresh;
+		if (frame.ShadowParams.w > 0.0f || localShadowWork)
 		{
 			gpuTimer.Next(gpuStages.Shadows);
 			commandList->beginMarker("Shadows");
@@ -3515,7 +3519,7 @@ namespace Strata
 					BuildShadowRanges(commandList, (1u << m_CascadeCount) - 1u);
 				}
 			}
-			if (!m_LocalShadowViews.empty() || !m_LocalShadowClears.empty())
+			if (localShadowWork)
 			{
 				commandList->beginMarker("LocalShadows");
 				ClearUnneededLocalShadowTiles(commandList);

@@ -1942,11 +1942,15 @@ namespace Strata
 		// Clears the tiles of the views no receiver needs (m_LocalShadowClears), on either path before the views are drawn.
 		void ClearUnneededLocalShadowTiles(nvrhi::ICommandList* commandList);
 		// The depth ranges of the rect lights' views drawn this frame (Scene/LocalShadowRanges.comp; u_LocalShadowRanges), after
-		// either path drew them. Made with the first frame that draws a shadowed rect light's view (EnsureLocalShadowRanges, false
-		// when that fails: the frame's rect lights then cast no shadow), released with the atlas.
+		// either path drew them, and when new also of those holding content. Made with the first frame in which a rect light holds
+		// tiles (EnsureLocalShadowRanges, false when that fails: the frame's rect lights then cast no shadow), released with the
+		// atlas.
 		bool EnsureLocalShadowRanges();
 		void BuildLocalShadowRanges(nvrhi::ICommandList* commandList);
 		void ReleaseLocalShadowRanges(std::vector<nvrhi::ResourceHandle>& released);
+		// Whether a rect light holds tiles (its views are drawn, or hold content): its views need the ranges from the frame
+		// they are first drawn in, before its shadow fades in.
+		bool HoldsAreaShadowViews() const;
 		// The layers of the area shadow masks the frame's shadowed rect lights take (LocalShadowLight::MaskLayer), the light
 		// buffer's SpotAngles.w of each, and the masks' targets (EnsureAreaShadowMasks: false, reported, when they cannot be
 		// made); RenderAreaShadowMasks draws them after the prepass, in GPU.ScreenShadows.
@@ -2363,6 +2367,7 @@ namespace Strata
 		nvrhi::ComputePipelineHandle m_LocalShadowRangeDownsamplePipeline;
 		nvrhi::BufferHandle m_LocalShadowRangeTileBuffer;
 		std::vector<glm::uvec4> m_LocalShadowRangeTiles;
+		bool m_LocalShadowRangesFresh = false; // Made since the last build: the rect lights' views holding content need theirs too
 		// The area shadow masks of the frame (AssignAreaShadowMasks): per masked light its parameters and its scissor on screen
 		// (x, y, width, height in pixels).
 		struct AreaShadowMask
