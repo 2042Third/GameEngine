@@ -251,7 +251,7 @@ namespace Strata
 		// asks the host for it at the end of that frame's UI), then encodes and saves the picture on job threads.
 		std::optional<EditorCommandResult> PollScreenshot(const std::shared_ptr<ScreenshotCapture>& capture);
 		// At the end of the UI's frame: asks the host to read back the window, or the panel's rectangle as this frame drew it,
-		// for the screenshots armed.
+		// for the screenshots armed, once a frame lays out its windows as the frame before (or they waited their longest).
 		void ReadBackScreenshots();
 		// Notes input that arrived this frame (ImGui's input events, held keys and buttons).
 		void TrackInput();

@@ -433,8 +433,10 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   picture never has another size than asked for. With `--ui-scale 1` (or another fixed scale) beside it, screenshots of
   the editor compare across machines; `StrataCLI launch --window-size` and `--ui-scale` pass them on.
 - AI agents: `editor.screenshot {path?, overwrite?, panel?}` takes a picture of the whole editor window as the person sees
-  it, UI and all, or of one panel, two frames after the command (so `editor.showPanel`, `editor.showDialog` and the other
-  commands before it show), without stalling a frame; it needs a window.
+  it, UI and all, or of one panel, without stalling a frame; it needs a window. The picture is of the first frame, from the
+  second after the command, that lays out its windows and tabs as the one before (so `editor.showPanel`,
+  `editor.showDialog` and the other commands before it show, and an editor that just started has its tabs laid out),
+  at most 30 frames later; `settled` says whether the layout had stopped moving.
 - AI agents: `viewport.capture {renderer: {...}}` switches techniques for one picture to show what they do: specular
   anti-aliasing, the specular energy compensation, the horizon fade, dithering, the spatial reflections' resolve, FXAA's
   sub-pixel amount (0.75 beside 0.25), one bounce of global illumination, the GPU-driven path, occlusion culling,

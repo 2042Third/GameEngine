@@ -11,18 +11,25 @@
 
 #include <Strata/Core/Base64.h>
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/ImageReader.h>
 #include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Scene/Components.h>
 
+#include <imgui.h>
+#include <imgui_internal.h>
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
+#include <vector>
 
 // Contracts of the editor's commands that agents rely on: values out of a property's range are refused rather than changed,
 // and the editor window's dialogs open on request (editor.showDialog).
@@ -285,6 +292,98 @@ TEST_SUITE("Editor.UI.Dialogs")
 		CHECK_FALSE(failed.Success);
 		CHECK(failed.Error.find("the device was lost") != std::string::npos);
 		CHECK_FALSE(FileSystem::Exists(directory / "Failed.png"));
+	}
+
+	TEST_CASE("editor.screenshot takes a frame laid out as the one before, also as the first command of an editor that just started")
+	{
+		// Where every window and every tab of a visible tab bar was in the frame just drawn.
+		const auto layoutOf = []()
+		{
+			ImGuiContext& imgui = *ImGui::GetCurrentContext();
+			std::vector<double> layout;
+			for (const ImGuiWindow* window : imgui.Windows)
+			{
+				if (window->Active)
+					layout.insert(layout.end(), { double(window->ID), window->Hidden ? 1.0 : 0.0, window->Pos.x, window->Pos.y, window->Size.x, window->Size.y });
+			}
+			for (int index = 0; index < imgui.TabBars.GetMapSize(); index++)
+			{
+				const ImGuiTabBar* tabBar = imgui.TabBars.TryGetMapData(index);
+				if (!tabBar || tabBar->CurrFrameVisible != imgui.FrameCount)
+					continue;
+				for (const ImGuiTabItem& tab : tabBar->Tabs)
+					layout.insert(layout.end(), { double(tab.ID), tab.Offset, tab.Width });
+			}
+			return layout;
+		};
+		const auto frameOnce = [](HarnessEditor& editor, const std::function<void()>& before)
+		{
+			editor.Host->Time += ImGuiHarness::c_DeltaTime;
+			editor.Layer->OnUpdate(Timestep(ImGuiHarness::c_DeltaTime));
+			editor.Harness.Frame([&]()
+			{
+				before();
+				editor.Layer->OnImGuiRender();
+			});
+			editor.Host->FrameCount++;
+			// Encoding runs on job threads.
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		};
+
+		HarnessEditor editor({}, WithFeatureProject("ScreenshotSettle"));
+		editor.Host->Window = true;
+		// As a command script's first command, before the editor drew its first frame (its dock space, windows and tabs lay out
+		// over the first frames).
+		auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+		editor.Layer->GetCommandRunner().Run(editor.Context(), editor.Layer->GetCommands(), "editor.screenshot", nlohmann::json::object(),
+			[completed](const EditorCommandResult& result) { *completed = result; });
+		std::vector<std::vector<double>> layouts;
+		std::optional<size_t> readFrame;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		while (!completed->has_value() && std::chrono::steady_clock::now() < deadline)
+		{
+			frameOnce(editor, []() {});
+			layouts.push_back(layoutOf());
+			if (!readFrame && !editor.Host->WindowReadbacks.empty())
+				readFrame = layouts.size() - 1;
+		}
+		REQUIRE(completed->has_value());
+		INFO((*completed)->Error);
+		REQUIRE((*completed)->Success);
+		REQUIRE(readFrame.has_value());
+		REQUIRE(*readFrame >= 1);
+		CHECK(layouts[*readFrame] == layouts[*readFrame - 1]);
+		CHECK((*completed)->Value["settled"] == true);
+
+		// A window that grows in every frame never holds still: the picture is taken after the longest wait, and says so.
+		completed->reset();
+		const size_t readbacks = editor.Host->WindowReadbacks.size();
+		const uint64_t started = editor.Host->FrameCount;
+		std::optional<uint64_t> readAt;
+		float growth = 0.0f;
+		editor.Layer->GetCommandRunner().Run(editor.Context(), editor.Layer->GetCommands(), "editor.screenshot", nlohmann::json::object(),
+			[completed](const EditorCommandResult& result) { *completed = result; });
+		const auto growingDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		while (!completed->has_value() && std::chrono::steady_clock::now() < growingDeadline)
+		{
+			frameOnce(editor, [&growth]()
+			{
+				growth += 1.0f;
+				ImGui::SetNextWindowPos(ImVec2(40.0f, 40.0f));
+				ImGui::SetNextWindowSize(ImVec2(200.0f + growth, 120.0f));
+				ImGui::Begin("Growing", nullptr, ImGuiWindowFlags_NoDocking);
+				ImGui::TextUnformatted("Grows");
+				ImGui::End();
+			});
+			if (!readAt && editor.Host->WindowReadbacks.size() > readbacks)
+				readAt = editor.Host->FrameCount;
+		}
+		REQUIRE(completed->has_value());
+		INFO((*completed)->Error);
+		REQUIRE((*completed)->Success);
+		CHECK((*completed)->Value["settled"] == false);
+		REQUIRE(readAt.has_value());
+		CHECK(*readAt - started >= 30);
 	}
 
 	TEST_CASE("editor.showDialog opens the project dialogs and the export dialog of an open project")

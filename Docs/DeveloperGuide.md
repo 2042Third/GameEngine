@@ -2847,10 +2847,15 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     tab shows; while a modal dialog waits for the person it opens behind it (focusing it would close the dialog).
     `editor.screenshot {path?, overwrite?, panel?}`, the window's third command, takes a picture of the window as the person
     sees it, UI and all, or of one docked panel's window (named as `editor.showPanel` names them), as a PNG (`{Image, width,
-    height, panel, region: {x, y, width, height}, path?}`; `path` through `CommandUtils::ResolveOutputPath`). It is an
-    `EditorHost` service: `StrataEditorCore` never reaches the UI. The command's poll waits `c_ScreenshotSettleFrames` (2)
-    so the commands before it took effect and ImGui laid out what changed, then arms the capture; at the end of that frame's
-    UI (`EditorLayer::ReadBackScreenshots`) the panel's rectangle as this frame drew it (`GetShownWindowRect`, times
+    height, panel, region: {x, y, width, height}, settled, path?}`; `path` through `CommandUtils::ResolveOutputPath`). It is
+    an `EditorHost` service: `StrataEditorCore` never reaches the UI. The command's poll waits `c_ScreenshotSettleFrames` (2)
+    so the commands before it took effect, then arms the capture. At the end of each later frame's UI
+    (`EditorLayer::ReadBackScreenshots`) it compares where ImGui put the windows and the tabs of their tab bars with the
+    frame before (`HashWindowLayout`): ImGui lays out what appeared, resized or docked over a frame or more, and an editor
+    that just started (a script's first command) shows its tabs' titles cut in its first frames. The first frame that lays
+    out as the one before is read back (`settled` true), or the one `c_ScreenshotMaxSettleFrames` (30) frames in (`settled`
+    false). What is still loading (the scene's assets, thumbnails) shows as the person sees it: scripts wait (`editor.wait`)
+    before pictures right after the start. Then the panel's rectangle as this frame drew it (`GetShownWindowRect`, times
     `DisplayFramebufferScale`; a panel brought to the front gets `c_ScreenshotShowFrames` to show) goes to
     `EditorHost::RequestWindowReadback`, which `GraphicsModule::RequestBackBufferReadback` answers: a `TextureReadback` of
     the back buffer submitted at the end of that frame, after the UI is drawn, polled at the start of later frames, so no

@@ -593,11 +593,13 @@ person at the editor sees the same in the Performance panel (click the frame pil
 way ("recovery" lets the person choose what to recover or discard, instead of you choosing for them; "newScript" and
 "externalEditor" let them name a script class or pick the program that opens scripts; "preferences" takes a `section`).
 `editor.screenshot {path?, overwrite?, panel?}` takes a picture of the whole editor window as the person sees it (UI,
-dialogs, toasts), or of one panel (`"Inspector"`, `"Scene"`, ... as `editor.showPanel` names them), two frames after the
-command so the commands before it show: `{Image, width, height, panel, region, path?}`. It needs a window (not
-`--headless`); start the editor with `StrataCLI launch --window-size 1600x900` (or `StrataEditor --window-size`) for
-pictures of one size on every machine, and bring a panel to the front with `editor.showPanel` first (a closed panel or one
-behind another tab fails).
+dialogs, toasts), or of one panel (`"Inspector"`, `"Scene"`, ... as `editor.showPanel` names them), at the first frame
+from the second after the command whose windows and tabs lie as in the frame before, so the commands before it show:
+`{Image, width, height, panel, region, settled, path?}` (`settled` false: the layout still moved after 30 frames). What
+is still loading shows as it is: after a start, `editor.wait` first. It needs a window (not `--headless`); start the
+editor with `StrataCLI launch --window-size 1600x900 --ui-scale 1` (or `StrataEditor --window-size ... --ui-scale 1`;
+at least 640x360, and within the display, else the editor does not start) for pictures that compare across machines, and
+bring a panel to the front with `editor.showPanel` first (a closed panel or one behind another tab fails).
 
 **Play it (simulated input)**: while the game runs (`play.start`), the `input.*` commands press keys and buttons the way a
 player would; scripts see them through `Input::IsKeyDown/IsKeyPressed/IsKeyReleased` (also while the viewport has no focus).
