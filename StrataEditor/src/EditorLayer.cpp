@@ -1527,7 +1527,8 @@ namespace Strata
 	{
 		ImGui::DockBuilderRemoveNode(dockspaceId);
 		ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
-		ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetContentRegionAvail());
+		// A window shrunk to almost nothing leaves the dock space no room, and ImGui takes no empty node: it grows as the window does.
+		ImGui::DockBuilderSetNodeSize(dockspaceId, ImMax(ImGui::GetContentRegionAvail(), ImVec2(1.0f, 1.0f)));
 
 		// The viewport first: the side panels take a fixed share of the width (more at large UI scales, for their text), the
 		// bottom area a share of the height under the viewport only.

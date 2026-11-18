@@ -178,7 +178,6 @@ namespace Strata
 		const ViewportToolbar::Layout layout = ViewportToolbar::Compute(m_ChipStrip.Rows);
 		const ImVec2 imageMin = layout.ImageMin;
 		const ImVec2 available = layout.ImageSize;
-		ImGui::SetCursorScreenPos(imageMin);
 		const ImVec2 viewportScale = ImGui::GetWindowViewport()->FramebufferScale;
 		const ImVec2 displayScale = ImGui::GetIO().DisplayFramebufferScale;
 		m_Image.Min = glm::vec2(imageMin.x, imageMin.y);
@@ -194,11 +193,14 @@ namespace Strata
 		// the Inspector's pixels and captures use it).
 		const glm::uvec2 screenSize = canvasMode ? m_CanvasMode.GetScreenPixels() : size;
 		viewport.SetSize(screenSize);
+		// A panel with no room under its toolbar (a window shrunk to almost nothing) draws nothing. The cursor moves to the image
+		// only when the image follows: ImGui refuses a window whose cursor was moved past its contents without an item there.
 		if (size.x == 0 || size.y == 0)
 		{
 			Reset(context);
 			return;
 		}
+		ImGui::SetCursorScreenPos(imageMin);
 
 		// Elsewhere an item covering the image takes the clicks, so dragging in the viewport never moves a floating window.
 		if (m_OverGizmo)
