@@ -5179,7 +5179,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   its ceiling light's plane as the reference (0.21 off without leaving out the taps behind the plane), its back wall beside the
   red wall within 0.016 where the reference sees the whole light; a blocker
   0.3 m under a 2 m light gets 16% of the reference's width: the **reach clamp**, the known limit of very wide penumbrae (a
-  blocker within about a third of the receiver's distance of a large light); in the Cornell box 46% of the fully lit pixels
+  blocker within about a third of the receiver's distance of a large light); in the Cornell box 45% of the fully lit pixels
   still reach the taps (the spec's 30% is not met: by walls and corners geometry nearer than the receiver lies within its own
   reach); a strafe across the Cornell box's penumbrae without anti-aliasing measures 0.060% of blocks and 0.83% at their
   99th percentile on the

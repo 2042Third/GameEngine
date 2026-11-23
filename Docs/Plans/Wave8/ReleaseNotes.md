@@ -370,7 +370,7 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
   the light to the surface, so a wall beside a floor point blocks nothing (in the Cornell box the floor was 0.40 off the
   reference by the walls before; the test's grid points outside the penumbrae are within 0.073 now), and a post's contact
   shadow is
-  2.1 cm wide instead of 3.3 cm. Each tap also looks at two points nearer the surface along its path, so a solid blocker's
+  2.0 cm wide instead of 3.3 cm. Each tap also looks at two points nearer the surface along its path, so a solid blocker's
   shadow keeps its true width: behind a thick wall's top edge the penumbra is within 0.063 of the true one and 8% wider
   (0.167 off and 38% narrower before), and a wall rising beside a surface no longer darkens it as a contact would (the
   Cornell box's back wall beside the red wall read a band 0.19 dark).

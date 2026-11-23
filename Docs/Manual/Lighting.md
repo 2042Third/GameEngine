@@ -113,8 +113,8 @@ linearly transformed cosines), the same in every frame.
   under a strip light) takes that part's light; a blocker in front of it is found, but not one hidden from the light's
   center by the object itself. The back faces take a second atlas of the point and spot atlas's size, made with the
   first rect light that casts a shadow. Shadows of shadowed rect lights cost every pixel near their penumbrae a filter
-  of twice the Shadow Filter Quality's taps: four of them over a whole 4K view take about 7 ms of GPU time at High, so
-  budget about 1.7 ms for each shadowed rect light that covers the view.
+  of twice the Shadow Filter Quality's taps: four of them over a whole 4K view take about 7 ms of GPU time at High on an
+  RTX 5090, so budget about 1.7 ms for each shadowed rect light that covers the view.
 - **An emissive panel is not a light by itself.** A mesh with an emissive material shows its glow, but it lights the scene
   only through global illumination's probes, with their coarse resolution. To make a panel light the room, right-click it
   in the Hierarchy and choose **Make Area Light** (also in the Mesh Renderer's menu in the Inspector; agents:
