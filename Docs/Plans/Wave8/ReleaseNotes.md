@@ -638,7 +638,12 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   double-sided closed mesh is known only by its front, so light passes at its foot as it did before the back faces
   (neither measured). The side of an object facing away from the light's center finds a blocker in front of it within
   the filter's reach (a bar in front of a post's side under a strip: 0.12 off the true visibility on average, 0.29 at
-  worst) but not one that its own solid hides from the light's center. A very large rect light (a reviewer's 100 x 100 m
+  worst) but not one that its own solid hides from the light's center. A side that has the light's center in front of
+  it but a blocker between them reads fully shadowed where it should be partly lit (a slab's side under a bar: 0 where
+  the true visibility is 0.65 to 0.89, 0.26 too dark on average over the side): the filter finds no blocker for a surface
+  that steep, so only its four central taps count. A one-line change of that test measured within 0.074 of the true
+  visibility there but also counts a sloped surface's own depth as a blocker, so it waits for the other cases' measures.
+  A very large rect light (a reviewer's 100 x 100 m
   one over the Cornell box) drew ragged notches along the sphere's terminator, more than the reach's narrower penumbrae
   explain; not measured, and not looked at again since the filter leaves out the taps behind a receiver's horizon. In
   the Cornell box 45% of the fully lit pixels still run the filter's comparisons. They are costly: four rect lights

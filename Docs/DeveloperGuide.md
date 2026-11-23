@@ -5160,6 +5160,11 @@ lights, Post Process and the sky), and never a resolution below the output's.
   reference at their outer edge and up to 0.078 lighter inside, which L4's steps, taken where the reference is flat, do not
   see. A light whose tile halves (512 to 256 texels, S10's dolly) draws its penumbra 8.9% narrower (0.503 m against 0.552 m,
   the reference 0.578 m; the spec's 5% is not met); the frames that still sample its old tiles keep the old width.
+  A side whose plane has the light's center in front of it but that a blocker hides from the center reads umbra (S14: the
+  slab's side under the bar reads 0 where the reference is 0.65 to 0.89): a cell blocks only where it is nearer than the
+  receiver's plane over the whole cell, which a steep receiver's plane across a coarse cell never allows, so no blocker
+  is found and the tent alone reads the bar. Counting cells nearer than the plane anywhere over them read that side within
+  0.074 on average (0.30 at worst) but counts a sloped receiver's own surface, and was not measured on the other cases.
   Looks at more points cost more: six
   from a quarter of the offset measured 1 ms less in `PerfGPU.Renderer.AreaShadows4` but left the strafe's flicker above the
   sun's. No step between

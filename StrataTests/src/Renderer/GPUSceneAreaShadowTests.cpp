@@ -421,6 +421,47 @@ namespace
 		return glm::vec3(start + direction * t);
 	}
 
+	// How far a side x = `sideX` of a slab 0.6 m tall and 0.4 m deep (centered on z = 0, standing on the floor), seen head-on, reads
+	// from the reference's visibility, over every other pixel 2 cm in from its edges and from `lowest` to `highest` up.
+	struct SideError
+	{
+		double Mean = 0.0;
+		double Signed = 0.0;
+		double Worst = 0.0;
+		double ReferenceLeast = 1.0;
+		uint32_t Count = 0;
+	};
+
+	SideError MeasureSideError(const VisibilityImage& image, const SceneCamera& camera, const AreaShadowScene& scene, const AreaLights::Record& light, double sideX,
+		double normalX, float lowest = 0.02f, float highest = 0.58f)
+	{
+		SideError error;
+		double sum = 0.0;
+		double signedSum = 0.0;
+		for (uint32_t y = 0; y < image.Height; y += 2)
+		{
+			for (uint32_t x = 0; x < image.Width; x += 2)
+			{
+				const std::optional<glm::vec3> point = FindPlanePointX(camera, x, y, image.Width, image.Height, sideX);
+				if (!point || std::abs(point->z) > 0.18f || point->y < lowest || point->y > highest || image.At(x, y) < 0.0f)
+					continue;
+				const double reference = AreaShadowReference(glm::dvec3(*point), glm::dvec3(normalX, 0.0, 0.0), light, scene.Boxes, 48);
+				const double difference = std::abs(image.At(x, y) - reference);
+				error.Worst = std::max(error.Worst, difference);
+				sum += difference;
+				signedSum += image.At(x, y) - reference;
+				error.ReferenceLeast = std::min(error.ReferenceLeast, reference);
+				error.Count++;
+			}
+		}
+		if (error.Count > 0)
+		{
+			error.Mean = sum / error.Count;
+			error.Signed = signedSum / error.Count;
+		}
+		return error;
+	}
+
 	uint32_t CountDifferent(const ReadbackImage& a, const ReadbackImage& b)
 	{
 		REQUIRE(a.Pixels.size() == b.Pixels.size());
@@ -1462,47 +1503,84 @@ TEST_SUITE("GPU.SceneRenderer.AreaShadows")
 				const SceneCamera camera = OrthographicLookAt(glm::vec3(3.0f, 0.3f, 0.0f), glm::vec3(0.3f, 0.3f, 0.0f), 0.8f);
 				const VisibilityImage image = RenderVisibility(shadowed, unshadowed, scene, camera);
 				CHECK(shadowed.GetStats().AreaShadowMasks == 1);
-				const AreaLights::Record light = GetLightRecord(scene.Light);
-				double worst = 0.0;
-				double sum = 0.0;
-				double signedSum = 0.0;
-				double referenceLeast = 1.0;
-				uint32_t count = 0;
-				for (uint32_t y = 0; y < image.Height; y += 2)
-				{
-					for (uint32_t x = 0; x < image.Width; x += 2)
-					{
-						const std::optional<glm::vec3> point = FindPlanePointX(camera, x, y, image.Width, image.Height, c_SideX);
-						// The side, 2 cm in from its edges.
-						if (!point || std::abs(point->z) > 0.18f || point->y < 0.02f || point->y > 0.58f || image.At(x, y) < 0.0f)
-							continue;
-						const double reference = AreaShadowReference(glm::dvec3(*point), glm::dvec3(1.0, 0.0, 0.0), light, scene.Boxes, 48);
-						const double difference = std::abs(image.At(x, y) - reference);
-						worst = std::max(worst, difference);
-						sum += difference;
-						signedSum += image.At(x, y) - reference;
-						referenceLeast = std::min(referenceLeast, reference);
-						count++;
-					}
-				}
-				REQUIRE(count > 1000);
+				const SideError side = MeasureSideError(image, camera, scene, GetLightRecord(scene.Light), c_SideX, 1.0);
+				REQUIRE(side.Count > 1000);
 				MESSAGE(fmt::format("S13{}: the side's {} pixels: {:.4f} from the reference on average ({:+.4f} signed), {:.4f} at worst (the reference's "
-					"least {:.4f})", withBar ? " with the bar" : "", count, sum / count, signedSum / count, worst, referenceLeast));
+					"least {:.4f})", withBar ? " with the bar" : "", side.Count, side.Mean, side.Signed, side.Worst, side.ReferenceLeast));
 				if (withBar)
 				{
 					// Measured 0.1155 on average (+0.017 signed: as much too dark as too light) and 0.286 at worst; the bounds are
 					// 1.5 times that. A look whose ray from the center meets the bar counts its path as blocked, as the filter's
 					// looks do elsewhere: the bar's penumbra on the side lies within the reach.
-					CHECK(referenceLeast < 0.8);
-					CHECK(sum / count <= 0.173);
-					CHECK(worst <= 0.429);
+					CHECK(side.ReferenceLeast < 0.8);
+					CHECK(side.Mean <= 0.173);
+					CHECK(side.Worst <= 0.429);
 				}
 				else
 				{
 					// Measured 0 to the fourth decimal (the side lit as without the shadow); before, umbra with blotches of light.
-					CHECK(referenceLeast == 1.0);
-					CHECK(worst <= 1e-4);
+					CHECK(side.ReferenceLeast == 1.0);
+					CHECK(side.Worst <= 1e-4);
 				}
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A side whose plane cuts the light in front of its center takes no light from the face's part behind that plane")
+	{
+		// S14: S13's slab and strip, seen from the slab's other side. Its -X side has the strip's center 0.25 m in front of its plane
+		// and the strip's last 0.5 m (a third) behind it, so the side's receivers take the filter's usual branch. A bar in front of
+		// the side, between it and the strip's part it sees, brings them to the filter's taps; the taps whose points of the face lie
+		// behind the side's plane must then give the side nothing (the shading's horizon), whatever their looks read along paths
+		// through the slab. Seen head-on, against the reference's visibility (normal -X).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		constexpr uint32_t c_Size = 256;
+		constexpr double c_SideX = 0.25;
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			if (mode == GPUDrivenMode::Auto && !DeviceDrawsGPUDriven())
+				continue;
+			CAPTURE(static_cast<int>(mode));
+			for (const bool withBar : { false, true })
+			{
+				CAPTURE(withBar);
+				AreaShadowScene scene;
+				BuildAreaShadowScene(scene, assets, glm::vec3(0.0f, 1.2f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), 1.5f, 0.05f);
+				AddBox(scene, Box { glm::vec3(0.275f, 0.3f, 0.0f), glm::vec3(0.05f, 0.6f, 0.4f) }, "Slab");
+				if (withBar)
+					AddBox(scene, Box { glm::vec3(0.19f, 0.66f, 0.0f), glm::vec3(0.04f, 0.04f, 0.6f) }, "Bar");
+				SceneRenderer shadowed(AreaShadowSpecification(mode));
+				SceneRenderer unshadowed(AreaShadowSpecification(mode));
+				shadowed.SetViewportSize(c_Size, c_Size);
+				unshadowed.SetViewportSize(c_Size, c_Size);
+				const SceneCamera camera = OrthographicLookAt(glm::vec3(-2.45f, 0.3f, 0.0f), glm::vec3(0.25f, 0.3f, 0.0f), 0.8f);
+				const VisibilityImage image = RenderVisibility(shadowed, unshadowed, scene, camera);
+				CHECK(shadowed.GetStats().AreaShadowMasks == 1);
+				const AreaLights::Record light = GetLightRecord(scene.Light);
+				const SideError side = MeasureSideError(image, camera, scene, light, c_SideX, -1.0);
+				REQUIRE(side.Count > 1000);
+				MESSAGE(fmt::format("S14{}: the side's {} pixels: {:.4f} from the reference on average ({:+.4f} signed), {:.4f} at worst (the reference's "
+					"least {:.4f})", withBar ? " with the bar" : "", side.Count, side.Mean, side.Signed, side.Worst, side.ReferenceLeast));
+				if (!withBar)
+				{
+					CHECK(side.ReferenceLeast == 1.0);
+					CHECK(side.Worst <= 1e-4);
+					continue;
+				}
+				// The side below 0.36 m, which the strip's center sees past the bar (the bar hides the side from 0.375 to 0.585 m from
+				// it: there the side reads up to 0.90 too dark, a Known issue of the release notes).
+				const SideError seen = MeasureSideError(image, camera, scene, light, c_SideX, -1.0, 0.02f, 0.36f);
+				REQUIRE(seen.Count > 500);
+				MESSAGE(fmt::format("S14 with the bar, below 0.36 m: {} pixels: {:.4f} from the reference on average ({:+.4f} signed), {:.4f} at worst "
+					"(the reference's least {:.4f})", seen.Count, seen.Mean, seen.Signed, seen.Worst, seen.ReferenceLeast));
+				// Measured 0.0441 on average (-0.038 signed) and 0.144 at worst; the bounds are 1.5 times that. With the taps behind
+				// the side's plane counted, the part read 0.193 too dark on average and 0.248 at worst.
+				CHECK(seen.ReferenceLeast < 0.9);
+				CHECK(seen.Mean <= 0.066);
+				CHECK(seen.Worst <= 0.216);
 			}
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
