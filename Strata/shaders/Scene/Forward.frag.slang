@@ -335,8 +335,16 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 #else
 				float areaDiffuseWeight = 1.0;
 #endif
+				float areaSpecularWeight = 1.0 - u_Frame.MaterialParams.w;
+				// The views of one kind of light keep the rect light's of that kind alone, as LightSurface does for the others
+				// (branches on the uniform view: other frames shade with the weights of before).
+				uint areaView = GetLightingView();
+				if (areaView == ST_LIGHTING_VIEW_SPECULAR)
+					areaDiffuseWeight = 0.0;
+				else if (areaView == ST_LIGHTING_VIEW_DIFFUSE)
+					areaSpecularWeight = 0.0;
 				AreaLight area = LoadAreaLight(light, u_LightShapes[lightIndex]);
-				float3 areaColor = ShadeAreaLight(surface, coat, coatDFG, dfg, areaDiffuseWeight, area, 1.0 - u_Frame.MaterialParams.w);
+				float3 areaColor = ShadeAreaLight(surface, coat, coatDFG, dfg, areaDiffuseWeight, area, areaSpecularWeight);
 				// A shadowed light's slot plus one (SceneRenderer's local shadows): opaque surfaces read its mask, transparent ones
 				// filter per pixel (Include/AreaShadows.slang), as for the sun.
 				uint areaSlot = uint(light.SpotAngles.z + 0.5);

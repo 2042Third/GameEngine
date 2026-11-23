@@ -1303,6 +1303,61 @@ TEST_SUITE("GPU.SceneRenderer.AreaLights")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The specular and diffuse views show one kind of a rect light's light, as the reference without the other")
+	{
+		// The views of one kind of light (SceneLightingView::Specular, Diffuse) keep the lights' light of that kind alone: a rect
+		// light's too, so a metal shows nothing in the diffuse view and a coated dielectric its highlights or its diffuse light.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		constexpr uint32_t c_ViewSize = 48;
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(c_ViewSize, c_ViewSize);
+		for (const SceneLightingView lightingView : { SceneLightingView::Specular, SceneLightingView::Diffuse })
+		{
+			for (const float metallic : { 0.0f, 1.0f })
+			{
+				CAPTURE(static_cast<int>(lightingView));
+				CAPTURE(metallic);
+				SceneRenderOptions options;
+				options.LightingView = lightingView;
+				PlaneMaterial material;
+				material.Albedo = glm::vec3(0.8f);
+				material.Metallic = metallic;
+				material.Roughness = 0.2f;
+				material.Clearcoat = metallic > 0.0f ? 0.0f : 1.0f;
+				material.ClearcoatRoughness = 0.1f;
+				Scene scene;
+				AddNeutralPostProcess(scene);
+				AddDarkSky(scene);
+				AddPlane(scene, assets, material, 0.0f, 20.0f);
+				const Entity entity = AddRectLight(scene, glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f), 1.0f, 0.5f,
+					1000.0f, 20.0f);
+				const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.5f, 1.5f), glm::vec3(0.0f, 0.0f, -0.2f));
+				const ReadbackImage hdr = RenderHDR(renderer, scene, camera, options);
+				const ReadbackImage lut = ReadBRDF(renderer);
+				ReferenceView view = MakeView(camera, c_ViewSize, c_ViewSize, 10.0f);
+				if (lightingView == SceneLightingView::Specular)
+					view.DiffuseWeight = 0.0f;
+				else
+					view.SpecularWeight = 0.0f;
+				const Agreement agreement = CompareWithReference(view, hdr, material,
+					std::vector<AreaLights::AreaLight> { GetRelativeLight(entity, glm::dvec3(camera.Position)) }, lut);
+				if (lightingView == SceneLightingView::Diffuse && metallic > 0.0f)
+				{
+					CHECK(agreement.Peak == 0.0);
+					CHECK(agreement.MaxAbsolute == 0.0);
+				}
+				else
+				{
+					CHECK(agreement.Peak > 1.0);
+					CHECK(agreement.MaxRelative <= c_AgreementRelative);
+				}
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Screen-space reflections count a light surface once: the light's own highlight is the panel's reflection")
 	{
 		// L1: a tagged emissive panel 2 m over a polished metal floor, a one-sided light 1 mm under its face with its luminance, no

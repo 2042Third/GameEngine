@@ -506,6 +506,9 @@ the Where column, as plan section 6 does; in the upgrade table its block starts 
 - Rect light shadows are right from the first frame a light casts one: views drawn before its shadow had faded in (a
   renderer's first frame, a light whose views are drawn over several frames) kept depth ranges that were never built, so
   its shadow could be missing or wrong until its views were drawn again.
+- The **Specular** and **Diffuse** debug views show a rect light's highlight or its diffuse light alone, as they do the
+  other lights'; a frame whose scene has both a rect light and global illumination draws with forward shaders that shade
+  both.
 - Look-dev: the Cornell box with its panel made a light (`lookdev.cornell.rect`, `.rect.top`), a shop light over wet ground
   (`lookdev.rect.wet`, `.wet.low`), three softboxes over the polished, satin and glossy floors (`lookdev.rect.metal`) and a
   strip over the metal sheet (`lookdev.rect.strip`). Perf entries `PerfGPU.Renderer.AreaLights8` (a room under eight 2 x 1 m
