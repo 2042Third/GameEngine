@@ -360,9 +360,10 @@ TEST_SUITE("GPU.SceneRenderer.AreaLightCornell")
 				const glm::dvec3 point(-2.5 + 0.5 * column, 0.0, -2.5 + 0.5 * row);
 				if (blockers.Blocks(glm::dvec3(camera.Position), point))
 					continue;
-				const glm::uvec2 pixel = ProjectToPixel(camera, glm::vec3(point), c_Size);
-				if (pixel.x >= c_Size || pixel.y >= c_Size)
+				const std::optional<glm::uvec2> found = FindPixel(camera, glm::vec3(point), c_Size, c_Size);
+				if (!found)
 					continue;
+				const glm::uvec2 pixel = *found;
 				const std::optional<glm::dvec3> seen = FindPlanePoint(camera, pixel.x, pixel.y, 1, 0.0);
 				const float visibility = frames.Visibility(pixel.x, pixel.y);
 				if (!seen || visibility < 0.0f)
@@ -427,9 +428,10 @@ TEST_SUITE("GPU.SceneRenderer.AreaLightCornell")
 				const glm::dvec3 point(-2.72 + 0.05 * column, 0.5 + 0.25 * row, -2.75);
 				if (blockers.Blocks(glm::dvec3(front.Position), point))
 					continue;
-				const glm::uvec2 pixel = ProjectToPixel(front, glm::vec3(point), c_Size);
-				if (pixel.x >= c_Size || pixel.y >= c_Size)
+				const std::optional<glm::uvec2> found = FindPixel(front, glm::vec3(point), c_Size, c_Size);
+				if (!found)
 					continue;
+				const glm::uvec2 pixel = *found;
 				const std::optional<glm::dvec3> seen = FindPlanePoint(front, pixel.x, pixel.y, 2, -2.75);
 				const float visibility = frontFrames.Visibility(pixel.x, pixel.y);
 				if (!seen || seen->x > -2.45 || visibility < 0.0f)
@@ -459,9 +461,10 @@ TEST_SUITE("GPU.SceneRenderer.AreaLightCornell")
 				const glm::dvec3 point(-2.75, 0.05 + 0.1 * row, -2.65 + 0.1 * column);
 				if (blockers.Blocks(glm::dvec3(front.Position), point))
 					continue;
-				const glm::uvec2 pixel = ProjectToPixel(front, glm::vec3(point), c_Size);
-				if (pixel.x >= c_Size || pixel.y >= c_Size)
+				const std::optional<glm::uvec2> found = FindPixel(front, glm::vec3(point), c_Size, c_Size);
+				if (!found)
 					continue;
+				const glm::uvec2 pixel = *found;
 				const std::optional<glm::dvec3> seen = FindPlanePoint(front, pixel.x, pixel.y, 0, -2.75);
 				const float visibility = frontFrames.Visibility(pixel.x, pixel.y);
 				if (!seen || std::abs(seen->z) > 2.7 || seen->y < 0.02 || seen->y > 5.15 || visibility < 0.0f)

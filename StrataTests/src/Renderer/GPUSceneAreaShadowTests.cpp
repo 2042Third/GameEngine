@@ -330,9 +330,10 @@ namespace
 	// where it shows nothing lit).
 	std::pair<float, glm::vec3> VisibilityAt(const VisibilityImage& image, const SceneCamera& camera, const glm::vec3& point)
 	{
-		const glm::uvec2 pixel = ProjectToPixel(camera, point, image.Width, image.Height);
-		if (pixel.x >= image.Width || pixel.y >= image.Height)
+		const std::optional<glm::uvec2> found = FindPixel(camera, point, image.Width, image.Height);
+		if (!found)
 			return { -1.0f, point };
+		const glm::uvec2 pixel = *found;
 		const std::optional<glm::vec3> seen = FindFloorPoint(camera, pixel.x, pixel.y, image.Width, image.Height);
 		return { image.At(pixel.x, pixel.y), seen.value_or(point) };
 	}
@@ -1326,11 +1327,11 @@ TEST_SUITE("GPU.SceneRenderer.AreaShadows")
 					// The plane's height at the wall: center + t along the face's height axis... found by its normal.
 					const float planeY = light.Center.y - (light.Normal.z * (point.z - light.Center.z)) / light.Normal.y;
 					const glm::vec3 wallPoint(point.x, planeY - 0.05f - 0.05f * static_cast<float>(row), point.z);
-					const glm::uvec2 pixel = ProjectToPixel(camera, wallPoint, c_Size);
-					if (pixel.x >= c_Size || pixel.y >= c_Size || image.At(pixel.x, pixel.y) < 0.0f)
+					const std::optional<glm::uvec2> pixel = FindPixel(camera, wallPoint, c_Size, c_Size);
+					if (!pixel || image.At(pixel->x, pixel->y) < 0.0f)
 						continue;
 					const double reference = AreaShadowReference(glm::dvec3(wallPoint), glm::dvec3(0.0, 0.0, 1.0), light, scene.Boxes);
-					worst = std::max(worst, std::abs(image.At(pixel.x, pixel.y) - reference));
+					worst = std::max(worst, std::abs(image.At(pixel->x, pixel->y) - reference));
 					points++;
 				}
 			}
@@ -1359,10 +1360,10 @@ TEST_SUITE("GPU.SceneRenderer.AreaShadows")
 				for (int column = -8; column <= 8; column++)
 				{
 					const glm::vec3 wallPoint(0.3f * static_cast<float>(column), 5.199f - 0.01f - 0.03f * static_cast<float>(row), -2.75f);
-					const glm::uvec2 pixel = ProjectToPixel(camera, wallPoint, c_Size);
-					if (pixel.x >= c_Size || pixel.y >= c_Size || image.At(pixel.x, pixel.y) < 0.0f)
+					const std::optional<glm::uvec2> pixel = FindPixel(camera, wallPoint, c_Size, c_Size);
+					if (!pixel || image.At(pixel->x, pixel->y) < 0.0f)
 						continue;
-					worst = std::max(worst, std::abs(1.0 - static_cast<double>(image.At(pixel.x, pixel.y))));
+					worst = std::max(worst, std::abs(1.0 - static_cast<double>(image.At(pixel->x, pixel->y))));
 					points++;
 				}
 			}

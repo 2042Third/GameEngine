@@ -25,6 +25,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -479,6 +480,21 @@ namespace Strata::Tests
 	inline glm::uvec2 ProjectToPixel(const SceneCamera& camera, const glm::vec3& point, uint32_t size)
 	{
 		return ProjectToPixel(camera, point, size, size);
+	}
+
+	// The pixel a point projects to as ProjectToPixel finds it, or nothing where the point lies behind the camera or outside the
+	// image: ProjectToPixel converts a coordinate left of or above the image to an unsigned integer, which is undefined.
+	inline std::optional<glm::uvec2> FindPixel(const SceneCamera& camera, const glm::vec3& point, uint32_t width, uint32_t height)
+	{
+		const glm::vec4 clip = camera.Projection * camera.View * glm::vec4(point, 1.0f);
+		if (!(clip.w > 0.0f))
+			return std::nullopt;
+		const glm::vec2 ndc = glm::vec2(clip) / clip.w;
+		const float x = (ndc.x * 0.5f + 0.5f) * static_cast<float>(width);
+		const float y = (0.5f - ndc.y * 0.5f) * static_cast<float>(height);
+		if (!(x >= 0.0f && x < static_cast<float>(width) && y >= 0.0f && y < static_cast<float>(height)))
+			return std::nullopt;
+		return glm::uvec2(static_cast<uint32_t>(x), static_cast<uint32_t>(y));
 	}
 
 	inline int Red(const ReadbackImage& image, uint32_t x, uint32_t y)
