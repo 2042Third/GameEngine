@@ -606,10 +606,13 @@ Windows reference machine, back with a replaced CPU, and landed on main before t
   fix), their GPU busy time at a median ratio of 1.003. High at 3840x2160 costs the samples' scene cameras 0 to 0.52 ms
   of GPU time over Medium.
 
-**Wave 8 in progress (step 0 landed on 2026-11-02, then landing 1).** The owner asked for the wave on 2026-11-01
+**Wave 8 landed (2026-11-23); release 0.8.0 holds it.** The owner asked for the wave on 2026-11-01
 ("### Wave 8" below, with what each step 0 lane landed); its plan, reviewed specs, the orchestrator's rulings and the
-release notes that each landing adds to are in `Docs/Plans/Wave8/`. Step 0's lanes landed on main one by one, and the
-rendering streams branch from its tip:
+release notes that each landing added to are in `Docs/Plans/Wave8/`. After step 0 and landing 1, `local-lights`,
+`radiance-cascades` (global illumination, experimental: the voxels, the light, every bounce, batch 2 and moving
+objects), the capture additions (`docs-captures`) and `area-lights` stages 0 to 3 landed on main; global illumination's
+batch 3, `animation-graph` and tranche 3 moved to the next wave. Step 0's lanes landed on main one by one, and the
+rendering streams branched from its tip:
 
 - The 0.7.0 baseline: every look-dev shot of 76f28a21's Release build, both sizes, all three anti-aliasing modes, 5
   repeats and the live shots, is kept on the reference machine in `.worktrees/wave8-plan/lookdev/0.7.0`, its Medium
@@ -656,7 +659,7 @@ rendering streams branch from its tip:
   not fit a 4K display). Later: grass with coverage-preserving alpha, people, the B-list of scans, sound, the walk on a
   character controller (after `physics-timing`), supersampled stills, a night after dusk (a station with probes of its
   own), and sunlight thrown off a sheet onto nearby surfaces (after `radiance-cascades`).
-- `area-lights` stages 0 to 3 (on `agent/wave8-area-lights`, to land through `ci/wave8-area-lights`): the Rect Light,
+- `area-lights` stages 0 to 3 (landed on 2026-11-23): the Rect Light,
   shaded per pixel from linearly transformed cosines (Heitz et al.) with nothing sampled, cut at each surface's horizon;
   soft, contact-hardening shadows from six views of the local shadow atlas, opaque surfaces taking them from screen-space
   masks; Light Surface and `lighting.makeAreaLight` (an emissive panel made a light in one step, its emission left out of
