@@ -1220,15 +1220,16 @@ namespace Strata
 			bool Velocity = false;
 			// The prepass of a frame with screen-space reflections (always with Velocity): it writes the surface target too.
 			bool Surface = false;
-			// The forward passes (Opaque, Transparent, Glass) of a frame whose scene has a rect light: the shaders' forms that
-			// shade rect lights (ST_AREA_LIGHTS); its prepass with the surface target: the form that marks light surfaces
-			// (ST_PREPASS_LIGHT_SURFACES). GetScenePipeline sets it from the frame.
-			bool AreaLights = false;
 			// The forward passes (opaque, glass, alpha-blended) of a frame whose shading reads global illumination's field, for the
 			// join or one of its views (m_FieldFrame): the pixel shaders with the field's gather (ST_FORWARD_FIELD). Every other
 			// frame's hold nothing of it, so a frame without global illumination pays nothing for it. With AreaLights beside it,
 			// the forms with both (ST_AREA_LIGHTS and ST_FORWARD_FIELD).
 			bool Field = false;
+			// The forward passes (Opaque, Transparent, Glass) of a frame whose scene has a rect light: the shaders' forms that
+			// shade rect lights (ST_AREA_LIGHTS); its prepass with the surface target: the form that marks light surfaces
+			// (ST_PREPASS_LIGHT_SURFACES). GetScenePipeline sets it from the frame. It comes last so that the keys written in
+			// order (pass, ..., Velocity, Surface, Field) leave it to GetScenePipeline.
+			bool AreaLights = false;
 			bool operator==(const PipelineKey&) const = default;
 		};
 
