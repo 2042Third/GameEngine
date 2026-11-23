@@ -427,6 +427,14 @@ fences.
   bounce arrives a frame after the one before: rooms fill with light over 12 frames when their brightest surface is
   plaster-like (albedo 0.58), 17 for a white of 0.73 and up to 38 for the brightest whites, and so they do when the light
   changes (the sun moves, an object is placed). The editor's captures and the project's picture wait for it.
+- **Moving objects** take part while they move: a crate pushed across a floor shades the floor beside it and tints it with
+  its color in the same frame. While it moves the engine takes each of its parts as a box of its size with soft edges; a
+  quarter of a second after it stops, it rebuilds the object's exact shape and eases the light around it over to that
+  within another quarter of a second, as it does when the object starts to move. Most of the object's shade and tint
+  is there the moment it stops; the rest arrives in that half second, and close to the object the light visibly
+  shifts then: under an open sky by up to a quarter of a nearby point's light in small steps, in a closed room lit
+  only by bounce light by up to half, a quarter of it in a single frame. Animated characters receive the bounce light
+  but do not block or bounce it yet.
 - **Debug views** (the viewport's debug view chip): **GI** shows the bounce light on surfaces made white, **Open** the share
   of the sky each surface sees, **Voxels** the voxel copy of the scene (walls too thin in the error color) and **Probes**
   the probes, dead ones dark red.
@@ -434,22 +442,30 @@ fences.
   - The east wall and the ceiling of a sunlit room get about half of their first bounce.
   - At Low, light bounces only once, as it did before every bounce came: a room lit by a panel in its ceiling keeps a
     dark ceiling there. Low's coarser probes would let bounced light into a closed room's corners; High bounces on.
-  - A surface that sees none of the probes around it gets no indirect light at all, darker than without global
+  - A surface that the probes around it see little of gets little indirect light, darker than without global
     illumination: gaps, recesses and ledges thinner than about two voxels (20 cm at High, 40 cm at Low) and the bases of
-    walls beside bright patches can go nearly black. Outdoors this shows at the foot of large boxes on the ground and on
-    ThirdPerson's ledges and fence rails; indoors as a dark band where the floor meets a wall below a sunlit window, and
-    under low overhangs (the floor under a ball's rim) and in narrow gaps between an object and a wall.
+    walls beside bright patches can go nearly black (a gap that no probe sees keeps a few percent of the light at its
+    opening). Outdoors this shows at the foot of large boxes on the ground and on ThirdPerson's ledges, fence rails and
+    ground folds; indoors as a dark band where the floor meets a wall below a sunlit window, under low overhangs (the
+    floor under a ball's rim), in narrow gaps between an object and a wall and on the floor along the foot of a tall
+    box beside a wall.
   - Low is too dark.
   - Its light fades out from 7.5 m to 9.5 m around the camera and from 5.5 m to 7.5 m above and below it at High
     (Low: 7 m to 9 m, and 2.8 m to 4.8 m), and outdoors that edge can show.
   - Round objects read a few percent dark at their sides.
+  - A wall that stands at an angle to the world's axes glows softly around a patch of sunlight on it (up to about two
+    and a half times the bounce light of its shadowed part).
+  - A moving ball, barrel or hollow object shades and bounces light as the box around it would, until it rests. More than
+    64 parts moving at once, or very large moving objects, are left out of the bounce light until they rest. In a room
+    lit by bounce light, the floor right before a moving object visibly flickers as the object advances: by about a
+    tenth of its brightness, a few frames at a time, about every half meter at High.
   - It costs about 4 ms of GPU time at 3840 x 2160 at High.
 
   Use it for interiors and look at them with the **GI** debug view.
 
 ## Debug views
 
-The **debug view** chip on the viewport's toolbar has five views that show the scene's light instead of its image, each
+The **debug view** chip on the viewport's toolbar has views that show the scene's light instead of its image, each
 with a legend:
 
 - **Lighting**: every surface white, lit as the scene lights it. Shadows, the sky's color and how bright the sun is
@@ -462,6 +478,12 @@ with a legend:
 - **Albedo**: the materials' base colors. Real materials lie between about 0.03 (charcoal, fresh asphalt) and 0.85 (fresh
   snow): darker ones are marked blue, brighter ones striped red, with their share of the image in the legend. Colors
   outside that range make lighting look wrong however it is set up.
+- **Specular** and **Diffuse**: only the light surfaces reflect as highlights and reflections, or only the light they
+  scatter, without emission, fog and the light glass lets through. They show which kind of light a look comes from; they
+  do not add up to the picture: the sky shows in both, and automatic exposure meters each view on its own.
+- **Clusters**: how many point and spot lights each pixel's light cluster lists, in bands (none, 1, 2-3, 4-7, ..., up to
+  a full cluster, 256 lights unless the renderer lists more): every pixel's shading walks its cluster's list, so crowded
+  bands are where many lights cost the most.
 
 Every view's legend names the **sun to sky ratio** on flat ground: how much more light a horizontal surface in the sun gets
 than one in the shade. A clear day gives 6 to 10, a hazy one 3 to 5, golden hour about 1 to 2, an overcast day below 0.3.

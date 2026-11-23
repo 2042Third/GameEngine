@@ -2,13 +2,14 @@
 #define STRATA_GI_FIELD_SLANG
 
 // Global illumination's irradiance field as the scene passes read it (Docs/DeveloperGuide.md, "Global illumination"): b3 of the
-// scene layout (RenderData::GIFieldConstants, zero without GI), the field's faces (SRV 35), cascade 0's validity (SRV 37), its
-// probes' depth moments (SRV 54) and voxel levels 0-2 (SRV 38-40) for the gather's visibility. Everything is world data: no screen
-// input.
+// scene layout (RenderData::GIFieldConstants, zero without GI), the field's harmonics (SRV 35) and ambient cubes (SRV 55), cascade
+// 0's validity (SRV 37), its probes' depth moments (SRV 54) and voxel levels 0-2 (SRV 38-40) for the gather's visibility. Everything
+// is world data: no screen input.
 
 #include "Include/Common.slang"
 
 #include "Include/GlobalIllumination.slang"
+#include "Include/SphericalHarmonics.slang"
 
 struct GIFieldConstants
 {
@@ -19,11 +20,16 @@ struct GIFieldConstants
 	int4 VoxelTexel[3];          // xyz: the minimum corner's texel
 	int4 VoxelValidMinimum[3];   // xyz: the valid box's first voxel, relative to the window's minimum corner
 	int4 VoxelValidMaximum[3];   // xyz: one past its last voxel
-	float4 VoxelDimensions;      // xyz: voxels per axis
+	float4 VoxelDimensions;      // xyz: voxels per axis; w: 1 when drawn points in gaps the voxels close take the gap's light
 };
 ConstantBuffer<GIFieldConstants> u_GIField : register(b3);
 
-Texture3D<float4> u_GIFieldFaces : register(t35);
+#ifdef ST_GI_FIELD_AMBIENT_CUBE
+Texture3D<float4> u_GIFieldCubes : register(t35);
+#else
+Texture3D<float4> u_GIFieldHarmonics : register(t35);
+Texture3D<float4> u_GIFieldCubes : register(t55);
+#endif
 Texture3D<float4> u_GIFieldValidity : register(t37);
 Texture3D<float4> u_GIFieldVoxels0 : register(t38);
 Texture3D<float4> u_GIFieldVoxels1 : register(t39);
@@ -44,10 +50,40 @@ float4 ReadAmbientCube(int3 probe, float3 normal)
 {
 	int3 base = int3(probe.x * 3, probe.y * 2, probe.z);
 	float3 squared = normal * normal;
-	float4 x = u_GIFieldFaces.Load(int4(base + (normal.x >= 0.0 ? int3(0, 0, 0) : int3(1, 0, 0)), 0));
-	float4 y = u_GIFieldFaces.Load(int4(base + (normal.y >= 0.0 ? int3(2, 0, 0) : int3(0, 1, 0)), 0));
-	float4 z = u_GIFieldFaces.Load(int4(base + (normal.z >= 0.0 ? int3(1, 1, 0) : int3(2, 1, 0)), 0));
+	float4 x = u_GIFieldCubes.Load(int4(base + (normal.x >= 0.0 ? int3(0, 0, 0) : int3(1, 0, 0)), 0));
+	float4 y = u_GIFieldCubes.Load(int4(base + (normal.y >= 0.0 ? int3(2, 0, 0) : int3(0, 1, 0)), 0));
+	float4 z = u_GIFieldCubes.Load(int4(base + (normal.z >= 0.0 ? int3(1, 1, 0) : int3(2, 1, 0)), 0));
 	return squared.x * x + squared.y * y + squared.z * z;
+}
+
+// A cascade-0 probe's irradiance for a shading normal (rgb irradiance over pi times ST_GI_RADIANCE_SCALE, a the sky share), never
+// below zero. Scene passes read the probe's spherical harmonics (SRV 35: FieldReduce.comp's coefficients times the basis at the
+// normal), which turn smoothly with the normal, and never less than its ambient cube (SRV 55). The harmonics' kernel over the
+// cosine mu to the normal, 1/4 + mu/2 + 5/32 (3 mu^2 - 1), follows the clamped cosine but is negative from 104 to 145 degrees off
+// the normal (-0.04 at 122): a probe that sees a strong light behind the surface's plane, as the probes in front of a wall see the
+// sun's patch on that wall, would read dark to black there. The cube's weights are negative nowhere: along an axis its face holds
+// the light of the wall's own hemisphere and nothing from behind it, and between the axes it blends the axes' hemispheres, which
+// reads low under even light (a rim 7% low: there the harmonics win) and takes some light from behind the plane (a wall between
+// the axes glows around a sun patch on it; never black). The re-injection (GI/VoxelInject.comp) and the probes view read only the
+// cubes, at SRV 35 (they define ST_GI_FIELD_AMBIENT_CUBE): their weights are never negative, so the bounces' series rises to its
+// limit and stays there (the harmonics' negative lobes made it cycle by a rounding step, and still frames differed).
+float4 ReadProbeIrradiance(int3 probe, float3 normal)
+{
+	float4 cube = ReadAmbientCube(probe, normal);
+#ifdef ST_GI_FIELD_AMBIENT_CUBE
+	return cube;
+#else
+	float basis[9];
+	ProbeSHBasis(normal, basis);
+	// Band 0's texel holds its coefficient times the basis already (FieldReduce.comp: the mean radiance, which fits the format
+	// where the coefficient does not).
+	basis[0] = 1.0;
+	float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+	[unroll]
+	for (uint coefficient = 0u; coefficient < 9u; coefficient++)
+		sum += basis[coefficient] * u_GIFieldHarmonics.Load(int4(probe.x * 3 + int(coefficient % 3u), probe.y * 3 + int(coefficient / 3u), probe.z, 0));
+	return max(sum, cube);
+#endif
 }
 
 float SampleFieldVoxels(uint level, SamplerState repeat, float3 coordinate)
@@ -160,48 +196,20 @@ float3 PushOutOfSolid(SamplerState repeat, float3 position)
 	return position;
 }
 
-// The field's irradiance over pi at a camera-relative surface point for a shading normal (luminance, times
-// ST_GI_RADIANCE_SCALE), .a the field's weight there (0 outside it, while pending or where no voxel level holds the point). The
-// eight cascade-0 probes around the point moved ST_GI_GATHER_NORMAL_BIAS spacings along its geometric normal, each weighted
-// trilinearly, by its validity, by whether it lies in front of the surface's plane and by whether the voxels between it and the
-// point let it see the point (GetFieldTransmittance, toward the moved point moved ST_GI_GATHER_VIEW_BIAS spacings more toward the
-// viewer and out of any solid it then lies in when pushOut, PushOutOfSolid: neither a surface's own voxels nor a perpendicular
-// one's beside it hide it; skipped where the point lies before every ray of the probe around it hit anything), then normalized.
-// The guard is the geometry itself: Chebyshev's bound on the probes' 64 depth directions blurred a contact's surfaces over 25
-// degrees and hid probes that see the point plainly (a floor point under the Cornell box's sphere, beside its tall box), and the
-// light there went black. Where the live probes in front of the point see less of it than ST_GI_GATHER_MIN_VISIBLE of the weight
-// they would give it (a junction, a wall between), the light fades with what they see rather than giving the few that see it
-// full weight; dead probes take no part (a probe inside an object over a contact says nothing about the floor beside it); a
-// point no probe sees takes no field light (dark, never the sky). Every weight is continuous, so the light has no bands at cell
-// borders; where the probes cannot resolve a contact the voxels' edges still show (under the Cornell box's sphere a row of small
-// hard-edged dark notches, with lighter streaks beside them). openShare receives the cosine-weighted share of the sky it sees. viewDirection points toward
-// the viewer (the normal where there is none). pushOut moves the visibility point out of solids: drawn surfaces only.
-// Re-injection reads the field at voxels, some of them inside walls (the floor's face runs on under a wall), and moved out of the
-// solid such a point would take the light on the wall's far side into a sealed room.
-float4 SampleIrradianceField(SamplerState repeat, float3 position, float3 geometricNormal, float3 shadingNormal, float3 viewDirection,
-	bool pushOut, out float openShare)
+// The eight cascade-0 probes around `biased` as the gather weighs them for a surface at `position` (SampleIrradianceField, below):
+// rgb their irradiance's weighted sum, a their sky shares'; total receives the weights' sum, reachable what they would give
+// before their visibility.
+float4 GatherFieldProbes(SamplerState repeat, float3 biased, float3 position, float3 geometricNormal, float3 shadingNormal, float3 seen,
+	out float total, out float reachable)
 {
-	openShare = 1.0;
-	float fieldWeight = GetFieldWeight(position);
-	// A point no voxel level holds is outside what the probes' marches saw: today's light, as outside the field. The field's
-	// reach stays where level 2 holds every point one scroll slab short (GlobalIllumination::ComputeLayout), so only a camera that
-	// moved on by more than a step before the slab was voxelized meets this.
-	if (fieldWeight <= 0.0 || FindFieldLevel(position, position) >= 3u)
-		return float4(0.0, 0.0, 0.0, 0.0);
 	float spacing = u_GIField.FieldOrigin.w;
 	int3 grid = int3(u_GIField.FieldSize.xyz);
-	float3 biased = position + geometricNormal * (ST_GI_GATHER_NORMAL_BIAS * spacing);
 	float3 coordinate = (biased - u_GIField.FieldOrigin.xyz) / spacing - 0.5;
 	int3 base = int3(floor(coordinate));
 	float3 fraction = coordinate - float3(base);
-	float3 seen = biased + viewDirection * (ST_GI_GATHER_VIEW_BIAS * spacing);
-	if (pushOut)
-		seen = PushOutOfSolid(repeat, seen);
-
-	float3 irradiance = float3(0.0, 0.0, 0.0);
-	float sky = 0.0;
-	float total = 0.0;
-	float reachable = 0.0;
+	float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+	total = 0.0;
+	reachable = 0.0;
 	[loop]
 	for (uint corner = 0u; corner < 8u; corner++)
 	{
@@ -225,14 +233,113 @@ float4 SampleIrradianceField(SamplerState repeat, float3 position, float3 geomet
 			weight *= GetFieldTransmittance(repeat, probePosition, seen);
 		if (weight <= 0.0)
 			continue;
-		float4 cube = ReadAmbientCube(probe, shadingNormal);
-		irradiance += weight * cube.rgb;
-		sky += weight * cube.a;
+		sum += weight * ReadProbeIrradiance(probe, shadingNormal);
 		total += weight;
 	}
-	openShare = total > 0.0 ? sky / total : 0.0;
-	float normalization = max(total, ST_GI_GATHER_MIN_VISIBLE * reachable);
-	return float4(total > 0.0 ? irradiance / normalization : float3(0.0, 0.0, 0.0), fieldWeight);
+	return sum;
+}
+
+// The field's irradiance over pi at a camera-relative surface point for a shading normal (luminance, times
+// ST_GI_RADIANCE_SCALE), .a the field's weight there (0 outside it, while pending or where no voxel level holds the point). The
+// eight cascade-0 probes around the point moved ST_GI_GATHER_NORMAL_BIAS spacings along its geometric normal, each weighted
+// trilinearly, by its validity, by whether it lies in front of the surface's plane and by whether the voxels between it and the
+// point let it see the point (GetFieldTransmittance, toward the moved point moved ST_GI_GATHER_VIEW_BIAS spacings more toward the
+// viewer and out of any solid it then lies in when pushOut, PushOutOfSolid: neither a surface's own voxels nor a perpendicular
+// one's beside it hide it; skipped where the point lies before every ray of the probe around it hit anything), then normalized.
+// The guard is the geometry itself: Chebyshev's bound on the probes' 64 depth directions blurred a contact's surfaces over 25
+// degrees and hid probes that see the point plainly (a floor point under the Cornell box's sphere, beside its tall box), and the
+// light there went black. Where the live probes in front of the point see less of it than ST_GI_GATHER_MIN_VISIBLE of the weight
+// they would give it (a junction, a wall between), the light fades with what they see rather than giving the few that see it
+// full weight; dead probes take no part (a probe inside an object over a contact says nothing about the floor beside it); a
+// point no probe sees takes no field light (dark, never the sky), but where a gap its voxels close hides it from them, the
+// light of the gap's opening toward the viewer (below). Every weight is continuous, so the light has no bands at cell
+// borders; where the probes cannot resolve a contact the voxels' edges still show (under the Cornell box's sphere a row of small
+// hard-edged dark notches, with lighter streaks beside them). openShare receives the cosine-weighted share of the sky it sees. viewDirection points toward
+// the viewer (the normal where there is none). pushOut moves the visibility point out of solids: drawn surfaces only.
+// Re-injection reads the field at voxels, some of them inside walls (the floor's face runs on under a wall), and moved out of the
+// solid such a point would take the light on the wall's far side into a sealed room.
+float4 SampleIrradianceField(SamplerState repeat, float3 position, float3 geometricNormal, float3 shadingNormal, float3 viewDirection,
+	bool pushOut, out float openShare)
+{
+	openShare = 1.0;
+	float fieldWeight = GetFieldWeight(position);
+	// A point no voxel level holds is outside what the probes' marches saw: today's light, as outside the field. The field's
+	// reach stays where level 2 holds every point one scroll slab short (GlobalIllumination::ComputeLayout), so only a camera that
+	// moved on by more than a step before the slab was voxelized meets this.
+	uint level = FindFieldLevel(position, position);
+	if (fieldWeight <= 0.0 || level >= 3u)
+		return float4(0.0, 0.0, 0.0, 0.0);
+	float spacing = u_GIField.FieldOrigin.w;
+	float3 biased = position + geometricNormal * (ST_GI_GATHER_NORMAL_BIAS * spacing);
+	float3 seen = biased + viewDirection * (ST_GI_GATHER_VIEW_BIAS * spacing);
+	if (pushOut)
+		seen = PushOutOfSolid(repeat, seen);
+	float total;
+	float reachable;
+	float4 sum = GatherFieldProbes(repeat, biased, position, geometricNormal, shadingNormal, seen, total, reachable);
+	float minimum = ST_GI_GATHER_MIN_VISIBLE * reachable;
+	float3 irradiance = total > 0.0 ? sum.rgb / max(total, minimum) : float3(0.0, 0.0, 0.0);
+	openShare = total > 0.0 ? sum.a / total : 0.0;
+	// A drawn point its probes see too little of lies in a gap its voxels close (thinner than about one and a half voxels): its
+	// probes there are dead or see only the gap's walls (the yard's car, 0.15 m off the ground, beyond level 0's reach, where level
+	// 1's 0.2 m voxels hold no probe under it). The camera sees it, so the way from it toward the camera is open: it takes the light
+	// where that way leaves the closed voxels into open space (the gap's opening as the camera sees it), darkened by how far in it
+	// lies as the ground under a gap of c_GIGatherGapVoxels sees its opening (1 - d / sqrt(d^2 + g^2)), for the share of it the
+	// probes do not see. Their own light is already faded by what they see and stays whole: blended toward the gap's it was faded
+	// twice, and a partly seen point darker with the gap's light than without it. Only drawn surfaces: re-injection's points
+	// inside walls must not take a wall's far side. The way leaves the closed voxels where their occupancy crosses
+	// ST_GI_GATHER_EXIT_OCCUPANCY between two samples half a voxel apart (interpolated: by whole steps the light fell in bands), so
+	// the depth is continuous in the point and the camera where the occupancy toward the camera falls through the threshold once.
+	// It is not where a sample lies at the threshold and the voxels close again further on: just open, the search ends there (at
+	// the first sample with no depth at all, the opening's light whole); just closed, it marches on to an opening far away, or
+	// finds none. That is a crisp edge inside one voxel level (the release notes' known issues); a search that weighs every
+	// opening on the way would be continuous and is another design. Where the point's level ends the voxel doubles, and with it
+	// the steps, the gap and the guard's samples: a gap that crosses a level's edge shows it. Nothing found within
+	// ST_GI_GATHER_EXIT_STEPS: what the probes give.
+	if (pushOut && u_GIField.VoxelDimensions.w > 0.0 && (total < minimum || total <= 0.0))
+	{
+		float h = u_GIField.VoxelOrigin[level].w;
+		float3 start = position + geometricNormal * (0.5 * h);
+		// Closed: something in the voxels at the sample or a voxel along the normal from it (the gap's own soft layer is not the open).
+		float closed = max(SampleFieldOccupancy(level, repeat, start), SampleFieldOccupancy(level, repeat, start + geometricNormal * h));
+		float travelled = 0.0;
+		bool found = closed < ST_GI_GATHER_EXIT_OCCUPANCY;
+		[loop]
+		for (uint step = 1u; step < ST_GI_GATHER_EXIT_STEPS && !found; step++)
+		{
+			float3 marched = start + viewDirection * (0.5 * h * float(step));
+			if (!IsInFieldLevel(level, marched))
+				break;
+			float next = max(SampleFieldOccupancy(level, repeat, marched), SampleFieldOccupancy(level, repeat, marched + geometricNormal * h));
+			if (next < ST_GI_GATHER_EXIT_OCCUPANCY)
+			{
+				// The sample before was closed (at or above the threshold) and this one is open: the crossing lies between them.
+				travelled = 0.5 * h * (float(step) - (ST_GI_GATHER_EXIT_OCCUPANCY - next) / max(closed - next, 1e-6));
+				found = true;
+			}
+			closed = next;
+		}
+		if (found)
+		{
+			float3 exitPoint = start + viewDirection * travelled;
+			float3 fallbackBiased = exitPoint + geometricNormal * (ST_GI_GATHER_NORMAL_BIAS * spacing);
+			float3 fallbackSeen = PushOutOfSolid(repeat, exitPoint + viewDirection * (ST_GI_GATHER_VIEW_BIAS * spacing));
+			float fallbackTotal;
+			float fallbackReachable;
+			float4 exitLight = GatherFieldProbes(repeat, fallbackBiased, position, geometricNormal, shadingNormal, fallbackSeen, fallbackTotal,
+				fallbackReachable);
+			if (fallbackTotal > 0.0)
+			{
+				float gap = ST_GI_GATHER_GAP_VOXELS * h;
+				float opening = 1.0 - travelled * rsqrt(travelled * travelled + gap * gap);
+				float3 gapLight = exitLight.rgb / max(fallbackTotal, ST_GI_GATHER_MIN_VISIBLE * fallbackReachable) * opening;
+				float seenShare = total / max(minimum, 1e-8);
+				irradiance += gapLight * (1.0 - seenShare);
+				openShare = lerp(exitLight.a / fallbackTotal * opening, openShare, seenShare);
+			}
+		}
+	}
+	return float4(irradiance, fieldWeight);
 }
 
 #endif

@@ -298,7 +298,7 @@ on an Apple M2 Max with MoltenVK 1.4.2 (Homebrew), where every test of the `gpu`
 - **Tight limits**: 31 storage buffers per shader stage and 32 KiB of compute shared memory, and 16 samplers per stage.
   The scene set uses 13 storage buffers (the reflection probes' and the lights' shapes among them), 9 samplers and the
   scene-color copy, the rect lights' table, the local shadow atlas's depth ranges, the area shadow masks and the rect lights'
-  back faces as more sampled images (SRV 19, 55, 57, 58, 59), the GPU culling's layout 23
+  back faces as more sampled images (SRV 19, 56, 58, 59, 60), the GPU culling's layout 23
   storage buffers (the local shadow views' among them): a new binding counts against these.
 - **Bindless tables**: the descriptor set support query rejects any set beyond `maxPerSetDescriptors` (1,212), also
   update-after-bind sets within the update-after-bind limits (a million sampled images), and MoltenVK samples every slot
@@ -322,12 +322,17 @@ Windows, so that no console window opens with them; `StrataCLI` and `StrataTests
 `CreateApplication` in `Engine/ApplicationLaunch.h`: `ProgramRun` in `Core/Platform.h`) and calls `Platform::ConnectStandardStreams` with it: pipes and
 files their callers pass are kept, so tests and tools read their output and exit codes as before. A *Console* run
 (output is the point: `--version`, `--help`, usage errors, headless and scripted runs: the editor's `--headless`,
-`--no-gpu`, `--frames`, `--commands`, `--quit-after-commands`, the runtime's `--headless`, `--frames`, `--seconds` and
-option mistakes) prints into the terminal that started it; an *Interactive* run (a person's window) leaves that terminal alone,
-so its Ctrl+C or closing it does not end the program and the log does not run into the shell's prompt. Then
-`Platform::InstallInterruptHandler` turns Ctrl+C, Ctrl+Break and the console closing (Windows) or SIGINT and SIGTERM
-(POSIX) into an orderly quit through the main loop (`Platform::IsInterruptRequested`; exit code
-`Application::c_InterruptedExitCode`, 130, unless the run had failed); a second request ends the process at once. Fatal
+`--no-gpu`, `--frames`, `--commands`, `--quit-after-commands` and `--window-size` (pictures for tools: `StrataCLI launch`
+discards the output, so a dialog would wait for a person while the CLI waits for the session), the runtime's
+`--headless`, `--frames`, `--seconds` and option mistakes) prints into the terminal that started it; an *Interactive*
+run (a person's window) leaves that terminal alone, so its Ctrl+C or closing it does not end the program and the log
+does not run into the shell's prompt. Then `Platform::InstallInterruptHandler` turns Ctrl+C, Ctrl+Break and the
+console closing (Windows) or SIGINT and SIGTERM (POSIX) into an orderly quit through the main loop (`Platform::IsInterruptRequested`; exit code
+`Application::c_InterruptedExitCode`, 130, unless the run had failed); a second request ends the process at once. An
+exception that leaves a frame (engine code does not throw: third-party code, a driver's failure inside NVRHI) is caught by
+the main loop, logged as critical ("Unhandled exception in the main loop") and ends the run in order with
+`Application::c_UnhandledExceptionExitCode`, 1, unless the run had failed before (`Core.Application` checks it through a
+helper process that ends as `Engine/EntryPoint.h` does). Fatal
 startup failures go through `Application::ReportFatalError` (no window, no graphics device, no game to run, a game that cannot
 start): logged, and for an Interactive run whose stderr nobody reads (`Platform::ShouldShowErrorDialogs`: started from
 the desktop, from a terminal it left alone, or with its output sent to the null device) also shown in a native dialog
@@ -848,9 +853,17 @@ exercised by it.
     `expect` conditions on the rects, the ball, the clicks, the field's text and `script.status`), extract the sun of
     `Sky.hdr` (a 900-nit texel its generator writes, which its `.meta`'s `RemoveSun` paints out of the cooked map) into
     the Sun with `lighting.extractSun` and undo it, export it with the module and run it headless; they must exit cleanly and print what the scripts log
-    (`StrataTests/Editor/RunAndExpect.cmake`). A new editor command a game relies on gets a step there.
+    (`StrataTests/Editor/RunAndExpect.cmake`). The editor's run ends when its script is done (`--quit-after-commands`)
+    and is bounded by the clock (`TIMEOUT_SECONDS`, which stops the program and fails the run:
+    `StrataEditor.RunAndExpectTimeout`), never by a count of frames: a headless editor draws 60 frames a second however
+    long an export takes. A new editor command a game relies on gets a step there.
     `StrataRuntime.FeatureTestQuality` (labels `feature` and `gpu`) runs the exported game in a window with
     `--quality low`: its scripts must read the preset as the command line's and say so.
+    `StrataEditor.FeatureCaptures` (labels `feature` and `gpu`) takes the editor's pictures by command in a window of a fixed
+    size (`--window-size 1280x720`, its own layout file and its own copy of the project,
+    `Editor/FeatureCaptureCommands.json.in`): `editor.screenshot` of the window and of the Inspector, and `viewport.capture`
+    through the scene's camera, which must be `complete`; `StrataTests --strata-test-helper=check-image` checks the pictures.
+    A new capture command, switch or debug view gets a step there.
 - **The feature test enforces coverage.** It fails when:
   - a registered component is missing from the feature scene, or a property has its default value on every entity
     with the component (new properties need a non-default value there, which also proves that they serialize);
@@ -2143,7 +2156,12 @@ Building and loading scripts:
   call of the function it was inlined into), `Stack` the frames; `Symbolized` says the job
   finished (`ScriptModule::GetFault` merges its result). `script.status`, the Console (a click opens the line), the
   Problems panel and the play-stop log show them. Script modules write a PDB in every configuration
-  (`strata_add_script_module`).
+  (`strata_add_script_module`), and GCC and Clang compile them with `-g` in every configuration too: the editor builds
+  scripts in its own configuration (a released editor in Release; Dist takes Release's flags), and a debugger binds a
+  breakpoint in a script only where the module has debug information (DWARF in the ELF module; on macOS the module's
+  debug map names the objects that hold it). `Scripting.Module` reads the built test module for it without a debugger
+  (`Tests::FindModuleDebugInformation`: a CodeView record and its PDB, `.debug_info`, a `__DWARF` segment or `N_OSO`
+  stabs).
 - Contained: access violations, division by zero, stack overflow, C++ exceptions escaping module code and, on Windows,
   `abort()` (also from a failed `assert()` and from `std::terminate`: modules turn it into
   `ST_SCRIPT_ABORT_EXCEPTION_CODE` through a SIGABRT handler `ScriptModuleEntry.cpp` installs in their static C
@@ -2828,7 +2846,28 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
     root or its asset folders; `search`: the Hierarchy's search text, as if typed, e.g. a world's `l:Props`;
     `UI::SearchField`'s `reload` makes a field being typed in show it); it fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
     stays open through a layout reset and the saved open states read at the first frame, and is asked for again until its
-    tab shows; while a modal dialog waits for the person it opens behind it (focusing it would close the dialog). Glyphs a font lacks show as its fallback glyph: draw color swatches as rectangles (the monospaced font has no
+    tab shows; while a modal dialog waits for the person it opens behind it (focusing it would close the dialog).
+    `editor.screenshot {path?, overwrite?, panel?}`, the window's third command, takes a picture of the window as the person
+    sees it, UI and all, or of one docked panel's window (named as `editor.showPanel` names them), as a PNG (`{Image, width,
+    height, panel, region: {x, y, width, height}, settled, path?}`; `path` through `CommandUtils::ResolveOutputPath`). It is
+    an `EditorHost` service: `StrataEditorCore` never reaches the UI. The command's poll waits `c_ScreenshotSettleFrames` (2)
+    so the commands before it took effect, then arms the capture. At the end of each later frame's UI
+    (`EditorLayer::ReadBackScreenshots`) it compares where ImGui put the windows and the tabs of the tab bars shown, and how
+    far each tab bar is scrolled, with the frame before (`HashWindowLayout`; a dock node owns its tab bar apart from
+    `BeginTabBar`'s, `ImGuiContext::TabBars`, so it walks both): ImGui lays out what appeared, resized or docked over a frame or more, and an editor
+    that just started (a script's first command) shows its tabs' titles cut in its first frames. The first frame that lays
+    out as the one before is read back (`settled` true), or the one `c_ScreenshotMaxSettleFrames` (30) frames in (`settled`
+    false). What is still loading (the scene's assets, thumbnails) shows as the person sees it: scripts wait (`editor.wait`)
+    before pictures right after the start. Then the panel's rectangle as this frame drew it (`GetShownWindowRect`, times
+    `DisplayFramebufferScale`; a panel brought to the front gets `c_ScreenshotShowFrames` to show) goes to
+    `EditorHost::RequestWindowReadback`, which `GraphicsModule::RequestBackBufferReadback` answers: a `TextureReadback` of
+    the back buffer submitted at the end of that frame, after the UI is drawn, polled at the start of later frames, so no
+    frame stalls (`--screenshot`'s `RequestScreenshot` blocks its last frame). The picture is encoded and saved on job
+    threads (`CommandUtils::SubmitEncodePNG`, `SubmitSavePNG`, which `viewport.capture` uses too). It fails without side
+    effects for an unknown panel, a closed one, one another tab covers, a panel while the launcher shows, an existing file
+    without `overwrite` and a run without a window; the window's size is the person's, or `--window-size`'s, and the UI's
+    scale the display's, or `--ui-scale`'s: pictures that compare across machines need both (`StrataCLI launch` takes both).
+    Glyphs a font lacks show as its fallback glyph: draw color swatches as rectangles (the monospaced font has no
     icons), and check panels with `ImGuiHarness::CountFallbackGlyphs`.
 
 ### Changes go through commands
@@ -3237,9 +3276,21 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   anything starts (no log file, window or session); an argument the editor does not know, or an option without its value,
   exits 3 with the usage, and so does a value an option does not take (`--frames abc`, `--frames 0`: `CheckValues`; the
   table of arguments is `c_Arguments` in `EditorApplication.cpp`: add new ones there; the runtime's is in
-  `RuntimeApplication.cpp`, and both check and print theirs through `Core/CommandLineOptions`). `--ui-scale <factor>` draws the
+  `RuntimeApplication.cpp`, and both check and print theirs through `Core/CommandLineOptions`). `--window-size
+  <width>x<height>` opens a window of exactly that many pixels, whatever the display's scale, instead of a maximized one
+  (screenshots of a fixed size; it needs a window, so `--headless` and `--no-gpu` refuse it, and `StrataCLI launch
+  --window-size` passes it on). It takes no window smaller than 640x360 (`c_MinWindowWidth`, `c_MinWindowHeight`: the
+  size the panels are laid out for; Windows widens a window narrower than its title bar anyway), and a window the system
+  made another size ends the start with exit code 1 and both sizes (`HasRequestedPixels`): Windows shrinks one larger
+  than the display, and a display whose screen coordinates are more than a pixel makes only the sizes its scale steps
+  through (a Retina display's 2: even ones; `MatchWindowPixels` tells the two apart, and the message then names the
+  nearest size the scale makes), logged and never in a dialog (a run with `--window-size` is a Console run):
+  `StrataCLI launch` then fails at once, naming the editor's exit code (`LaunchEditor`). Only the start is checked: the
+  window stays resizable, so a person, a snap or a window manager can change its size later (`editor.screenshot`'s
+  `width` and `height` say what a picture got). `--ui-scale <factor>` draws the
   UI at a fixed scale instead of the display's and the person's preference (e.g. 1 to check it at 100% on a 150%
-  display), `--layout <file>` keeps
+  display; `StrataCLI launch --ui-scale` passes it on); with `--window-size` it gives pictures of the editor that compare
+  across machines. `--layout <file>` keeps
   the panel layout in that file instead of the user's (`<user data>/Strata/EditorLayout.ini`), and `--imgui-demo` offers
   ImGui's demo window (Help menu) for UI work.
   Without `--frames`, a headless editor runs until `editor.quit` (which, like the other commands that replace the scene,
@@ -3585,7 +3636,7 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   snapping). A toolbar strip above the image holds the chips, so none ever covers the image (the game's HUD, its
   canvases): the camera settings, the overlay toggles (grid, outline, gizmos, stats), the editor-view settings (preview
   lighting, game UI) and the debug view (named after the view, "Lit" without one, and lit while one colors the image; a
-  click offers Lit, Streaming, LOD and Mip) from its left, the agent chip at its right (a strip narrower than the chips
+  click offers every view of `ViewportDebugView`) from its left, the agent chip at its right (a strip narrower than the chips
   with their labels draws the last ones as icons, labels in their tooltips, and one too narrow even for the icons puts the
   chips that pass its width on rows under the first, the toolbar growing by those rows: `UI::ChipStrip`, so every chip
   stays in reach); clicking a chip does not focus the panel; "Game camera" (F8, `ViewportSettings::PilotGameCamera`)
@@ -3633,7 +3684,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   fov?, overlays?, debugView?: "none" | "streaming" | "lod" | "mip" | "motion" | "shadows" | "lighting" | "ao" | "indirect" |
   "luminance" | "albedo" | "voxels" | "gi" | "open" | "probes" (global illumination's voxels, its bounce light on white
   surfaces, the share of the sky surfaces see and its probes, with `debugView.globalIllumination` and a wait for the
-  voxels to settle: [Global illumination](#global-illumination)), quality?: "project" | "low" | "medium" |
+  voxels to settle: [Global illumination](#global-illumination)) | "specular" | "diffuse" | "clusters" | "culled" |
+  "wireframe" (boxes of what culling left out, the edges of what was drawn: "Rendering"), quality?: "project" | "low" | "medium" |
   "high" | "ultra", waitForAssets?, path?, overwrite?}` renders on the
   next frame (again on the following frames, up to `c_MaxCaptureTextFrames`, while glyphs of the scene's text are still
   being rasterized, so text is never half drawn, up to `c_MaxCaptureExposureFrames` until its pre-exposure settled (the
@@ -3657,7 +3709,15 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   "screenSpaceTexts", "hiddenScreenSpaceTexts", "ui": {"canvases",
   "hiddenCanvases", "elements", "drawCalls", "pendingGlyphs"}, "debugView":
   {"view", "tintedEntities", "pendingEntities", "failedEntities", "placeholderBoxes", "entitiesPerLOD",
-  "entitiesPerMipShortfall", "shadows"?, "lighting"?, "lightingPending"?}, "notice"?, "path"?}` (the mip view counts entities
+  "entitiesPerMipShortfall", "shadows"?, "lighting"?, "lightingPending"?}, "renderStats", "screenSpaceReflectionsPending",
+  "notice"?, "path"?, "incomplete", "complete"}` (every wait is bounded in frames and the command succeeds when a bound runs
+  out, so `incomplete` lists, as JSON pointers into the result, the fields that say what the picture lacks:
+  `ListIncompleteCapture`'s `/pendingAssets`, `/texturesBelowWanted`, `/stalePoses`, `/pendingTextGlyphs`,
+  `/ui/pendingGlyphs`, `/localShadowViewsPending`, `/reflectionProbesPending`, `/renderStats/deferredInstanceBytes`,
+  `/preExposureSettled`, `/globalIlluminationSettled`, `/previewLighting` (lit by the editor's preview, not the scene),
+  `/temporalFrames` (under TAA, fewer than 8), `/screenSpaceReflectionsPending`, `/debugView/shadows/complete`,
+  `/debugView/lightingPending` and `/notice` (another camera than the one asked for), and `complete` is true when it is
+  empty; the mip view counts entities
   with textures by the mip levels their worst texture lacks: none, 1, 2, 3 or more or still loading; the motion view colors
   pixels by their motion since the capture renderer's previous frame, so it renders a second frame, and a still scene shows
   none; the shadows view colors every receiver by screen pixels per shadow texel and adds `shadows: {complete, shadowMapSize,
@@ -3672,8 +3732,24 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   they arrived (`lighting` null and `lightingPending` true if they did not within the same polls); it defaults to the
   viewport's size, camera, overlays and debug view and fails without a GPU. `position`, `target` and `fov` render through a camera of the capture's own (a copy
   of the editor camera with those changes; `camera.get` is unchanged, the result's camera is `"custom"`), so agents look
-  around without moving the person's view. **Live captures** (`viewport.capture {live: true, camera, atFixedStep?,
-  frames?, path?}`) render nothing: they read back what the Scene view (`"editor"`) or the Game view (`"scene"`) presented, its
+  around without moving the person's view. **Renderer switches** (`viewport.capture {renderer: {...}}`,
+  `CaptureRendererSwitches` in `ViewportRenderer.h`) turn techniques on or off for one picture, to show what they do:
+  `SceneRendererSpecification`'s `FadeLevelsOfDetail`, `GPUDriven` (false: the CPU path), `BatchAcrossMaterials`,
+  `TextureStreaming`, `SpecularAntiAliasing`, `VisibilityFeedback`, `OcclusionCulling`, `DitherOutput`, and the capture-only
+  fields `SpecularEnergyCompensation`, `HorizonFade`, `SpatialReflectionResolve` (false: the forward pass reads each pixel's
+  traced reflection, copied over the resolved target), `GlobalIlluminationBounceGain` (`GlobalIlluminationSettings::
+  BounceGain`, 0 is one bounce) and `FXAASubpixel` (0.25 or 0.75: `PostProcess/FXAAWideSubpixel.frag`, a variant, so the
+  default's shader is unchanged). A capture with any renders through a renderer of its own
+  (`EditorViewport::GetSwitchedCaptureRenderer`: the capture renderer's specification with the switches over it, kept for
+  the next capture with the same switches, its targets released after each picture; the capture holds it until it
+  finished), so no view, other capture or game frame changes (`GPU.Editor.Viewport` checks the Scene view's frames and a
+  capture without switches against those before, to the bit; the switches' waits are a capture's like any other's: a
+  texture made resident whole without `TextureStreaming` stays resident as a capture's levels do). The result's `renderer`
+  echoes the switches set; live captures refuse them. A capture's exposure is metered from its own frames, so under
+  automatic exposure a switch that changes how much light there is (energy compensation, the bounces) re-exposes the whole
+  picture: pairs that show what a technique does are taken with a fixed exposure (`PostProcess` `AutoExposure` off), and
+  `renderStats.exposure` says what automatic exposure metered. **Live captures** (`viewport.capture {live: true, camera,
+  atFixedStep?, frames?, path?}`) render nothing: they read back what the Scene view (`"editor"`) or the Game view (`"scene"`) presented, its
   temporal history as it is, to see motion as it plays (trails, smearing, crawling). Every command poll runs before the
   views render in its frame, so a poll reads back the frame the view rendered in the previous one before it renders
   again; `ViewportRenderer::GetRenderStamp` pairs each render with the play session and the fixed steps it showed.
@@ -3879,7 +3955,10 @@ mechanical, so a lighting bug in code nobody changed may be a conversion slip (i
    - Vertex and instance ids are `SV_VulkanVertexID` and `SV_VulkanInstanceID`: the draw list is indexed by the instance
      index including the base instance, which `SV_InstanceID` excludes.
    - `precise` where fused or reordered math would break an agreement (`Include/LODSelection.slang`: the CPU and GPU choose
-     the same level of detail).
+     the same level of detail; `GI/FieldReduce.comp`: a dispatch repeats the one before to the bit). It covers the
+     expressions assigned to the variable that carries it, not the body of a function it calls, a `dot` or a `sqrt`: declare
+     it where each value is computed, write a `dot` out, and check the SPIR-V for `NoContraction` on every product, sum and
+     quotient that must hold (`slangc -target spirv-asm`).
    - `static const` for constants. No generics, modules, interfaces or extensions; `__target_switch` and `spirv_asm`
      only in `Include/Common.slang`, each with an HLSL form.
    - New shaders take their stage inputs as entry-point parameters (`SV_Position`, `SV_DispatchThreadID`...). The
@@ -3907,7 +3986,7 @@ mechanical, so a lighting bug in code nobody changed may be a conversion slip (i
    `-fvk-use-dx-layout`, `-fvk-use-scalar-layout` (other buffer offsets), `-g` (configuration-dependent outputs),
    `-O`, `-source-embed-style` (the header must follow the patch), `-depfile`, `-emit-spirv-via-glsl`. Shader bytes are
    the same in Debug, Release and Dist. Every entry depends on its own file and every include: editing an include
-   recompiles all shaders, editing `Forward.frag.slang` its six entries.
+   recompiles all shaders, editing `Forward.frag.slang` its twelve entries.
 5. **The pin** (`CMake/StrataSlang.cmake`). Slang 2026.20's release archives for Windows x64, Linux x64 and macOS (arm64
    and x64), each with its SHA-256. The first configure downloads the host's archive (25-64 MB) under a file lock into a
    per-user cache, `%LOCALAPPDATA%\Strata\Toolchains`, `~/Library/Caches/Strata/Toolchains` or
@@ -3927,7 +4006,9 @@ mechanical, so a lighting bug in code nobody changed may be a conversion slip (i
    allow-list grows only by a feature device selection requires; `StorageImageExtendedFormats` only per named entry with a
    fallback for devices without `shaderStorageImageExtendedFormats`, and a hint names the known traps: `f32tof16`'s 16-bit
    types, `Sample` in compute, storage images without a format, `SV_InstanceID`); the four `Scene/Mesh*.vert` entries
-   keep their position invariant; no module binds two used variables to one slot; each scene vertex shader reads exactly
+   keep their position invariant; no module binds two used variables to one slot; the six forward pixel shaders without
+   `ST_FORWARD_FIELD` use none of global illumination's slots and each of their six twins reads the field (Rendering,
+   "The join"); each scene vertex shader reads exactly
    the locations and types of its input layout (`Renderer/SceneVertexLayouts.h`, from which `GetScenePipeline` takes a
    pipeline's layout by its vertex shader: the validation layer only warns about an attribute no shader reads, and the
    GPU suites count errors). A new scene vertex shader gets a line there. `Renderer.ShaderTool` tests the tool.
@@ -3938,7 +4019,8 @@ mechanical, so a lighting bug in code nobody changed may be a conversion slip (i
    macOS job converts every module to Metal with MoltenVK's converter and compiles it (a lower bound of what MoltenVK does
    at run time): `c_KnownFailures` of `.github/scripts/convert_shaders_to_metal.sh` lists the entries the offline
    conversion refuses whatever compiled them (the bindless table's runtime array, which MoltenVK places in an argument
-   buffer at run time), and only shrinks. Their lines read `known failure:`, not errors, so that CI's annotations (the
+   buffer at run time): an entry leaves it once it converts, and only a new entry that reads the bindless table (the
+   forward pass's `*Field.frag` and `*AreaLights.frag` variants and the prepass's `*LightSurfaces.frag`) joins it, with that reason. Their lines read `known failure:`, not errors, so that CI's annotations (the
    first few error lines of a failed job's logs) name the job's real failures.
 7. **A conversion slip.** The classes the conversion met: vector comparisons used as one bool, a multiplication across two
    lines, `texture()` in compute, a matrix column written alone, GLSL's `umulExtended` and the dispatch's size (the hand
@@ -3980,6 +4062,7 @@ mechanical, so a lighting bug in code nobody changed may be a conversion slip (i
   the ambient occlusion (GTAO and its denoiser, their resources and targets), `SceneRendererLightingView.cpp` the lighting
   debug views, `SceneRendererGlass.cpp`, `SceneRendererScreenShadows.cpp` the sun's screen-space shadow mask (its
   evaluation, contact shadows and blur), `SceneRendererShadowView.cpp` the shadows debug view,
+  `SceneRendererGeometryViews.cpp` the wireframe and culled debug views,
   `SceneRendererScreenReflections.cpp`, `SceneRendererReflectionProbes.cpp`, `SceneRendererAtmosphere.cpp`,
   `SceneRendererLocalShadows.cpp`, `SceneRendererExtraction.cpp` and `SceneRendererGPUDriven.cpp`. Their members stay
   declared in `SceneRenderer.h`, grouped under a comment naming their file. A feature's new pass goes into its file
@@ -4037,7 +4120,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
 | Screen-space reflections' targets per view (scenes that ask for them; "Reflections") | none | 20 MiB, 79 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows | 58 MiB, 232 MiB at 2160 rows |
 | Motion blur's targets per view (scenes with motion blur) | none | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows | 24 MiB, 97 MiB at 2160 rows |
 | Reflection probes per view (16 slots, scenes with probes) | 17 MiB | 17 MiB | 68 MiB | 68 MiB |
-| Global illumination per view (scenes that ask for it; Low's layout 22.6 MiB) | none | none | 146.4 MiB | 146.4 MiB |
+| Global illumination per view (scenes that ask for it; Low's layout 24.9 MiB) | none | none | 155.7 MiB | 155.7 MiB |
 
 - **Medium is Strata 0.6.0's costs** and `SceneRendererSpecification`'s default, so tests and tools keep their meaning;
   High, the default of the `Renderer.Quality` section, is Medium below 1440 output rows but for rows that cost at every
@@ -4525,7 +4608,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   center and Range, its luminance times its color, its normal as the direction, its bounds the sphere of radius Range plus
   the face's half diagonal (so it is culled, ranked, clustered and capped with them), `Source.y` its two sides and the
   record's last two vectors, `AxisX` and `AxisY`, its face's axes with its half sizes. Its face rides beside the light
-  buffer in a parallel one (`RenderData::LightShape`, 48 bytes a light, zero for point and spot lights; scene set SRV 56,
+  buffer in a parallel one (`RenderData::LightShape`, 48 bytes a light, zero for point and spot lights; scene set SRV 57,
   `u_LightShapes`): `CollectLights` fills it with the lights it uploads, `LightCompact.comp` writes it (its u7) at the
   light's place. The GPU counts the rect lights it packed (`CullCounters::VisibleAreaLights`, counter 27;
   `SceneRendererStats::AreaLights`, `editor.perf`'s `areaLights`; whether the frame drew with the forms that shade them:
@@ -4749,6 +4832,28 @@ lights, Post Process and the sky), and never a resolution below the output's.
   frames that show the view: its pipelines and buffers are made by the first such frame, its binding sets (which name the
   depth) are released with the targets, its counts' buffer and the ring of `c_GPURecordCount` readbacks stay with the
   renderer, so a capture's counts survive the release of its targets.
+- **The wireframe and culled debug views** (`SceneRenderOptions::ShowWireframe`, `ShowCulled`; the editor's `debugView:
+  "wireframe"`, `"culled"`; `SceneRendererGeometryViews.cpp`) show what the frame drew and what it left out, drawn into the
+  output texture in `GPU.Overlays` with the overlays' frame constants, after the tints and under the other overlays. The
+  wireframe replays the frame's own draws with `Pass::Wireframe` scene pipelines (non-solid fill, the batch's culling and
+  winding, so mirrored instances keep theirs, depth tested against the frame's depth with `SetJitteredDepthBias`, blended in
+  `WireframeColor`): the GPU-driven path's view buckets with the arguments its culling wrote (`DrawGPUView`), or the CPU's
+  opaque batches, then the transparent batches both paths draw on the CPU; the mesh vertex shaders (skinned ones for skinned
+  instances) and `Scene/Wireframe.frag`, which tests the level-of-detail fade's mask as the prepass does and reads no
+  texture. The replay leaves `DrawCommands` as the frame counted them. It needs the device's non-solid fill mode
+  (`GraphicsDeviceInfo::SupportsWireframe`): without it the frame reports why and draws no lines. The culled view boxes the
+  mesh renderers in the frustum that culling left out, over everything (no depth test): by their size (`CulledColors[0]`,
+  boxes grown to `RenderData::c_CulledViewMinPixels` across their diagonal, a cube's edges about 3.5 pixels) and, on the
+  GPU-driven path, by occlusion (`[1]`: hidden now and not drawn by the first phase; `renderStats.occludedProxies` counts
+  every proxy the second phase found hidden, so while the camera moves it includes the ones the first phase drew once
+  more because the previous frame saw them, boxed from the next frame). Each path records them where it decides, so the
+  boxes are its decisions, not a second guess: the CPU's extraction into `m_CulledProxies` (uploaded at the overlay),
+  `Scene/Cull.comp`'s counting passes into `u_CulledViewList` with `u_CulledViewArguments` as the draw's indirect arguments (`CullConstants::CulledView`; the cull
+  layout binds both every frame, one entry long while the view is off, and the branch is uniform). An entry is the proxy's
+  index and the reason above `c_CulledReasonShift`; `Overlay/CulledView.vert` draws a box per entry from the scene copy's
+  proxy records, one draw per reason so crossing lines of two colors do not depend on the GPU's recording order. Frames
+  without the views record nothing of them; their resources are made by the first frame that shows one, apart from the
+  GPU path's two one-entry buffers the cull layout binds.
 - `SceneRenderer::GetShadowViewStats()` (`ShadowViewStats`, `Strata/Renderer/ShadowView.h`) is the newest frame whose counts
   came back (2-3 frames late, never waited for: `Render` resolves them at its start, `ResolveShadowViewStats` for tools
   that wait without rendering, as `viewport.capture` does beside `ResolveGPUStats`): per cascade its layout (the frame's
@@ -4881,7 +4986,10 @@ lights, Post Process and the sky), and never a resolution below the output's.
   (`SurfaceData::SpecularEnergy`, `ClearcoatData::SpecularEnergy` for the coat's lobe of F0 0.04) is computed once per pixel
   from the table fetch the surface setup of `ShadeLitSurface` makes, and multiplies direct light's specular term
   (`EvaluateLightWeighted`, `EvaluateClearcoat`), image light's split sum (`IndirectInputs::SpecularColor`), the coat's
-  reflectance, and what glass reflects in `TransmitLight` (what passes through is what it does not reflect). Image light's
+  reflectance, and what glass reflects in `TransmitLight` (what passes through is what it does not reflect); the forward pass
+  reads it through `GetFrameSpecularEnergy`, as `GetHorizonFade` through `GetFrameHorizonFade`, which return 1 where a
+  capture turned them off (`SceneRendererSpecification::SpecularEnergyCompensation`, `HorizonFade`: the bits of
+  `FrameConstants::CaptureSwitches`, 0 in every other frame, a uniform branch). Image light's
   diffuse keeps `1 - SpecularColor` (diffuse gets what specular leaves); direct light's keeps `1 - F`, as the compensation
   adds under 0.5% to a dielectric's reflection. A white metal in a white furnace reflects the whole sky at every roughness
   (0.31 of it at roughness 1 before; `GPU.SceneRenderer.Lighting`'s furnace cases): check every shading change with them,
@@ -4961,7 +5069,16 @@ lights, Post Process and the sky), and never a resolution below the output's.
   drops emission, **AmbientOcclusion** returns the occlusion that darkens indirect light (material times screen, before
   multi-bounce), **Albedo** writes the base color; the last two are *value views*: written without the pre-exposure (a
   sunlit scene's 2^-19 would make an albedo of 0.03 subnormal in half floats), without fog and what glass transmits.
-  **Luminance** keeps the lit image. Lighting and Indirect go through exposure and tone mapping as the image does; for the
+  **Luminance** keeps the lit image. **Specular** and **Diffuse** keep one kind of light: the lights' highlights and image
+  light's reflections (the coat's included), or the lights' and image light's diffuse light (global illumination's field
+  included), without emission, fog, aerial perspective or what glass transmits (`IsLightKindView`); frames without them shade
+  with the old expressions to the bit, as branches on the uniform view select whole expressions, never weights multiplied
+  in (a multiply would let the compiler fuse differently). **Clusters** is a value view: the lights the pixel's light
+  cluster lists (what its shading walks, lit surfaces or not), written as a share of the cluster's capacity
+  (`ClusterGrid.w`, the overlay's `ClusterCapacity`), drawn by the overlay as bands of the luminance view's colors (none, 1,
+  2-3, 4-7, ...; the counts stop at the capacity, so the legend lists the bands up to a full cluster's:
+  `GetClusterLegendBands`, `GetClusterLegendName`), so its statistics' `value` reads shares of the capacity. Lighting, Indirect,
+  Specular and Diffuse go through exposure and tone mapping as the image does; for the
   value views and Luminance, `Overlay/LightingView.frag` replaces the finished image, first among the overlays (the motion
   view is skipped with one), from the frame's own HDR target (never the temporal history, which would blend values of
   earlier frames): occlusion as gray, albedo with luminances below `c_AlbedoLow` (0.03) mixed 0.7 toward the low mark and
@@ -5010,7 +5127,8 @@ lights, Post Process and the sky), and never a resolution below the output's.
   A change to the shading changes both, and the test.
 - **Shading** (`ShadeAreaLight`, entered from the forward pass's cluster loop for lights of type `ST_LIGHT_RECT` and
   above, the same for every pixel of a light: point and spot lights never enter it). Only the forward shaders' forms with
-  `ST_AREA_LIGHTS` (`Scene/ForwardAreaLights.frag` and the transparent and glass ones, separate binaries rather than a
+  `ST_AREA_LIGHTS` (`Scene/ForwardAreaLights.frag` and the transparent and glass ones, each also with global illumination's
+  field: `Scene/Forward*AreaLightsField.frag`, `PipelineKey::Field` beside `AreaLights`; separate binaries rather than a
   specialization constant, so that the others stay the shaders of before, instruction for instruction) hold it, and a
   renderer draws with them in frames whose scene has a rect light anywhere, lit or not (`RenderLights::GetTypeCount`:
   every `RectLightComponent` with a world transform, unlit and inactive ones too; `PipelineKey::AreaLights`, both paths
@@ -5054,7 +5172,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   "Real-Time Polygonal-Light Shading with Linearly Transformed Cosines", ACM TOG 35(4), 2016, and for the clipless form the
   2016 course "Real-Time Area Lighting: a Journey from Research to Production" (Hill, Heitz): `ThirdPartyNotices.md`):
   two layers of 64 x 64 RGBA32F texels in one `Texture2DArray` (`Renderer::GetAreaLightTable`, 128 KiB per device,
-  written in `Renderer::Init`'s command list, so it holds its values before any frame), scene set SRV 55. Shaders read it
+  written in `Renderer::Init`'s command list, so it holds its values before any frame), scene set SRV 56. Shaders read it
   with `Load` and bilinear weights of their own (`SampleAreaLightTable`, four loads a lookup): linear filtering of 32-bit
   floats is an optional device feature, and a sampler's 8-bit weights would be too coarse. `Include/AreaLights.slang`
   declares the table, the shapes and the shading only under `ST_AREA_LIGHT_SHADING` (the forward pass); the clipped form
@@ -5105,7 +5223,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   two tests. One depth per texel cannot tell a solid's hidden lower part from the space under an overhang, so every rect
   light view is drawn a second time with the winding reversed and no depth bias (`Pass::LocalShadowBack`, both paths, from the
   same draws or culled buckets) into the **back faces' atlas** (`EnsureLocalShadowBackAtlas`: a D32 atlas of the atlas's size,
-  the same tiles; scene SRV 59 and the masks' t59; made with the ranges, released with the atlas; a new one is cleared to the
+  the same tiles; scene SRV 60 and the masks' t60; made with the ranges, released with the atlas; a new one is cleared to the
   far plane, which reads as no back face, and the views holding content are drawn again). Where the light's center does not
   see the receiver (the tent found a blocker) each tap then looks **inside solids** (`GetAreaShadowInside`): ten points of its
   path from half its offset toward the receiver, each at 1 / sqrt(2) of the one before
@@ -5139,7 +5257,7 @@ lights, Post Process and the sky), and never a resolution below the output's.
   `SceneRendererStats::AreaShadowMasks`) the filter at every prepass pixel within the light's bounds on screen (the pass's
   scissor, grown by the blur's reach), with a blur radius of 0.35 of the penumbra's half-width in pixels as the sun's, then
   `Effects/ScreenShadowsBlur.frag`'s two passes in their `ST_AREA_SHADOW_BLUR` form (`Effects/AreaShadowsBlur.frag`: radii up
-  to 16 pixels, the sun's 8) into the light's layer of an R8 array (scene SRV 58; a 1 x 1 dummy without masks). The light
+  to 16 pixels, the sun's 8) into the light's layer of an R8 array (scene SRV 59; a 1 x 1 dummy without masks). The light
   buffer's `SpotAngles.w` is a rect light's layer plus one (the CPU path writes it with the slot, the GPU-driven path packs it
   in the top byte of the slot table, t21, which `Scene/LightCompact.comp` unpacks). The masks and two RG8 scratch targets
   (66 MB at 3840 x 2160) are made by the first frame with one and released with the render targets. The ranges and back faces
@@ -5282,19 +5400,26 @@ probe-field levels and local lights follow.
   `Renderer.Quality.GlobalIllumination` (Off, Low, High; Off at Low and Medium, High at High and Ultra; traits line
   `GPU.RadianceCascades`, the layout's `GetMemoryBytes`). GI runs where a scene asks at a row other than Off, or a GI view
   shows (at the row's layout; at Off the views show High's). Without that, nothing is made (no memory, no stage, the dummy
-  SRVs) and the image is Strata 0.7.0's bit for bit; `ForThumbnails()` and `ForBake()` take Medium's row, so no GI there.
+  SRVs), the forward passes draw with shaders that hold nothing of the field (the join, below) and the image is Strata
+  0.7.0's bit for bit; `ForThumbnails()` and `ForBake()` take Medium's row, so no GI there.
   High's cost is measured on the reference machine only (Windows, NVIDIA): Low is the level for integrated and Apple GPUs
   until measured there, and CI's Mac runs no GPU test.
 
 - **Layout** (`R/GlobalIlluminationLayout.h`, `Renderer.GlobalIlluminationLayout`): per quality level the voxel levels
   (High four of 128 x 64 x 128 voxels from 10 cm, Low three of 64 x 32 x 64 from 20 cm, each level twice the voxel size of
   the one before) and the probe cascades (High four from 0.5 m, 16 to 1,024 directions; Low three from 1 m). Memory per view
-  that runs GI (`GetMemory`, the same at every output size, the frame's work and region lists included): 146.4 MiB at High,
-  22.6 MiB at Low (the probes' depth moments 35.2 and 4.4 of them); `SceneRenderer::GetGlobalIlluminationMemoryBytes` adds the
+  that runs GI (`GetMemory`, the same at every output size, the frame's work and region lists included): 155.7 MiB at High,
+  24.9 MiB at Low (the probes' depth moments 35.2 and 4.4 of them, their spherical harmonics 6.3 and 0.8, the dynamic layer
+  of moving objects 3.1 and 1.5);
+  `SceneRenderer::GetGlobalIlluminationMemoryBytes` adds the
   scene's material table (4 KiB for 256 materials, doubling as it grows). A frame that wants none releases everything
   (`ReleaseGlobalIllumination`), and so do the render targets' release and a `SetQuality` that changes the row.
 - **The clipmap** (`R/VoxelClipmap.h`, CPU, main thread, `Renderer.VoxelClipmap`): per level a window centered on the
-  camera, snapped to steps of `c_GIScrollVoxels` (4) voxels, stored toroidally (world voxel `w` at texel `w mod
+  camera (at High the finest level's on a point `c_GIFinestLevelDrop`, 0.8 m, below it, `VoxelLevelLayout::Drop`, with its
+  weights: floors and what rests on them lie below the eye, and with the camera at half the height of the owner's 5.5 m
+  Cornell box the floor's contacts fell to level 1's 0.2 m voxels, which closed the floor under the sphere's overhang; Low's
+  finest level, at full weight only 1.6 m up and down, stays centered, keeping a ceiling 1.5 m above the eye), snapped to steps
+  of `c_GIScrollVoxels` (4) voxels, stored toroidally (world voxel `w` at texel `w mod
   dimensions`: a scroll rewrites only the slabs that entered), with a queue of regions and the box of valid voxels. Regions
   and voxel coordinates are relative to an **anchor** (a multiple of 1,024 voxels, kept until the camera leaves its cell by
   1 km on an axis): the same scene voxelizes to the same bits whatever the camera. A scroll queues its slabs (the level is
@@ -5313,9 +5438,9 @@ probe-field levels and local lights follow.
   have settled (`GISettleFrames`; Multi-bounce, below).
 - **What enters:** indexed, active proxies of the Static arena (meshes of the Skinned arena are left out: characters
   neither occlude nor bounce light; they receive it), opaque and alpha-masked submeshes (transparent and transmissive
-  ones are left out); `CastShadows` does not matter. A proxy placed anew is moving for `c_GIMovingFrames` (30) frames:
-  out of the voxels until it rests (its old voxels empty at once), so movers cost no voxel work and cannot pop the
-  light. Open meshes take the coarsest level of detail whose error stays within half a voxel; closed meshes keep full
+  ones are left out); `CastShadows` does not matter. A proxy placed anew is moving: its triangles leave the voxels (its
+  old voxels fade out) and the dynamic layer holds it until it has rested (Moving objects, below). Open meshes take
+  the coarsest level of detail whose error stays within half a voxel; closed meshes keep full
   detail. Materials reach the voxels as the CPU's means (`RenderData::GIMaterial`: the diffuse albedo
   `BaseColor * (1 - Metallic)` times the base color map's mean, the emission times the emissive map's mean,
   `Texture::GetLinearMean` of the map's smallest level), so no compute pass reads bindless textures and streaming never
@@ -5379,6 +5504,80 @@ probe-field levels and local lights follow.
   changes only the struct's type. What differs arises in the recompiled pipelines themselves; not found within stage 2's
   time box (next: run the recompiled GTAO twice over one frame in a test and compare its raw target bit for bit), so
   frame constants a new pass needs check the `ao` view's repeats first.
+- **Moving objects** (the dynamic layer: `GI/VoxelMovers.comp`, `VoxelClipmap::EmitMovers`; R5 of the research, the idea
+  of a coverage per voxel from the lab's `voxelize_boxes.comp`): a proxy whose placement changed (the transform it is
+  drawn with: `RenderScene`'s, which takes `Scene::FindDrawnTransform`) is **moving** until it has kept its place for
+  `c_GIMoverRestSeconds` (0.25 s) of the renderer's clock (`StepSeconds`: the wall clock between its frames, at most 0.25 s
+  a frame, or `SceneRenderOptions::AdaptationSeconds`), never for a number of frames: the hold of 30 frames this replaces
+  left movers out of the voxels altogether, so a moved object's shade and bounce arrived half a second after it stopped at
+  60 frames a second, and later at lower rates. Its triangles are voxelized twice only: its old bounds are queued when it
+  starts (they leave) and its new ones when it rests (they enter), and it stays in the layer until every level took those
+  regions (a budget may spread them over frames), so it is never in neither. Meanwhile each of its submeshes is an
+  **oriented box**: the submesh's bounds under the proxy's world transform (`RenderData::VoxelMover`, camera-relative, with
+  the material's mean albedo and emission). Boxes, because a box needs no triangle and no winding: a mover costs the same
+  whatever its mesh, static proxies' triangles are dispatched for it only in those two regions, at its start and its rest
+  (every voxelized proxy's triangles there, as before, in the frames that take those regions), never for its motion,
+  and crates, doors and platforms are exact;
+  round and hollow meshes are too large (What it cannot do). Each frame the clipmap lists the boxes (at most
+  `c_GIMaxMoverBoxes`, 64) and the **bricks** of 8 x 8 x 8 voxels they reach in every level (`RenderData::VoxelMoverBrick`,
+  at multiples of 8 voxels of the world, so a mover's bricks stay while windows scroll; at most
+  `GlobalIlluminationLayout::MoverBricks`: 512 at High, 256 at Low; a 1 m box reaches about 50 of High's). A proxy past
+  either limit is left out whole (`GIMoversLeftOut`: in no voxel until it rests, as every mover was before). The pass runs
+  a group of 512 threads a brick, twice a frame: before the voxelizer it **puts back** what the bricks written the frame
+  before held (a backup of 12 bytes a voxel, so the voxelizer and a scroll see the static voxels alone, and a mover that
+  rested leaves a fresh renderer's textures and field, to the byte); after it, it stores what this frame's bricks hold and
+  **writes the boxes into the level's own textures**, where they give more occupancy than the voxel has. So every march,
+  the sun's walk, the probes' moves and the forward gather read max(static, dynamic) with the reads they had: no second
+  texture, no new binding in any shader, the forward shaders and their plain twins untouched, and **no pass, no write and
+  no bit of difference while nothing moves** (`GIMoverDispatches` 0). Injection lights the layer's voxels like any others,
+  so a mover bounces light and glows in the frame it moves.
+  What a box writes (`GetMoverOccupancy`): per axis of the box its share of the voxel's surroundings under a tent two
+  voxels wide, multiplied (a voxel's occupancy starts and ends without a kink as a face passes: the box's plain share of
+  the voxel alone bent a probe's light once per voxel crossed, second differences of 3.8% of the light beside the test's
+  box, 0.53% with the tent); times `1 / c_GIOccupancyGain`, so what a march's sample absorbs is the coverage itself
+  (stored as the coverage, a voxel was opaque two fifths of the way in: 5.4%); the box taken a quarter of a voxel smaller
+  (`ST_GI_MOVER_INSET`: whole, the soft edge and the marches' absorption, which saturates, read the ground beside a 0.5 m
+  box 12.0% dark for the 9.8% of its sky the box hides, and half a voxel smaller 7.2%; a quarter reads 10.1%, and the
+  bounce of its sunlit face 1.01 of its static voxels'); voxels more than a voxel inside rise to occupancy 1 over the next
+  one (the solid cores the gather's guard reads); a box thinner than two and a half voxels counts as that thick. The voxels
+  a face passes through carry its surface (the faces' outward normals by nearness; one layer, so injection's walk toward
+  the sun starts beyond what the box itself absorbs), deeper ones are interior, and a box thinner than a voxel is
+  two-sided (dark), as thin static walls are. A static voxel that holds a lit surface of its own below the box's occupancy
+  (the layer in front of a floor's face) turns into the box's gradually.
+  **Where one form takes the other's place, the voxels fade** (`VoxelClipmap::FollowFades`, the shader's `BlendFade`). A
+  proxy's triangles' voxels and its box are two forms of it: whole voxels against a box with soft edges, and a probe the
+  object covers finds its way out of the one elsewhere than out of the other (20.7% of a point's light 0.3 m from the
+  test's box where it stops). The frame a proxy started and the frame its triangles came back each stepped the light
+  around it by that difference (26.5% and 26.1% in the test). In both frames the clipmap now starts a fade for the voxels
+  the proxy's bounds touch and one beyond (the box's soft edge), per level and brick, where the level was valid
+  (`VoxelFrame::MoverFades`). The pass, in a third mode run before anything is put back (the layer of the frame before is
+  still in the textures), takes what those bricks show into a slot of the backup, and for `c_GIMoverFadeSeconds` (0.25 s
+  of the movers' clock) writes a blend of that and what the voxels hold, today's share easing in. The occupancy is blended
+  in the marches' measure (`GetFadeMeasure`: what a sample absorbs, then the solid core; blended as stored, a voxel that
+  left stayed opaque while the one that came already was); the surface is blended where both are lit and face alike, and
+  otherwise turns from the one kind into the other at a share each voxel has of its own (`GetFadeTurn`: at one share for
+  all, an object's whole footprint turned in one frame). A brick that fades again starts over from what it shows, so a
+  proxy that moves on while its rest fades steps nothing. Fading bricks stay in the frame's list, without a box's bit,
+  until their time is over: `GIMoverBricks` returns to 0 a quarter of a second after the last box left the layer, and
+  `GIMoverDispatches` the frame after (that frame still puts back what the last bricks held). The
+  slots are the backup's: the frame's bricks keep the first ones, by their order, and fades hold the last. Movers come
+  first (fades whose slots their bricks need end at once), a fade never takes a slot the bricks of the frame before still
+  hold, and an event that does not fit whole does not fade (it steps, as all did). A fade spreads the forms' difference
+  over its time in small steps, not evenly: What it cannot do, below.
+  **A new input of what a mover is to the GI** (another shape than a box, an albedo per voxel, a flag) goes into
+  `VoxelMover`, which `EmitMovers` hashes (`VoxelFrame::MoversChanged` keeps `GlobalIlluminationSettled` false while the
+  layer changes); keeps the bricks a superset of the voxels the shader writes (`EmitMovers` mirrors the shader's reach);
+  writes only what the backup puts back (the level's material, emission and normal); and stays continuous in the mover's
+  place: `GlobalIlluminationRoom`'s moving props measure it (the flicker measure, and the box's own share of the sky as
+  the reference). The layer shapes its values to the marches' rules (the gain, the lead-in's threshold, the guard's core):
+  a change to how voxels are read changes the still scenes' bits.
+  Cost: nothing while nothing moves. Eight boxes of 0.5 m sliding up to 3 cm a frame in the sun room at 3840 x 2160 at
+  High (61 bricks): `GPU.RadianceCascades` read 4.22, 4.21 and 4.24 ms against 4.20, 4.23 and 4.20 ms with them at rest
+  in three runs under PerfLock (+0.02, -0.01 and +0.04 ms: less than the blocks' own spread of 0.3 ms lets one tell;
+  `PerfGPU.Renderer`'s "Global illumination's moving objects' cost at 3840x2160": one renderer, interleaved blocks,
+  medians; at most 0.2 ms was the goal). The blocks hold the steady move: a fade's bricks cost their share of the same
+  pass for a quarter of a second, and the frame it starts one more dispatch a level; neither is measured apart. Skinned characters are not in the layer (5c of the spec): they receive the
+  field and neither occlude nor bounce.
 - **The light** (`GPU.RadianceCascades` after the voxels, every frame; `Include/GIProbes.slang`): `GI/VoxelInject` lights
   every surface voxel of every level (albedo times the sun's illuminance on its normal times a walk toward the sun through
   the voxels the ray crosses, read unfiltered, from its own level up: its own level until the walk has risen
@@ -5416,8 +5615,9 @@ probe-field levels and local lights follow.
   the camera's distance, the hard choices (relocate or not, which candidate) flipped as a probe crossed a blend into
   level 1's fatter surfaces, and probes about 5.5 m from a walking camera jumped up to 0.35 m in a frame; now a 2 cm step
   moves one at most 0.021 m and changes its validity at most 0.12 (`Renderer`'s "Relocated probes move continuously
-  ..."). So level 0's relocation reaches 5.35 m from the camera at High (2.15 m up and down), and level 1's 0.2 m voxels
-  close gaps under objects beyond: no probe enters the yard's car's 0.15 m gap there, which takes no field light),
+  ..."). So level 0's relocation reaches 5.35 m from the camera at High (2.95 m down and 1.35 m up), and level 1's 0.2 m voxels
+  close gaps under objects beyond: no probe enters the yard's car's 0.15 m gap there, whose ground takes its opening's light
+  instead: the gather, below),
   `ProbeWeights` (the
   eight parents' trilinear weights times their validity and the transmittance between the moved probes), `CascadeMarch`
   (cascades from the top down to 1, a thread per texel, fixed directions, each texel the mean of
@@ -5435,14 +5635,53 @@ probe-field levels and local lights follow.
   unabsorbed ray continues into the parents' merged rays, only the top cascade, leaving the clipmap, reads the sky), and
   `FieldReduce` (a group per cascade-0 probe, a thread per direction: cascade 0 marches cascade 1's 64 directions, each
   continued by cascade 1's merged ray of the same direction and gated by its own transmittance, into the field's ambient cube:
-  six RGBA16F faces per cascade-0 probe, irradiance over pi and the sky share, normalized by the directions' cosine sum;
-  cascade 0 has no atlas). A 16-direction cascade 0 reduced apart gated four of cascade 1's directions with one ray and put an
+  six RGBA16F faces per cascade-0 probe, irradiance over pi and the sky share, normalized by the directions' cosine sum, which
+  re-injection reads; and the same rays projected on the real spherical harmonics of bands 0-2, each band times the cosine
+  lobe's factor over pi (1, 2/3, 1/4), less what a uniform radiance leaves in a coefficient through the 64 directions'
+  quadrature, nine RGBA16F texels a probe (`FieldIrradiance`; band 0's holds the coefficient times its basis function, the
+  mean of the rays' light, which stays under the voxels' clamp: the coefficient, 3.545 times the mean, left the format's
+  range in a bright closed room; the other bands' are clamped to the range), which drawn surfaces read; cascade 0 has no
+  atlas). Drawn
+  surfaces read the harmonics (`ReadProbeIrradiance`, never below zero), which turn smoothly with the normal: the faces
+  blend the axes' hemispheres for a normal between them, which take directions behind its plane, and beside a white sphere
+  under a uniform sky the probes a few centimeters off it read its rim 7% dark (the harmonics 3.5%). The harmonics' weight
+  over the cosine mu to the normal, 1/4 + mu/2 + 5/32 (3 mu^2 - 1), is negative from 104 to 145 degrees off the normal
+  (-0.04 at 122), so a probe that sees a strong light behind the surface's plane reads dark: the probes in front of a wall
+  the sun shines on, at the patch and around it. Under a sun 6 degrees up, the harmonics alone read the sun room's north
+  wall at 0.48 to 0.67 of its probes' faces on the patch and 0.74 above it, dark to black blotches, and the back wall of
+  the showcase's hut, which the sun's patches on it alone light, black around them. So the read is the larger of the
+  harmonics' and the faces' (`ReadProbeIrradiance`; the faces are bound to the scene passes at SRV 55): the faces' weights
+  are negative nowhere. Along an axis a face holds the light of its own hemisphere and nothing from behind it: that wall
+  reads 0.999 to 1.085 of its faces ("The north wall keeps its light around the sun's patch on it"). Between the axes the
+  faces' blend takes some light from behind the plane, so a wall there glows around a sun patch on it, as it did when
+  surfaces read the faces alone: on a panel turned 30 degrees the patch reads 2.2 to 2.7 times the panel's shadowed part
+  (the harmonics alone 0.79 to 1.17), under sunlight hundreds of times as bright, and the shadow 0.75 m from the patch 3%
+  more than the harmonics' ("A wall between the axes keeps its light at the sun's patch on it"). Not kept: the faces as
+  the floor only near the axes (all of them within 13 degrees, none beyond 30), which left the hut's wall, turned 45
+  degrees, black around its patches; as the floor between the axes, the harmonics with bands 1 and 2 scaled by 0.866 and
+  0.8, the least scaling whose weight is negative nowhere, which adds a fifteenth of the light behind the plane (that
+  panel's patch read 2.1 to 2.3 times its shadowed part, no better than the faces, for nine more reads a probe); the
+  faces instead of the harmonics along the axes, which read the furnace's center 0.894 with the sphere off the probes'
+  grid (0.902). Re-injection and the probes view keep the faces
+  (`ST_GI_FIELD_AMBIENT_CUBE`): their weights are never negative, so the bounces' series rises to its limit and stays there
+  (re-injected through the harmonics, the series fell into a rounding cycle: still frames differed, settling missed its
+  frame). A 16-direction cascade 0 reduced apart gated four of cascade 1's directions with one ray and put an
   emissive wall's light at its directions' centres' cosines, 1.34-1.42 times the form factor. The same pass keeps each probe's
   **depth moments** (DDGI's, Majercik et al. 2019 and 2021, ideas only): each ray's distance to its first hit over its march
   (the absorbed shares' mean; what passes counts at the march's end, two spacings; the probe's own sample is its validity, not
   a hit), its mean and mean square filtered over the neighbouring rays by the cosine to `c_GIFieldDepthSharpness` (8), stored
   as the mean and the variance in a 10 x 10 octahedral tile per probe, two halves an R32_UINT texel (RG16F is an extended
   storage format) (a texel per ray inside a one-texel border that repeats the interior across the octahedron's edges), SRV 54.
+  **What follows the march is `precise`** (the solid angles, the merge of the parents, the basis: `ProbeSHBasisPrecise`, the
+  faces' and the harmonics' sums): at one bounce a still camera's field must repeat to the bit, and left free, one driver
+  (NVIDIA 621.1, RTX 5090) ran these sums in two ways from dispatch to dispatch on one pipeline, a unit in the last place
+  apart: one byte of the faces (one probe's face) and 182 of the harmonics (176 probes, mostly bands 1 and 2, where what a
+  uniform radiance leaves is rounding alone). It showed only in a process that had drawn the room suite's earlier cases while
+  the machine was busy: 8 of 16 runs of the suite beside a build and a CTest run, in 3 to 7 of 11 readings each, against 0 of
+  16 with the sums `precise`, the two taking turns (the suite's two cases that hold it, as committed: 6 of 24 runs failed,
+  against 0 of 24); a process that drew the case alone never showed it (166 runs each). Why the driver has two ways is not
+  known. The march and the octahedral mapping, shared with `CascadeMarch`, stay free: the atlases and the depth moments
+  never differed.
 - **Multi-bounce** (re-injection; `GlobalIlluminationSettings::BounceGain`, 1, within [0, 1]; the tests' one-bounce
   cases set 0; High only, `GlobalIlluminationLayout::Bounces`: Low bounces once, because its field brightens the series to
   about 1.8 times High's, What it cannot do below): `VoxelInject`
@@ -5472,7 +5711,53 @@ probe-field levels and local lights follow.
   1, three interleaved pairs a run, two runs): `GPU.RadianceCascades` 3.93-3.95 ms with one bounce, 4.01-4.04 ms with
   every bounce, so the injection's gather costs 0.06-0.10 ms. An earlier A/B between main's binary and this one's put
   main's stage at 5.6 ms in the sun room against 4.0 ms; that gap between binaries was not explained, and the in-process
-  figures replace it. Without GI nothing of it runs.
+  figures replace it. Where the stage's time goes (batch 2: a timer per pass, added for the measurement and removed
+  again; medians of 60 settled frames, three processes, the sun room and the yard, three renderers each, validation off,
+  under `PerfLock`): the voxels' lighting (`VoxelInject`, every voxel of every level) 0.53 ms, its downsample 0.08 ms,
+  validity and weights 0.01 ms, the march of cascades 3 to 1 2.6 ms and cascade 0's rays summed into the field
+  (`FieldReduce`) 1.35 ms: 4.3-4.7 ms in all. Two cuts of the reduce followed, both of work the group repeated: **a loop
+  that a few threads of a compute group run is paid by the whole group**, whose other threads wait for it. The nine
+  threads that sum the harmonics' coefficients evaluated the whole basis for each of the 64 rays (each ray's thread now
+  stores its basis once, `s_Basis`: 0.13-0.20 ms of a frame's GPU time), and the depth tile's 36 border texels were
+  filtered like its 64 interior ones, a second pass over every ray (now copied from the interior, `s_Depths`: 0.09-0.10
+  ms); together 0.29-0.31 ms in the sun room and 0.23-0.24 ms in the yard, the 66 cases of the
+  `GPU.SceneRenderer.GlobalIllumination*` suites reporting the numbers they reported before. That leaves the stage at
+  about 4.2 ms (the perf cases `PerfGPU.Renderer.GlobalIllumination4K*`: medians of 4.24 ms in the sun room and 4.28 ms
+  in the yard, `GPU.Opaque` 1.10 and 0.86 ms; the reduce about 1.1 ms by the frame's time, not measured per pass again)
+  and all of batch 2 at about 0.1 ms of a frame's GPU time over the build before it, in the opaque pass's gather:
+  `GPU.Opaque` 1.10 against 1.00 ms in the sun room and 0.86 against 0.74 ms in the yard in three interleaved runs of
+  each, the stage (4.24 against 4.16 ms, 4.28 against 4.31) and the frame's time (8.88 against 8.93 ms, 8.31 against
+  8.32) within their runs' spread. Its steps, measured one by one, summed to 0.12-0.15 and 0.04 ms (the window's shift
+  0.12-0.15 and 0.02 ms, the thin gaps' light 0.06-0.08 and 0-0.03 ms, the harmonics 0.23-0.25 ms in both, less the
+  cuts), and the read's floor at the cubes (three more reads a probe) and the thin gaps' light on top of the probes'
+  came after them and cost 0.02-0.03 ms more (`GPU.Opaque` read 1.07 and 0.84 ms before the two, in other runs). Compare
+  builds by the frame's GPU time (the cases' `GPU ... ms busy`) and by like readings of a stage over several runs, never
+  by one reading. `GPU.Opaque` has two readings with GI on, 0.3-0.4 ms apart, that change from capture to capture (the
+  sun room: 1.10-1.12 ms in 21 of 30 look-dev captures and 1.38-1.49 ms in 9; before batch 2, 1.00-1.01 ms in 17 and
+  1.35-1.39 ms in 13), and the stage's reading often moves the other way: with the frame's time within 0.03 ms, one
+  binary's runs read the yard's `GPU.Opaque` at 1.07 and 0.75 ms and the stage at 4.16 and 4.41 ms. 1-2 ms is the goal.
+  What is left is the marches themselves (2.6 ms, and most of the reduce's 1.1), and no cheap cut of them was found
+  (untried: groups of rays that end alike, since a ray that ends early waits for its group's longest; skipping empty
+  space by the coarser levels). **Two modes:** some runs read the stage at about 6.5 ms instead (the reduce 3.6 ms for
+  1.2, `GPU.Opaque`'s median the same, the frame's GPU time 2 ms longer): one binary read 6.65, 4.32 and 5.92 ms in
+  three runs, and single look-dev shots read 5.5-7.4 ms among others of 4.0-4.8. Every slow reading was taken on one day
+  before 15:00; from 17:00 on none of 54 blocks of 60 frames of the same code read slow, nor did 16 runs of the code
+  before it (4.1-4.5 ms), whose look-dev shots had, with nothing voxelized, queued or pending in any block, nor any of
+  the 61 later runs of five sessions (4.73 ms at most). The review's captures added a stretch in between: one of three
+  look-dev sessions of the code before batch 2 read the sun room's stage at 5.3-5.7 ms in all ten captures (3.8-4.7 ms
+  in every other session of either build), while another agent built and ran GPU tests on the machine. A settled frame's
+  work depends on the layout alone, so the slow mode is not work this code chooses to do; a time slice of another
+  program's GPU work falling into the frame's longest stage fits what was seen (other agents worked on the machine that
+  day) but was neither reproduced nor ruled out. The machine's readings do have states of their own: without GI,
+  `PerfGPU.Renderer`'s 100,000 cubes' frame read 1.57, 1.77 or 2.31 ms by session, in every build measured, the one
+  before batch 2 included (at 2.31 ms its prepass and opaque pass 0.26 ms longer each, dropping back within the
+  session). A lead, not a cause: this driver ran the reduce's sums in two ways from dispatch to dispatch (above), and
+  two compiled forms of the pass would fit the two times as well; nothing ties them together yet. Rounding the sums as
+  written cost nothing six interleaved pairs of runs could measure (the frame's GPU time 8.76 against 8.78 ms in the sun
+  room and 8.23 against 8.20 ms in the yard), and neither binary read slow; the yard's stage alone read 3.83 to 4.53 ms
+  in the one and 4.08 to 4.51 in the other, the frame's time following by 0.17 ms at most. Compare builds only by
+  interleaved runs, and judge the stage by the medians of several. Without GI nothing of it runs, and the forward
+  shaders hold none of it (the join).
 - **The join** (`Scene/Forward.frag.slang`'s `ShadeLitSurface`, `Include/IndirectLight.slang`'s `GatherIndirectField`):
   where the scene asked and the frame's field is used (ran, not pending), `FrameConstants::ReflectionParams.y` is 1 and `.z`
   the intensity (clamped to [0, 4], non-finite 1). Every variant (opaque, alpha-blended, glass: no screen data is read)
@@ -5483,6 +5768,16 @@ probe-field levels and local lights follow.
   holds the sky's intensity. Specular is untouched. With `ReflectionParams.y` 0 the code is the old expression, so a frame
   without GI, or pending, is 0.7.0's to the bit; with a field weight of 0 the joined form is too (`x * 1`, `+ 0`).
   `viewport.capture` and the project picture (`ProjectThumbnail`, `c_MaxGIFrames`) wait for `GlobalIlluminationSettled`.
+  The gather is not compiled into every forward shader: each of the six pixel shaders of `Forward.frag.slang` and their six
+  rect light forms (`ST_AREA_LIGHTS`) has a twin with `ST_FORWARD_FIELD` (`Scene/Forward*Field.frag`), and a frame draws with the twins (`PipelineKey::Field`, from
+  `m_FieldFrame`) only when it joins the field or shows the `gi` or `open` view (`SceneRendererStats`'
+  `GlobalIlluminationShaded`); their pipelines are made when first used. Every other frame, a pending one too, draws with
+  shaders that hold nothing of the field. Compiled in behind the branch on `ReflectionParams.y`, the gather cost a frame
+  without GI 6-11% of `GPU.Opaque` at 3840 x 2160 (0.017-0.021 ms, the review's interleaved runs against the build before
+  batch 2). Without it, three interleaved pairs against that build read `GPU.Opaque` at 0.94-1.01 of its time without
+  anti-aliasing and 0.98-1.02 with TAA at High's row (eight and six shots, medians 0.99 and 0.98, differences from -0.010
+  to +0.007 ms), 0.96-1.00 and 0.96-1.01 at Medium's (-0.008 to +0.003 ms). A new forward variant gets its twin, and a
+  shader that must read the field is a twin: `Renderer.ShaderModules` fails when a plain one binds one of the field's slots.
 - **The field in the forward pass** (`Include/GIField.slang`, the `gi` and `open` views and the join): the eight cascade-0
   probes around the point moved `c_GIGatherNormalBias` spacings along its geometric normal, each by its trilinear weight (from
   its grid position), validity, whether it lies in front of the surface's plane (from where it moved) and whether it sees the
@@ -5503,23 +5798,62 @@ probe-field levels and local lights follow.
   step at probe-cell borders within 9% there). Where the live probes in front see less than `c_GIGatherMinVisible` (a
   quarter) of the weight they would give, the light fades with what they see instead of renormalizing a vanishing weight
   (which stepped at the cells' borders); dead probes take no part (a probe dead inside an object over a contact says nothing
-  about the floor beside it); none visible: no field light, never the sky. A point no level holds, beyond a valid box a
-  scroll left short, takes today's light; within 2 m of the field's edge it fades to today's light.
+  about the floor beside it); none visible: no field light, never the sky, but a drawn point whose probes see less than
+  `c_GIGatherMinVisible` of it (a gap its finest voxels close, thinner than about one and a half voxels) takes, for the
+  share of it they do not see, the light where the way to the camera leaves the closed voxels into open space (up to
+  `c_GIGatherExitSteps` (24) steps of half a voxel toward the viewer, to where the occupancy at the sample and at the
+  sample a voxel along the normal falls below `c_GIGatherExitOccupancy` (0.2): the gap's opening as the camera sees it,
+  the probes around it gathered for the point's own normal and plane), times `1 - d / sqrt(d^2 + g^2)` for the distance d
+  travelled and a gap g of `c_GIGatherGapVoxels` (0.75) voxels: what the ground under a gap that tall sees of its opening
+  from that far in. **The gap's light is added, and d is interpolated:** the probes' own light is already faded by what
+  they see and stays whole (blended toward the gap's light it was faded twice, and a point its probes see in part, a
+  fold of the ground or a contact, was darker with the gap's light than without it), and d ends where the occupancy
+  crosses the threshold between two samples (counted in whole steps the light fell in bands, 1.5 times from one pixel to
+  the next; 1.12 now, its own slope). The camera sees the point, so the way is open in the scene: a sealed room's points
+  never take light from beyond its walls (the sealed cases hold). Under the yard's car (0.15 m off the ground) seen from
+  6 m, beyond level 0's reach, the ground 0-0.2, 0.2-0.5 and 0.5-1 m under its edge keeps 0.91, 0.067 and 0.015 of the
+  open ground's light (without the gap's light 0.91, 0 and 0; 0.41, 0.060 and 0.0047 from 4 m, where level 0's probes
+  relocate into the gap and the gap's light adds nothing; about 0.22, 0.04 and 0.01 by the opening's view factor). At Low
+  the probes beside the car light the first 0.5 m as they light the open ground (0.97-0.99, with the gap's light or
+  without), and the ground 0.5-1 m in keeps 0.016 from 4 m and 0.048 from 6 m (black without). What it leaves (the
+  release notes' known issues): the probes' own light ends in a hard line 0.25 m under the car's edge; where a
+  point's voxel level ends the voxel doubles, and with it the steps and the gap g, so a gap that crosses a level's edge
+  shows it; and d is continuous only where the occupancy toward the camera falls through the threshold once. Where a
+  sample lies at the threshold and the voxels close again further on, the search jumps: just open, it ends there (at
+  the first sample with no depth at all, the opening's light whole); just closed, it marches on to an opening far away,
+  or finds none and keeps what the probes give. That is a crisp edge inside one voxel level, which interpolating d does
+  not remove (one fold of ThirdPerson's ground steps by 14-16 of 255 in the GI view since the gap's light came; whether
+  this jump is what draws that edge is not established). A search that weighs every opening on the way would be
+  continuous: another design. `GlobalIlluminationSettings::GapLight` (true) turns the gap's light off: the tests compare
+  with it.
+  Only drawn surfaces: re-injection's points inside walls would take a wall's far side. A point no level holds, beyond a
+  valid box a scroll left short, takes today's light; within 2 m of the field's edge it fades to today's light.
   `SceneLightingView::GlobalIllumination` (`gi`) shades white and returns the diffuse indirect light (the field inside,
   today's beyond, under the diffuse occlusion), `OpenShare` (`open`) the share of the sky a surface sees, as gray;
   `Probes` (`probes`, `GI/ProbeView.frag` in `GPU.Overlays`) draws cascade 0's probes over the image, live ones lit by
   their ambient cube, dead ones dark red. `SceneRendererGPUStats` adds `GIDeadProbes`, `GILiveProbes`,
-  `GISurfaceVoxels`; `ReadGlobalIlluminationValidity`, `ReadGlobalIlluminationField` and `ReadGlobalIlluminationFieldDepth`
-  read the probes (blocking). `GPU.SceneRenderer.GlobalIlluminationStitching` checks the depth moments against a probe's
+  `GISurfaceVoxels`; `ReadGlobalIlluminationValidity`, `ReadGlobalIlluminationField`,
+  `ReadGlobalIlluminationFieldIrradiance` and `ReadGlobalIlluminationFieldDepth` read the probes (blocking).
+  `GPU.SceneRenderer.GlobalIlluminationStitching` checks the depth moments against a probe's
   known distances and the Cornell box's gi view at High: across every probe plane on its walls, ceiling and floor the light
-  steps at most 10% beyond its slope (the old on/off gather: 25% on the red wall; 8.9% at most now), and the floor around
+  steps at most 10% beyond its slope (the old on/off gather: 25% on the red wall; 8.7% at most now), and the floor around
   the sphere's foot has no point darker than half its brightest neighbour a voxel away (0.65), and along the far corners
   (the back wall with the side walls and the ceiling, the ceiling with the side walls) no point within 0.2 m of the junction
-  is darker than half of the point a voxel farther from it (0.58 at the least; without the push out of solids 0 at every
-  junction). The floor the sphere overhangs (its last 0.3 m) and around the tall box's foot keep at least 0.06 and 0.2 of
-  their brightest neighbour (0.083 and 0.233; 0.021 and 0.10 before relocation and the guard visibility): half is a goal not
-  met. `Renderer`'s "Dead probes" checks relocation: in a 2 m block the probes 0.05 m inside a face move out, live, those
-  deeper stay dead and are the ones counted.
+  is darker than half of the point a voxel farther from it (0.53 at the least, on the red wall by the ceiling; 0.58 before
+  the finest voxels' window moved 0.8 m down: the ceiling, 2.75 m above the camera, takes 0.2 m voxels since; without the
+  push out of solids 0 at every junction). The floor the sphere overhangs (its last 0.3 m) keeps half of its brightest
+  neighbour too (0.53; 0.083 while the floor, 2.75 m below the camera, lay beyond level 0's weights, 0.021 before
+  relocation and the guard visibility); around the tall box's foot it keeps at least 0.2 (0.22; 0.23 before the window
+  moved and surfaces read harmonics, 0.10 before relocation): half is a goal not met there. "A thin gap takes field
+  light beyond the finest voxels" checks the yard's car from 4 and 6 m at High and Low (above: from 6 m at High the band
+  under its edge keeps 0.1 of the open ground's light and every band half of what it keeps from 4 m; no band is brighter
+  than the open ground, High's two inner bands keep at most three times the view factor's share, 0.12 and 0.03, and
+  Low's innermost 0.005-0.1: the gap's light not darkened by the way in reads 0.91 and fails). "The light of a thin gap
+  falls off without bands" checks that through a 4 degree lens no two neighboring pixels of the gap's light differ by
+  more than 1.25 times (1.12; 1.50 in whole steps), and "The light of a thin gap darkens no point" that no pixel of the
+  car from 4 and 6 m or of the Cornell box is darker with the gap's light than without it (blended: 42 pixels from 6 m,
+  the darkest at 0.18 of itself, and one in the box). `Renderer`'s "Dead probes" checks relocation: in
+  a 2 m block the probes 0.05 m inside a face move out, live, those deeper stay dead and are the ones counted.
 
 - **Sampling** (`Include/GlobalIllumination.slang`): a point reads the finest level whose valid box holds it with
   `c_GILevelGuardVoxels` to spare, blended into the next over `c_GILevelBlendVoxels` by its distance from the camera (not
@@ -5539,8 +5873,13 @@ probe-field levels and local lights follow.
   counts them); every capture's result has
   `globalIlluminationSettled`, `editor.perf`'s `renderStats` `globalIllumination: {ran, pending, settled}`.
 - **Statistics** (`SceneRendererStats`): `GlobalIllumination`, `GlobalIlluminationPending`, `GlobalIlluminationSettled`,
-  `GIVoxelizedTriangles`, `GIQueuedRegions`, `GIWaitingProxies`, `GIMovingProxies`,
-  `GIUnvoxelizedSubmeshes`; a frame whose voxelization could not be recorded is degraded, pending and not settled;
+  `GlobalIlluminationShaded` (the frame drew with the forward shaders that read the field),
+  `GIVoxelizedTriangles`, `GIQueuedRegions`, `GIWaitingProxies`, `GIMovingProxies` (moving, or resting for less than
+  `c_GIMoverRestSeconds`), `GIMoverBricks` (bricks the dynamic layer writes its boxes and fades into),
+  `GIMoverFades` (those of them that fade), `GIMoversLeftOut` (movers past the layer's boxes or bricks, or not
+  resident), `GIMoverDispatches` (the layer's dispatches the frame recorded: 0 when none of its passes ran; the frame
+  after its last bricks still puts them back), `GIUnvoxelizedSubmeshes`; a frame whose voxelization
+  could not be recorded is degraded, pending and not settled;
   `SceneRendererGPUStats`' `GITiles` and
   `GITileOverflow` (frames late). Tests and tools read a level's textures with `ReadGlobalIlluminationVoxels` (blocking).
 - **Tests:** `Renderer.GlobalIlluminationLayout`, `Renderer.VoxelClipmap` (a render scene with residency and assets a test
@@ -5549,7 +5888,9 @@ probe-field levels and local lights follow.
   walks, one at 2,000 triangles a frame that moves the camera while regions are queued, against a renderer made for the
   camera alone, bit for bit; 20 km out; nothing made without GI) and `GPU.SceneRenderer.GPUDriven`'s "The
   GI's voxels" (both paths give the same voxels); `GPU.SceneRenderer.GlobalIlluminationJoin` (not asked, or the row Off:
-  nothing made and the same image; a pending frame is today's light to the bit; the owner's red floor tints the lit
+  nothing made and the same image; a pending frame is today's light to the bit; only a frame that reads the field draws
+  with the field's forward shaders, whose plain twins bind none of its slots (`Renderer.ShaderModules`); the owner's red
+  floor tints the lit
   image's walls by at least 0.7 of the one-bounce reference's change of R/G, and not at all without GI; the intensity scales
   the field; the field's share takes no multi-bounce; the row follows `SetQuality`; both paths give the same lit image;
   inside the field the diffuse light is the gi view's times the albedo within 1%; a blended quad and a glass pane take the
@@ -5562,11 +5903,15 @@ probe-field levels and local lights follow.
   `PerfGPU.Renderer`'s "Global illumination's cost at 3840x2160" (sun room and yard, provisional);
   `GPU.SceneRenderer.GlobalIllumination`'s "The fence and grass strafes on the gi view" (Gate W's flicker bounds: fence
   blocks 0.10%, their 99th percentile 0.88%, grass 0.19%, without and with TAA) and `GlobalIlluminationRoom`'s "A strafe's gi
-  view is a fresh renderer's at its camera";
+  view is a fresh renderer's at its camera" and "A still camera's field repeats frame after frame" (the faces, the harmonics
+  and the depth moments of twelve frames, to the byte);
   `GPU.SceneRenderer.GlobalIlluminationBounce` (the owner's Cornell box, `Tests::BuildCornellBox`, which look-dev's
   `Cornell` scene and `lookdev.cornell` mirror: what the bounces add to the ceiling is at least half of the floor's light
   integrated from the panel, the floor and the sphere take the colored walls' tints; a glowing closed box converges to
-  Le / (1 - rho) within 3% of the series its one-bounce field's own error predicts (that error is 4-9% low at High); the sun
+  Le / (1 - rho) within 3% of the series its one-bounce field's own error predicts (that error is 4-9% low at High); the
+  same box at 65,000 nits and an albedo of 0.95 keeps every texel of its harmonics finite and its largest band 0 within
+  0.9-1.25 times the light of the wall ahead (1.16; stored as the coefficient it read 65,504, the format's largest value,
+  2.8 times that light as the texel is read now and 22% under it as the coefficient); the sun
   room's points take at least their one-bounce light, the ceiling over the patch 10% more, and what the bounces add stays
   within the series' bound; settling after a cut, also at the albedo clamp, at least `c_GISettleMarginFrames` after the
   image; a 2 m move in one frame, whose next frame matches a renderer settled there; still frames; a panel in the dark
@@ -5574,38 +5919,153 @@ probe-field levels and local lights follow.
   1 gives one bounce's light), `GlobalIlluminationRoom`'s "A sealed room stays dark" with the gain 1 at High and Low,
   `Renderer.GlobalIlluminationLayout`'s "High bounces on, Low once" and "Bounces settle by the scene's brightest albedo",
   `Renderer.VoxelClipmap`'s "The brightest albedo voxelized bounds the bounces", and `PerfGPU.Renderer`'s "Global
-  illumination's bounces' cost at 3840x2160" (the gain 0 against 1 in one process).
+  illumination's bounces' cost at 3840x2160" (the gain 0 against 1 in one process). Moving objects:
+  `GlobalIlluminationRoom`'s five cases of a box sliding a fifth of a voxel a frame over open ground and one in a closed
+  room (it takes the share
+  of the points' sky the box itself hides within 15%, in every frame at least half of what it takes at rest, and their
+  light's largest second difference stays under 2% once the voxels it left have faded: 0.53%, and under 4% from rest
+  through that fade: 2.9%, for 15.8% without the fade; a red box in the sun adds 0.75-1.25 of what it adds at rest to
+  their red; the frame it starts changes nothing, the frames of its move step a point's light by at most 12% (10.1% in
+  one frame of the fade, at most 5.3% in the others, which is what the move itself steps by), the frame it stops is
+  within 25% of a resting prop's light at every point (20.7%: its light is there, not yet the resting prop's),
+  no later frame steps by more than 6% (4.3%), the handover to its static voxels included, c_GIMoverRestSeconds
+  later by the renderer's clock, where without the fade one frame stepped 26.1%, and through the handover a point's
+  light leaves the range between the two forms' by at most 4.5% of it (3.3%); a resting prop makes no brick and no
+  dispatch, and one that moved, rested and faded leaves a fresh renderer's voxel textures to the byte and its field
+  within 16 bytes of 4.4 million (two renderers' fields differed by one byte once on NVIDIA 621.1: Known issues); one
+  that moves, pauses until it has rested and moves on while its voxels still fade, all while the camera walks and the
+  levels' windows scroll under its bricks, leaves the voxel textures of a prop that stood still, to the byte, at High
+  and at Low; in the Cornell box with every bounce a 0.7 m box that stops takes at least 55% of the light a resting box
+  takes from twelve points around it in that frame (69.1%), through the handover no frame steps a point by more
+  than 32% (27.6%) nor does a point leave the range between the two forms' by more than 18% of its light (14.8%), and
+  while it moves steadily the points' largest second difference stays under 22% (19.1%, before its leading face: a
+  bound on a known fault, What it cannot do)),
+  `GlobalIllumination`'s "A moved object leaves no trace", `Renderer.VoxelClipmap`'s "A moving proxy is listed for the
+  dynamic layer, and nothing is while nothing moves", "A proxy that rested stays in the dynamic layer until its regions
+  are taken", "Movers past the
+  dynamic layer's bricks or boxes are left out", "Where a proxy starts to move or rests, the bricks around it fade by the
+  clock" and "Movers come before fades in the dynamic layer's slots", and `PerfGPU.Renderer`'s "Global illumination's
+  moving objects' cost at 3840x2160".
 - **What it cannot do** (so far): the field resolves no more than its probes, 0.5 m apart at High and 1 m at Low. In the
-  Cornell box at High the visible rim of the floor the sphere overhangs still falls to 0.083 of its neighbour's light within
-  a voxel, where a row of small hard-edged black notches (the voxels' edges) remains under the sphere with soft lighter
-  streaks at its left, and the gap between the tall box's back-left corner and the red wall to 0.23 (the stitching case
-  reports them):
-  under the sphere the free space is two voxels tall, and the probes' rays in and beside it meet
-  the soft layers of the floor and the sphere, and the box's gap lies in the panel's shadow beside a lit cell, whose 17
-  times brighter probe the trilinear weights blend in linearly. Neither denser probes (a 0.25 m cascade 0, measured: no
+  Cornell box at High a row of small hard-edged black notches (the voxels' edges) remains where the sphere meets the floor,
+  with soft lighter streaks at its left, and the floor in the gap between the tall box's back-left corner and the red wall
+  falls to 0.22 of its neighbour's light within a voxel (the stitching case reports it); since the finest voxels' window
+  moved down, a soft dark patch also lies on the floor along that box's left face (0.6 m by 0.2 m of it under half of what
+  the lit picture read before, the darkest 0.26; the cause is not established: the release notes' Known issues), and the
+  floor 0.3 to 0.6 m from the sphere's contact is darker than it was. The notches are floor the camera
+  sees through a gap of 6-15 cm under the sphere (0.3-0.5 m from its contact), thinner than a voxel: the sphere's voxels
+  (every voxel a face reaches into is solid) rest on the floor's there, so no probe sees those points, and the view ray from
+  them grazes the sphere's voxels for more than 0.6 m (measured: retesting each probe against where the view ray leaves the
+  closed voxels, darkening by the clearance above the surface, and stopping the visibility point before the next solid left
+  them black or drew new contours). The box's gap lies in the panel's full shadow (no direct light at any of its probes,
+  computed from the scene), but the probes in front of it read the panel through the cascades' merge, whose parents beside
+  the box see past it: 17 times their neighbours in the shadow, blended in linearly. Interpolating the probes' light in log
+  space smoothed that (0.43-0.45) but darkened the floor by 6% at High and halved Low's, and put new dark spots elsewhere. Neither denser probes (a 0.25 m cascade 0, measured: no
   better there, and steps and corners worse with 10 cm voxels) nor a per-pixel march through the voxels (measured: 0.16-0.24
   at the rim, junction speckles, 1.6-2.2 ms more at 3840 x 2160) met the goal; at Low whole cells of probes beside the box and the sphere lie in the coarse voxels' solids, so the floor
   and walls there still step and go black, and its ceiling's junctions with the walls darken within a voxel. Low bounces once:
   with every bounce its Cornell box is about 1.8 times as bright as High's (ceiling 165-235 nits per albedo against 89-142).
   Denser probes near surfaces are the next step. Walls thinner than two voxels go two-sided
   (dark from both sides), thin props blur into
-  blobs of whole voxels, characters and moving objects are not in the voxels until they rest, textured albedo and emission
+  blobs of whole voxels, characters are not in the voxels (they receive the field; they neither occlude nor bounce light),
+  moving objects are in them as their submeshes' bounds (oriented boxes with soft edges: a ball or a hollow shape shades
+  and bounces as its bounds do while it moves. A quarter of a second after a mover stops, its triangles' voxels take
+  the box's place, and the light beside it changes by what the two forms differ by: up to 26% of a point's light 0.3 m
+  from the test's box, whose static voxels are whole ones, and more for a mesh that is no box; with every bounce in a
+  closed room more still: the look-dev's Cornell box (a blue 0.7 m box that slid and stopped, 2026-11-18) shows in the
+  frame it stops 59% of the resting box's shade and tint on the tall box behind it, 72% on the sphere and 25% on the
+  floor to its left, by the regions' mean color, and the test's twelve points around it 69.1% of the light the resting
+  box takes from them, a point up to 50.7% of its light off. So "its light is in place the frame it stops" holds in
+  part: the object's light is there, the resting object's is not yet. The cause is the box's soft, fractional edge
+  against the whole voxels its triangles make, which reach up to a voxel further at every level: with the box written
+  as whole voxels (every voxel it overlaps full; an experiment of 2026-11-18, not kept, because whole voxels pop as a
+  mover crosses them: the lab's 15%) the last frame of its wait was the resting box's within 2.3% of every point's red,
+  where the soft box's is up to 73% off. The fade spreads the difference over
+  another quarter of a second, but not evenly, and not all the way between its two ends. Under the open sky the
+  test's frames step by up to 4.3% then, and by up to 10.1% in one frame of the fade after a start (the others 5.3%,
+  the move's own), with second differences of 2.9% from rest through the start's fade and 3.1% through the stop (the
+  flicker measure's 2% holds for the steady move alone: 0.53%), and a point's light leaves the range between the two
+  forms' by up to 3.3% of it. In the Cornell box the light beside the box first moves away from where it ends (the
+  blue on the tall box rises 11% before it falls to 27% under where it began; a point leaves the range between the
+  two forms' by up to 14.8% of its light), and one frame two thirds into the fade steps the floor 0.3 m beside the
+  box's back by 27.6%: there the fade does not divide what the two forms differ by (117 against 86.5 nits per albedo).
+  And the steady move is smooth beside the box's way only: where its leading face passes a row of cascade 0's probes
+  (0.5 m apart at High) the floor before it pops. In the Cornell box the floor 0.2 to 0.45 m before the face darkens as
+  the face nears the probes (116.6 to 99.7 nits per albedo over six frames at 2.5 cm a frame), rises for the four frames
+  the face takes through the probes' voxel, falls when it leaves it (100.4, 101.7, 104.0, 110.5, then 97.1) and steps on
+  (102.2, 108.7, 106.1, 103.2): second differences of 19.1% of the light there, 8.7% beside its corner, 3.4% on the tall
+  box behind and under 1.6% at the other points, for the flicker measure's 2% (0.53% beside the way under the open sky,
+  where no measured point lies before a face that moves along its normal). The look-dev's frames
+  (`lookdev/gi-movers/2026-11-18-frames`, 3840 x 2160) show it too: the mean of a 180 x 110 pixel patch of floor before
+  the face rises from 161.5 to 170.0 of 255 over four frames and falls to 160.0 in the next, the same with FXAA and TAA,
+  while the tall box's and the sphere's regions change by a code a frame at most. Found 2026-11-18 by the closed room's
+  case. The cause is the probes' move, not the voxels (the occupancy a box writes rises evenly as a face advances):
+  `GI/ProbeValidity.comp` reads the layer as it reads still surfaces, and its rules are choices. A probe the box's soft
+  edge covers is pushed off it along the surface's normal by the share covered, and only the voxels a face passes
+  through carry a normal: the probe (on a voxel's center at High) is pushed ahead of the face, out of the soft edge its
+  rays along the face are absorbed in, exactly while the face crosses the probe's own voxel (the four rising frames, by
+  the code and the frames' timing); then the normal is gone, the push with it, and the relocation's search places the
+  probe (the fall), among candidates 5 cm apart whose order changes every few frames as the face moves on. It
+  happens once per row of probes, not per voxel: with the case's move begun 0.5 m earlier (a run of the second fix
+  round) the same floor point changes smoothly while the face crosses the voxels between two rows (127.7 to 117.5 nits
+  per albedo over eighteen frames), and a floor point 0.37 m before the row 0.5 m back shows that row's sequence twenty
+  frames earlier (142.1, 146.5, 146.7, then 133.9). Two experiments of the second fix round, neither kept, measured
+  in the closed room's case: with cascade 0's probes left
+  where the grid puts them (every still scene's probes on walls then die) the largest second difference there is 3.08%
+  and no frame falls: the light dips from 117.8 to 98.4 as the face nears the probes and returns to 116.0 as the box
+  covers them (smooth: what a row of probes 0.5 m apart resolves of a face that passes it); with the way out of the
+  box written into all its voxels (a normal inside it too, so the push holds) 9.7%: the fall is gone, kinks where the
+  push starts and ends remain, and by the code the search still follows once the push no longer clears the box. So
+  nothing the layer writes removes it: the probes must take their places from the static voxels alone, and the
+  layer only cover them (lower their validity). That is another design: the placement pass run on the voxels with the
+  layer put back, a pass for the layer's cover, and an answer for the two hand-overs, where the static voxels change
+  in one frame under a fade (a probe the resting object had moved off its surface would step in the frame the object
+  starts). It is the movers' next step, with the fractions below. One lead was ruled out before: scaling the light of
+  the floor's layer under the box's edge by its own share of the occupancy left the 19.1% as it was.
+  What is left of the hand-over are single events a blend of voxels cannot divide: a probe the object covers changes
+  its way out (the relocation takes the lowest of some occupancies; not that of cascade 0 alone: with those probes left
+  in place, the experiment above, a frame of the Cornell box's hand-over still stepped a point by 30.7%), the sun's walk
+  lets go of voxels under `c_GITouchOccupancy` at once, and a voxel is lit or not. Holding the leaving form until the
+  arriving one stands (a larger of the two instead of
+  their mean; tried 2026-11-18) moved the Cornell box's step three frames earlier without making it smaller (27.2%) and
+  made the open ground's worse (steps of 7.4% for 4.3%, second differences of 8.1% for 3.1%). A fast object leaves its
+  old place fading for that quarter second, and one that is set down
+  elsewhere fades in there where its old place's voxels reach. A box that grows into its voxels' shape before it
+  rests would move the same difference into the wait, not remove it: the two forms agree only if static voxels hold
+  fractions too, which changes every still scene's bits (the next step, if the owner funds it); movers past 64 boxes
+  or the layer's bricks
+  are in no voxel until they rest), textured albedo and emission
   count by their maps' means (models colored from one shared palette map, as the ThirdPerson sample's Kenney models are,
   take the palette's mean everywhere: one mauve for grass, wood and rock), double-sided materials' voxels have no facing
   (the voxels view shades them flat), glowing values above 65,408 nits clamp, and an editor top view far above a scene
-  shows its coarse levels only. The field is an ambient cube per probe, exact for axis-aligned normals only: a white sphere
-  under a uniform sky reads 2% dark at its center and 7% at its rim (one bounce; its probes see the sphere behind the
-  point's own horizon). Measured instead (batch 1, not landed): correction 7b's 8 x 8 octahedral tile read the rim 4.3% dark
-  but its bilinear reads creased the Cornell box's sphere; nine spherical-harmonic coefficients read it 3.5% dark and smooth,
-  but in half floats the bounces fell into a 0.2% cycle (still frames differed, settling missed its frame), and in floats
-  they still differed at frame 30; what is left at the rim seems to lie in the merge of parents beside the sphere (their rays
-  of the same direction cross it). Its light ends at the field's edge around the camera (High: full within 7.5 m horizontally and 5.5 m up and
+  shows its coarse levels only. A white sphere under a uniform sky reads 2.1% dark at its center and 3.5% at its rim (one
+  bounce; the white furnace case, `GlobalIlluminationJoin`, asserts 3% and 4%; 3% at the rim is the goal; the ambient cubes
+  read 6.8% there). Neither the form nor the bounces decide what is left (every bounce: 2.1% and 3.0%): a probe within two
+  voxels of the
+  sphere loses the rays that skim it to the voxels' layer about the surface, which absorbs them at a grazing angle and
+  sends nothing back (a probe 8 cm off the sphere holds 0.81 of the sky along the normal, with one bounce and with every
+  bounce; marched without the lead-in, or without the origin's sample, the sphere read within 1% of the same). So the loss
+  depends on where a surface lies among the probes: the same sphere at (0.13, 0.07, 0.21) reads 9.8% dark at its center and
+  2.9% at its rim (the same case holds the center within 10.5%, the rim within 4%). Pushing cascade 0's probes a voxel
+  off the surfaces around where they land (clearance: on each axis the occupancy a voxel behind against a voxel ahead;
+  measured, batch 2) read that sphere 3.5-3.8% dark at its center and took the largest step at a probe plane from 6.1% to
+  1.7% on the Cornell box's ceiling and from 5.3% to 3.7% on its floor, but its side walls by the ceiling fell to 0.38 and
+  0.48 of the light 0.1 m from the corner (0.53 and 0.64; the corners' case asserts half), its sealed twin let in ten
+  times as much (0.026 nits for 0.003 with every bounce, of 656 in the open room) and the sun room's image settled at
+  frame 13, with the flag, instead of two frames before it; with two voxels of clearance a Low probe 0.5 m above a floor
+  also found it 1.08 m below (0.57). Not kept: the walls' loss by the ceiling is not understood. Measured instead (batch
+  1): correction 7b's 8 x 8 octahedral tile read the
+  rim 4.3% dark but its bilinear reads creased the Cornell box's sphere; the harmonics for re-injection made the bounces
+  cycle (above); a stricter facing of the probes (from 0.05 instead of -0.05) moved the rim by half a percent only. Its
+  light ends at the field's edge around the camera (High: full within 7.5 m horizontally and 5.5 m up and
   down, Low within 7 m and 2.8 m, faded to today's light over the next 2 m), which can show outdoors as the edge of a
   bubble. The reach stays where voxel level 2 holds every point while a scroll's slab waits to be voxelized and the camera
   moves on up to a step (`ComputeLayout`; Low's level 2 holds 4.8 m up and down), since a point no level holds takes
-  today's light at once. A surface that sees none of its eight probes gets no field light (dark, never the sky): gaps,
-  recesses and ledges under about two voxels and wall bases beside bright patches go nearly black, outdoors too, where
-  they are darker than without GI (the yard's pool box, ThirdPerson's ledges and fence rails). The sun room's window wall
+  today's light at once. A surface that sees none of its eight probes gets none of their light (dark, never the sky; at
+  most the thin gaps' light, a few percent of the light at the gap's opening), and one they see little of gets little:
+  gaps, recesses and ledges under about two voxels and wall bases beside bright patches go nearly black, outdoors too,
+  where they are darker than without GI (the yard's pool box, ThirdPerson's ledges and fence rails, and its ground
+  folds, about half as bright since the finest voxels' window moved down). The sun room's window wall
   shows why at its foot: the row of probes 0.15 m above the floor sees the sunlit patch only at grazing angles, which their
   64 directions (about 25 degrees apart) do not resolve, so at one bounce every face of those beside the window reads 0.0-0.1
   (those under it, which see the sill's light, 30), and the wall's foot, between them and probes under the floor, goes black
@@ -6409,7 +6869,8 @@ flares) and `RenderPostDisplay` (the tone mapping, then FXAA or the morphologica
   `Pass::Glass`: no blending (HDR alpha 1), depth written (the blended surfaces behind it stay hidden, overlays and the
   TAA see it), entity ids when the renderer has them and the velocity in a frame with motion vectors, as further
   attachments of `m_GlassFramebuffer` and `m_GlassMotionFramebuffer` (`Scene/ForwardGlass*.frag`, the four variants of
-  `Forward.frag` with `ST_FORWARD_GLASS`). It is picked and outlined like an opaque surface. Its alpha mode's blending
+  `Forward.frag` with `ST_FORWARD_GLASS` and their four twins that read global illumination's field). It is picked and
+  outlined like an opaque surface. Its alpha mode's blending
   does not apply (Mask still cuts).
 - **The scene-color copy** (`SceneRendererGlass.cpp`, `Effects/SceneColorCopy.comp`, in `GPU.Transparent`): when the
   frame draws glass, the HDR image after the sky is box-filtered into a texture of half the viewport's size with 6
@@ -6717,8 +7178,8 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   strata_describe)" when cut) and property descriptions cut to their first sentence (100 characters); types, enums,
   ranges and `required` stay (`McpToolsets::MakeCompactToolDefinition`). So the first sentence of a command's
   description says what it does, and a property's first sentence what it is. The default list stays at most 32 tools
-  and 30 KiB of `tools/list` JSON (`CLI.McpToolsets`). It is at the tool limit: 27 core commands and 5 generic tools, about 18.6 KB; every command
-  is about 99 KB of definitions (151 commands; `CLI.McpToolsets` prints the figure). A command added to `core` takes the place
+  and 30 KiB of `tools/list` JSON (`CLI.McpToolsets`). It is at the tool limit: 27 core commands and 5 generic tools, about 21.8 KB; every command
+  is about 101 KB of definitions (152 commands; `CLI.McpToolsets` prints the figure). A command added to `core` takes the place
   of another.
 
 ### Other methods and tests

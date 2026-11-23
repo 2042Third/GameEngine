@@ -110,7 +110,8 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Did something fail that I have not seen? | `editor.status` `errors`: `unread` (errors logged since your last `log.read`), `scriptBuild {failed, errors}`, `scriptFault`, `importFailures`; then `log.read`, `script.status` or `asset.info` |
 | Does the person at the editor see the launcher or the editor? | `editor.status` (`editor.launcher`; `{"sections": ["editor"]}` adds `gpu` and `startupSeconds`) |
 | Did the game ask for fullscreen or a resolution, lock the cursor, where do its saves go? | `editor.status {"sections": ["game"]}` (`windowRequests`, recorded but not applied in play mode; `cursor`; `saveDirectory`, the project's `.strata/Saves`) |
-| Which commands and parameters exist? | `editor.commands` (or `list --json`) |
+| Which commands and parameters exist? | `editor.commands` (or `list --json`): each with `kind`, `mayDefer` (answers frames later; `editor.batch` refuses it), `waitsForAssets` (waits for the asset scan) and `results` (`"content"` or `"session"`) |
+| Which files can be imported, by which importer? | `asset.types`: each asset type with `nativeExtension` (the engine's own documents) and `importers: [{name, version, extensions}]` |
 | Which components and properties (types, ranges, enum values)? | `component.list` |
 | Which assets exist? | `asset.list` (`type`, `path` filters), `asset.info` (meshes, models, prefabs: `bounds`, their size as placed) |
 | What uses an asset (before deleting it)? | `asset.findReferences` (`asset.delete` refuses while anything does) |
@@ -141,8 +142,18 @@ editor started with `--no-gpu` (use `--headless`):
 - `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?, fov?, overlays?, debugView?,
   quality?, waitForAssets?, path?}` returns `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, view, waitedFrames,
   temporalFrames, overlays, pendingAssets, texturesBelowWanted, stalePoses, pendingTextGlyphs, previewLighting, screenSpaceTexts,
-  hiddenScreenSpaceTexts, ui: {canvases, hiddenCanvases, elements, drawCalls, pendingGlyphs}, debugView, notice?, path?}`. Text is complete in the picture, and so are the view's meshes,
-  materials and textures: the capture renders again for up to about five seconds of frames while they load, up to about
+  hiddenScreenSpaceTexts, ui: {canvases, hiddenCanvases, elements, drawCalls, pendingGlyphs}, debugView, renderStats,
+  screenSpaceReflectionsPending, notice?, path?, incomplete, complete}`. Every wait below is bounded and the capture still
+  succeeds when one runs out: check `complete` (true when the picture lacks nothing), else `incomplete` lists the JSON
+  pointers of the fields that say what it lacks (`"/pendingAssets"`, `"/preExposureSettled"`, `"/temporalFrames"`,
+  `"/previewLighting"`, `"/notice"`, ...). `renderer: {...}` switches techniques for that one picture to show what they
+  do (`SpecularAntiAliasing`, `SpecularEnergyCompensation`, `DitherOutput`, `HorizonFade`, `SpatialReflectionResolve`,
+  `GPUDriven`, `OcclusionCulling`, `VisibilityFeedback`, `BatchAcrossMaterials`, `TextureStreaming`, `FadeLevelsOfDetail`:
+  booleans; `GlobalIlluminationBounceGain` 0 for one bounce; `FXAASubpixel` 0.25 or 0.75); the editor's views and the game
+  never draw with them, and the result's `renderer` echoes them. Automatic exposure meters each capture alone, so a switch
+  that changes how much light there is re-exposes the whole picture: take such off/on pairs with the Post Process's
+  `AutoExposure` off (`renderStats.exposure` says what automatic exposure metered). Text is complete in the picture, and
+  so are the view's meshes, materials and textures: the capture renders again for up to about five seconds of frames while they load, up to about
   two more while textures still lack the finer mip levels the view wants, and a few while animated characters that
   animate only while seen (`CullingMode: WhenVisible`) still show an older pose, also while paused, and while mesh renderers
   the scene just gained are still on their way to the GPU (a few frames for a million; `waitForAssets: false` takes it
@@ -184,6 +195,13 @@ editor started with `--no-gpu` (use `--headless`):
   p90PixelsPerTexel, aboveFourShare, cascades: [{index, near, far, texelSize, screenShare, medianPixelsPerTexel, ...}]}`
   (shares of the image; pixels per texel over covered receivers: about 1 or less means shadows as fine as the screen; the
   cascades are stable, the view's alone, so the first frame is final);
+  `"culled"` draws over everything a box around each mesh renderer in view that culling left out: yellow (Sulfur) those
+  too small on screen (`RendererQualitySettings::MinProjectedPixels`; each box's diagonal grown to 6 pixels so it
+  shows), red (Cinnabar) those hidden behind what is drawn (occlusion culling, which only the GPU-driven path does: pass
+  `renderer: {"OcclusionCulling": false}` to see the CPU path's boxes), counted by `renderStats.sizeCulledProxies` and
+  `occludedProxies` (every proxy found hidden: while the camera moves also those drawn once more because the frame before
+  saw them, boxed from the next frame); `"wireframe"` draws the edges of every triangle drawn (each level of detail as
+  chosen, skins as posed) over the image where nothing is in front of them (devices without a non-solid fill mode draw no lines and log why);
   `"none"` is the plain image. Pass it to `viewport.capture` for one picture, or set it for the viewport with
   `viewport.setSettings {"debugView": ...}` (it then colors the person's viewport too, also the Game view). The result's
   `debugView` counts what it found among the entities in view: `{view, tintedEntities, pendingEntities, failedEntities,
@@ -197,7 +215,10 @@ editor started with `--no-gpu` (use `--headless`):
   through the scene's exposure), `"ao"` the ambient occlusion that darkens indirect light (white: none), `"indirect"` only the
   sky's, probes' and reflected light, `"luminance"` the scene's luminance as EV100 bands (log2 of nits plus 3: an overcast
   day's ground about 12, a sunlit one about 15), `"albedo"` the base colors with values below 0.03 marked blue and above 0.85
-  striped red (no real material lies outside). `viewport.capture` measures the frame it captured (the statistics come back
+  striped red (no real material lies outside), `"specular"` and `"diffuse"` one kind of light alone (no emission or fog;
+  each exposed on its own, so they do not add up to the picture), `"clusters"` how many lights each pixel's light cluster
+  lists, as bands (none, 1, 2-3, 4-7, ..., up to a full cluster, 256 lights by default; `value` is a share of a cluster's
+  capacity). `viewport.capture` measures the frame it captured (the statistics come back
   with the image) and adds `debugView.lighting: {view, surfaceShare, surfaceEv100: {p05, p50, p95}, backgroundEv100, value:
   {median, p05}, belowRangeShare, aboveRangeShare, sunIlluminance, skyIlluminance, sunToSkyRatio}` (null where the view
   measures nothing):
@@ -579,6 +600,15 @@ person at the editor sees the same in the Performance panel (click the frame pil
 "openSample" | "recovery" | "newScript" | "preferences" | "externalEditor" | "about"}` opens a dialog of the window the same
 way ("recovery" lets the person choose what to recover or discard, instead of you choosing for them; "newScript" and
 "externalEditor" let them name a script class or pick the program that opens scripts; "preferences" takes a `section`).
+`editor.screenshot {path?, overwrite?, panel?}` takes a picture of the whole editor window as the person sees it (UI,
+dialogs, toasts), or of one panel (`"Inspector"`, `"Scene"`, ... as `editor.showPanel` names them), at the first frame
+from the second after the command whose windows and tabs lie as in the frame before, so the commands before it show:
+`{Image, width, height, panel, region, settled, path?}` (`settled` false: the layout still moved after 30 frames). What
+is still loading shows as it is: after a start, `editor.wait` first. It needs a window (not `--headless`); start the
+editor with `StrataCLI launch --window-size 1600x900 --ui-scale 1` (or `StrataEditor --window-size ... --ui-scale 1`;
+at least 640x360, within the display and, on a Retina display, even, else the editor does not start) for pictures that
+compare across machines, and bring a panel to the front with `editor.showPanel` first (a closed panel or one behind
+another tab fails).
 
 **Play it (simulated input)**: while the game runs (`play.start`), the `input.*` commands press keys and buttons the way a
 player would; scripts see them through `Input::IsKeyDown/IsKeyPressed/IsKeyReleased` (also while the viewport has no focus).
@@ -771,6 +801,7 @@ the scene has unsaved changes; `{"force": true}` discards them. The editor answe
 | Changes vanished after `play.stop` | They were made while playing; make them in edit mode. |
 | `scene.open`, `scene.new`, `project.*` or `editor.quit` fail with unsaved changes | `scene.save` / `scene.saveAs` first, or `{"force": true}` to discard them. |
 | Headless editor exits at once with code 1 | Its automation could not start (session directory not private, port in use); read its output or `<user data>/Logs/StrataEditor.log`. |
+| `launch` says the editor exited before its session became available (exit code 1) | It could not start (e.g. a `--window-size` the display cannot make); `<user data>/Logs/StrataEditor.log` says why. |
 | The editor went away on its own | It was started with `--idle-timeout` (MCP: 10 minutes) and no client stayed connected; start it again. |
 | `viewport.*` / `camera.*` fail or are missing | The editor runs with `--no-gpu` (restart it with `--headless`), or this build has no viewport commands (check `editor.commands`). |
 | The capture is lit, but the game is dark | The capture says `"previewLighting": true`: the scene has no light of its own. Add a directional light and a sky light (or start from the `basic3d` template); check with `{"camera": "scene"}`. |

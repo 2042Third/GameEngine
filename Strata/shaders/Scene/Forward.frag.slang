@@ -15,7 +15,9 @@
 #include "Include/Fog.slang"
 #include "Include/AerialPerspective.slang"
 #include "Include/AmbientOcclusionFit.slang"
+#ifdef ST_FORWARD_FIELD
 #include "Include/GIField.slang"
+#endif
 #define ST_REFLECTION_PROBE_SAMPLING
 #include "Include/ReflectionProbes.slang"
 #include "Include/IndirectLight.slang"
@@ -31,11 +33,17 @@
 //   entity ids (without ST_NO_ENTITY_IDS: ForwardGlassNoEntityIDs.frag) and, with ST_VELOCITY (ForwardGlassVelocity.frag,
 //   ForwardGlassNoEntityIDsVelocity.frag, after Scene/MeshVelocity.vert), their motion, into the attachments after the
 //   color, as the prepass does for opaque surfaces. Their HDR alpha is 1: the TAA does not take them for blended surfaces.
-// Every variant shades a clear coat where the material has one (a branch on its flag, the same for a whole draw). Each has a
-// form with ST_AREA_LIGHTS (Scene/ForwardAreaLights.frag, ForwardTransparentAreaLights.frag, ...): the one that shades rect
-// lights (Include/AreaLights.slang), drawn in frames whose scene has a rect light, drawn or not (RenderLights::GetTypeCount).
-// The forms without it are the shaders of before rect lights, instruction for instruction: a scene without rect lights pays
-// nothing for their code (its registers would cost every pixel) and shows the same bits.
+// Every variant shades a clear coat where the material has one (a branch on its flag, the same for a whole draw).
+// Each of them has a twin with ST_FORWARD_FIELD (Scene/ForwardField.frag, ForwardTransparentField.frag, ForwardGlassField.frag
+// and so on), which reads global illumination's field (Include/GIField.slang): the frames that join the field into the image
+// or show one of its views draw with the twins (SceneRenderer's PipelineKey::Field). The variants without it hold nothing of
+// the field's gather: compiled in behind a branch that a frame without global illumination never takes, it still cost that
+// frame's opaque pass 6-11% of its time at 3840 x 2160.
+// Each of these twelve also has a form with ST_AREA_LIGHTS (Scene/ForwardAreaLights.frag, ForwardTransparentAreaLights.frag,
+// ..., and with the field ForwardAreaLightsField.frag, ForwardTransparentAreaLightsField.frag, ...): the one that shades rect
+// lights (Include/AreaLights.slang), drawn in frames whose scene has a rect light, drawn or not (RenderLights::GetTypeCount;
+// PipelineKey::AreaLights). The forms without it are the shaders of before rect lights, instruction for instruction: a scene
+// without rect lights pays nothing for their code (its registers would cost every pixel) and shows the same bits.
 
 #ifndef ST_FORWARD_TRANSPARENT
 #define ST_EARLY_FRAGMENT_TESTS [earlydepthstencil]
@@ -79,7 +87,7 @@ Texture2D<float4> u_ScreenShadows : register(t28);
 #ifdef ST_AREA_LIGHTS
 // The shadowed rect lights' masks (Effects/AreaScreenShadows.frag), a layer per light (its SpotAngles.w is the layer plus one):
 // red the square root of its visibility at the pixel.
-Texture2DArray<float4> u_AreaShadowMasks : register(t58);
+Texture2DArray<float4> u_AreaShadowMasks : register(t59);
 #endif
 #endif
 
@@ -89,10 +97,36 @@ uint GetLightingView()
 	return uint(u_Frame.MaterialParams.y + 0.5);
 }
 
-// The views whose values are not light (occlusion, albedo): written unexposed, without fog or what glass transmits.
+// GetSpecularEnergy and GetHorizonFade (Include/PBR.slang) as the frame shades them: 1 where a capture turned them off
+// (FrameConstants::CaptureSwitches, a uniform branch; 0 in every other frame).
+float3 GetFrameSpecularEnergy(float3 f0, float2 dfg)
+{
+	if ((u_Frame.CaptureSwitches.x & ST_CAPTURE_NO_SPECULAR_ENERGY) != 0u)
+		return float3(1.0);
+	return GetSpecularEnergy(f0, dfg);
+}
+
+float GetFrameHorizonFade(float3 reflected, float3 geometricNormal)
+{
+	if ((u_Frame.CaptureSwitches.x & ST_CAPTURE_NO_HORIZON_FADE) != 0u)
+		return 1.0;
+	return GetHorizonFade(reflected, geometricNormal);
+}
+
+// The views whose values are not light (occlusion, albedo, the clusters' lights): written unexposed, without fog or what glass
+// transmits.
 bool IsLightingValueView(uint view)
 {
-	return view == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION || view == ST_LIGHTING_VIEW_ALBEDO || view == ST_LIGHTING_VIEW_OPEN_SHARE;
+	return view == ST_LIGHTING_VIEW_AMBIENT_OCCLUSION || view == ST_LIGHTING_VIEW_ALBEDO || view == ST_LIGHTING_VIEW_OPEN_SHARE
+		|| view == ST_LIGHTING_VIEW_CLUSTERS;
+}
+
+// The views of one kind of light (specular, diffuse): exposed as the image is, without emission, fog or what glass transmits.
+// The frames without them shade with the expressions of the frames before these views existed (branches on the uniform view,
+// never weights multiplied in), so their pictures are those to the bit.
+bool IsLightKindView(uint view)
+{
+	return view == ST_LIGHTING_VIEW_SPECULAR || view == ST_LIGHTING_VIEW_DIFFUSE;
 }
 
 // The light a lit surface reflects from one light: the base's, under its clear coat when it has one (the coat reflects some of
@@ -102,16 +136,35 @@ bool IsLightingValueView(uint view)
 float3 LightSurface(SurfaceData surface, ClearcoatData coat, float diffuseWeight, float3 lightDirection, float3 radiance, float sourceAlpha2)
 {
 	float specularWeight = 1.0 - u_Frame.MaterialParams.w;
+	uint lightingView = GetLightingView();
+	float3 light;
+	if (IsLightKindView(lightingView))
+	{
 #ifdef ST_FORWARD_GLASS
-	float3 light = EvaluateLightWeighted(surface, lightDirection, radiance, diffuseWeight, specularWeight, sourceAlpha2);
+		float baseDiffuse = diffuseWeight;
 #else
-	float3 light = EvaluateLightWeighted(surface, lightDirection, radiance, 1.0, specularWeight, sourceAlpha2);
+		float baseDiffuse = 1.0;
 #endif
+		light = EvaluateLightWeighted(surface, lightDirection, radiance, lightingView == ST_LIGHTING_VIEW_DIFFUSE ? baseDiffuse : 0.0,
+			lightingView == ST_LIGHTING_VIEW_SPECULAR ? specularWeight : 0.0, sourceAlpha2);
+	}
+	else
+	{
+#ifdef ST_FORWARD_GLASS
+		light = EvaluateLightWeighted(surface, lightDirection, radiance, diffuseWeight, specularWeight, sourceAlpha2);
+#else
+		light = EvaluateLightWeighted(surface, lightDirection, radiance, 1.0, specularWeight, sourceAlpha2);
+#endif
+	}
 	if (coat.Strength > 0.0)
 	{
 		float baseWeight;
 		float3 coatLight = EvaluateClearcoat(coat, surface.View, lightDirection, radiance, sourceAlpha2, baseWeight);
-		light = light * baseWeight + coatLight * specularWeight;
+		// The coat's highlight is specular light: the diffuse view keeps only what reaches the base.
+		if (lightingView == ST_LIGHTING_VIEW_DIFFUSE)
+			light = light * baseWeight;
+		else
+			light = light * baseWeight + coatLight * specularWeight;
 	}
 	return light;
 }
@@ -175,7 +228,7 @@ IndirectInputs GetIndirectInputs(SurfaceData surface, float3 f0, float2 dfg, flo
 	// map turns into the surface fade out (GetHorizonFade).
 	inputs.SpecularOcclusion = inputs.Form == ST_INDIRECT_AMBIENT ? 1.0
 		: clamp(pow(NoV + diffuseOcclusion, exp2(-16.0 * surface.Roughness - 1.0)) - 1.0 + diffuseOcclusion, 0.0, 1.0)
-		* GetHorizonFade(inputs.Reflected, geometricNormal);
+		* GetFrameHorizonFade(inputs.Reflected, geometricNormal);
 	// The same on the material's occlusion alone, for what screen-space reflections found (exactly 1 without an occlusion map).
 	inputs.ScreenReflectionOcclusion = clamp(pow(NoV + surface.Occlusion, exp2(-16.0 * surface.Roughness - 1.0)) - 1.0 + surface.Occlusion, 0.0, 1.0);
 	inputs.FieldWeight = 0.0;
@@ -184,6 +237,7 @@ IndirectInputs GetIndirectInputs(SurfaceData surface, float3 f0, float2 dfg, flo
 	return inputs;
 }
 
+#ifdef ST_FORWARD_FIELD
 // The GI's views (SceneLightingView::GlobalIllumination, OpenShare): inside the field its diffuse light on a white surface (absolute
 // luminance, under the diffuse occlusion as the join will carry it) or the share of the sky it sees; beyond it, blended over the
 // field's fade, today's diffuse light on white (every form of Include/IndirectLight.slang) or 1 (today's light counts all open).
@@ -202,6 +256,7 @@ float3 ShadeGlobalIlluminationView(uint lightingView, SurfaceData surface, float
 	float3 today = ComposeIndirect(inputs, GatherIndirectDiffuse(inputs, white), float3(0.0));
 	return field.rgb * (diffuseOcclusion / ST_GI_RADIANCE_SCALE) * field.a + today * (1.0 - field.a);
 }
+#endif
 
 // The lit surface's color: the sun with its shadow, the point and spot lights of the pixel's cluster (those with shadows
 // through their views, Include/LocalShadows.slang) and its rect lights (Include/AreaLights.slang, unshadowed), the reflection
@@ -230,14 +285,14 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 	float3 f0 = lerp(float3(material.Absorption.w), surface.Albedo, surface.Metallic);
 	surface.F0 = f0;
 	float2 dfg = u_BRDFLut.SampleLevel(u_LinearClampSampler, float2(NoV, surface.Roughness), 0.0).rg;
-	surface.SpecularEnergy = GetSpecularEnergy(f0, dfg);
+	surface.SpecularEnergy = GetFrameSpecularEnergy(f0, dfg);
 	float coatNoV = 1.0;
 	float2 coatDFG = float2(1.0, 0.0);
 	if (coat.Strength > 0.0)
 	{
 		coatNoV = max(dot(coat.Normal, surface.View), 1e-4);
 		coatDFG = u_BRDFLut.SampleLevel(u_LinearClampSampler, float2(coatNoV, coat.Roughness), 0.0).rg;
-		coat.SpecularEnergy = GetSpecularEnergy(float3(c_ClearcoatF0), coatDFG).x;
+		coat.SpecularEnergy = GetFrameSpecularEnergy(float3(c_ClearcoatF0), coatDFG).x;
 	}
 
 	float viewDepth = -(mul(u_Frame.View, float4(v_RelativePosition, 1.0))).z;
@@ -353,6 +408,7 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 		diffuseOcclusionColor, diffuseWeight);
 	// The base's image-based light (or constant ambient), which the clear coat covers below.
 	float3 indirect;
+#ifdef ST_FORWARD_FIELD
 	bool globalIlluminationView = lightingView == ST_LIGHTING_VIEW_GLOBAL_ILLUMINATION || lightingView == ST_LIGHTING_VIEW_OPEN_SHARE;
 	if (u_Frame.ReflectionParams.y > 0.0 || globalIlluminationView)
 	{
@@ -368,13 +424,25 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 		indirectInputs.FieldWeight = field.a;
 		indirectInputs.FieldIrradiance = field.rgb * (u_Frame.ReflectionParams.z / ST_GI_RADIANCE_SCALE);
 		indirectInputs.FieldOpen = openShare;
-		indirect = ComposeIndirect(indirectInputs, GatherIndirectDiffuse(indirectInputs, surface) * (1.0 - indirectInputs.FieldWeight),
-			GatherIndirectSpecular(indirectInputs)) + GatherIndirectField(indirectInputs, surface) * indirectInputs.FieldWeight;
+		if (lightingView == ST_LIGHTING_VIEW_SPECULAR)
+			indirect = ComposeIndirect(indirectInputs, float3(0.0), GatherIndirectSpecular(indirectInputs));
+		else if (lightingView == ST_LIGHTING_VIEW_DIFFUSE)
+			indirect = ComposeIndirect(indirectInputs, GatherIndirectDiffuse(indirectInputs, surface) * (1.0 - indirectInputs.FieldWeight), float3(0.0))
+				+ GatherIndirectField(indirectInputs, surface) * indirectInputs.FieldWeight;
+		else
+			indirect = ComposeIndirect(indirectInputs, GatherIndirectDiffuse(indirectInputs, surface) * (1.0 - indirectInputs.FieldWeight),
+				GatherIndirectSpecular(indirectInputs)) + GatherIndirectField(indirectInputs, surface) * indirectInputs.FieldWeight;
 	}
+	else
+#endif
+	if (lightingView == ST_LIGHTING_VIEW_SPECULAR)
+		indirect = ComposeIndirect(indirectInputs, float3(0.0), GatherIndirectSpecular(indirectInputs));
+	else if (lightingView == ST_LIGHTING_VIEW_DIFFUSE)
+		indirect = ComposeIndirect(indirectInputs, GatherIndirectDiffuse(indirectInputs, surface), float3(0.0));
 	else
 		indirect = ComposeIndirect(indirectInputs, GatherIndirectDiffuse(indirectInputs, surface), GatherIndirectSpecular(indirectInputs));
 
-	float3 emitted = lightingView == ST_LIGHTING_VIEW_INDIRECT ? float3(0.0) : surface.Emissive;
+	float3 emitted = lightingView == ST_LIGHTING_VIEW_INDIRECT || IsLightKindView(lightingView) ? float3(0.0) : surface.Emissive;
 	if (coat.Strength > 0.0)
 	{
 		// The coat reflects the probes', the sky's or the ambient light by its prefiltered Fresnel (split sum, as the base), and
@@ -383,8 +451,11 @@ float3 ShadeLitSurface(float3 albedo, float baseAlpha, float3 emissive, float4 m
 		float3 coatReflected = reflect(-surface.View, coat.Normal);
 		float3 coatRadiance = SampleSpecularLight(surface.Position, coat.Normal, coatReflected, coat.Roughness, indirectInputs.Environment);
 		float coatOcclusion = clamp(pow(coatNoV + diffuseOcclusion, exp2(-16.0 * coat.Roughness - 1.0)) - 1.0 + diffuseOcclusion, 0.0, 1.0)
-			* GetHorizonFade(coatReflected, indirectInputs.GeometricNormal);
-		indirect = indirect * (1.0 - coatReflectance) + coatRadiance * coatReflectance * coatOcclusion;
+			* GetFrameHorizonFade(coatReflected, indirectInputs.GeometricNormal);
+		if (lightingView == ST_LIGHTING_VIEW_DIFFUSE)
+			indirect = indirect * (1.0 - coatReflectance);
+		else
+			indirect = indirect * (1.0 - coatReflectance) + coatRadiance * coatReflectance * coatOcclusion;
 		emitted *= 1.0 - ClearcoatFresnel(coat, coatNoV);
 	}
 	color += indirect;
@@ -419,7 +490,7 @@ float3 TransmitLight(InstanceData instance, MaterialData material, float3 normal
 	float2 dfg = u_BRDFLut.SampleLevel(u_LinearClampSampler, float2(NoV, roughness), 0.0).rg;
 	// What the surface reflects, compensated as its specular light is (ShadeLitSurface): the rest passes through.
 	float3 f0 = lerp(float3(material.Absorption.w), albedo, metallic);
-	float3 reflectance = (f0 * dfg.x + dfg.y) * GetSpecularEnergy(f0, dfg);
+	float3 reflectance = (f0 * dfg.x + dfg.y) * GetFrameSpecularEnergy(f0, dfg);
 	float3 absorbed = exp(-material.Absorption.rgb * thickness);
 	return behind * absorbed * albedo * (1.0 - metallic) * (1.0 - reflectance) * transmission;
 }
@@ -489,22 +560,35 @@ void st_Main()
 	{
 		color = float3(1.0); // Nothing occludes the light of an unlit surface
 	}
-	else if (lightingView == ST_LIGHTING_VIEW_INDIRECT || lightingView == ST_LIGHTING_VIEW_GLOBAL_ILLUMINATION)
+	else if (lightingView == ST_LIGHTING_VIEW_INDIRECT || lightingView == ST_LIGHTING_VIEW_GLOBAL_ILLUMINATION || IsLightKindView(lightingView))
 	{
-		color = float3(0.0); // Its emission is not indirect light
+		color = float3(0.0); // Its emission is not indirect, specular or diffuse light
 	}
 	if (lightingView == ST_LIGHTING_VIEW_ALBEDO)
 		color = baseColor.rgb;
+	// The lights the pixel's cluster lists, which its shading walks, as a share of the cluster's capacity (lit or not).
+	if (lightingView == ST_LIGHTING_VIEW_CLUSTERS)
+	{
+		float clusterLights = 0.0;
+		if (u_Frame.LightCounts.x > 0u)
+		{
+			float viewDepth = -(mul(u_Frame.View, float4(v_RelativePosition, 1.0))).z;
+			uint clusterBase = GetClusterIndex(st_FragCoord.xy, viewDepth) * GetClusterStride();
+			clusterLights = float(min(u_ClusterLights[clusterBase], u_Frame.ClusterGrid.w));
+		}
+		color = float3(clusterLights / float(max(u_Frame.ClusterGrid.w, 1u)));
+	}
 
 	// Every variant hazes and fogs alike, so a transparent surface looks like an opaque one at its depth: the air's haze
 	// first (aerial perspective), then the height fog, nearer the camera, over it. The value views show the surface's own
 	// values.
-	if (u_Frame.FogParams.z > 0.0 && !valueView)
+	bool fogged = !valueView && !IsLightKindView(lightingView);
+	if (u_Frame.FogParams.z > 0.0 && fogged)
 		color = ApplyAerialPerspective(color, v_RelativePosition, st_FragCoord.xy);
-	if (u_Frame.FogParams.x > 0.0 && !valueView)
+	if (u_Frame.FogParams.x > 0.0 && fogged)
 		color = ApplyHeightFog(color, v_RelativePosition);
 #ifdef ST_FORWARD_GLASS
-	if (!valueView)
+	if (fogged)
 		color += transmitted;
 #endif
 

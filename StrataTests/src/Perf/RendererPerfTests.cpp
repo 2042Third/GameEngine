@@ -276,6 +276,88 @@ namespace
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	// What eight moving boxes add to GPU.RadianceCascades in the sun room at 3840 x 2160 at High: the dynamic layer's passes (its
+	// bricks put back and written again every frame) and whatever the marches pay for the voxels it fills. One renderer of one
+	// scene, the boxes at rest (no pass of the layer runs) and sliding 3 cm a frame, in interleaved blocks (A B, B A, A B) of one
+	// process. Reported, not budgeted (GlobalIllumination4KSunRoom budgets the whole stage).
+	void MeasureGlobalIlluminationMovers4K()
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!Perf::MeasuresGPU())
+		{
+			MESSAGE("The moving objects' cost: not measured, the device writes no timestamps");
+			return;
+		}
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+		constexpr uint32_t c_Width4K = 3840;
+		constexpr uint32_t c_Height4K = 2160;
+		Scene scene("GlobalIlluminationMovers4K");
+		SunRoomOptions room;
+		room.SunDirection = SunRoomDirection(-40.0f, 30.0f);
+		BuildSunRoom(scene, assets, room);
+		MaterialProperties properties;
+		properties.BaseColor = glm::vec4(0.8f, 0.3f, 0.2f, 1.0f);
+		const AssetHandle material = assets.AddMaterial(properties);
+		// Eight boxes of 0.5 m on the room's floor (its top is y 0.1), two rows of four.
+		std::vector<Entity> boxes;
+		for (uint32_t index = 0; index < 8; index++)
+		{
+			Entity box = AddMesh(scene, BuiltinAssets::CubeMesh, material, glm::vec3(-12.0f + 1.2f * static_cast<float>(index % 4), 0.35f, index < 4 ? -3.2f : -1.2f), "Mover");
+			box.GetComponent<TransformComponent>().Scale = glm::vec3(0.5f);
+			boxes.push_back(box);
+		}
+		const SceneCamera camera = LookAt(glm::vec3(-9.0f, 1.5f, -4.5f), glm::vec3(-10.0f, 1.2f, 1.1f), static_cast<float>(c_Width4K) / static_cast<float>(c_Height4K));
+		GetPostProcess(scene).GlobalIllumination = true;
+		SceneRendererSpecification specification = Perf::MeasuredRendererSpecification();
+		specification.Quality = RendererQuality::GetPreset(RendererQualityPreset::High);
+		SceneRenderer renderer(specification);
+		renderer.SetViewportSize(c_Width4K, c_Height4K);
+		// The renderer's clock: a fifteenth of a second a frame, whatever the machine's, so the boxes rest and the voxels around
+		// them fade (four frames each) within a block's warm-up.
+		SceneRenderOptions options;
+		options.AdaptationSeconds = 1.0f / 15.0f;
+		std::array<std::vector<double>, 2> blocks;
+		std::array<uint32_t, 2> bricks = { 0, 0 };
+		std::string order;
+		uint32_t step = 0;
+		for (const uint32_t side : { 0u, 1u, 1u, 0u, 0u, 1u })
+		{
+			const bool moving = side == 1;
+			Perf::MeasureFrames(gpu, c_WarmupFrames, c_MeasuredFrames, [&]
+			{
+				if (moving)
+				{
+					step++;
+					for (size_t index = 0; index < boxes.size(); index++)
+					{
+						TransformComponent& transform = boxes[index].GetComponent<TransformComponent>();
+						transform.Translation.x = -12.0f + 1.2f * static_cast<float>(index % 4) + 0.3f * std::sin(0.1f * static_cast<float>(step));
+						boxes[index].MarkModified<TransformComponent>();
+					}
+				}
+				REQUIRE(renderer.Render(scene, camera, nullptr, options));
+			});
+			CHECK(renderer.GetStats().GlobalIllumination);
+			CHECK_FALSE(renderer.GetStats().GlobalIlluminationPending);
+			// The measured frames of a block are all of its kind: the warm-up holds the boxes' start, their rest and both fades.
+			CHECK(renderer.GetStats().GIMovingProxies == (moving ? 8u : 0u));
+			CHECK(renderer.GetStats().GIMoversLeftOut == 0);
+			CHECK((renderer.GetStats().GIMoverBricks > 0) == moving);
+			bricks[side] = std::max(bricks[side], renderer.GetStats().GIMoverBricks);
+			const double giMs = MedianGPUStageMs("GPU.RadianceCascades");
+			CHECK(giMs > 0.0);
+			blocks[side].push_back(giMs);
+			order += fmt::format("{}{} {:.3f}", order.empty() ? "" : ", ", moving ? "moving" : "resting", giMs);
+		}
+		for (std::vector<double>& values : blocks)
+			std::sort(values.begin(), values.end());
+		MESSAGE("Eight moving boxes' cost at 3840x2160, High, the sun room: GPU.RadianceCascades median of the blocks ", blocks[0][1], " ms with the boxes at rest, ",
+			blocks[1][1], " ms with them moving (", blocks[1][1] - blocks[0][1], " ms, ", bricks[1], " bricks); the blocks in order (ms): ", order);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	// Render100kCubes' scene with the post-processing's defaults but TAA under `preset`: its jitter, motion vectors, motion
 	// history and resolve, measured as `key` (its CPU median) and `key`GPU (the GPU's median busy time); with `reflections`,
 	// screen-space reflections traced from every surface (the maximum roughness 1).
@@ -637,6 +719,11 @@ TEST_SUITE("PerfGPU.Renderer")
 	TEST_CASE("Global illumination's bounces' cost at 3840x2160")
 	{
 		MeasureGlobalIlluminationBounces4K();
+	}
+
+	TEST_CASE("Global illumination's moving objects' cost at 3840x2160")
+	{
+		MeasureGlobalIlluminationMovers4K();
 	}
 
 	TEST_CASE("Motion blur's cost at 3840x2160")

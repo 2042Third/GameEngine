@@ -942,6 +942,7 @@ namespace Strata
 		// Levels of detail that change cross-fade (LODSelection::UpdateLODFade): each opaque instance's state, written only by
 		// the chunk that draws it.
 		const bool fades = opaqueDraws && m_Specification.FadeLevelsOfDetail;
+		const bool culledView = opaqueDraws && m_CulledViewFrame;
 		if (fades)
 			m_LODFades.resize(instances.size());
 		const uint32_t fadeFrame = m_LODFadeFrame;
@@ -952,6 +953,7 @@ namespace Strata
 			output.Transparent.clear();
 			output.MaterialScreenUses.clear();
 			output.SizeCulled = 0;
+			output.Culled.clear();
 			// Counted in locals and stored once: a store per instance into the chunk, whose neighbours other threads write,
 			// cost 100,000 instances about 0.1 ms.
 			std::array<uint32_t, SceneRendererStats::c_LODStatCount> instancesPerLOD = {};
@@ -973,6 +975,9 @@ namespace Strata
 				if (minPixels > 0.0f && fraction * viewportHeight < minPixels)
 				{
 					output.SizeCulled++;
+					// The culled view's boxes, where the CPU draws the view (the GPU's culling records its own: Scene/Cull.comp).
+					if (culledView)
+						output.Culled.push_back(proxy | (RenderData::c_CulledBySize << RenderData::c_CulledReasonShift));
 					continue;
 				}
 				const float viewDepth = -(camera.View * glm::vec4(bounds.GetCenter(), 1.0f)).z;
@@ -1054,11 +1059,13 @@ namespace Strata
 
 		m_Draws.clear();
 		m_Transparent.clear();
+		m_CulledProxies.clear();
 		uint32_t skipped = 0;
 		for (uint32_t chunk = 0; chunk < chunks; chunk++)
 		{
 			const ExtractionChunk& output = m_Chunks[chunk];
 			m_Draws.insert(m_Draws.end(), output.Draws.begin(), output.Draws.end());
+			m_CulledProxies.insert(m_CulledProxies.end(), output.Culled.begin(), output.Culled.end());
 			m_Transparent.insert(m_Transparent.end(), output.Transparent.begin(), output.Transparent.end());
 			for (size_t lod = 0; lod < output.InstancesPerLOD.size(); lod++)
 				m_Stats.InstancesPerLOD[lod] += output.InstancesPerLOD[lod];

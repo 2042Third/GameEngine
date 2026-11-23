@@ -250,6 +250,10 @@ namespace Strata
 				// lost device inside NVRHI) so the application still shuts down in order and flushes its logs.
 				ST_CORE_CRITICAL("Unhandled exception in the main loop: {}", exception.what());
 				m_Running = false;
+				// The run failed: a caller (CI, a script, the launcher) must not read success. A code set before (a failed
+				// command script, an interrupt) says more and stays.
+				if (m_ExitCode == 0)
+					m_ExitCode = c_UnhandledExceptionExitCode;
 			}
 
 			if (frameRan)

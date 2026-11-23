@@ -259,6 +259,22 @@ namespace Strata
 		// (Tests::ExactSpecification).
 		bool DitherOutput = true;
 
+		// Switches only the editor's captures turn off (viewport.capture {renderer}), to show what a technique does; every other
+		// renderer keeps them on, and its frames are as without them, to the bit. SpecularEnergyCompensation: the forward pass
+		// scales specular light by GetSpecularEnergy (Include/PBR.slang), which restores what single scattering loses on rough
+		// surfaces; off, the specular light is the single-scattering lobe's. HorizonFade: reflections a normal map turns into the
+		// surface fade out (GetHorizonFade); off, they do not. Both reach the forward pass as FrameConstants::CaptureSwitches
+		// bits (a uniform branch, nothing while 0). SpatialReflectionResolve: the spatial screen-space reflections' 5x5 resolve
+		// (Effects/ReflectionResolve.comp); off, the forward pass reads each pixel's traced reflection as the march found it.
+		bool SpecularEnergyCompensation = true;
+		bool HorizonFade = true;
+		bool SpatialReflectionResolve = true;
+		// FXAA's sub-pixel aliasing removal: 0.25, or 0.75 (PostProcess/FXAAWideSubpixel.frag, a variant compiled with it:
+		// the default's shader is unchanged); other values draw at 0.25. Only captures change it.
+		float FXAASubpixel = c_DefaultFXAASubpixel;
+		static constexpr float c_DefaultFXAASubpixel = 0.25f;
+		static constexpr float c_WideFXAASubpixel = 0.75f;
+
 		// A shadow view (a light's tile) is drawn again only when what it shows changed: the light (its position, direction,
 		// range, cone, tile or filter), a shadow caster whose bounds before or after its change reach the light's range and
 		// view, or what the casters are drawn with (the scene's GPU copy's mesh and material tables and new proxies, the
@@ -338,7 +354,10 @@ namespace Strata
 		Voxels,           // Global illumination's voxels as the GI sees the scene, lit (GI/VoxelView.frag over the lit image)
 		GlobalIllumination, // Global illumination's diffuse light on white surfaces (the field, today's light beyond it), through the scene's exposure
 		OpenShare,        // The cosine-weighted share of the sky each surface sees through the world, as gray (1 beyond the field)
-		Probes            // Global illumination's first cascade of probes over the lit image (GI/ProbeView.frag): live ones lit, dead ones red
+		Probes,           // Global illumination's first cascade of probes over the lit image (GI/ProbeView.frag): live ones lit, dead ones red
+		Specular,         // Only the specular light (the lights' highlights, image light's reflections), through the scene's exposure
+		Diffuse,          // Only the diffuse light (the lights' and image light's, global illumination's field), through the scene's exposure
+		Clusters          // The lights the pixel's light cluster lists (what its shading walks), as bands of counts
 	};
 
 	// Display colors of the lighting views that show values (sRGB; alpha unused). Not saved: the editor sets them from its theme.
@@ -439,9 +458,11 @@ namespace Strata
 		// wrong place (lookdev.patch). (The procedural sky's disk is part of its environment cube, as for every surface's image
 		// light, and surfaces keep the image light's specular.)
 		bool ProbeCapture = false;
-		// The time since this renderer's previous frame that automatic exposure adapts over and point and spot shadows fade
-		// over (SceneRenderer::c_LocalShadowFadeSeconds); unset, the wall clock between its frames (at most 0.25 s, so pauses
-		// do not turn into one huge step). Tests and tools that step time, and tests that compare two renderers' frames, set it.
+		// The time since this renderer's previous frame: what automatic exposure adapts over, point and spot shadows fade over
+		// (SceneRenderer::c_LocalShadowFadeSeconds) and global illumination's moving objects rest and fade by
+		// (RenderData::c_GIMoverRestSeconds, c_GIMoverFadeSeconds); unset, the wall clock between its frames (at most 0.25 s, so
+		// pauses do not turn into one huge step). Tests and tools that step time, and tests that compare two renderers' frames,
+		// set it.
 		std::optional<float> AdaptationSeconds;
 		// The scene's motion blur applies (PostProcessComponent::MotionBlur, unless the quality turns it off). Editor views and
 		// renderers of single images (captures, thumbnails) turn it off: they never blur.
@@ -500,6 +521,20 @@ namespace Strata
 		bool ShowShadowView = false;
 		// Display colors (sRGB; alpha unused) of the ramp: green, yellow and red by default (the editor passes its theme's).
 		std::array<glm::vec4, 3> ShadowViewColors = { { { 0.24f, 0.75f, 0.55f, 1.0f }, { 0.91f, 0.76f, 0.30f, 1.0f }, { 0.90f, 0.33f, 0.29f, 1.0f } } };
+
+		// The wireframe debug view (SceneRendererGeometryViews.cpp): the edges of every triangle the frame drew (opaque, alpha-masked,
+		// glass and blended surfaces, at the levels of detail and with the skins drawn) in WireframeColor (sRGB, alpha its opacity) over
+		// the image, where no surface lies in front of them. It needs the device's non-solid fill mode (GraphicsDeviceInfo::
+		// SupportsWireframe): without it the image is drawn without the lines, and the frame reports why.
+		bool ShowWireframe = false;
+		glm::vec4 WireframeColor = { 0.93f, 0.92f, 0.89f, 0.8f };
+		// The culled debug view (SceneRendererGeometryViews.cpp): the bounds of the mesh renderers in the frustum that the frame's
+		// culling left out, as boxes over everything: CulledColors[0] those below RendererQualitySettings::MinProjectedPixels (each
+		// box grown to RenderData::c_CulledViewMinPixels across its diagonal), [1] those hidden behind what the view drew (occlusion culling, which only
+		// the GPU-driven path does). Both paths record them where they decide (the CPU's extraction, Scene/Cull.comp's counting
+		// passes). Display colors (sRGB; alpha unused).
+		bool ShowCulled = false;
+		std::array<glm::vec4, 2> CulledColors = { { { 0.91f, 0.76f, 0.30f, 1.0f }, { 0.90f, 0.33f, 0.29f, 1.0f } } };
 
 		// A lighting debug view (SceneLightingView). Lighting and Indirect change what the forward pass shades and are exposed and
 		// tone mapped as the image is; AmbientOcclusion and Albedo write their values (unexposed) and Luminance keeps the lit
@@ -700,10 +735,22 @@ namespace Strata
 		bool GlobalIllumination = false;
 		bool GlobalIlluminationPending = false;
 		bool GlobalIlluminationSettled = true;
+		// The frame's forward passes drew with the shaders that read global illumination's field (PipelineKey::Field): the field
+		// was joined into the image, or one of its views showed. False in every other frame, the pending ones too: those draw
+		// with shaders that hold nothing of the field.
+		bool GlobalIlluminationShaded = false;
 		uint32_t GIVoxelizedTriangles = 0;
 		uint32_t GIQueuedRegions = 0;
 		uint32_t GIWaitingProxies = 0;
-		uint32_t GIMovingProxies = 0;
+		uint32_t GIMovingProxies = 0;      // In the dynamic layer: moving, or resting for less than c_GIMoverRestSeconds
+		uint32_t GIMoverBricks = 0;        // Bricks of voxels the dynamic layer writes its boxes and fades into this frame
+		uint32_t GIMoverFades = 0;         // Of those: bricks fading, where a proxy started to move or rested within c_GIMoverFadeSeconds
+		// Moving proxies the layer does not hold: past its boxes or bricks, or not ready (their mesh or instances not resident). In
+		// no voxel until they rest.
+		uint32_t GIMoversLeftOut = 0;
+		// The dynamic layer's dispatches the frame recorded: 0 when none of its passes ran. The frame after the layer's last bricks
+		// still puts back what they held, with GIMoverBricks 0.
+		uint32_t GIMoverDispatches = 0;
 		uint32_t GIUnvoxelizedSubmeshes = 0;
 		uint32_t GISettleFrames = 0;
 		// Copies of the scene's color the frame made for transmissive surfaces and spatial reflections (CopySceneColor: 1 when
@@ -1105,11 +1152,14 @@ namespace Strata
 		// The probes' textures as the GPU holds them (tests and tools only, waiting for the GPU), texels in rows of x, then y, then z:
 		// a cascade's validity (RGBA8, r the validity, gba the probe's move off a surface: GI/ProbeValidity.comp), the field
 		// (RGBA16F, (3 x, 2 y, z) per cascade-0 probe: faces +X, -X, +Y in the first row, -Y, +Z, -Z in the second; rgb
-		// irradiance over pi times c_GIRadianceScale, a the face's sky share), the field's depth moments (two halves, a tile of
-		// c_GIFieldDepthTexels a side at (probe.xy * texels + texel, probe.z): the mean distance to the first hit around the
-		// texel's octahedral direction and its variance, meters).
+		// irradiance over pi times c_GIRadianceScale, a the face's sky share), the field's irradiance as drawn surfaces read it
+		// (RGBA16F, (3 x, 3 y, z) per cascade-0 probe: coefficient c of the spherical harmonics at (c % 3, c / 3), scaled as the
+		// faces are, band 0 times its basis function: the mean of the probe's light), the field's depth moments (two halves, a
+		// tile of c_GIFieldDepthTexels a side at (probe.xy * texels + texel, probe.z): the mean distance to the first hit around
+		// the texel's octahedral direction and its variance, meters).
 		bool ReadGlobalIlluminationValidity(uint32_t cascade, std::vector<uint8_t>& outTexels) const;
 		bool ReadGlobalIlluminationField(std::vector<uint8_t>& outTexels) const;
+		bool ReadGlobalIlluminationFieldIrradiance(std::vector<uint8_t>& outTexels) const;
 		bool ReadGlobalIlluminationFieldDepth(std::vector<uint8_t>& outTexels) const;
 		// The forward pass's GI constants of the latest frame (zero without GI).
 		const RenderData::GIFieldConstants& GetGlobalIlluminationFieldConstants() const { return m_GIFieldConstants; }
@@ -1155,7 +1205,8 @@ namespace Strata
 			// A rect light's view's back faces into its tile of the back faces' atlas (EnsureLocalShadowBackAtlas): the winding
 			// reversed, no depth bias
 			LocalShadowBack,
-			LocalShadowBackMasked
+			LocalShadowBackMasked,
+			Wireframe      // The wireframe debug view's edges into the output texture (SceneRenderOptions::ShowWireframe)
 		};
 
 		struct PipelineKey
@@ -1173,6 +1224,11 @@ namespace Strata
 			// shade rect lights (ST_AREA_LIGHTS); its prepass with the surface target: the form that marks light surfaces
 			// (ST_PREPASS_LIGHT_SURFACES). GetScenePipeline sets it from the frame.
 			bool AreaLights = false;
+			// The forward passes (opaque, glass, alpha-blended) of a frame whose shading reads global illumination's field, for the
+			// join or one of its views (m_FieldFrame): the pixel shaders with the field's gather (ST_FORWARD_FIELD). Every other
+			// frame's hold nothing of it, so a frame without global illumination pays nothing for it. With AreaLights beside it,
+			// the forms with both (ST_AREA_LIGHTS and ST_FORWARD_FIELD).
+			bool Field = false;
 			bool operator==(const PipelineKey&) const = default;
 		};
 
@@ -1292,6 +1348,7 @@ namespace Strata
 			std::vector<ShadowCaster> Casters;   // The chunk's shadow casters (FindShadowCasters)
 			uint32_t SubTexelCasters = 0;
 			uint32_t SizeCulled = 0;             // Visible proxies below RendererQualitySettings::MinProjectedPixels
+			std::vector<uint32_t> Culled;        // Those proxies, for the culled debug view (SceneRenderOptions::ShowCulled)
 			AABB Receivers; // The world bounds of the chunk's visible proxies (scenes with Skin proxies only)
 			uint32_t SkinnedInstances = 0;
 		};
@@ -1962,7 +2019,7 @@ namespace Strata
 		bool EnsureLocalShadowRanges();
 		void BuildLocalShadowRanges(nvrhi::ICommandList* commandList);
 		void ReleaseLocalShadowRanges(std::vector<nvrhi::ResourceHandle>& released);
-		// The rect lights' back faces (Include/AreaShadows.slang, scene SRV 59): every rect light view is drawn a second time
+		// The rect lights' back faces (Include/AreaShadows.slang, scene SRV 60): every rect light view is drawn a second time
 		// into m_LocalShadowBackAtlas with the winding reversed (Pass::LocalShadowBack), so each texel holds the nearest back
 		// face, where the solid the view first sees ends. Made with the ranges (false when that fails: reported, the rect
 		// lights unshadowed); a new one is cleared and the rect light views holding content are drawn again.
@@ -2104,6 +2161,15 @@ namespace Strata
 		// (Debug/ShadowViewStats.comp, read back through m_ShadowViewReadbacks) and draws the view into the output texture;
 		// false when GPU resources failed (reported).
 		bool DrawShadowView(nvrhi::ICommandList* commandList, const SceneRenderOptions& options, const nvrhi::Viewport& viewport);
+		// The wireframe and culled debug views (SceneRenderOptions::ShowWireframe and ShowCulled, SceneRendererGeometryViews.cpp)
+		// into the output texture, with the overlays' frame constants; false when the view could not be drawn (reported). The
+		// wireframe replays the frame's draws (the GPU-driven path's buckets or the CPU's batches, then the transparent ones)
+		// with Pass::Wireframe; the culled view draws a box per entry of the frame's culled list (Overlay/CulledView.vert).
+		bool DrawWireframeView(nvrhi::ICommandList* commandList, const SceneRenderOptions& options);
+		bool DrawCulledView(nvrhi::ICommandList* commandList, const SceneRenderOptions& options);
+		// The buffers the GPU's culling records the culled view's proxies into (m_CulledViewArguments, m_CulledViewList), sized
+		// for the frame's proxies while the view shows and to one entry otherwise (the cull layout binds them every frame).
+		bool EnsureCulledViewBuffers(bool& outRecreated);
 		// After the executed command list of a frame that recorded the view's counts: the copy is pending.
 		void SubmitShadowViewReadback();
 		// The sun's screen-space shadow mask (SceneRendererScreenShadows.cpp): its targets (RG8, the viewport's size, made by the
@@ -2147,7 +2213,7 @@ namespace Strata
 		// GI, a new quality, the render targets.
 		void ReleaseGlobalIllumination(std::vector<nvrhi::ResourceHandle>& released);
 		// The frame's voxelization on the CPU (VoxelClipmap::BuildFrame, in Render.Extract) and the GI's constants.
-		void PrepareGlobalIllumination(const RenderScene& renderScene, const Ref<AssetManagerBase>& assets, const SceneCamera& camera);
+		void PrepareGlobalIllumination(const RenderScene& renderScene, const Ref<AssetManagerBase>& assets, const SceneCamera& camera, const SceneRenderOptions& options);
 		// GlobalIlluminationSettled under re-injection, once the frame's sun and sky are known: not until GISettleFrames frames
 		// after the light's inputs or the bounce's source last changed.
 		void SettleGlobalIllumination(const RenderData::FrameConstants& frame);
@@ -2163,9 +2229,9 @@ namespace Strata
 		bool RecordGlobalIlluminationLight(nvrhi::ICommandList* commandList);
 		void SubmitGlobalIlluminationReadback();
 		void ResolveGlobalIlluminationCounters(bool wait);
-		// What the scene binding sets bind at SRV 35, 37 and 38-40: the field, cascade 0's validity and voxel levels 0-2's material
-		// once made, else the black 3D texture.
-		std::array<nvrhi::ITexture*, 6> GetBoundGITextures() const;
+		// What the scene binding sets bind at SRV 35, 37, 38-40, 54 and 55: the field's harmonics, cascade 0's validity, voxel
+		// levels 0-2's material, the probes' depth moments and the field's ambient cubes once made, else the black 3D textures.
+		std::array<nvrhi::ITexture*, 7> GetBoundGITextures() const;
 	private:
 		SceneRendererSpecification m_Specification;
 		nvrhi::IDevice* m_Device = nullptr;
@@ -2202,12 +2268,21 @@ namespace Strata
 		nvrhi::ShaderHandle m_ForwardPixelShader;
 		nvrhi::ShaderHandle m_ForwardTransparentPixelShader;
 		nvrhi::ShaderHandle m_GlassPixelShader; // With or without entity ids, as the renderer writes them
+		// The same three with global illumination's field (PipelineKey::Field).
+		nvrhi::ShaderHandle m_ForwardFieldPixelShader;
+		nvrhi::ShaderHandle m_ForwardTransparentFieldPixelShader;
+		nvrhi::ShaderHandle m_GlassFieldPixelShader;
 		// The forward shaders' forms that shade rect lights (ST_AREA_LIGHTS: Include/AreaLights.slang), for frames whose scene has
-		// a rect light (m_AreaLightsFrame); the others leave them out, so that frames without them pay nothing.
+		// a rect light (m_AreaLightsFrame); the others leave them out, so that frames without them pay nothing. The Field forms
+		// also read global illumination's field (PipelineKey::AreaLights and PipelineKey::Field).
 		nvrhi::ShaderHandle m_ForwardAreaPixelShader;
 		nvrhi::ShaderHandle m_ForwardTransparentAreaPixelShader;
 		nvrhi::ShaderHandle m_GlassAreaPixelShader;
 		nvrhi::ShaderHandle m_GlassVelocityAreaPixelShader;
+		nvrhi::ShaderHandle m_ForwardAreaFieldPixelShader;
+		nvrhi::ShaderHandle m_ForwardTransparentAreaFieldPixelShader;
+		nvrhi::ShaderHandle m_GlassAreaFieldPixelShader;
+		nvrhi::ShaderHandle m_GlassVelocityAreaFieldPixelShader;
 		bool m_AreaLightsFrame = false;
 		nvrhi::ShaderHandle m_FullscreenVertexShader;
 		nvrhi::ShaderHandle m_TonemapPixelShader;
@@ -2375,7 +2450,7 @@ namespace Strata
 		std::vector<uint32_t> m_LocalShadowRecordSlots;
 		// The tiles of views no receiver needs that the frame's shadow pass clears (ClearUnneededLocalShadowTiles).
 		std::vector<ShadowAtlasTile> m_LocalShadowClears;
-		// Rect lights' shadows. The atlas's depth ranges (u_LocalShadowRanges, scene SRV 57; the dummy, 1 x 1, while there are
+		// Rect lights' shadows. The atlas's depth ranges (u_LocalShadowRanges, scene SRV 58; the dummy, 1 x 1, while there are
 		// none), their levels with a binding set each (the level below, or the atlas, as SRV and the level as UAV), the frame's
 		// drawn rect light tiles (x, y, size, 0) and the buffer they are uploaded to, and the pipelines.
 		nvrhi::TextureHandle m_LocalShadowRanges;
@@ -2389,7 +2464,7 @@ namespace Strata
 		nvrhi::BufferHandle m_LocalShadowRangeTileBuffer;
 		std::vector<glm::uvec4> m_LocalShadowRangeTiles;
 		bool m_LocalShadowRangesFresh = false; // Made since the last build: the rect lights' views holding content need theirs too
-		// The rect lights' back faces (EnsureLocalShadowBackAtlas; scene SRV 59, the dummy atlas while there is none) and the
+		// The rect lights' back faces (EnsureLocalShadowBackAtlas; scene SRV 60, the dummy atlas while there is none) and the
 		// framebuffer their views are drawn into.
 		nvrhi::TextureHandle m_LocalShadowBackAtlas;
 		nvrhi::FramebufferHandle m_LocalShadowBackFramebuffer;
@@ -2403,7 +2478,7 @@ namespace Strata
 			glm::ivec4 Scissor = glm::ivec4(0);
 		};
 		std::vector<AreaShadowMask> m_AreaShadowMasks;
-		// The masks (R8, a layer per masked light; scene SRV 58, the 1 x 1 dummy without them), a framebuffer per layer, two RG8
+		// The masks (R8, a layer per masked light; scene SRV 59, the 1 x 1 dummy without them), a framebuffer per layer, two RG8
 		// targets the evaluation and the horizontal blur write (the blur's taps read the first, the vertical pass the second into
 		// a layer), the evaluation's layout, binding set and pipeline (the set names the atlas, the ranges and the local shadows'
 		// buffer it was made with), the blur's sets and its two pipelines (into the RG8 target, into a layer).
@@ -2462,7 +2537,7 @@ namespace Strata
 		uint64_t m_BoundSceneGPUVersion = 0;
 		uint64_t m_BoundTextureTableVersion = 0; // TextureTable::GetBufferVersion the binding sets were made for
 		nvrhi::BufferHandle m_LightBuffer;
-		nvrhi::BufferHandle m_LightShapeBuffer; // The lights' faces (RenderData::LightShape, scene set SRV 56), parallel to m_LightBuffer
+		nvrhi::BufferHandle m_LightShapeBuffer; // The lights' faces (RenderData::LightShape, scene set SRV 57), parallel to m_LightBuffer
 		nvrhi::BufferHandle m_LightCountBuffer; // The lights in m_LightBuffer where the GPU culled them (LightCounts.y)
 		// The shadow cascades' projections (RenderData::CascadeData), fitted on the GPU every frame with shadows
 		// (Scene/CascadeFit.comp) from m_CascadeFit and, on the GPU-driven path, the nearest casters its culling found.
@@ -2766,6 +2841,7 @@ namespace Strata
 		uint64_t m_RenderCount = 0;
 		bool m_GPUDrivenFrame = false;  // The frame being rendered culls on the GPU
 		bool m_GPUCullFrame = false;    // And its render scene has proxies to cull (SceneRendererStats::GPUCulled)
+		bool m_CulledViewFrame = false; // The frame shows the culled debug view: its culling records what it leaves out
 		nvrhi::BindingLayoutHandle m_CullBindingLayout;
 		nvrhi::ComputePipelineHandle m_CullViewPipeline;
 		nvrhi::ComputePipelineHandle m_CullShadowPipeline;
@@ -2952,6 +3028,7 @@ namespace Strata
 		nvrhi::ShaderHandle m_SkinnedMeshVelocityVertexShader;
 		nvrhi::ShaderHandle m_PrepassVelocityPixelShader;
 		nvrhi::ShaderHandle m_GlassVelocityPixelShader;
+		nvrhi::ShaderHandle m_GlassVelocityFieldPixelShader; // With global illumination's field (PipelineKey::Field)
 		nvrhi::FramebufferHandle m_GlassMotionFramebuffer; // The glass framebuffer's attachments and the velocity target
 		// Screen-space reflections (PostProcessComponent::ScreenSpaceReflections): the frame traces them (with TAA, its history
 		// holding the previous frame), their targets and the prepass framebuffer writing the surface target, the trace's
@@ -3001,6 +3078,23 @@ namespace Strata
 		nvrhi::BindingLayoutHandle m_MotionViewLayout;
 		nvrhi::BindingSetHandle m_MotionViewBindingSet;
 		nvrhi::GraphicsPipelineHandle m_MotionViewPipeline;
+		// The wireframe debug view (DrawWireframeView): its pixel shader and push constant layout (the line color), made by the
+		// first frame that shows it; its pipelines are scene pipelines (Pass::Wireframe).
+		nvrhi::ShaderHandle m_WireframePixelShader;
+		nvrhi::BindingLayoutHandle m_WireframePushLayout;
+		nvrhi::BindingSetHandle m_WireframePushBindingSet;
+		uint32_t m_WireframeColor = 0; // The frame's SceneRenderOptions::WireframeColor, RGBA8 (red in the low byte)
+		// The culled debug view (DrawCulledView): the GPU's culling's indirect arguments (24 vertices, an instance per entry) and
+		// its list of entries (a proxy index and why it was culled, RenderData::c_CulledReasonShift), which the CPU path writes
+		// itself from m_CulledProxies; the boxes' pipeline and its binding set (naming the scene copy's proxy records).
+		nvrhi::BufferHandle m_CulledViewArguments;
+		nvrhi::BufferHandle m_CulledViewList;
+		std::vector<uint32_t> m_CulledProxies; // The CPU path's entries of the frame
+		nvrhi::BindingLayoutHandle m_CulledViewLayout;
+		nvrhi::GraphicsPipelineHandle m_CulledViewPipeline;
+		nvrhi::BindingSetHandle m_CulledViewBindingSet;
+		nvrhi::IBuffer* m_CulledViewBoundProxies = nullptr; // The proxy records and list m_CulledViewBindingSet names
+		nvrhi::IBuffer* m_CulledViewBoundList = nullptr;
 		// The shadows debug view (DrawShadowView): the overlay's and the count's pipelines, their binding sets (which name the
 		// depth: released with the targets), the counts' buffer and the ring of their readbacks, each with the layout of the
 		// frame it copied (made by the first frame that shows the view, kept with the renderer so a capture's counts survive
@@ -3068,7 +3162,10 @@ namespace Strata
 		// whether the frame runs it, and the voxel levels the scene binding sets name at SRV 38-40.
 		Scope<GlobalIlluminationResources> m_GI;
 		bool m_GIFrame = false;
-		std::array<nvrhi::ITexture*, 6> m_BoundGITextures = {};
+		// The frame's forward passes read the field: it is joined into the image (ReflectionParams.y) or a GI view shows it,
+		// which samples it also where no field ran (weight 0: today's light). They draw with PipelineKey::Field.
+		bool m_FieldFrame = false;
+		std::array<nvrhi::ITexture*, 7> m_BoundGITextures = {};
 	};
 
 }

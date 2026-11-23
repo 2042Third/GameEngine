@@ -4,12 +4,10 @@
 #include "Editor/ProjectThumbnail.h"
 #include "Editor/ViewportRenderer.h"
 
-#include <Strata/Core/Base64.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/FrameProfiler.h>
 #include <Strata/Core/JobSystem.h>
 #include <Strata/Core/Log.h>
-#include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/SceneRenderer.h>
@@ -147,7 +145,7 @@ namespace Strata
 		nlohmann::json DebugViewSchema(std::string description)
 		{
 			return { { "type", "string" }, { "enum", { "none", "streaming", "lod", "mip", "motion", "shadows", "lighting", "ao", "indirect", "luminance",
-				"albedo", "voxels", "gi", "open", "probes" } }, { "description", std::move(description) } };
+				"albedo", "voxels", "gi", "open", "probes", "specular", "diffuse", "clusters", "culled", "wireframe" } }, { "description", std::move(description) } };
 		}
 
 		// What the shadows debug view counted (SceneRenderer::GetShadowViewStats): shares of the image's pixels, and screen pixels
@@ -357,22 +355,17 @@ namespace Strata
 			// Unset: the view's (the Scene view's setting; for the scene's camera the game's quality, EditorContext::GetGameQuality:
 			// the project's, with the players' options while playing)
 			std::optional<ViewportQuality> Quality;
+			// Switches of the renderer for this capture alone: set ones render through a renderer of their own
+			// (EditorViewport::GetSwitchedCaptureRenderer), never the views' or the capture renderer.
+			CaptureRendererSwitches Renderer;
 			std::filesystem::path Path; // Empty: the image is only returned
 			bool Overwrite = false;
 		};
 
-		// The image and what the jobs make of it. Jobs write it; the main thread reads it once a job has completed.
-		struct EncodedCapture
-		{
-			ReadbackImage Image;
-			std::vector<uint8_t> Png;
-			std::string Base64;
-			std::string Error;     // Encoding failed when set
-			std::string SaveError; // Saving failed when set
-		};
-
 		struct CaptureProgress
 		{
+			// The renderer of a capture with switches (CaptureRequest::Renderer), held until the capture finished.
+			Ref<ViewportRenderer> SwitchedRenderer;
 			Scope<TextureReadback> Readback;
 			ViewportView View;
 			bool Overlays = false;
@@ -419,11 +412,22 @@ namespace Strata
 			uint32_t GPUStatsPolls = 0;   // Polls that waited for its GPU times
 			nlohmann::json RenderStats;   // renderStats, once its GPU times are known
 			std::chrono::steady_clock::time_point Submitted;
-			Ref<EncodedCapture> Encoded; // Set once the pixels are on the CPU
+			Ref<EncodedImage> Encoded; // Set once the pixels are on the CPU
 			JobHandle EncodeJob;
 			JobHandle SaveJob;
 			bool SaveStarted = false;
 		};
+
+		// The renderer a capture draws with: the capture renderer, or for a capture with switches the renderer made with them, which
+		// the capture holds until it finished. Null without a renderer.
+		ViewportRenderer* GetCaptureRenderer(EditorContext& context, const CaptureRequest& request, CaptureProgress& progress)
+		{
+			if (!request.Renderer.IsSet())
+				return context.GetViewport().GetCaptureRenderer();
+			if (!progress.SwitchedRenderer)
+				progress.SwitchedRenderer = context.GetViewport().GetSwitchedCaptureRenderer(request.Renderer);
+			return progress.SwitchedRenderer.get();
+		}
 
 		// The view of a capture: the viewport's choice of camera, or the capture's own camera (an editor view while the game
 		// is not playing, like the editor camera it starts from).
@@ -445,38 +449,6 @@ namespace Strata
 			return view;
 		}
 
-		// Encodes a captured image as PNG, and as Base64 for the result when `base64`, on a worker thread (compressing a large
-		// image would hitch the frame).
-		JobHandle SubmitEncode(const Ref<EncodedCapture>& encoded, bool base64)
-		{
-			return JobSystem::Submit([encoded, base64]()
-			{
-				std::string error;
-				std::optional<std::vector<uint8_t>> png = ImageWriter::EncodePNG(encoded->Image, true, &error);
-				if (!png)
-				{
-					encoded->Error = fmt::format("Encoding the capture as PNG failed: {}", error);
-					return;
-				}
-				if (base64)
-					encoded->Base64 = Base64::Encode(*png);
-				encoded->Png = std::move(*png);
-			});
-		}
-
-		// Saves an encoded capture on an I/O thread.
-		JobHandle SubmitSave(const Ref<EncodedCapture>& encoded, const std::filesystem::path& path, bool overwrite)
-		{
-			return JobSystem::SubmitIO([encoded, path, overwrite]()
-			{
-				// Checked again: the file may have appeared since the command was given.
-				if (!overwrite && FileSystem::Exists(path))
-					encoded->SaveError = fmt::format("'{}' already exists (pass overwrite: true to replace it)", FileSystem::ToUTF8(path));
-				else if (!FileSystem::CreateDirectories(path.parent_path()) || !FileSystem::WriteBytes(path, encoded->Png))
-					encoded->SaveError = fmt::format("Cannot write the capture to '{}'", FileSystem::ToUTF8(path));
-			});
-		}
-
 		// viewport.capture {live}: what a view presents, read back from its own output, with its history as it is.
 		struct LiveCaptureRequest
 		{
@@ -494,7 +466,7 @@ namespace Strata
 			uint64_t FixedSteps = 0;
 			uint32_t TemporalFrames = 0;
 			std::chrono::steady_clock::time_point Submitted;
-			Ref<EncodedCapture> Encoded; // Set once the pixels are on the CPU
+			Ref<EncodedImage> Encoded; // Set once the pixels are on the CPU
 			JobHandle EncodeJob;
 			JobHandle SaveJob;
 			bool SaveStarted = false;
@@ -585,12 +557,12 @@ namespace Strata
 							return EditorCommandResult::Fail(fmt::format("The GPU did not finish the capture within {} seconds", c_CaptureReadbackTimeout.count()));
 						continue;
 					}
-					Ref<EncodedCapture> encoded = CreateRef<EncodedCapture>();
+					Ref<EncodedImage> encoded = CreateRef<EncodedImage>();
 					if (!frame.Readback->GetResult(encoded->Image))
 						return EditorCommandResult::Fail("Mapping the captured image failed");
 					frame.Readback.reset();
 					frame.Encoded = encoded;
-					frame.EncodeJob = SubmitEncode(encoded, request.Frames == 1); // Several frames go to files only
+					frame.EncodeJob = SubmitEncodePNG(encoded, request.Frames == 1); // Several frames go to files only
 					continue;
 				}
 				if (!frame.EncodeJob.IsComplete())
@@ -605,7 +577,7 @@ namespace Strata
 				if (!frame.SaveStarted)
 				{
 					frame.SaveStarted = true;
-					frame.SaveJob = SubmitSave(frame.Encoded, request.Paths[index], request.Overwrite);
+					frame.SaveJob = SubmitSavePNG(frame.Encoded, request.Paths[index], request.Overwrite);
 					finished = false;
 					continue;
 				}
@@ -641,7 +613,7 @@ namespace Strata
 		EditorCommandResult StartLiveCapture(EditorContext& context, const nlohmann::json& parameters)
 		{
 			CommandArguments arguments(parameters);
-			for (const char* refused : { "width", "height", "overlays", "position", "target", "fov", "debugView", "quality", "waitForAssets" })
+			for (const char* refused : { "width", "height", "overlays", "position", "target", "fov", "debugView", "quality", "waitForAssets", "renderer" })
 			{
 				if (arguments.Has(refused) && arguments.IsValid())
 					arguments.SetError(fmt::format("Parameter '{}' does not apply to live captures, which return what the view presented", refused));
@@ -735,7 +707,7 @@ namespace Strata
 		std::optional<EditorCommandResult> StartCapture(EditorContext& context, const CaptureRequest& request, CaptureProgress& progress)
 		{
 			EditorViewport& viewport = context.GetViewport();
-			ViewportRenderer* renderer = viewport.GetCaptureRenderer();
+			ViewportRenderer* renderer = GetCaptureRenderer(context, request, progress);
 			if (!renderer)
 				return EditorCommandResult::Fail("viewport.capture needs a GPU: the renderer is not running");
 			// The project's picture renders through this renderer in the frames after a save, at a size of its own: in shared
@@ -748,7 +720,11 @@ namespace Strata
 			if (context.GetProjectThumbnail().IsRendering())
 			{
 				if (progress.Rendered)
+				{
+					Ref<ViewportRenderer> switched = std::move(progress.SwitchedRenderer);
 					progress = CaptureProgress {};
+					progress.SwitchedRenderer = std::move(switched);
+				}
 				return std::nullopt;
 			}
 
@@ -867,11 +843,11 @@ namespace Strata
 		std::optional<EditorCommandResult> ContinueCapture(EditorContext& context, const CaptureRequest& request, CaptureProgress& progress)
 		{
 			// The targets a lighting view's capture kept for its statistics: released once they arrived, or when the capture fails.
-			const auto releaseTargets = [&context, &progress]()
+			const auto releaseTargets = [&context, &request, &progress]()
 			{
 				if (!progress.LightingStatsPending)
 					return;
-				if (ViewportRenderer* renderer = context.GetViewport().GetCaptureRenderer())
+				if (ViewportRenderer* renderer = GetCaptureRenderer(context, request, progress))
 					renderer->ReleaseTargets();
 				progress.LightingStatsPending = false;
 			};
@@ -889,7 +865,7 @@ namespace Strata
 				// The GPU finished the capture: its GPU times are known once the profiler resolved its frame (a frame or two).
 				if (progress.RenderStats.is_null())
 				{
-					ViewportRenderer* renderer = context.GetViewport().GetCaptureRenderer();
+					ViewportRenderer* renderer = GetCaptureRenderer(context, request, progress);
 					SceneRenderer& sceneRenderer = renderer->GetSceneRenderer();
 					sceneRenderer.ResolveGPUStats(false);
 					// The capture renderer renders no frame while the capture waits: its shadows view's counts are read here.
@@ -925,7 +901,7 @@ namespace Strata
 						known.HasCounters = false;
 					progress.RenderStats = DescribeRenderStats(progress.Stats, known);
 				}
-				Ref<EncodedCapture> encoded = CreateRef<EncodedCapture>();
+				Ref<EncodedImage> encoded = CreateRef<EncodedImage>();
 				if (!progress.Readback->GetResult(encoded->Image))
 				{
 					releaseTargets();
@@ -933,19 +909,19 @@ namespace Strata
 				}
 				progress.Readback.reset();
 				progress.Encoded = encoded;
-				progress.EncodeJob = SubmitEncode(encoded, true);
+				progress.EncodeJob = SubmitEncodePNG(encoded, true);
 				return std::nullopt;
 			}
 
 			if (!progress.EncodeJob.IsComplete())
 				return std::nullopt;
-			EncodedCapture& encoded = *progress.Encoded;
+			EncodedImage& encoded = *progress.Encoded;
 			if (!encoded.Error.empty())
 				return EditorCommandResult::Fail(encoded.Error);
 			if (!request.Path.empty() && !progress.SaveStarted)
 			{
 				progress.SaveStarted = true;
-				progress.SaveJob = SubmitSave(progress.Encoded, request.Path, request.Overwrite);
+				progress.SaveJob = SubmitSavePNG(progress.Encoded, request.Path, request.Overwrite);
 				return std::nullopt;
 			}
 			if (!progress.SaveJob.IsComplete())
@@ -980,15 +956,47 @@ namespace Strata
 				{ "debugView", DescribeDebugView(progress.DebugView, progress.DebugViewStats, progress.TintedEntities,
 					progress.DebugView == ViewportDebugView::Shadows ? &progress.ShadowView : nullptr, progress.ShadowViewComplete, progress.LightingStats,
 					progress.GlobalIllumination) },
-				{ "renderStats", std::move(progress.RenderStats) }
+				{ "renderStats", std::move(progress.RenderStats) },
+				{ "screenSpaceReflectionsPending", progress.Stats.ScreenSpaceReflectionsPending },
+				{ "renderer", request.Renderer.ToJson() }
 			};
 			if (!progress.View.Notice.empty())
 				result["notice"] = progress.View.Notice;
 			if (!request.Path.empty())
 				result["path"] = FileSystem::ToUTF8(request.Path);
+			result["incomplete"] = ListIncompleteCapture(result, progress.Stats);
+			result["complete"] = result["incomplete"].empty();
 			return EditorCommandResult::Ok(std::move(result));
 		}
 
+	}
+
+	nlohmann::json ListIncompleteCapture(const nlohmann::json& result, const SceneRendererStats& stats)
+	{
+		nlohmann::json incomplete = nlohmann::json::array();
+		const auto note = [&incomplete](bool pending, const char* pointer)
+		{
+			if (pending)
+				incomplete.push_back(pointer);
+		};
+		note(result["pendingAssets"].get<uint32_t>() > 0, "/pendingAssets");
+		note(result["texturesBelowWanted"].get<uint32_t>() > 0, "/texturesBelowWanted");
+		note(result["stalePoses"].get<uint32_t>() > 0, "/stalePoses");
+		note(result["pendingTextGlyphs"].get<uint32_t>() > 0, "/pendingTextGlyphs");
+		note(result["ui"]["pendingGlyphs"].get<uint32_t>() > 0, "/ui/pendingGlyphs");
+		note(result["localShadowViewsPending"].get<uint32_t>() > 0, "/localShadowViewsPending");
+		note(result["reflectionProbesPending"].get<uint32_t>() > 0, "/reflectionProbesPending");
+		note(result["renderStats"].value("deferredInstanceBytes", uint64_t(0)) > 0, "/renderStats/deferredInstanceBytes");
+		note(!stats.PreExposureSettled, "/preExposureSettled");
+		note(!stats.GlobalIlluminationSettled, "/globalIlluminationSettled");
+		note(result["previewLighting"].get<bool>(), "/previewLighting");
+		note(stats.TemporalAntiAliasing && stats.TemporalFrames < c_TemporalSettleFrames, "/temporalFrames");
+		note(stats.ScreenSpaceReflectionsPending, "/screenSpaceReflectionsPending");
+		const nlohmann::json& debugView = result["debugView"];
+		note(debugView.contains("shadows") && !debugView["shadows"]["complete"].get<bool>(), "/debugView/shadows/complete");
+		note(debugView.value("lightingPending", false), "/debugView/lightingPending");
+		note(result.contains("notice"), "/notice");
+		return incomplete;
 	}
 
 	void RegisterViewportCommands(EditorCommandRegistry& registry)
@@ -1097,7 +1105,8 @@ namespace Strata
 			"UI), the gizmo mode and space, whether gizmo drags snap, the snap steps, debugView (\"none\", or \"streaming\" / \"lod\" / \"mip\" / "
 			"\"motion\" / \"shadows\": the image colored by streaming state, level of detail, the mip levels textures lack, motion or shadow texels "
 			"per pixel; or a lighting view: \"lighting\", \"ao\", \"indirect\", \"luminance\", \"albedo\", or global illumination's \"voxels\", "
-			"\"gi\", \"open\", \"probes\"), gameView (the Game view's image: {mode, width, "
+			"\"gi\", \"open\", \"probes\"; \"specular\" and \"diffuse\" the light of one kind, \"clusters\" the lights each pixel's light "
+			"cluster lists; \"culled\" boxes of what culling left out, \"wireframe\" the triangles' edges), gameView (the Game view's image: {mode, width, "
 			"height}, width and height for mode \"custom\"), pilotGameCamera (the Scene view looks through the scene's primary camera) and editPose "
 			"(\"rest\" or \"clipStart\": what skinned characters of the edited scene show while it does not play).",
 			ObjectSchema({}),
@@ -1140,7 +1149,13 @@ namespace Strata
 					"below 0.03 marked Azurite and above 0.85 striped Cinnabar, \"voxels\" global illumination's voxels: the scene as the GI sees it, "
 					"each surface its voxels' albedo, two-sided voxels (no bounce) Cinnabar, \"gi\" global illumination's diffuse light on white "
 					"surfaces (its field near the camera, today's light beyond), \"open\" the share of the sky each surface sees through the world "
-					"as gray, \"probes\" its first cascade's probes, dead ones (inside solids) dark red, \"none\" shows the image as rendered") },
+					"as gray, \"probes\" its first cascade's probes, dead ones (inside solids) dark red, \"specular\" only the specular light (the "
+					"lights' highlights and image light's reflections) and \"diffuse\" only the diffuse light, both without emission and fog, "
+					"\"clusters\" how many lights each pixel's light cluster lists (bands: none, 1, 2-3, 4-7, ...; what its shading walks), "
+					"\"culled\" the bounds of the mesh renderers in view that culling left out, as boxes over everything: Sulfur those too small "
+					"on screen (grown to about 6 pixels across), Cinnabar those hidden behind what is drawn (occlusion culling, on the GPU-driven "
+					"path only), \"wireframe\" the edges of every triangle drawn (all levels of detail, skins as posed) over the image, \"none\" "
+					"shows the image as rendered") },
 				{ "gameView", ObjectSchema({
 					{ "mode", { { "type", "string" }, { "enum", { "free", "16:9", "16:10", "4:3", "21:9", "1920x1080", "1280x720", "custom", "game" } },
 						{ "description", "The Game view's image: free fills the panel, an aspect ratio is the largest image of it inside the panel "
@@ -1231,7 +1246,11 @@ namespace Strata
 			"loading when the picture was taken (pendingAssets), the textures drawn coarser than the view wants (texturesBelowWanted), animators "
 			"drawn with an older pose (stalePoses), glyphs that could not be prepared in time (pendingTextGlyphs) and point and spot lights' shadow "
 			"views not drawn (localShadowViewsPending; captures draw them all at once) and reflection probes whose capture was not loaded "
-			"(reflectionProbesPending; waited for as assets are, with waitForAssets; captures convert loaded ones at once). debugView colors "
+			"(reflectionProbesPending; waited for as assets are, with waitForAssets; captures convert loaded ones at once), and whether spatial "
+			"screen-space reflections still lacked a previous frame's color (screenSpaceReflectionsPending). Every wait is bounded and the "
+			"command succeeds when a bound runs out: complete is true when the picture lacks nothing, else incomplete lists the JSON pointers "
+			"of the result's fields that say what it lacks (\"/pendingAssets\", \"/preExposureSettled\", \"/temporalFrames\" under TAA, "
+			"\"/debugView/shadows/complete\", \"/notice\" when the view fell back to another camera, ...). debugView colors "
 			"the picture "
 			"by streaming state, level of detail, mip levels, motion or shadow texels, or shows a lighting view (default: the viewport's, "
 			"viewport.setSettings) and the result's debugView says what it found: {view, tintedEntities, pendingEntities, failedEntities, "
@@ -1247,7 +1266,10 @@ namespace Strata
 			"Needs a GPU (fails in editors started with --no-gpu). live: true renders nothing: it reads back what the Scene view (camera "
 			"\"editor\") or the Game view (\"scene\") presented, as it played, to see motion (trails, smearing, crawling) at exact steps: arm it "
 			"after play.start {paused: true}, then run input.sequence or play.step. It fails when the view does not render, play stops or step "
-			"atFixedStep already ran; images: [{fixedSteps, temporalFrames, width, height, path}].",
+			"atFixedStep already ran; images: [{fixedSteps, temporalFrames, width, height, path}]. renderer switches techniques of the renderer "
+			"for this one picture, to show what they do (SpecularAntiAliasing, SpecularEnergyCompensation, DitherOutput, GPUDriven, "
+			"OcclusionCulling, SpatialReflectionResolve, FXAASubpixel 0.75, GlobalIlluminationBounceGain 0 for one bounce, ...): it renders "
+			"through a renderer of its own, so no view of the editor or game frame changes; the result's renderer echoes the switches set.",
 			ObjectSchema({
 				{ "width", IntegerSchema("Image width in pixels; without height the viewport's aspect ratio is kept", c_MinCaptureSize, c_MaxCaptureSize) },
 				{ "height", IntegerSchema("Image height in pixels; without width the viewport's aspect ratio is kept", c_MinCaptureSize, c_MaxCaptureSize) },
@@ -1266,7 +1288,14 @@ namespace Strata
 					"outlines the cascades; \"lighting\" white surfaces, \"ao\" ambient occlusion, \"indirect\" indirect light only, \"luminance\" EV100 "
 					"bands, \"albedo\" base colors (outside 0.03-0.85 marked), each with debugView.lighting: {view, surfaceShare, surfaceEv100 {p05, p50, "
 					"p95}, backgroundEv100, value {median, p05} (ao, albedo), belowRangeShare, aboveRangeShare (albedo), sunIlluminance, skyIlluminance "
-					"(lux on flat ground), sunToSkyRatio}; \"voxels\" the GI's voxels, with debugView.globalIllumination {ran, settled, voxelLevels, memoryMiB}; "
+					"(lux on flat ground), sunToSkyRatio}; \"voxels\" the GI's voxels, with debugView.globalIllumination {ran, settled, voxelLevels, memoryMiB}; \"specular\" and "
+					"\"diffuse\" the light of one kind (no emission, no fog), \"clusters\" the lights each pixel's light cluster lists as bands "
+					"(none, 1, 2-3, 4-7, ...; debugView.lighting.value: shares of a cluster's capacity); \"culled\" boxes of the mesh renderers in "
+					"view that culling left out (too small: Sulfur, about 6 pixels across; hidden behind what is drawn: Cinnabar, the GPU-driven "
+					"path's occlusion culling; renderStats.sizeCulledProxies counts the first, occludedProxies all found hidden, also those the "
+					"frame drew once more while the camera moves), \"wireframe\" the edges of every "
+					"triangle drawn over the image (it needs the device's non-solid fill mode: without it the lines are left out and the log "
+					"says why); "
 					"\"none\" not at all (default: the viewport's debug view)") },
 				{ "quality", QualitySchema("The quality the picture is drawn at (default: the quality of the view it shows: the Scene view's for the "
 					"editor camera and cameras of the capture's own, the game's for the scene's camera: the project's, with the players' options "
@@ -1276,7 +1305,11 @@ namespace Strata
 				{ "overwrite", BoolSchema("Replace an existing file at path (default false: an existing file is an error)") },
 				{ "live", BoolSchema("Return what the view (camera: required) presented, with its history as it is, instead of rendering") },
 				{ "atFixedStep", IntegerSchema("live: the first frame the view renders once the game's fixedSteps reached this", 1, c_MaxLiveCaptureStep) },
-				{ "frames", IntegerSchema("live: that frame and the next ones, as numbered files beside path above 1 (default 1)", 1, c_MaxLiveCaptureFrames) } }),
+				{ "frames", IntegerSchema("live: that frame and the next ones, as numbered files beside path above 1 (default 1)", 1, c_MaxLiveCaptureFrames) },
+				{ "renderer", CaptureRendererSwitches::GetSchema("Switches of the renderer for this capture alone, named as SceneRendererSpecification's "
+					"fields, to show what a technique does (e.g. {\"SpecularAntiAliasing\": false}); the editor's views, other captures and the game "
+					"never draw with them. Unset ones keep the capture's own values. Automatic exposure meters each capture alone: compare "
+					"switches that change the light with a fixed exposure") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
@@ -1316,13 +1349,22 @@ namespace Strata
 					request.DebugView = ViewportDebugViewFromString(arguments.GetString("debugView"));
 					if (!request.DebugView && arguments.IsValid())
 						arguments.SetError("Parameter 'debugView' must be \"none\", \"streaming\", \"lod\", \"mip\", \"motion\", \"shadows\", \"lighting\", "
-							"\"ao\", \"indirect\", \"luminance\", \"albedo\", \"voxels\", \"gi\", \"open\" or \"probes\"");
+							"\"ao\", \"indirect\", \"luminance\", \"albedo\", \"voxels\", \"gi\", \"open\", \"probes\", \"specular\", \"diffuse\", "
+							"\"clusters\", \"culled\" or \"wireframe\"");
 				}
 				if (arguments.Has("quality"))
 				{
 					request.Quality = ViewportQualityFromString(arguments.GetString("quality"));
 					if (!request.Quality && arguments.IsValid())
 						arguments.SetError("Parameter 'quality' must be \"project\", \"low\", \"medium\", \"high\" or \"ultra\"");
+				}
+				if (arguments.Has("renderer") && arguments.IsValid())
+				{
+					std::string error;
+					if (std::optional<CaptureRendererSwitches> switches = CaptureRendererSwitches::FromJson(parameters["renderer"], &error))
+						request.Renderer = *switches;
+					else
+						arguments.SetError(fmt::format("Parameter 'renderer' {}", error));
 				}
 				request.Overwrite = arguments.GetBool("overwrite", false);
 				if (arguments.Has("path"))

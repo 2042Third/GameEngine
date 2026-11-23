@@ -87,6 +87,7 @@ strata_add_shaders(Strata_Renderer
 		Scene/Mesh.vert
 		Scene/DepthPrepass.frag
 		Scene/Forward.frag
+		Scene/Wireframe.frag
 		Scene/Skybox.frag
 		Scene/ShadowMesh.vert
 		Scene/ShadowMask.frag
@@ -126,6 +127,7 @@ strata_add_shaders(Strata_Renderer
 		GI/VoxelTiles.comp
 		GI/VoxelFill.comp
 		GI/VoxelFinalize.comp
+		GI/VoxelMovers.comp
 		GI/VoxelView.frag
 		GI/VoxelInject.comp
 		GI/VoxelDownsample.comp
@@ -168,6 +170,7 @@ strata_add_shaders(Strata_Renderer
 		Overlay/LightingView.frag
 		Overlay/DebugLine.vert
 		Overlay/DebugLine.frag
+		Overlay/CulledView.vert
 		Overlay/Text.vert
 		Overlay/Text.frag
 		GameUI/UIQuad.vert
@@ -184,6 +187,18 @@ strata_add_shaders(Strata_Renderer
 		"Scene/Forward.frag|Scene/ForwardGlassNoEntityIDsAreaLights.frag|ST_FORWARD_TRANSPARENT,ST_FORWARD_GLASS,ST_NO_ENTITY_IDS,ST_AREA_LIGHTS"
 		"Scene/Forward.frag|Scene/ForwardGlassVelocityAreaLights.frag|ST_FORWARD_TRANSPARENT,ST_FORWARD_GLASS,ST_VELOCITY,ST_AREA_LIGHTS"
 		"Scene/Forward.frag|Scene/ForwardGlassNoEntityIDsVelocityAreaLights.frag|ST_FORWARD_TRANSPARENT,ST_FORWARD_GLASS,ST_NO_ENTITY_IDS,ST_VELOCITY,ST_AREA_LIGHTS"
+		"Scene/Forward.frag|Scene/ForwardField.frag|ST_FORWARD_FIELD"
+		"Scene/Forward.frag|Scene/ForwardTransparentField.frag|ST_FORWARD_TRANSPARENT,ST_FORWARD_FIELD"
+		"Scene/Forward.frag|Scene/ForwardGlassField.frag|ST_FORWARD_TRANSPARENT,ST_FORWARD_GLASS,ST_FORWARD_FIELD"
+		"Scene/Forward.frag|Scene/ForwardGlassNoEntityIDsField.frag|ST_FORWARD_TRANSPARENT,ST_FORWARD_GLASS,ST_NO_ENTITY_IDS,ST_FORWARD_FIELD"
+		"Scene/Forward.frag|Scene/ForwardGlassVelocityField.frag|ST_FORWARD_TRANSPARENT,ST_FORWARD_GLASS,ST_VELOCITY,ST_FORWARD_FIELD"
+		"Scene/Forward.frag|Scene/ForwardGlassNoEntityIDsVelocityField.frag|ST_FORWARD_TRANSPARENT,ST_FORWARD_GLASS,ST_NO_ENTITY_IDS,ST_VELOCITY,ST_FORWARD_FIELD"
+		"Scene/Forward.frag|Scene/ForwardAreaLightsField.frag|ST_AREA_LIGHTS,ST_FORWARD_FIELD"
+		"Scene/Forward.frag|Scene/ForwardTransparentAreaLightsField.frag|ST_FORWARD_TRANSPARENT,ST_AREA_LIGHTS,ST_FORWARD_FIELD"
+		"Scene/Forward.frag|Scene/ForwardGlassAreaLightsField.frag|ST_FORWARD_TRANSPARENT,ST_FORWARD_GLASS,ST_AREA_LIGHTS,ST_FORWARD_FIELD"
+		"Scene/Forward.frag|Scene/ForwardGlassNoEntityIDsAreaLightsField.frag|ST_FORWARD_TRANSPARENT,ST_FORWARD_GLASS,ST_NO_ENTITY_IDS,ST_AREA_LIGHTS,ST_FORWARD_FIELD"
+		"Scene/Forward.frag|Scene/ForwardGlassVelocityAreaLightsField.frag|ST_FORWARD_TRANSPARENT,ST_FORWARD_GLASS,ST_VELOCITY,ST_AREA_LIGHTS,ST_FORWARD_FIELD"
+		"Scene/Forward.frag|Scene/ForwardGlassNoEntityIDsVelocityAreaLightsField.frag|ST_FORWARD_TRANSPARENT,ST_FORWARD_GLASS,ST_NO_ENTITY_IDS,ST_VELOCITY,ST_AREA_LIGHTS,ST_FORWARD_FIELD"
 		"Scene/DepthPrepass.frag|Scene/DepthPrepassNoEntityIDs.frag|ST_NO_ENTITY_IDS"
 		"Scene/DepthPrepass.frag|Scene/DepthPrepassVelocity.frag|ST_VELOCITY"
 		"Scene/DepthPrepass.frag|Scene/DepthPrepassNoEntityIDsVelocity.frag|ST_NO_ENTITY_IDS,ST_VELOCITY"
@@ -211,6 +226,7 @@ strata_add_shaders(Strata_Renderer
 		"Scene/Skybox.frag|Scene/SkyboxAtmosphere.frag|ST_ATMOSPHERE"
 		"Effects/AODenoise.comp|Effects/AODenoiseHalf.comp|ST_AO_HALF"
 		"Effects/SceneColorCopy.comp|Effects/SceneColorCopyFallback.comp|ST_SCENE_COLOR_FALLBACK"
+		"PostProcess/FXAA.frag|PostProcess/FXAAWideSubpixel.frag|ST_FXAA_WIDE_SUBPIXEL"
 	# The depth prepass's EQUAL test needs the forward pass's positions bit-identical (Scene/Mesh.vert).
 	INVARIANT_POSITION
 		Scene/Mesh.vert)

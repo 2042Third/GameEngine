@@ -4,7 +4,9 @@
 
 #include <Strata/Asset/AssetTypes.h>
 #include <Strata/Core/FrameProfiler.h>
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Math/AABB.h>
+#include <Strata/Renderer/Renderer.h>
 #include <Strata/Scene/Entity.h>
 
 #include <glm/glm.hpp>
@@ -213,6 +215,23 @@ namespace Strata
 		// match (".png"), and an existing file is replaced only with `overwrite`; anything but a regular file never is.
 		std::optional<std::filesystem::path> ResolveOutputPath(const EditorContext& context, std::string_view path, std::string_view extension, bool overwrite,
 			std::string* outError);
+
+		// A picture a command returns and saves (viewport.capture, editor.screenshot): PNG compression and Base64 of a large
+		// image would hitch the frame, so a job encodes it (SubmitEncodePNG) and an I/O job saves it (SubmitSavePNG). Jobs write
+		// it; the main thread reads it once a job has completed.
+		struct EncodedImage
+		{
+			ReadbackImage Image;
+			std::vector<uint8_t> Png;
+			std::string Base64;    // Only when asked for
+			std::string Error;     // Encoding failed when set
+			std::string SaveError; // Saving failed when set
+		};
+		// Encodes the image as an opaque PNG, and as Base64 for a result when `base64`, on a worker thread.
+		JobHandle SubmitEncodePNG(const Ref<EncodedImage>& encoded, bool base64);
+		// Saves the encoded PNG to `path` (ResolveOutputPath's) on an I/O thread, checking again that no file appeared there
+		// unless `overwrite`; folders are created.
+		JobHandle SubmitSavePNG(const Ref<EncodedImage>& encoded, const std::filesystem::path& path, bool overwrite);
 
 		// A free path "<folder>/<name><extension>" in the asset directory for an asset named after something people named (an
 		// entity): characters file names cannot hold become '_', a name that still is no valid file name (empty, a device name

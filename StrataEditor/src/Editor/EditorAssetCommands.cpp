@@ -669,6 +669,37 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "assets", std::move(assets) } });
 			}, EditorCommandKind::Query, EditorCommandResults::Content, true });
 
+		registry.Register({ "asset.types",
+			"The asset types this editor knows, each with the extension of the documents the engine writes for it (nativeExtension, null for "
+			"types only imported) and its importers: {name, version (raised whenever its output changes, which imports the type's files "
+			"again), extensions (lower case, with the dot)}. Types without importers (Mesh, Skeleton, AnimationClip) are sub-assets a "
+			"model's import makes, as it makes its materials and textures. Needs no project.",
+			ObjectSchema({}),
+			[](EditorContext&, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				const std::vector<const AssetImporter*> importers = AssetImporterRegistry::GetAll();
+				nlohmann::json types = nlohmann::json::array();
+				// The types' values are consecutive from Scene (they are stored: append only), and past the last one has no name.
+				for (uint16_t value = static_cast<uint16_t>(AssetType::Scene); std::string_view(AssetTypeToString(static_cast<AssetType>(value))) != "None"; value++)
+				{
+					const AssetType type = static_cast<AssetType>(value);
+					nlohmann::json typeImporters = nlohmann::json::array();
+					for (const AssetImporter* importer : importers)
+					{
+						if (importer->GetType() == type)
+							typeImporters.push_back({ { "name", importer->GetName() }, { "version", importer->GetVersion() }, { "extensions", importer->GetExtensions() } });
+					}
+					const std::string_view native = GetNativeAssetExtension(type);
+					types.push_back({ { "type", AssetTypeToString(type) },
+						{ "nativeExtension", native.empty() ? nlohmann::json(nullptr) : nlohmann::json(std::string(native)) },
+						{ "importers", std::move(typeImporters) } });
+				}
+				return EditorCommandResult::Ok({ { "types", std::move(types) } });
+			}, EditorCommandKind::Query });
+
 		registry.Register(MayDefer({ "asset.info",
 			"An asset's metadata, load state, import errors and warnings, sub-assets, import settings with the description of every setting "
 			"(importSettingsProperties: type, range, options; what asset.setImportSettings accepts) and whether an import is running. Meshes, models "

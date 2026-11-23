@@ -50,6 +50,11 @@ namespace Strata
 			case ViewportDebugView::GlobalIllumination: return "gi";
 			case ViewportDebugView::OpenShare: return "open";
 			case ViewportDebugView::Probes:    return "probes";
+			case ViewportDebugView::Specular:  return "specular";
+			case ViewportDebugView::Diffuse:   return "diffuse";
+			case ViewportDebugView::Clusters:  return "clusters";
+			case ViewportDebugView::Culled:    return "culled";
+			case ViewportDebugView::Wireframe: return "wireframe";
 			case ViewportDebugView::None:      break;
 		}
 		return "none";
@@ -60,7 +65,8 @@ namespace Strata
 		for (ViewportDebugView view : { ViewportDebugView::None, ViewportDebugView::Streaming, ViewportDebugView::LOD, ViewportDebugView::Mip,
 			ViewportDebugView::Motion, ViewportDebugView::Shadows, ViewportDebugView::Lighting, ViewportDebugView::AmbientOcclusion,
 			ViewportDebugView::Indirect, ViewportDebugView::Luminance, ViewportDebugView::Albedo, ViewportDebugView::Voxels,
-			ViewportDebugView::GlobalIllumination, ViewportDebugView::OpenShare, ViewportDebugView::Probes })
+			ViewportDebugView::GlobalIllumination, ViewportDebugView::OpenShare, ViewportDebugView::Probes, ViewportDebugView::Specular,
+			ViewportDebugView::Diffuse, ViewportDebugView::Clusters, ViewportDebugView::Culled, ViewportDebugView::Wireframe })
 		{
 			if (name == ViewportDebugViewToString(view))
 				return view;
@@ -81,12 +87,17 @@ namespace Strata
 			case ViewportDebugView::GlobalIllumination: return SceneLightingView::GlobalIllumination;
 			case ViewportDebugView::OpenShare:        return SceneLightingView::OpenShare;
 			case ViewportDebugView::Probes:           return SceneLightingView::Probes;
+			case ViewportDebugView::Specular:         return SceneLightingView::Specular;
+			case ViewportDebugView::Diffuse:          return SceneLightingView::Diffuse;
+			case ViewportDebugView::Clusters:         return SceneLightingView::Clusters;
 			case ViewportDebugView::None:
 			case ViewportDebugView::Streaming:
 			case ViewportDebugView::LOD:
 			case ViewportDebugView::Mip:
 			case ViewportDebugView::Motion:
-			case ViewportDebugView::Shadows:          break;
+			case ViewportDebugView::Shadows:
+			case ViewportDebugView::Culled:
+			case ViewportDebugView::Wireframe:        break;
 		}
 		return SceneLightingView::None;
 	}
@@ -96,6 +107,28 @@ namespace Strata
 		if (errorPixels > 0.0f)
 			return fmt::format("LOD {}{} ({:.2f} px)", level, last ? "+" : "", errorPixels);
 		return fmt::format("LOD {}{}", level, last ? "+" : "");
+	}
+
+	size_t GetClusterLegendBands(size_t bands, uint32_t capacity)
+	{
+		// The band of the capacity: 1 + its highest bit (1 for one light, 2 for 2-3...), as the shader's firstbithigh.
+		size_t band = 0;
+		for (uint32_t lights = capacity; lights > 0; lights >>= 1)
+			band++;
+		return std::min(bands, band + 1);
+	}
+
+	std::string GetClusterLegendName(size_t band, size_t bands, uint32_t capacity)
+	{
+		if (band == 0)
+			return "No lights";
+		const uint64_t lower = uint64_t(1) << (band - 1);
+		// The last color takes every count beyond; counts stop at the capacity.
+		const uint64_t upper = band + 1 >= bands ? uint64_t(capacity) : std::min<uint64_t>((uint64_t(1) << band) - 1, capacity);
+		const std::string lights = lower >= upper ? fmt::format("{} light{}", upper, upper == 1 ? "" : "s") : fmt::format("{}-{} lights", lower, upper);
+		if (upper != capacity)
+			return lights;
+		return lower >= upper ? fmt::format("{} (full)", lights) : fmt::format("{} (full at {})", lights, capacity);
 	}
 
 	std::string GetLuminanceLegendName(size_t band, size_t bands, float firstEV100)
@@ -142,6 +175,8 @@ namespace Strata
 			note += fmt::format(", AO median {:.2f}", stats->ValueMedian);
 		else if (view == ViewportDebugView::OpenShare && std::isfinite(stats->ValueMedian))
 			note += fmt::format(", open median {:.2f}", stats->ValueMedian);
+		else if (view == ViewportDebugView::Clusters)
+			return std::isfinite(stats->ValueMedian) ? fmt::format("Median {:.1f}% of a cluster's capacity", stats->ValueMedian * 100.0f) : std::string("No lights in view");
 		else if (view != ViewportDebugView::AmbientOcclusion && view != ViewportDebugView::OpenShare && view != ViewportDebugView::Albedo
 			&& std::isfinite(stats->SurfaceEV100.y))
 			note += fmt::format(", EV100 median {:.1f}", stats->SurfaceEV100.y);

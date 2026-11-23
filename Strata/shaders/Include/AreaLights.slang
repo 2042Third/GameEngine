@@ -18,7 +18,7 @@
 //
 // Outside ST_AREA_LIGHT_SHADING only plain values are used (no table, no scene resource): the exact clipped form factor, the
 // nearest point and the range window, which passes without the scene set (the GI's light injection) can include. The forward
-// pass defines ST_AREA_LIGHT_SHADING for the table (scene SRV 55), the shapes (SRV 56) and the shading.
+// pass defines ST_AREA_LIGHT_SHADING for the table (scene SRV 56), the shapes (SRV 57) and the shading.
 
 #include "Include/Common.slang"
 
@@ -197,9 +197,9 @@ float GetAreaLightRangeWindow(float3 position, AreaLight light)
 // Load and bilinear weights computed here (32-bit float filtering is optional on devices, and the sampler's 8-bit weights
 // would be too coarse). Layer 0 texel (x, y, z, w) is the lobe's inverse transform of rows (x, 0, z), (0, 1, 0), (y, 0, w) in
 // the frame (T1, T2, N); layer 1's w is the horizon term (x and y, the lobe's magnitude and Fresnel term, come from u_BRDFLut).
-Texture2DArray<float4> u_AreaLightTable : register(t55);
+Texture2DArray<float4> u_AreaLightTable : register(t56);
 // The lights' faces, parallel to u_Lights by index (RenderData::LightShape).
-StructuredBuffer<LightShape> u_LightShapes : register(t56);
+StructuredBuffer<LightShape> u_LightShapes : register(t57);
 
 #define ST_AREA_TABLE_SIZE 64u
 #define ST_AREA_TABLE_TRANSFORM 0u

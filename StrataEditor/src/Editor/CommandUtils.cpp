@@ -9,12 +9,14 @@
 #include <Strata/Asset/AssetRegistration.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Core/Base64.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/StringUtils.h>
 #include <Strata/Math/Math.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Scene/ComponentAccess.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
@@ -452,6 +454,35 @@ namespace Strata
 		{
 			transaction.Rollback();
 			return EditorCommandResult::Fail(std::move(error), kind);
+		}
+
+		JobHandle SubmitEncodePNG(const Ref<EncodedImage>& encoded, bool base64)
+		{
+			return JobSystem::Submit([encoded, base64]()
+			{
+				std::string error;
+				std::optional<std::vector<uint8_t>> png = ImageWriter::EncodePNG(encoded->Image, true, &error);
+				if (!png)
+				{
+					encoded->Error = fmt::format("Encoding the picture as PNG failed: {}", error);
+					return;
+				}
+				if (base64)
+					encoded->Base64 = Base64::Encode(*png);
+				encoded->Png = std::move(*png);
+			});
+		}
+
+		JobHandle SubmitSavePNG(const Ref<EncodedImage>& encoded, const std::filesystem::path& path, bool overwrite)
+		{
+			return JobSystem::SubmitIO([encoded, path, overwrite]()
+			{
+				// Checked again: the file may have appeared since the command was given.
+				if (!overwrite && FileSystem::Exists(path))
+					encoded->SaveError = fmt::format("'{}' already exists (pass overwrite: true to replace it)", FileSystem::ToUTF8(path));
+				else if (!FileSystem::CreateDirectories(path.parent_path()) || !FileSystem::WriteBytes(path, encoded->Png))
+					encoded->SaveError = fmt::format("Cannot write the picture to '{}'", FileSystem::ToUTF8(path));
+			});
 		}
 
 		std::optional<std::filesystem::path> ResolveOutputPath(const EditorContext& context, std::string_view path, std::string_view extension, bool overwrite,

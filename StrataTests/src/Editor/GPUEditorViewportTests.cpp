@@ -300,6 +300,10 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(result["pendingTextGlyphs"] == 0);
 		CHECK_FALSE(result.contains("notice"));
 		CHECK(FileSystem::FromUTF8(result["path"].get<std::string>()) == path);
+		// Nothing was left pending: the picture is complete.
+		CHECK(result["screenSpaceReflectionsPending"] == false);
+		CHECK(result["incomplete"] == nlohmann::json::array());
+		CHECK(result["complete"] == true);
 
 		// The lit cube fills the center; the corners show the dark clear color.
 		const glm::ivec4 center = image.At(32, 24);
@@ -925,6 +929,9 @@ TEST_SUITE("GPU.Editor.Viewport")
 		harness.Capture({ { "width", 32 }, { "height", 32 } }, &result);
 		CHECK(result["camera"] == "editor");
 		CHECK_FALSE(result["notice"].get<std::string>().empty());
+		// Not the view that was asked for: the picture is not complete.
+		CHECK(result["incomplete"] == nlohmann::json { "/notice" });
+		CHECK(result["complete"] == false);
 		harness.Context.Stop();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
@@ -1318,6 +1325,8 @@ TEST_SUITE("GPU.Editor.Viewport")
 		nlohmann::json result;
 		const DecodedImage lit = harness.Capture(size, &result);
 		CHECK(result["previewLighting"] == true);
+		CHECK(result["incomplete"] == nlohmann::json { "/previewLighting" });
+		CHECK(result["complete"] == false);
 		const SceneCamera camera = harness.Context.GetViewport().GetCamera().GetSceneCamera(static_cast<float>(width) / static_cast<float>(height));
 		const double top = MeanLumaAround(lit, camera, glm::vec3(0.0f, 0.5f, 0.0f));
 		const double right = MeanLumaAround(lit, camera, glm::vec3(0.5f, 0.0f, 0.0f));
@@ -1332,6 +1341,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		harness.Run("viewport.setSettings", { { "previewLighting", false } });
 		const DecodedImage plain = harness.Capture(size, &result);
 		CHECK(result["previewLighting"] == false);
+		CHECK(result["complete"] == true);
 		CHECK(harness.CountDifferences(plain, reference) == 0);
 		CHECK(std::abs(MeanLumaAround(plain, camera, glm::vec3(0.0f, 0.5f, 0.0f)) - MeanLumaAround(plain, camera, glm::vec3(0.5f, 0.0f, 0.0f))) < 10.0);
 
@@ -1778,6 +1788,227 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A capture's renderer switches draw through a renderer of their own: the views' frames and other captures do not change")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		EditorContext& context = harness.Context;
+		EditorViewport& viewport = context.GetViewport();
+		ViewportRenderer* panel = viewport.GetRenderer();
+		REQUIRE(panel);
+		const glm::uvec2 panelSize(96, 64);
+		// A frame of the Scene view's renderer, read back.
+		const auto renderPanel = [&]()
+		{
+			const std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic,
+				static_cast<float>(panelSize.x) / static_cast<float>(panelSize.y));
+			REQUIRE(view);
+			REQUIRE(panel->Render(context, panelSize, *view, viewport.GetSettings(), view->EditorOverlays, RendererQuality::GetProjectQuality()));
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(panel->GetOutputTexture(), image));
+			return image.Pixels;
+		};
+		const std::vector<uint8_t> panelBefore = renderPanel();
+		const auto capture = [&](const nlohmann::json& renderer, nlohmann::json* outResult = nullptr)
+		{
+			nlohmann::json parameters = { { "width", 96 }, { "height", 64 }, { "overlays", false } };
+			if (!renderer.is_null())
+				parameters["renderer"] = renderer;
+			return harness.Capture(parameters, outResult);
+		};
+
+		nlohmann::json result;
+		const DecodedImage plain = capture(nullptr, &result);
+		CHECK(result["renderer"] == nlohmann::json::object());
+		// No switch: the capture renderer, today's picture.
+		CHECK(capture(nlohmann::json::object()).Pixels == plain.Pixels);
+		CHECK(viewport.FindRenderer() == panel);
+		// A switch that changes nothing in this scene draws the same picture through the renderer of its own, and the result
+		// echoes it.
+		const DecodedImage unbatched = capture({ { "BatchAcrossMaterials", false } }, &result);
+		CHECK(result["renderer"] == nlohmann::json { { "BatchAcrossMaterials", false } });
+		CHECK(unbatched.Pixels == plain.Pixels);
+		// The GPU-driven path and the CPU path agree.
+		CHECK(harness.CountDifferences(capture({ { "GPUDriven", false } }), plain) == 0);
+		// A switch that changes the picture: without the dither the lit faces' codes change by at most one.
+		const DecodedImage undithered = capture({ { "DitherOutput", false } });
+		CHECK(undithered.Pixels != plain.Pixels);
+		CHECK(harness.CountDifferences(undithered, plain) == 0);
+		// None of it changed what the editor's view draws, nor today's capture.
+		CHECK(renderPanel() == panelBefore);
+		CHECK(capture(nullptr).Pixels == plain.Pixels);
+		// Captures of the switched renderer release their targets as the capture renderer does.
+		const Ref<ViewportRenderer> switched = viewport.GetSwitchedCaptureRenderer(CaptureRendererSwitches { .DitherOutput = false });
+		REQUIRE(switched);
+		CHECK(switched->GetSize() == glm::uvec2(0, 0));
+
+		// Switches that do not exist, values of the wrong type or range, and live captures are refused without a picture.
+		for (const nlohmann::json& wrong : { nlohmann::json { { "Wireframe", true } }, nlohmann::json { { "DitherOutput", 1 } },
+			nlohmann::json { { "FXAASubpixel", 0.5 } }, nlohmann::json { { "GlobalIlluminationBounceGain", 2 } }, nlohmann::json(true) })
+		{
+			CAPTURE(wrong.dump());
+			const EditorCommandResult refused = harness.Commands.Execute(context, "viewport.capture", { { "renderer", wrong } });
+			CHECK(refused.ErrorKind == EditorCommandError::InvalidParameters);
+		}
+		CHECK(harness.Commands.Execute(context, "viewport.capture", { { "live", true }, { "camera", "editor" }, { "renderer", { { "DitherOutput", false } } } }).ErrorKind
+			== EditorCommandError::InvalidParameters);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Captures switch FXAA's sub-pixel amount and the spatial reflections' resolve for one picture")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		harness.Run("entity.create", { { "name", "PostProcess" }, { "components", { { "PostProcess", { { "Tonemapper", "None" }, { "AutoExposure", false },
+			{ "Vignette", 0.0 }, { "Bloom", false }, { "AntiAliasing", true }, { "AntiAliasingMethod", "FXAA" }, { "ScreenSpaceReflections", true },
+			{ "ScreenSpaceReflectionsMaxRoughness", 1.0 } } } } } });
+		Scene& scene = *harness.Context.GetActiveScene();
+		Entity floor = scene.CreateEntity("Floor");
+		floor.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, -0.5f, 0.0f);
+		floor.GetComponent<TransformComponent>().Scale = glm::vec3(20.0f, 1.0f, 20.0f);
+		floor.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		Entity box = scene.CreateEntity("Box");
+		box.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.5f, 0.0f);
+		box.GetComponent<TransformComponent>().Rotation = glm::vec3(0.0f, 0.4f, 0.0f);
+		box.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		scene.CreateEntity("Sun").AddComponent<DirectionalLightComponent>();
+		harness.Run("camera.set", { { "position", { 0, 2, 6 } }, { "target", { 0, 0, 0 } } });
+
+		const nlohmann::json size = { { "width", 128 }, { "height", 128 }, { "overlays", false }, { "quality", "high" } };
+		nlohmann::json result;
+		const DecodedImage plain = harness.CaptureLoaded(size, &result);
+		CHECK(result["complete"] == true);
+		nlohmann::json wide = size;
+		wide["renderer"] = { { "FXAASubpixel", 0.75 } };
+		const DecodedImage wider = harness.CaptureLoaded(wide, &result);
+		CHECK(result["renderer"]["FXAASubpixel"] == 0.75);
+		CHECK(wider.Pixels != plain.Pixels);
+		nlohmann::json traced = size;
+		traced["renderer"] = { { "SpatialReflectionResolve", false } };
+		const DecodedImage unresolved = harness.CaptureLoaded(traced, &result);
+		CHECK(result["complete"] == true);
+		CHECK(unresolved.Pixels != plain.Pixels);
+		// The switched renderers drew those; the capture renderer's picture is as before.
+		CHECK(harness.CaptureLoaded(size).Pixels == plain.Pixels);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("viewport.capture shows the specular, diffuse and clusters views, alike on the GPU-driven and the CPU path")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		const auto capture = [&](const char* view, bool cpu = false, nlohmann::json* outResult = nullptr)
+		{
+			nlohmann::json parameters = { { "width", 96 }, { "height", 64 }, { "overlays", false }, { "debugView", view } };
+			if (cpu)
+				parameters["renderer"] = { { "GPUDriven", false } };
+			return harness.Capture(parameters, outResult);
+		};
+		// The views of one kind of light: no pixel brighter than the lit image's, and the two differ.
+		const DecodedImage lit = capture("none");
+		nlohmann::json result;
+		const DecodedImage specular = capture("specular", false, &result);
+		CHECK(result["debugView"]["view"] == "specular");
+		CHECK(result["debugView"]["lightingPending"] == false);
+		const DecodedImage diffuse = capture("diffuse", false, &result);
+		CHECK(result["debugView"]["view"] == "diffuse");
+		CHECK(specular.Pixels != diffuse.Pixels);
+		int brighter = 0;
+		for (int y = 0; y < lit.Height; y++)
+		{
+			for (int x = 0; x < lit.Width; x++)
+			{
+				brighter += glm::any(glm::greaterThan(specular.At(x, y), lit.At(x, y) + glm::ivec4(2))) ? 1 : 0;
+				brighter += glm::any(glm::greaterThan(diffuse.At(x, y), lit.At(x, y) + glm::ivec4(2))) ? 1 : 0;
+			}
+		}
+		CHECK(brighter == 0);
+		CHECK(harness.CountDifferences(capture("specular", true), specular) == 0);
+		CHECK(harness.CountDifferences(capture("diffuse", true), diffuse) == 0);
+
+		// The clusters: without point or spot lights every surface lists none; a lamp beside the cube puts it in the clusters
+		// it reaches. The bands are the luminance view's colors.
+		const LightingViewColors& colors = harness.Context.GetViewport().GetSettings().DebugColors.Lighting;
+		const auto code = [](const glm::vec4& color) { return glm::ivec3(glm::round(glm::clamp(glm::vec3(color), 0.0f, 1.0f) * 255.0f)); };
+		const auto countColor = [](const DecodedImage& image, const glm::ivec3& color)
+		{
+			int pixels = 0;
+			for (int y = 0; y < image.Height; y++)
+			{
+				for (int x = 0; x < image.Width; x++)
+					pixels += glm::ivec3(image.At(x, y)) == color ? 1 : 0;
+			}
+			return pixels;
+		};
+		const DecodedImage unlit = capture("clusters", false, &result);
+		CHECK(result["debugView"]["view"] == "clusters");
+		CHECK(countColor(unlit, code(colors.Luminance[0])) > 0);
+		CHECK(countColor(unlit, code(colors.Luminance[1])) == 0);
+		harness.Run("entity.create", { { "name", "Lamp" }, { "components", { { "PointLight", { { "Range", 3.0 } } },
+			{ "Transform", { { "Translation", { 0.8, 0.0, 1.2 } } } } } } });
+		const DecodedImage clusters = capture("clusters", false, &result);
+		CHECK(countColor(clusters, code(colors.Luminance[1])) > 0);
+		CHECK(result["debugView"]["lighting"]["value"]["median"].get<double>() >= 0.0);
+		CHECK(harness.CountDifferences(capture("clusters", true), clusters) == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("viewport.capture shows the wireframe and culled views in the theme's colors, alike on the GPU-driven and the CPU path")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		// A grain far beyond the cube, far below a pixel: the culled view boxes it.
+		harness.Run("entity.create", { { "name", "Grain" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } },
+			{ "Transform", { { "Translation", { 0.0, 0.0, -150.0 } }, { "Scale", { 0.02, 0.02, 0.02 } } } } } } });
+		const auto capture = [&](const char* view, bool cpu = false, nlohmann::json* outResult = nullptr)
+		{
+			// Without occlusion culling, which only the GPU-driven path does: both paths leave out the same.
+			nlohmann::json parameters = { { "width", 96 }, { "height", 64 }, { "overlays", false }, { "debugView", view },
+				{ "renderer", { { "OcclusionCulling", false } } } };
+			if (cpu)
+				parameters["renderer"]["GPUDriven"] = false;
+			return harness.Capture(parameters, outResult);
+		};
+		const ViewportDebugColors& colors = harness.Context.GetViewport().GetSettings().DebugColors;
+		const auto countNear = [](const DecodedImage& image, const glm::vec4& color)
+		{
+			const glm::ivec3 code = glm::ivec3(glm::round(glm::clamp(glm::vec3(color), 0.0f, 1.0f) * 255.0f));
+			int pixels = 0;
+			for (int y = 0; y < image.Height; y++)
+			{
+				for (int x = 0; x < image.Width; x++)
+					pixels += glm::ivec3(image.At(x, y)) == code ? 1 : 0;
+			}
+			return pixels;
+		};
+		const DecodedImage lit = capture("none");
+		nlohmann::json result;
+		const DecodedImage culled = capture("culled", false, &result);
+		CHECK(result["debugView"]["view"] == "culled");
+		CHECK(result["complete"] == true);
+		CHECK(result["renderStats"]["sizeCulledProxies"].get<uint32_t>() >= 1);
+		CHECK(countNear(culled, colors.Culled[0]) > 0);
+		CHECK(countNear(lit, colors.Culled[0]) == 0);
+		CHECK(harness.CountDifferences(capture("culled", true), culled) == 0);
+		if (Renderer::GetGraphicsDevice().GetInfo().SupportsWireframe)
+		{
+			const DecodedImage wireframe = capture("wireframe", false, &result);
+			CHECK(result["debugView"]["view"] == "wireframe");
+			CHECK(result["complete"] == true);
+			CHECK(harness.CountDifferences(wireframe, lit) > 0);
+			CHECK(harness.CountDifferences(capture("wireframe", true), wireframe) == 0);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A capture of a scene with sixteen shadowed point lights shows every light's shadow in its first complete frame")
 	{
 		Tests::GPUContext gpu;
@@ -1874,10 +2105,20 @@ TEST_SUITE("GPU.Editor.Viewport")
 		harness.Capture({ { "width", 64 }, { "height", 64 }, { "overlays", false }, { "waitForAssets", false } }, &result);
 		CHECK(result["reflectionProbesPending"] == 1);
 		CHECK(result["waitedFrames"] == 0);
+		// The result says the picture lacks the probe's light.
+		{
+			const nlohmann::json incomplete = result["incomplete"];
+			const std::string listed = incomplete.dump();
+			CAPTURE(listed);
+			CHECK(std::find(incomplete.begin(), incomplete.end(), nlohmann::json("/reflectionProbesPending")) != incomplete.end());
+			CHECK(result["complete"] == false);
+		}
 		// With it, the capture renders again until the probe's capture loaded and was converted.
 		harness.Capture({ { "width", 64 }, { "height", 64 }, { "overlays", false } }, &result);
 		CHECK(result["reflectionProbesPending"] == 0);
 		CHECK(result["renderStats"]["reflectionProbes"] == 1);
+		CHECK(result["incomplete"] == nlohmann::json::array());
+		CHECK(result["complete"] == true);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

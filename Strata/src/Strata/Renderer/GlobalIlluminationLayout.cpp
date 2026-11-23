@@ -65,7 +65,7 @@ namespace Strata
 
 	uint64_t GlobalIlluminationMemory::GetTotal() const
 	{
-		return VoxelLevels + Scratch + Atlases + Weights + Validity + Field + FieldDepth + Tiles + WorkItems + Regions;
+		return VoxelLevels + Scratch + Atlases + Weights + Validity + Field + FieldDepth + FieldIrradiance + Tiles + WorkItems + Regions + Movers;
 	}
 
 	GlobalIlluminationMemory GlobalIlluminationLayout::GetMemory() const
@@ -79,6 +79,7 @@ namespace Strata
 		constexpr uint64_t c_ValidityBytes = 4;
 		constexpr uint64_t c_FieldBytes = 6 * 8;
 		constexpr uint64_t c_FieldDepthBytes = RenderData::c_GIFieldDepthTexels * RenderData::c_GIFieldDepthTexels * 4;
+		constexpr uint64_t c_FieldIrradianceBytes = 9 * 8;
 		constexpr uint64_t c_MaxTiles = 32768;
 		constexpr uint64_t c_TileBytes = 8;
 		constexpr uint64_t c_MaxWorkItems = 65536;
@@ -101,11 +102,17 @@ namespace Strata
 			{
 				memory.Field = probes * c_FieldBytes;
 				memory.FieldDepth = probes * c_FieldDepthBytes;
+				memory.FieldIrradiance = probes * c_FieldIrradianceBytes;
 			}
 		}
 		memory.Tiles = c_MaxTiles * c_TileBytes;
 		memory.WorkItems = c_MaxWorkItems * c_WorkItemBytes;
 		memory.Regions = static_cast<uint64_t>(RenderData::c_GIMaxRegions) * sizeof(RenderData::VoxelRegion) + RenderData::c_GICounterWords * sizeof(uint32_t);
+		// Per voxel of a brick the material, emission and normal it held; the frame's bricks and those of the frame before; the boxes.
+		constexpr uint64_t c_BrickVoxels = RenderData::c_GIMoverBrickVoxels * RenderData::c_GIMoverBrickVoxels * RenderData::c_GIMoverBrickVoxels;
+		constexpr uint64_t c_BackupBytes = 4 + 4 + 4;
+		memory.Movers = static_cast<uint64_t>(MoverBricks) * (c_BrickVoxels * c_BackupBytes + 2 * sizeof(RenderData::VoxelMoverBrick))
+			+ RenderData::c_GIMaxMoverBoxes * sizeof(RenderData::VoxelMover);
 		return memory;
 	}
 
@@ -158,7 +165,7 @@ namespace Strata
 
 			GlobalIlluminationLayout layout;
 			for (uint32_t index = 0; index < levelCount; index++)
-				layout.Levels.push_back(VoxelLevelLayout { firstVoxelSize * static_cast<float>(1u << index), dimensions });
+				layout.Levels.push_back(VoxelLevelLayout { firstVoxelSize * static_cast<float>(1u << index), dimensions, index == 0 && high ? RenderData::c_GIFinestLevelDrop : 0.0f });
 			for (uint32_t k = 0; k < cascadeCount; k++)
 			{
 				ProbeCascadeLayout cascade;
@@ -178,6 +185,7 @@ namespace Strata
 			}
 			layout.BatchVoxels = std::min(RenderData::c_GIMaxRegionVoxels * RenderData::c_GIMaxRegionVoxels * RenderData::c_GIMaxRegionVoxels,
 				dimensions.x * dimensions.y * dimensions.z);
+			layout.MoverBricks = high ? 512 : 256;
 			layout.FieldExtent = glm::vec3(firstGrid) * firstSpacing;
 			layout.FieldSnap = layout.Cascades.back().Spacing;
 			// The field reaches only where voxel level 2, the coarsest the gather reads, holds every point while a scroll is
@@ -253,7 +261,7 @@ namespace Strata
 
 		glm::i64vec3 GetWindowMinimum(const VoxelLevelLayout& level, const glm::dvec3& cameraPosition)
 		{
-			const glm::i64vec3 center = GetVoxelIndex(cameraPosition, level.VoxelSize);
+			const glm::i64vec3 center = GetVoxelIndex(cameraPosition - glm::dvec3(0.0, static_cast<double>(level.Drop), 0.0), level.VoxelSize);
 			const int64_t step = RenderData::c_GIScrollVoxels;
 			return FloorDivide(center - glm::i64vec3(level.Dimensions / 2u), step) * step;
 		}
@@ -357,7 +365,7 @@ namespace Strata
 		{
 			const float voxel = level.VoxelSize;
 			const glm::vec3 margin = glm::vec3(level.Dimensions) * (0.5f * voxel)
-				- static_cast<float>(RenderData::c_GIScrollVoxels + RenderData::c_GILevelGuardVoxels) * voxel - glm::abs(relative);
+				- static_cast<float>(RenderData::c_GIScrollVoxels + RenderData::c_GILevelGuardVoxels) * voxel - glm::abs(relative + glm::vec3(0.0f, level.Drop, 0.0f));
 			const float nearest = std::min({ margin.x, margin.y, margin.z });
 			return std::clamp(nearest / (static_cast<float>(RenderData::c_GILevelBlendVoxels) * voxel), 0.0f, 1.0f);
 		}

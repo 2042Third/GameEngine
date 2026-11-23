@@ -456,6 +456,17 @@ if(TARGET StrataEditor)
 		FIXTURES_SETUP StrataEditorQuitScreenshot)
 	add_test(NAME StrataEditor.QuitScreenshotCheck COMMAND StrataTests --strata-test-helper=check-image "${CMAKE_CURRENT_BINARY_DIR}/QuitScreenshot.png")
 	set_tests_properties(StrataEditor.QuitScreenshotCheck PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataEditorQuitScreenshot)
+	# --window-size opens a window of exactly that many pixels: the frame the script ended on has them (an even size, which a
+	# Retina display, 2 pixels to a point, makes too).
+	add_test(NAME StrataEditor.WindowSizeClean COMMAND "${CMAKE_COMMAND}" -E rm -f "${CMAKE_CURRENT_BINARY_DIR}/WindowSize.png")
+	set_tests_properties(StrataEditor.WindowSizeClean PROPERTIES FIXTURES_SETUP StrataEditorWindowSizeClean)
+	add_test(NAME StrataEditor.WindowSize
+		COMMAND StrataEditor --no-automation --quit-after-commands --frames 3600 --window-size 816x460 --screenshot "${CMAKE_CURRENT_BINARY_DIR}/WindowSize.png"
+			--commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/WaitCommands.json"
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
+	set_tests_properties(StrataEditor.WindowSize PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataEditorWindowSizeClean FIXTURES_SETUP StrataEditorWindowSize)
+	add_test(NAME StrataEditor.WindowSizeCheck COMMAND StrataTests --strata-test-helper=check-image "${CMAKE_CURRENT_BINARY_DIR}/WindowSize.png" --size 816x460)
+	set_tests_properties(StrataEditor.WindowSizeCheck PROPERTIES LABELS "gpu" FIXTURES_REQUIRED StrataEditorWindowSize)
 	# Without a project a windowed editor opens into the launcher (and closes cleanly from it).
 	add_test(NAME StrataEditor.LauncherSmoke
 		COMMAND StrataEditor --no-automation --frames 30 --windowed --commands "${CMAKE_CURRENT_SOURCE_DIR}/Editor/LauncherCommands.json"
@@ -802,11 +813,43 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	add_test(NAME StrataFeatureTest.Copy COMMAND "${CMAKE_COMMAND}" -E copy_directory "${STRATA_FEATURE_TEST_DIR}" "${STRATA_FEATURE_RUN_DIR}/Project")
 	set_tests_properties(StrataFeatureTest.Copy PROPERTIES FIXTURES_REQUIRED StrataFeatureTestClean FIXTURES_SETUP StrataFeatureTestProject LABELS "feature")
 
+	# The editor closes once the command script finished (--quit-after-commands: each command answers when its work is
+	# done, play.step after its fixed steps and project.export once the game is written) and fails the run if a step
+	# failed. The clock bounds the run (TIMEOUT_SECONDS), never a count of frames: --frames 300, five seconds of a headless
+	# editor's 60 frames per second, ended a slow CI machine's run while the export was still writing the game.
 	add_test(NAME StrataEditor.FeatureTest
 		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:StrataEditor>"
-			"-DARGUMENTS=--no-gpu|--no-automation|--frames|300|--project|${STRATA_FEATURE_RUN_DIR}/Project/FeatureTest.stproj|--commands|${CMAKE_CURRENT_BINARY_DIR}/FeatureCommands-$<CONFIG>.json"
-			"-DEXPECT=${STRATA_FEATURE_SCRIPTS_RAN}" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+			"-DARGUMENTS=--no-gpu|--no-automation|--quit-after-commands|--project|${STRATA_FEATURE_RUN_DIR}/Project/FeatureTest.stproj|--commands|${CMAKE_CURRENT_BINARY_DIR}/FeatureCommands-$<CONFIG>.json"
+			"-DEXPECT=${STRATA_FEATURE_SCRIPTS_RAN}" -DTIMEOUT_SECONDS=600 -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
 	set_tests_properties(StrataEditor.FeatureTest PROPERTIES FIXTURES_REQUIRED StrataFeatureTestProject FIXTURES_SETUP StrataFeatureTestGame LABELS "feature")
+	# RunAndExpect's clock bound stops a program that runs past it and fails the run (StrataEditor.FeatureTest relies on it).
+	add_test(NAME StrataEditor.RunAndExpectTimeout
+		COMMAND "${CMAKE_COMMAND}" "-DRUN_AND_EXPECT=${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpectTimeout.cmake")
+	set_tests_properties(StrataEditor.RunAndExpectTimeout PROPERTIES LABELS "feature" TIMEOUT 100)
+
+	# The pictures the editor takes by command, of a copy of the feature project of its own (the run above changes its copy),
+	# in a window of a fixed size (--window-size): editor.screenshot of the window and of the Inspector, and viewport.capture
+	# through the scene's camera, which must report a complete picture. The layout file is the run's, never the user's.
+	set(STRATA_FEATURE_CAPTURE_RUN_DIR "${CMAKE_CURRENT_BINARY_DIR}/FeatureCaptureRun")
+	set(STRATA_FEATURE_CAPTURE_DIR "${STRATA_FEATURE_CAPTURE_RUN_DIR}/Captures")
+	configure_file("${CMAKE_CURRENT_SOURCE_DIR}/Editor/FeatureCaptureCommands.json.in" "${CMAKE_CURRENT_BINARY_DIR}/FeatureCaptureCommands.json" @ONLY)
+	add_test(NAME StrataFeatureCaptures.Clean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${STRATA_FEATURE_CAPTURE_RUN_DIR}")
+	set_tests_properties(StrataFeatureCaptures.Clean PROPERTIES FIXTURES_SETUP StrataFeatureCapturesClean LABELS "feature;gpu")
+	add_test(NAME StrataFeatureCaptures.Copy COMMAND "${CMAKE_COMMAND}" -E copy_directory "${STRATA_FEATURE_TEST_DIR}" "${STRATA_FEATURE_CAPTURE_RUN_DIR}/Project")
+	set_tests_properties(StrataFeatureCaptures.Copy PROPERTIES FIXTURES_REQUIRED StrataFeatureCapturesClean FIXTURES_SETUP StrataFeatureCapturesProject
+		LABELS "feature;gpu")
+	add_test(NAME StrataEditor.FeatureCaptures
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:StrataEditor>"
+			"-DARGUMENTS=--no-automation|--quit-after-commands|--window-size|1280x720|--layout|${STRATA_FEATURE_CAPTURE_RUN_DIR}/Layout.ini|--project|${STRATA_FEATURE_CAPTURE_RUN_DIR}/Project/FeatureTest.stproj|--commands|${CMAKE_CURRENT_BINARY_DIR}/FeatureCaptureCommands.json"
+			"-DEXPECT_PATHS=${STRATA_FEATURE_CAPTURE_DIR}/Window.png|${STRATA_FEATURE_CAPTURE_DIR}/Inspector.png|${STRATA_FEATURE_CAPTURE_DIR}/Scene.png"
+			-DTIMEOUT_SECONDS=300 -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+	set_tests_properties(StrataEditor.FeatureCaptures PROPERTIES FIXTURES_REQUIRED StrataFeatureCapturesProject FIXTURES_SETUP StrataFeatureCaptures
+		LABELS "feature;gpu")
+	add_test(NAME StrataEditor.FeatureCapturesCheck COMMAND StrataTests --strata-test-helper=check-image "${STRATA_FEATURE_CAPTURE_DIR}/Window.png" --size 1280x720)
+	set_tests_properties(StrataEditor.FeatureCapturesCheck PROPERTIES FIXTURES_REQUIRED StrataFeatureCaptures LABELS "feature;gpu")
+	add_test(NAME StrataEditor.FeatureCapturesPanelCheck COMMAND StrataTests --strata-test-helper=check-image "${STRATA_FEATURE_CAPTURE_DIR}/Inspector.png")
+	set_tests_properties(StrataEditor.FeatureCapturesPanelCheck PROPERTIES FIXTURES_REQUIRED StrataFeatureCaptures LABELS "feature;gpu")
 
 	# The game runs longer than the in-process feature scenario (200 frames), where nothing may end it: its scripts quit only
 	# when a test runner asks them to. Its save files go into the build tree (--save-directory), never into the user's data,

@@ -82,6 +82,8 @@ namespace
 		SceneRenderer CPU;
 		SceneRenderer GPU;
 		DrawnCounts LastReference; // The CPU path's counts of the latest Check
+		// The debug views both paths draw in a Check (SceneRenderOptions' ShowWireframe and ShowCulled, with their colors).
+		SceneRenderOptions DebugViews;
 
 		// `everyLocalShadowView`: every shadow view of every shadowed point and spot light drawn every frame (neither spread
 		// over frames nor cached), so that a frame culls more views than one batch of them.
@@ -113,10 +115,14 @@ namespace
 		}
 
 		// With motion vectors, which both paths write with the same shaders through every phase.
-		static PathFrame Capture(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera)
+		static PathFrame Capture(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera, const SceneRenderOptions& debugViews = {})
 		{
 			PathFrame frame;
 			SceneRenderOptions options;
+			options.ShowWireframe = debugViews.ShowWireframe;
+			options.WireframeColor = debugViews.WireframeColor;
+			options.ShowCulled = debugViews.ShowCulled;
+			options.CulledColors = debugViews.CulledColors;
 			options.MotionVectors = true;
 			options.PreExposure = 1.0f; // Both paths' images at one scale, whatever each one metered
 			// Both paths step the same time, so neither path's automatic exposure follows its own frame times.
@@ -133,8 +139,8 @@ namespace
 		// Renders with both and checks they agree; returns the GPU path's frame.
 		PathFrame Check(Scene& scene, const SceneCamera& camera)
 		{
-			const PathFrame reference = Capture(CPU, scene, camera);
-			const PathFrame frame = Capture(GPU, scene, camera);
+			const PathFrame reference = Capture(CPU, scene, camera, DebugViews);
+			const PathFrame frame = Capture(GPU, scene, camera, DebugViews);
 			REQUIRE(frame.GPUDriven);
 			CHECK_FALSE(reference.GPUDriven);
 			CHECK(MaxDifference(reference.Color, frame.Color) <= 1);
@@ -185,6 +191,31 @@ namespace
 	bool DeviceDrawsGPUDriven()
 	{
 		return Renderer::GetGraphicsDevice().GetInfo().SupportsDrawIndirectFirstInstance;
+	}
+
+	// Pixels of exactly this color (RGBA8 output, alpha ignored).
+	uint32_t CountColor(const ReadbackImage& image, const glm::ivec3& color)
+	{
+		REQUIRE(image.BytesPerPixel == 4);
+		uint32_t count = 0;
+		for (size_t offset = 0; offset + 4 <= image.Pixels.size(); offset += 4)
+			count += image.Pixels[offset] == color.r && image.Pixels[offset + 1] == color.g && image.Pixels[offset + 2] == color.b ? 1u : 0u;
+		return count;
+	}
+
+	// The debug views' colors in the tests: ones no lit test scene shows.
+	constexpr glm::ivec3 c_WireColor(255, 0, 255);
+	constexpr glm::ivec3 c_SizeCulledColor(0, 255, 0);
+	constexpr glm::ivec3 c_OccludedColor(255, 0, 0);
+
+	SceneRenderOptions DebugViewOptions(bool wireframe, bool culled)
+	{
+		SceneRenderOptions options;
+		options.ShowWireframe = wireframe;
+		options.WireframeColor = glm::vec4(glm::vec3(c_WireColor) / 255.0f, 1.0f);
+		options.ShowCulled = culled;
+		options.CulledColors = { glm::vec4(glm::vec3(c_SizeCulledColor) / 255.0f, 1.0f), glm::vec4(glm::vec3(c_OccludedColor) / 255.0f, 1.0f) };
+		return options;
 	}
 
 	// A sphere of `segments` segments with three levels of detail, chosen by their errors or (without them) by halving the screen
@@ -834,6 +865,149 @@ TEST_SUITE("GPU.SceneRenderer.GPUDriven")
 		const PathFrame allFrame = Comparison::Capture(all, scene, camera);
 		CHECK(allFrame.Counts.Instances == culled.Counts.Instances + sizeCulled);
 		CHECK(all.GetGPUStats().SizeCulledProxies == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The wireframe view draws the same edges on both paths: meshes, masks, mirrors, skins, transparency and levels of detail")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!DeviceDrawsGPUDriven())
+			return;
+		if (!Renderer::GetGraphicsDevice().GetInfo().SupportsWireframe)
+		{
+			MESSAGE("The device has no non-solid fill mode: the wireframe view draws nothing");
+			return;
+		}
+		for (const TestScene& testScene : c_Scenes)
+		{
+			const std::string name = testScene.Name;
+			if (name != "Many meshes" && name != "Alpha-masked" && name != "Mirrored" && name != "Posed skinned" && name != "Transparent" && name != "LODs")
+				continue;
+			CAPTURE(name);
+			SceneTestAssets assets;
+			for (const AssetHandle mesh : { BuiltinAssets::CubeMesh, BuiltinAssets::SphereMesh, BuiltinAssets::PlaneMesh, BuiltinAssets::QuadMesh,
+				BuiltinAssets::CylinderMesh, BuiltinAssets::ConeMesh, BuiltinAssets::TorusMesh, BuiltinAssets::CapsuleMesh, BuiltinAssets::DefaultMaterial })
+				REQUIRE(assets.Manager->LoadAssetSync(mesh));
+			TestSkinningPoses poses;
+			Scene scene;
+			const SceneCamera camera = testScene.Build(scene, assets, poses);
+			Comparison comparison(IndirectDrawMode::Auto, testScene.LODErrorPixels);
+			// The image without the view, then with it: the lines are the view's alone, drawn alike by both paths.
+			const PathFrame lit = comparison.Check(scene, camera);
+			CHECK(CountColor(lit.Color, c_WireColor) == 0);
+			const auto litCommands = comparison.CPU.GetStats().DrawCommands;
+			comparison.DebugViews = DebugViewOptions(true, false);
+			const PathFrame wired = comparison.Check(scene, camera);
+			const uint32_t lines = CountColor(wired.Color, c_WireColor);
+			CHECK(lines > 200);
+			// Only the output's color changes: what the frame drew, its IDs and its counts are those of a frame without the view.
+			CHECK(CountDifferentIDs(lit.IDs, wired.IDs) == 0);
+			CHECK(wired.Counts.Instances == lit.Counts.Instances);
+			CHECK(comparison.CPU.GetStats().DrawCommands == litCommands);
+			// Edges lie on what was drawn: most line pixels have a surface (an entity ID), the rest along silhouettes. Blended
+			// surfaces write no entity IDs, so the transparent scene's edges over the background have none.
+			// Mirrored instances keep their winding: their front faces' edges show on them (with the wrong winding only back faces'
+			// edges would be drawn, hidden behind their own front faces).
+			uint32_t onSurfaces = 0;
+			uint32_t onMirrored = 0;
+			for (size_t offset = 0; offset + 4 <= wired.Color.Pixels.size(); offset += 4)
+			{
+				const bool line = wired.Color.Pixels[offset] == c_WireColor.r && wired.Color.Pixels[offset + 1] == c_WireColor.g
+					&& wired.Color.Pixels[offset + 2] == c_WireColor.b;
+				uint32_t id = 0;
+				std::memcpy(&id, wired.IDs.Pixels.data() + offset, sizeof(id));
+				if (!line || id == 0)
+					continue;
+				onSurfaces++;
+				const entt::entity handle = static_cast<entt::entity>(id - 1);
+				if (scene.GetRegistry().valid(handle) && scene.GetRegistry().all_of<TransformComponent>(handle))
+				{
+					const glm::vec3 scale = scene.GetRegistry().get<TransformComponent>(handle).Scale;
+					onMirrored += scale.x * scale.y * scale.z < 0.0f ? 1u : 0u;
+				}
+			}
+			if (name != "Transparent")
+				CHECK(onSurfaces * 10 >= lines * 6);
+			if (name == "Mirrored")
+				CHECK(onMirrored > 100);
+			if (scene.GetService<ISkinningPoses>())
+				scene.UnregisterService<ISkinningPoses>(poses);
+			gpu.GetDevice().WaitForIdle();
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The culled view boxes what both paths leave out by size and, on the GPU-driven path, what occlusion culling hides")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!DeviceDrawsGPUDriven())
+			return;
+		SceneTestAssets assets;
+		for (const AssetHandle mesh : { BuiltinAssets::CubeMesh, BuiltinAssets::SphereMesh, BuiltinAssets::TorusMesh, BuiltinAssets::DefaultMaterial })
+			REQUIRE(assets.Manager->LoadAssetSync(mesh));
+
+		SUBCASE("Below their smallest size: the same boxes on both paths")
+		{
+			Scene scene;
+			AddNeutralPostProcess(scene);
+			AddSun(scene, glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f)), 3.0f, false);
+			for (uint32_t index = 0; index < 4000; index++)
+			{
+				Entity cube = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(static_cast<float>(index % 40) - 20.0f, 0.0f,
+					-static_cast<float>(index / 40) * 4.0f), "Grain");
+				cube.GetComponent<TransformComponent>().Scale = glm::vec3(0.1f);
+			}
+			const SceneCamera camera = View(glm::vec3(0.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, -50.0f));
+			Comparison comparison(IndirectDrawMode::Auto);
+			const PathFrame lit = comparison.Check(scene, camera);
+			CHECK(CountColor(lit.Color, c_SizeCulledColor) == 0);
+			comparison.DebugViews = DebugViewOptions(false, true);
+			const PathFrame boxed = comparison.Check(scene, camera);
+			REQUIRE(comparison.GPU.GetGPUStats().HasCounters);
+			CHECK(comparison.CPU.GetStats().SizeCulledProxies > 0);
+			CHECK(comparison.GPU.GetGPUStats().OccludedProxies == 0);
+			// Each box grown to six pixels across its diagonal: the far grains' boxes cover a good part of the image's far half.
+			CHECK(CountColor(boxed.Color, c_SizeCulledColor) > 300);
+			CHECK(CountColor(boxed.Color, c_OccludedColor) == 0);
+			CHECK(CountDifferentIDs(lit.IDs, boxed.IDs) == 0);
+			// Without the view the next frames show no box.
+			comparison.DebugViews = SceneRenderOptions();
+			CHECK(CountColor(comparison.Check(scene, camera).Color, c_SizeCulledColor) == 0);
+		}
+
+		SUBCASE("Behind a wall: the GPU-driven path boxes what its occlusion culling left out, the CPU path draws it")
+		{
+			TestSkinningPoses poses;
+			Scene scene;
+			const SceneCamera camera = BuildOccluded(scene, assets, poses);
+			Comparison comparison(IndirectDrawMode::Auto);
+			const SceneRenderOptions views = DebugViewOptions(false, true);
+			// The first frames find what the wall hides; the third leaves it out (as CompareScenes' third frame).
+			PathFrame frame;
+			for (uint32_t index = 0; index < 3; index++)
+				frame = Comparison::Capture(comparison.GPU, scene, camera, views);
+			REQUIRE(comparison.GPU.GetGPUStats().HasCounters);
+			REQUIRE(comparison.GPU.GetGPUStats().OccludedProxies > 0);
+			CHECK(CountColor(frame.Color, c_OccludedColor) > 100);
+			const PathFrame reference = Comparison::Capture(comparison.CPU, scene, camera, views);
+			CHECK(CountColor(reference.Color, c_OccludedColor) == 0);
+			// Over everything: the boxes show where the wall is (the shapes behind it have no pixel of their own).
+			const ReadbackImage& ids = frame.IDs;
+			uint32_t overWall = 0;
+			const uint32_t wall = static_cast<uint32_t>(scene.FindEntityByName("Wall").GetHandle()) + 1;
+			for (size_t offset = 0; offset + 4 <= frame.Color.Pixels.size(); offset += 4)
+			{
+				uint32_t id = 0;
+				std::memcpy(&id, ids.Pixels.data() + offset, sizeof(id));
+				overWall += id == wall && frame.Color.Pixels[offset] == c_OccludedColor.r && frame.Color.Pixels[offset + 1] == c_OccludedColor.g
+					&& frame.Color.Pixels[offset + 2] == c_OccludedColor.b ? 1u : 0u;
+			}
+			CHECK(overWall > 100);
+			// Switched off, the next frame of the GPU path has no box.
+			CHECK(CountColor(Comparison::Capture(comparison.GPU, scene, camera).Color, c_OccludedColor) == 0);
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

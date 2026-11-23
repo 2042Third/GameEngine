@@ -228,6 +228,8 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(10),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(11),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(12),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(13), // The culled debug view's arguments and list
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(14),
 			// The pass (counting or writing): a slot no constant buffer of the layout uses.
 			nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t))
 		};
@@ -764,6 +766,7 @@ namespace Strata
 		constants.ShadowMapSize = m_ShadowMapSize;
 		constants.ShadowPyramidLevels = m_ShadowPyramidLevels;
 		constants.FirstLocalBucket = firstLocalBucket;
+		constants.CulledView = m_CulledViewFrame ? 1u : 0u;
 		// The bucket table's second part: each dense bucket's draw slots.
 		for (const uint32_t bucket : m_CullBuckets)
 			m_CullBucketTable.push_back(GetBucketSlots(bucket));
@@ -787,7 +790,16 @@ namespace Strata
 			&& EnsureBufferCapacity(m_FeedbackRecordBuffer, 1 + static_cast<size_t>(constants.MeshSlotCount) + constants.MaterialSlotCount,
 				sizeof(RenderData::FeedbackRecord), "FeedbackRecords", outRecreated, BufferKind::StructuredUAV)
 			&& EnsureBufferCapacity(m_CullLocalViewBuffer, m_CullLocalViews.size(), sizeof(RenderData::CullLocalShadowView), "CullLocalShadowViews", outRecreated)
-			&& EnsureVisibilityBuffer(outRecreated) && EnsureLODFadeBuffer(outRecreated);
+			&& EnsureVisibilityBuffer(outRecreated) && EnsureLODFadeBuffer(outRecreated) && EnsureCulledViewBuffers(outRecreated);
+	}
+
+	bool SceneRenderer::EnsureCulledViewBuffers(bool& outRecreated)
+	{
+		// Every proxy is culled at most once a frame: a list as long as the proxies has room for all (only while the view shows).
+		const size_t entries = m_CulledViewFrame ? std::max<size_t>(m_CullConstants.ProxyCount, 1) : 1;
+		return EnsureBufferCapacity(m_CulledViewArguments, sizeof(nvrhi::DrawIndirectArguments) / sizeof(uint32_t), sizeof(uint32_t), "CulledViewArguments",
+				outRecreated, BufferKind::IndirectArgumentsUAV)
+			&& EnsureBufferCapacity(m_CulledViewList, entries, sizeof(uint32_t), "CulledViewList", outRecreated, BufferKind::StructuredUAV);
 	}
 
 	bool SceneRenderer::EnsureLODFadeBuffer(bool& outRecreated)
@@ -890,6 +902,8 @@ namespace Strata
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(10, m_CasterDepthBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(11, m_VisibilityBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(12, m_LODFadeBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(13, m_CulledViewArguments),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(14, m_CulledViewList),
 			nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t))
 		};
 		m_CullBindingSet = m_Device->createBindingSet(desc, m_CullBindingLayout);
@@ -955,6 +969,12 @@ namespace Strata
 		commandList->clearBufferUInt(m_CullCounterBuffer, 0);
 		// Draw slots no record takes draw nothing.
 		commandList->clearBufferUInt(m_CullArgumentBuffer, 0);
+		if (m_CulledViewFrame)
+		{
+			// The culled view's draw: a box (12 lines) per entry the counting passes record.
+			const nvrhi::DrawIndirectArguments arguments = nvrhi::DrawIndirectArguments().setVertexCount(24).setInstanceCount(0);
+			commandList->writeBuffer(m_CulledViewArguments, &arguments, sizeof(arguments));
+		}
 		if (shadows)
 			commandList->clearBufferUInt(m_CasterDepthBuffer, 0); // No caster yet in any cascade
 		// What the cascades' occlusion culling finds says whether it pays only where it had history.
@@ -1241,10 +1261,14 @@ namespace Strata
 	{
 		const GeometryPool& pool = *Renderer::GetGeometryPool();
 		const bool count = GetGPUIndirectPath() == GPUIndirectPath::Count;
+		// The wireframe debug view replays the view's draws over the finished image (DrawWireframeView), its color a push constant.
+		const bool wireframe = pass == Pass::Wireframe;
 		nvrhi::GraphicsState state;
-		state.framebuffer = pass == Pass::Prepass ? GetPrepassFramebuffer() : m_ForwardFramebuffer.Get();
+		state.framebuffer = pass == Pass::Prepass ? GetPrepassFramebuffer() : wireframe ? m_OverlayFramebuffer.Get() : m_ForwardFramebuffer.Get();
 		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y)));
 		state.bindings = { m_GPUSceneBindingSet, Renderer::GetBindlessTextures().GetTable() };
+		if (wireframe)
+			state.bindings.push_back(m_WireframePushBindingSet);
 		state.indexBuffer = nvrhi::IndexBufferBinding { pool.GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
 		state.indirectParams = m_CullArgumentBuffer;
 		state.indirectCountBuffer = count ? m_CullBucketCountBuffer.Get() : nullptr;
@@ -1255,8 +1279,8 @@ namespace Strata
 			const uint32_t slots = GetBucketSlots(bucket);
 			if (slots == 0 && !count)
 				continue;
-			const PipelineKey key { pass, parts.DoubleSided, parts.Mirrored, parts.Geometry == RenderData::c_CullGeometrySkinned, m_MotionFrame,
-				m_ReflectionFrame && pass == Pass::Prepass };
+			const PipelineKey key { pass, parts.DoubleSided, parts.Mirrored, parts.Geometry == RenderData::c_CullGeometrySkinned, m_MotionFrame && !wireframe,
+				m_ReflectionFrame && pass == Pass::Prepass, m_FieldFrame && pass == Pass::Opaque };
 			const GeometryArena arena = parts.Geometry == RenderData::c_CullGeometryStatic ? GeometryArena::Static : GeometryArena::Skinned;
 			state.pipeline = GetScenePipeline(key);
 			state.vertexBuffers = {
@@ -1266,6 +1290,8 @@ namespace Strata
 			if (key.Skinned)
 				state.vertexBuffers.push_back(nvrhi::VertexBufferBinding { pool.GetSkinBuffer(), 2, 0 });
 			commandList->setGraphicsState(state);
+			if (wireframe)
+				commandList->setPushConstants(&m_WireframeColor, sizeof(m_WireframeColor));
 			DrawGPUBucket(commandList, dense, slots);
 		}
 	}

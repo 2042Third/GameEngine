@@ -121,6 +121,10 @@ function(strata_add_script_module target)
 		endif()
 		target_link_options(${target} PRIVATE "/DEBUG" "$<$<NOT:$<CONFIG:Debug>>:/OPT:REF;/OPT:ICF>")
 	else()
+		# Debug information in every configuration, as MSVC's program database: script builds take the editor's configuration,
+		# so a released editor builds Release (Dist takes Release's flags), and a breakpoint in a script binds only where the
+		# module has it. It stays in the module (ELF) or, on macOS, in the objects the module's debug map names.
+		target_compile_options(${target} PRIVATE -g)
 		if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 			# GCC otherwise emits STB_GNU_UNIQUE symbols for inline statics, which makes dlclose() a no-op and would
 			# keep every hot-reloaded module version in memory.

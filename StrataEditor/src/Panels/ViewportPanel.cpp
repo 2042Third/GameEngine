@@ -27,6 +27,7 @@
 #include <Strata/Core/StringUtils.h>
 #include <Strata/Input/Input.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/RendererQuality.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Runtime/GameGraphicsService.h>
@@ -177,7 +178,6 @@ namespace Strata
 		const ViewportToolbar::Layout layout = ViewportToolbar::Compute(m_ChipStrip.Rows);
 		const ImVec2 imageMin = layout.ImageMin;
 		const ImVec2 available = layout.ImageSize;
-		ImGui::SetCursorScreenPos(imageMin);
 		const ImVec2 viewportScale = ImGui::GetWindowViewport()->FramebufferScale;
 		const ImVec2 displayScale = ImGui::GetIO().DisplayFramebufferScale;
 		m_Image.Min = glm::vec2(imageMin.x, imageMin.y);
@@ -193,11 +193,14 @@ namespace Strata
 		// the Inspector's pixels and captures use it).
 		const glm::uvec2 screenSize = canvasMode ? m_CanvasMode.GetScreenPixels() : size;
 		viewport.SetSize(screenSize);
+		// A panel with no room under its toolbar (a window shrunk to almost nothing) draws nothing. The cursor moves to the image
+		// only when the image follows: ImGui refuses a window whose cursor was moved past its contents without an item there.
 		if (size.x == 0 || size.y == 0)
 		{
 			Reset(context);
 			return;
 		}
+		ImGui::SetCursorScreenPos(imageMin);
 
 		// Elsewhere an item covering the image takes the clicks, so dragging in the viewport never moves a floating window.
 		if (m_OverGizmo)
@@ -641,11 +644,23 @@ namespace Strata
 			label = "Open";
 		else if (settings.DebugView == ViewportDebugView::Probes)
 			label = "Probes";
+		else if (settings.DebugView == ViewportDebugView::Specular)
+			label = "Specular";
+		else if (settings.DebugView == ViewportDebugView::Diffuse)
+			label = "Diffuse";
+		else if (settings.DebugView == ViewportDebugView::Clusters)
+			label = "Clusters";
+		else if (settings.DebugView == ViewportDebugView::Culled)
+			label = "Culled";
+		else if (settings.DebugView == ViewportDebugView::Wireframe)
+			label = "Wireframe";
 		if (UI::ToggleChip("Viewport.DebugView", Icons::Layers, label, &clicked,
 			"Debug views: color the scene by streaming state (meshes, materials and textures still loading or failed), by the level of detail "
 			"meshes are drawn at, by the mip levels textures lack against what the view needs, by how each pixel moved since the previous frame, "
 			"or by how many screen pixels a texel of the sun's shadow cascades spans; or show its light: surfaces shaded white, ambient "
-			"occlusion, indirect light alone, luminance in EV100 bands, or albedo; or the GI's voxels, light, sky share and probes"))
+			"occlusion, indirect light alone, luminance in EV100 bands, or albedo; or the GI's voxels, light, sky share and probes; or the "
+			"specular or diffuse light alone, or the lights each pixel's light cluster lists; or box what culling left out, or draw the "
+			"triangles' edges"))
 		{
 			ImGui::OpenPopup("DebugView");
 		}
@@ -666,7 +681,12 @@ namespace Strata
 			{ ViewportDebugView::Voxels, "Voxels: the scene as the GI sees it" },
 			{ ViewportDebugView::GlobalIllumination, "GI: indirect light on white" },
 			{ ViewportDebugView::OpenShare, "Open: the share of sky each surface sees" },
-			{ ViewportDebugView::Probes, "Probes: the GI's probes, dead ones red" }
+			{ ViewportDebugView::Probes, "Probes: the GI's probes, dead ones red" },
+			{ ViewportDebugView::Specular, "Specular: highlights and reflections only" },
+			{ ViewportDebugView::Diffuse, "Diffuse: diffuse light only" },
+			{ ViewportDebugView::Clusters, "Clusters: lights per light cluster" },
+			{ ViewportDebugView::Culled, "Culled: boxes of what culling left out" },
+			{ ViewportDebugView::Wireframe, "Wireframe: the edges of the triangles drawn" }
 		};
 		for (const auto& [view, name] : views)
 		{
@@ -768,6 +788,13 @@ namespace Strata
 		}
 		else if (settings.DebugView == ViewportDebugView::Shadows)
 			AddShadowViewLegend(renderer->GetShadowViewStats(), settings.DebugColors.ShadowRatio, lines);
+		else if (settings.DebugView == ViewportDebugView::Culled)
+		{
+			// The frame's counts of what its culling left out (occlusion culling only on the GPU-driven path).
+			const SceneRendererStats frameStats = AddGPUCounts(renderer->GetSceneRenderer().GetStats(), renderer->GetSceneRenderer().GetGPUStats());
+			lines.push_back({ toColor(settings.DebugColors.Culled[0]), "Too small", std::to_string(frameStats.SizeCulledProxies) });
+			lines.push_back({ toColor(settings.DebugColors.Culled[1]), "Occluded", std::to_string(frameStats.OccludedProxies) });
+		}
 		const std::optional<LightingViewStats>& lighting = renderer->GetLightingViewStats();
 		const LightingViewColors& lightingColors = settings.DebugColors.Lighting;
 		const auto formatShare = [](float share) { return fmt::format("{:.1f}%", share * 100.0f); };
@@ -789,6 +816,15 @@ namespace Strata
 		{
 			lines.push_back({ toColor(lightingColors.TwoSided), "Two-sided: no bounce", std::string() });
 		}
+		else if (settings.DebugView == ViewportDebugView::Clusters)
+		{
+			// The bands of Overlay/LightingView.frag: none, then one per power of two, up to the one of a full cluster (the counts
+			// stop at the capacity).
+			const size_t bands = lightingColors.Luminance.size();
+			const uint32_t capacity = renderer->GetSceneRenderer().GetSpecification().MaxLightsPerCluster;
+			for (size_t band = GetClusterLegendBands(bands, capacity); band-- > 0;)
+				lines.push_back({ toColor(lightingColors.Luminance[band]), GetClusterLegendName(band, bands, capacity), std::string() });
+		}
 		std::string note;
 		if (settings.DebugView == ViewportDebugView::Streaming && stats.PlaceholderBoxes > 0)
 			note = fmt::format("{} boxes: meshes not there yet", stats.PlaceholderBoxes);
@@ -796,6 +832,16 @@ namespace Strata
 			note = "Hue: direction, strength: speed (full at 16 px)";
 		else if (settings.DebugView == ViewportDebugView::Shadows)
 			note = renderer->GetShadowViewStats().CascadeCount > 0 ? "White: cascade edges. Hatched: blend bands." : "No shadowed directional light";
+		else if (settings.DebugView == ViewportDebugView::Culled)
+			note = renderer->GetSceneRenderer().GetStats().GPUDriven ? "Boxes over everything" : "Boxes over everything; no occlusion culling on the CPU path";
+		else if (settings.DebugView == ViewportDebugView::Wireframe)
+		{
+			// The triangles the frame drew, whose edges the view shows (on the GPU-driven path its counts, frames late).
+			const SceneRenderer& sceneRenderer = renderer->GetSceneRenderer();
+			const uint64_t triangles = AddGPUCounts(sceneRenderer.GetStats(), sceneRenderer.GetGPUStats()).Triangles;
+			note = Renderer::GetGraphicsDevice().GetInfo().SupportsWireframe ? fmt::format("Edges of {} triangles", triangles)
+				: std::string("This GPU draws no wireframes");
+		}
 		else if (settings.DebugView == ViewportDebugView::Voxels)
 			note = GetVoxelLegendNote(renderer->GetSceneRenderer().GetVoxelClipmap());
 		else if (settings.DebugView == ViewportDebugView::Probes)

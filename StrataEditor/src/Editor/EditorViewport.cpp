@@ -348,6 +348,18 @@ namespace Strata
 		return m_CaptureRenderer.get();
 	}
 
+	Ref<ViewportRenderer> EditorViewport::GetSwitchedCaptureRenderer(const CaptureRendererSwitches& switches)
+	{
+		if (!Renderer::IsInitialized())
+			return nullptr;
+		if (!m_SwitchedCaptureRenderer || m_CaptureSwitches != switches)
+		{
+			m_SwitchedCaptureRenderer = CreateRef<ViewportRenderer>("ViewportCaptureSwitched", false, switches);
+			m_CaptureSwitches = switches;
+		}
+		return m_SwitchedCaptureRenderer;
+	}
+
 	bool EditorViewport::Focus(EditorContext& context, std::span<const Entity> entities)
 	{
 		Scene& scene = *context.GetActiveScene();

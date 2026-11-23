@@ -161,8 +161,8 @@ namespace Strata
 				nvrhi::BindingLayoutItem::Texture_SRV(22),          // The prepass's depth
 				nvrhi::BindingLayoutItem::Texture_SRV(23),          // Its normals
 				nvrhi::BindingLayoutItem::Texture_SRV(33),          // The blue-noise tile
-				nvrhi::BindingLayoutItem::Texture_SRV(57),          // The atlas's depth ranges
-				nvrhi::BindingLayoutItem::Texture_SRV(59),          // The rect lights' back faces
+				nvrhi::BindingLayoutItem::Texture_SRV(58),          // The atlas's depth ranges
+				nvrhi::BindingLayoutItem::Texture_SRV(60),          // The rect lights' back faces
 				nvrhi::BindingLayoutItem::Sampler(8),               // The filter's gathers of the atlas
 				nvrhi::BindingLayoutItem::Sampler(9),
 				// Slot 1: register b0 belongs to the frame constants.
@@ -261,8 +261,8 @@ namespace Strata
 				nvrhi::BindingSetItem::Texture_SRV(22, m_DepthTexture),
 				nvrhi::BindingSetItem::Texture_SRV(23, m_NormalTexture),
 				nvrhi::BindingSetItem::Texture_SRV(33, Renderer::GetBlueNoiseTexture()),
-				nvrhi::BindingSetItem::Texture_SRV(57, m_LocalShadowRanges),
-				nvrhi::BindingSetItem::Texture_SRV(59, m_LocalShadowBackAtlas),
+				nvrhi::BindingSetItem::Texture_SRV(58, m_LocalShadowRanges),
+				nvrhi::BindingSetItem::Texture_SRV(60, m_LocalShadowBackAtlas),
 				nvrhi::BindingSetItem::Sampler(8, m_LinearClampSampler),
 				nvrhi::BindingSetItem::Sampler(9, m_ShadowCompareSampler),
 				nvrhi::BindingSetItem::PushConstants(1, sizeof(RenderData::AreaShadowMaskParameters))

@@ -12,6 +12,7 @@
 #include <glm/glm.hpp>
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <map>
 #include <set>
@@ -248,6 +249,50 @@ namespace
 		}
 	};
 
+	// The fading bricks of a frame, checked: each one's slot of the backup lies past the frame's bricks' own (which are their
+	// order) and past those of the frame before where it is taken this frame, within the layout's, and no two share one.
+	struct FadeCheck
+	{
+		uint32_t Fades = 0;
+		uint32_t Snapshots = 0;
+		uint64_t Voxels = 0;
+		float Time = 0.0f; // The last fading brick's
+	};
+
+	FadeCheck CheckFades(const VoxelFrame& frame, const GlobalIlluminationLayout& layout, uint32_t level, size_t bricksBefore)
+	{
+		FadeCheck check;
+		std::vector<uint32_t> slots;
+		for (const RenderData::VoxelMoverBrick& brick : frame.MoverBricks)
+		{
+			const uint32_t fade = brick.Movers.z;
+			if (fade == 0)
+				continue;
+			check.Fades++;
+			const bool snapshot = (fade & RenderData::c_VoxelMoverFadeSnapshot) != 0;
+			check.Snapshots += snapshot ? 1u : 0u;
+			const uint32_t slot = (fade & RenderData::c_VoxelMoverFadeSlotMask) - 1;
+			CHECK(slot >= frame.MoverBricks.size());
+			if (snapshot)
+				CHECK(slot >= bricksBefore);
+			CHECK(slot < layout.MoverBricks);
+			slots.push_back(slot);
+			const glm::ivec3 low((fade >> RenderData::c_VoxelMoverFadeLowShift) & 7u, (fade >> (RenderData::c_VoxelMoverFadeLowShift + 3)) & 7u,
+				(fade >> (RenderData::c_VoxelMoverFadeLowShift + 6)) & 7u);
+			const glm::ivec3 high((fade >> RenderData::c_VoxelMoverFadeHighShift) & 7u, (fade >> (RenderData::c_VoxelMoverFadeHighShift + 3)) & 7u,
+				(fade >> (RenderData::c_VoxelMoverFadeHighShift + 6)) & 7u);
+			CHECK(glm::all(glm::lessThanEqual(low, high)));
+			if (static_cast<uint32_t>(brick.Texel.w) == level)
+				check.Voxels += static_cast<uint64_t>((high.x - low.x + 1) * (high.y - low.y + 1) * (high.z - low.z + 1));
+			check.Time = glm::uintBitsToFloat(brick.Movers.w);
+		}
+		CHECK(check.Fades == frame.MoverFades);
+		CHECK(check.Snapshots == frame.MoverSnapshots);
+		std::sort(slots.begin(), slots.end());
+		CHECK(std::adjacent_find(slots.begin(), slots.end()) == slots.end());
+		return check;
+	}
+
 }
 
 TEST_SUITE("Renderer.VoxelClipmap")
@@ -308,8 +353,8 @@ TEST_SUITE("Renderer.VoxelClipmap")
 		const RenderScene& render = RenderScene::Get(fixture.SceneData);
 		const AABB before = render.GetWorldBounds(render.FindProxy(cube));
 
-		// Moved: its old voxels are emptied in the frame it moved (it is out of the voxels while it moves), and the camera's move
-		// in the same frame queues its slabs behind the change.
+		// Moved: its old voxels are emptied in the frame it moved (its triangles are out of the voxels while it moves: the dynamic
+		// layer holds it), and the camera's move in the same frame queues its slabs behind the change.
 		cube.GetComponent<TransformComponent>().Translation = glm::vec3(3.0f, 0.5f, 3.0f);
 		cube.MarkModified<TransformComponent>();
 		fixture.Camera = glm::dvec3(0.45, 0.0, 0.0);
@@ -333,17 +378,29 @@ TEST_SUITE("Renderer.VoxelClipmap")
 				CHECK(index < regions.size());
 		}
 
-		// It rests: c_GIMovingFrames frames later its new bounds are queued, with its items.
+		// It rests by the clock, never by frames: while no time passes it stays a mover, and c_GIMoverRestSeconds after its last
+		// move its new bounds are queued, with its items.
 		fixture.Camera = glm::dvec3(0.0);
 		fixture.Build();
 		const AABB after = render.GetWorldBounds(render.FindProxy(cube));
-		for (uint32_t frame = 2; frame < RenderData::c_GIMovingFrames; frame++)
+		for (uint32_t frame = 0; frame < 100; frame++)
 		{
 			fixture.Build();
 			CHECK(fixture.GetItems(cube).empty());
 		}
+		CHECK(fixture.Frame.MovingProxies == 1);
+		fixture.Settings.StepSeconds = 0.4f * RenderData::c_GIMoverRestSeconds;
+		for (uint32_t frame = 0; frame < 2; frame++)
+		{
+			fixture.Build();
+			CHECK(fixture.GetItems(cube).empty());
+			CHECK(fixture.Frame.MovingProxies == 1);
+		}
 		fixture.Build();
 		CHECK(fixture.Frame.MovingProxies == 0);
+		CHECK(fixture.Frame.Movers.empty());
+		// Of the layer only the bricks that fade are left ("Where a proxy starts to move or rests, the bricks around it fade").
+		CHECK(fixture.Frame.MoverBricks.size() == fixture.Frame.MoverFades);
 		for (uint32_t level = 0; level < 4; level++)
 		{
 			CAPTURE(level);
@@ -357,6 +414,350 @@ TEST_SUITE("Renderer.VoxelClipmap")
 		for (uint32_t level = 0; level < 4; level++)
 			CHECK(fixture.RegionsCover(level, { fixture.GetChangeBox(after, level) }));
 		CHECK(fixture.Frame.Items.empty());
+	}
+
+	TEST_CASE("A moving proxy is listed for the dynamic layer, and nothing is while nothing moves")
+	{
+		Fixture fixture;
+		fixture.Settings.StepSeconds = 0.4f * RenderData::c_GIMoverRestSeconds;
+		Entity cube = fixture.Add(glm::vec3(2.0f, 0.5f, 3.03f), c_CubeMesh, UUID::Null(), glm::vec3(1.0f, 0.5f, 2.0f));
+		fixture.Camera = glm::dvec3(1.0, 1.0, 1.0);
+		fixture.Build();
+		fixture.Build();
+		CHECK(fixture.Frame.Movers.empty());
+		CHECK(fixture.Frame.MoverBricks.empty());
+		CHECK_FALSE(fixture.Frame.MoversChanged);
+
+		// Moved and turned: one box, its center relative to the camera and its half extents along the proxy's turned axes.
+		TransformComponent& transform = cube.GetComponent<TransformComponent>();
+		transform.Translation = glm::vec3(2.3f, 0.5f, 3.03f);
+		transform.Rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		cube.MarkModified<TransformComponent>();
+		fixture.Build();
+		CHECK(fixture.Frame.MovingProxies == 1);
+		CHECK(fixture.Frame.MoversLeftOut == 0);
+		CHECK(fixture.Frame.MoversChanged);
+		REQUIRE(fixture.Frame.Movers.size() == 1);
+		const RenderData::VoxelMover& mover = fixture.Frame.Movers.front();
+		CHECK(glm::distance(glm::vec3(mover.Center), glm::vec3(1.3f, -0.5f, 2.03f)) < 1e-5f);
+		// A quarter turn about y takes the box's x axis to -z and its z axis to +x.
+		CHECK(glm::distance(glm::abs(glm::vec3(mover.AxisX)), glm::vec3(0.0f, 0.0f, 0.5f)) < 1e-5f);
+		CHECK(glm::distance(glm::abs(glm::vec3(mover.AxisY)), glm::vec3(0.0f, 0.25f, 0.0f)) < 1e-5f);
+		CHECK(glm::distance(glm::abs(glm::vec3(mover.AxisZ)), glm::vec3(1.0f, 0.0f, 0.0f)) < 1e-5f);
+
+		// Its bricks: per level, in order, those holding every voxel of the window the box reaches, each in the window in part,
+		// with its texel, its slot in order and the box's bit. Among them, without the bit: bricks the box does not reach where
+		// the voxels it left fade.
+		const AABB bounds = RenderScene::Get(fixture.SceneData).GetWorldBounds(RenderScene::Get(fixture.SceneData).FindProxy(cube));
+		const glm::uvec3 dimensions = fixture.Clipmap.GetLayout().Levels.front().Dimensions;
+		constexpr int64_t c_Brick = RenderData::c_GIMoverBrickVoxels;
+		uint32_t previousLevel = 0;
+		std::array<uint32_t, 4> perLevel = {};
+		for (size_t index = 0; index < fixture.Frame.MoverBricks.size(); index++)
+		{
+			const RenderData::VoxelMoverBrick& brick = fixture.Frame.MoverBricks[index];
+			const uint32_t level = static_cast<uint32_t>(brick.Texel.w);
+			REQUIRE(level < 4);
+			CHECK(level >= previousLevel);
+			previousLevel = level;
+			perLevel[level] += brick.Movers.x;
+			CHECK(brick.Local.w == static_cast<int32_t>(index));
+			CHECK(brick.Movers.x <= 1u);
+			CHECK((brick.Movers.x == 1u || brick.Movers.z != 0u));
+			CHECK(brick.Movers.y == 0u);
+			const glm::i64vec3 window = fixture.Clipmap.GetLevel(level).Window;
+			const glm::i64vec3 voxel = window + glm::i64vec3(glm::ivec3(brick.Local));
+			CHECK(voxel.x % c_Brick == 0);
+			CHECK(voxel.y % c_Brick == 0);
+			CHECK(voxel.z % c_Brick == 0);
+			CHECK(glm::uvec3(glm::ivec3(brick.Texel)) == GlobalIllumination::GetTexel(voxel, dimensions));
+			const VoxelBox box { voxel, voxel + c_Brick };
+			CHECK(box.Intersects(GlobalIllumination::GetWindow(fixture.Clipmap.GetLayout().Levels[level], window)));
+		}
+		for (uint32_t level = 0; level < 4; level++)
+		{
+			CAPTURE(level);
+			// Along each axis the box and a voxel beyond, at least two voxels each way: what the layer weighs.
+			const double voxelSize = static_cast<double>(fixture.Clipmap.GetLayout().Levels[level].VoxelSize);
+			const glm::dvec3 center = 0.5 * (glm::dvec3(bounds.Min) + glm::dvec3(bounds.Max));
+			const glm::dvec3 reach = glm::max(0.5 * (glm::dvec3(bounds.Max) - glm::dvec3(bounds.Min)), glm::dvec3(voxelSize)) + voxelSize;
+			const glm::i64vec3 low(glm::floor((center - reach) / voxelSize));
+			const glm::i64vec3 high(glm::floor((center + reach) / voxelSize));
+			uint32_t expected = 1;
+			for (int axis = 0; axis < 3; axis++)
+			{
+				const int64_t first = low[axis] >= 0 ? low[axis] / c_Brick : -((-low[axis] + c_Brick - 1) / c_Brick);
+				const int64_t last = high[axis] >= 0 ? high[axis] / c_Brick : -((-high[axis] + c_Brick - 1) / c_Brick);
+				expected *= static_cast<uint32_t>(last - first + 1);
+			}
+			CHECK(perLevel[level] == expected);
+		}
+
+		// Unmoved while no time passes, the list repeats (its fade, begun the frame before, stands still as well).
+		fixture.Settings.StepSeconds = 0.0f;
+		fixture.Build();
+		fixture.Build();
+		CHECK(fixture.Frame.Movers.size() == 1);
+		CHECK_FALSE(fixture.Frame.MoversChanged);
+		// Resting, its box leaves in the frame the regions that hold its triangles are taken; the bricks around it fade for
+		// c_GIMoverFadeSeconds more, then nothing is listed and nothing changes.
+		fixture.Settings.StepSeconds = 0.4f * RenderData::c_GIMoverRestSeconds;
+		for (uint32_t frame = 0; frame < 3; frame++)
+			fixture.Build();
+		CHECK(fixture.Frame.MovingProxies == 0);
+		CHECK(fixture.Frame.Movers.empty());
+		CHECK(fixture.Frame.MoversChanged);
+		CHECK_FALSE(fixture.GetItems(cube).empty());
+		CHECK(fixture.Frame.MoverFades > 0);
+		for (uint32_t frame = 0; frame < 2; frame++)
+		{
+			fixture.Build();
+			CHECK(fixture.Frame.MoverFades > 0);
+			CHECK(fixture.Frame.MoversChanged);
+		}
+		fixture.Build();
+		CHECK(fixture.Frame.MoverBricks.empty());
+		CHECK(fixture.Frame.MoverFades == 0);
+		CHECK(fixture.Frame.MoversChanged);
+		fixture.Build();
+		CHECK_FALSE(fixture.Frame.MoversChanged);
+	}
+
+	TEST_CASE("Where a proxy starts to move or rests, the bricks around it fade by the clock")
+	{
+		Fixture fixture;
+		fixture.Settings.StepSeconds = 0.4f * RenderData::c_GIMoverFadeSeconds;
+		Entity cube = fixture.Add(glm::vec3(2.0f, 0.5f, 3.03f));
+		fixture.Build();
+		fixture.Build();
+		CHECK(fixture.Frame.MoverFades == 0);
+		const RenderScene& render = RenderScene::Get(fixture.SceneData);
+		const AABB before = render.GetWorldBounds(render.FindProxy(cube));
+		const GlobalIlluminationLayout& layout = fixture.Clipmap.GetLayout();
+		// The voxels of a level that fade for bounds: those their triangles touch and one beyond.
+		const auto getFaded = [&](const AABB& bounds, uint32_t level)
+		{
+			VoxelBox box = VoxelClipmap::GetTouchedVoxels(bounds, layout.Levels[level].VoxelSize);
+			box.Minimum -= int64_t(1);
+			box.Maximum += int64_t(1);
+			REQUIRE(fixture.Clipmap.GetLevel(level).Valid.Contains(box));
+			return box.GetVoxelCount();
+		};
+
+		// It starts: the frame takes what the bricks around its old place show, and they show all of it still.
+		cube.GetComponent<TransformComponent>().Translation.x = 2.02f;
+		cube.MarkModified<TransformComponent>();
+		fixture.Build();
+		CHECK(fixture.Frame.MovingProxies == 1);
+		for (uint32_t level = 0; level < 4; level++)
+		{
+			CAPTURE(level);
+			const FadeCheck check = CheckFades(fixture.Frame, layout, level, 0);
+			CHECK(check.Fades > 0);
+			CHECK(check.Snapshots == check.Fades);
+			CHECK(check.Voxels == getFaded(before, level));
+			CHECK(check.Time == 0.0f);
+		}
+		// The clock moves the fades: 0.4 and 0.8 of c_GIMoverFadeSeconds.
+		size_t bricksBefore = fixture.Frame.MoverBricks.size();
+		fixture.Build();
+		FadeCheck check = CheckFades(fixture.Frame, layout, 0, bricksBefore);
+		CHECK(check.Snapshots == 0);
+		CHECK(check.Time == doctest::Approx(0.4f).epsilon(0.001));
+		CHECK(fixture.Frame.MoversChanged);
+		fixture.Build();
+		check = CheckFades(fixture.Frame, layout, 0, bricksBefore);
+		CHECK(check.Time == doctest::Approx(0.8f).epsilon(0.001));
+		// Its time over, the fade ends; in the same frame the proxy has rested, and the bricks around it fade again, from what
+		// they show with its box to what they hold with its triangles.
+		bricksBefore = fixture.Frame.MoverBricks.size();
+		const AABB after = render.GetWorldBounds(render.FindProxy(cube));
+		fixture.Build();
+		CHECK(fixture.Frame.MovingProxies == 0);
+		CHECK(fixture.Frame.Movers.empty());
+		for (uint32_t level = 0; level < 4; level++)
+		{
+			CAPTURE(level);
+			check = CheckFades(fixture.Frame, layout, level, bricksBefore);
+			CHECK(check.Snapshots == check.Fades);
+			CHECK(check.Voxels == getFaded(after, level));
+			CHECK(check.Time == 0.0f);
+		}
+		// Moved again while they fade: the bricks start over from what they show, with both events' voxels.
+		fixture.Build();
+		cube.GetComponent<TransformComponent>().Translation.x = 2.04f;
+		cube.MarkModified<TransformComponent>();
+		bricksBefore = fixture.Frame.MoverBricks.size();
+		const uint32_t fadesBefore = fixture.Frame.MoverFades;
+		fixture.Build();
+		check = CheckFades(fixture.Frame, layout, 0, bricksBefore);
+		CHECK(check.Fades == fadesBefore);
+		CHECK(check.Snapshots == check.Fades);
+		CHECK(check.Voxels >= getFaded(after, 0));
+		CHECK(check.Time == 0.0f);
+	}
+
+	TEST_CASE("Movers come before fades in the dynamic layer's slots")
+	{
+		// No time passes, so what moved stays a mover and what fades keeps fading. Cubes start to move one a frame: a start fades
+		// whole while the slots hold it, the fades' slots never reach into the frame's bricks' own, and where the movers' bricks
+		// need the slots, fades end: no mover is left out before the movers alone fill the layer.
+		Fixture fixture;
+		const auto getPosition = [](size_t index)
+		{
+			return glm::vec3(-5.0f + 2.0f * static_cast<float>(index % 6), 0.5f + 2.0f * static_cast<float>(index / 36), -5.0f + 2.0f * static_cast<float>((index / 6) % 6));
+		};
+		// The bricks the frame's boxes reach, by level and first texel (one camera: the same windows in every fixture).
+		const auto getMoverBricks = [](const VoxelFrame& frame)
+		{
+			std::set<std::array<int32_t, 4>> bricks;
+			for (const RenderData::VoxelMoverBrick& brick : frame.MoverBricks)
+			{
+				if ((brick.Movers.x | brick.Movers.y) != 0)
+					bricks.insert({ brick.Texel.w, brick.Texel.x, brick.Texel.y, brick.Texel.z });
+			}
+			return bricks;
+		};
+		std::vector<Entity> cubes;
+		for (size_t index = 0; index < 72; index++)
+			cubes.push_back(fixture.Add(getPosition(index)));
+		fixture.Build();
+		const GlobalIlluminationLayout& layout = fixture.Clipmap.GetLayout();
+		uint32_t peakFades = 0;
+		uint32_t lastFades = 0;
+		size_t bricksBefore = 0;
+		size_t leftOut = cubes.size();
+		for (size_t index = 0; index < cubes.size() && leftOut == cubes.size(); index++)
+		{
+			cubes[index].GetComponent<TransformComponent>().Translation.y += 0.01f;
+			cubes[index].MarkModified<TransformComponent>();
+			fixture.Build();
+			CHECK(fixture.Frame.MoverBricks.size() <= layout.MoverBricks);
+			lastFades = CheckFades(fixture.Frame, layout, 0, bricksBefore).Fades;
+			bricksBefore = fixture.Frame.MoverBricks.size();
+			if (fixture.Frame.MoversLeftOut > 0)
+				leftOut = index;
+			else
+				peakFades = std::max(peakFades, lastFades);
+		}
+		REQUIRE(leftOut < cubes.size());
+		const std::set<std::array<int32_t, 4>> moverBricks = getMoverBricks(fixture.Frame);
+
+		// The cube the layer left out: the one whose bricks, as it reaches them moving alone, the frame's movers do not all
+		// hold. The movers enter by proxy, not by when they started, and those after one that does not fit still enter, so
+		// the frame's bricks are not what the layer held when that cube was judged (with them in the bound, a fade that
+		// kept slots could leave an earlier cube out and let later ones fill the room: the bound still held). What it held
+		// is what the moved cubes with lower proxies reach, each moving alone. Beside those the cube did not fit, whatever
+		// faded: a fade never keeps a slot a mover's brick needs.
+		std::vector<std::set<std::array<int32_t, 4>>> reached;
+		size_t missing = 0;
+		size_t missingCube = 0;
+		for (size_t index = 0; index <= leftOut; index++)
+		{
+			Fixture alone;
+			Entity cube = alone.Add(getPosition(index));
+			alone.Build();
+			cube.GetComponent<TransformComponent>().Translation.y += 0.01f;
+			cube.MarkModified<TransformComponent>();
+			alone.Build();
+			REQUIRE(alone.Frame.MoversLeftOut == 0);
+			reached.push_back(getMoverBricks(alone.Frame));
+			const bool absent = std::any_of(reached.back().begin(), reached.back().end(), [&](const std::array<int32_t, 4>& brick) { return moverBricks.count(brick) == 0; });
+			if (absent)
+			{
+				missing++;
+				missingCube = index;
+			}
+		}
+		REQUIRE(missing == 1);
+		const RenderScene& render = RenderScene::Get(fixture.SceneData);
+		const uint32_t missingProxy = render.FindProxy(cubes[missingCube]);
+		REQUIRE(missingProxy != RenderScene::c_InvalidIndex);
+		std::set<std::array<int32_t, 4>> held;
+		for (size_t index = 0; index <= leftOut; index++)
+		{
+			if (render.FindProxy(cubes[index]) < missingProxy)
+				held.insert(reached[index].begin(), reached[index].end());
+		}
+		size_t needed = 0;
+		for (const std::array<int32_t, 4>& brick : reached[missingCube])
+			needed += held.count(brick) == 0 ? 1u : 0u;
+		INFO("cube " << missingCube << " of " << leftOut + 1 << " moved was left out: the movers before it hold " << held.size() << " bricks, it needs " << needed << " more");
+		CHECK(held.size() + needed > layout.MoverBricks);
+		CHECK(peakFades > lastFades);
+		CHECK(moverBricks.size() + lastFades <= layout.MoverBricks);
+	}
+
+	TEST_CASE("A proxy that rested stays in the dynamic layer until its regions are taken")
+	{
+		// A budget of one triangle a frame takes one region a frame: the cube's bounds wait in every level's queue for a while,
+		// and it stays a mover until the last of them is taken, so it is never in neither.
+		Fixture fixture;
+		fixture.Settings.TrianglesPerFrame = 1;
+		fixture.Settings.StepSeconds = RenderData::c_GIMoverRestSeconds;
+		Entity cube = fixture.Add(glm::vec3(2.0f, 0.5f, 3.0f));
+		for (uint32_t frame = 0; frame < 2000 && (frame == 0 || fixture.Frame.QueuedRegions > 0); frame++)
+			fixture.Build();
+		REQUIRE(fixture.Frame.QueuedRegions == 0);
+		cube.GetComponent<TransformComponent>().Translation = glm::vec3(2.33f, 0.5f, 3.0f);
+		cube.MarkModified<TransformComponent>();
+		fixture.Build();
+		CHECK(fixture.Frame.MovingProxies == 1);
+		// The frame after, it has rested: its bounds are queued, and one region a frame is taken.
+		uint32_t waited = 0;
+		bool voxelized = false;
+		for (uint32_t frame = 0; frame < 200; frame++)
+		{
+			fixture.Build();
+			voxelized = voxelized || !fixture.GetItems(cube).empty();
+			if (fixture.Frame.QueuedRegions == 0)
+				break;
+			waited++;
+			CHECK(fixture.Frame.MovingProxies == 1);
+			CHECK(fixture.Frame.Movers.size() == 1);
+		}
+		CHECK(waited >= 3);
+		CHECK(voxelized);
+		CHECK(fixture.Frame.QueuedRegions == 0);
+		CHECK(fixture.Frame.MovingProxies == 0);
+		CHECK(fixture.Frame.Movers.empty());
+	}
+
+	TEST_CASE("Movers past the dynamic layer's bricks or boxes are left out")
+	{
+		Fixture fixture;
+		Entity large = fixture.Add(glm::vec3(0.0f, 0.5f, 0.0f), c_CubeMesh, UUID::Null(), glm::vec3(12.0f, 6.0f, 12.0f));
+		std::vector<Entity> cubes;
+		for (uint32_t index = 0; index < RenderData::c_GIMaxMoverBoxes + 1; index++)
+			cubes.push_back(fixture.Add(glm::vec3(-3.0f + 0.1f * static_cast<float>(index), 0.5f, 3.0f), c_CubeMesh, UUID::Null(), glm::vec3(0.05f)));
+		fixture.Build();
+		const auto move = [](Entity entity)
+		{
+			entity.GetComponent<TransformComponent>().Translation.y += 0.01f;
+			entity.MarkModified<TransformComponent>();
+		};
+
+		// A box of 12 x 6 x 12 m reaches more of level 0's bricks than High's layer holds: left out, nothing listed (nor does its
+		// start fade: more bricks than the layer has slots fade not at all).
+		move(large);
+		fixture.Build();
+		CHECK(fixture.Frame.MovingProxies == 1);
+		CHECK(fixture.Frame.MoversLeftOut == 1);
+		CHECK(fixture.Frame.Movers.empty());
+		CHECK(fixture.Frame.MoverBricks.empty());
+
+		// One box more than a frame lists: the last proxy is left out, the others keep their boxes.
+		for (Entity cube : cubes)
+			move(cube);
+		fixture.Build();
+		CHECK(fixture.Frame.MovingProxies == RenderData::c_GIMaxMoverBoxes + 2);
+		CHECK(fixture.Frame.MoversLeftOut == 2);
+		CHECK(fixture.Frame.Movers.size() == RenderData::c_GIMaxMoverBoxes);
+		CHECK(fixture.Frame.MoverBricks.size() <= fixture.Clipmap.GetLayout().MoverBricks);
+		uint32_t bits = 0;
+		for (const RenderData::VoxelMoverBrick& brick : fixture.Frame.MoverBricks)
+			bits |= brick.Movers.y;
+		CHECK(bits != 0u); // Boxes past the 32nd are named in the second word
 	}
 
 	TEST_CASE("A jump queues every window within the cut's budget, level 0 first")

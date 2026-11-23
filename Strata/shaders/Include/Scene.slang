@@ -5,17 +5,17 @@
 // in sync (std140 for the constant buffer, std430 for storage buffers, 16-byte aligned members).
 
 // The scene layout's slots (SceneRenderer::CreateResources): SRV 0-21, 27, 28, 29 (the aerial perspective volume), 32, 33, 35,
-// 37-40 and 54-59, samplers 0-5 (materials), 8, 9 and 10, CBV 0 and 3 (the GI field's constants, Include/GIField.slang): pipelines
+// 37-40 and 54-60, samplers 0-5 (materials), 8, 9 and 10, CBV 0 and 3 (the GI field's constants, Include/GIField.slang): pipelines
 // pairing this layout with push constants or a constant buffer of their own give them neither slot.
 // SRV 22-26 belong to the compute layouts of temporal anti-aliasing and screen-space reflections, never to this one.
 // Assigned in wave 7: SRV 28 the sun's screen-space shadow mask, 32 the cascades' depth ranges and 33 the shadows'
 // blue-noise tile; 29 the aerial perspective volume. Assigned for wave 8: 30 and 31 the irradiance volume (radiance-cascades,
 // below its cut), 34 volumetric fog (volumetric), 35 the GI field (global illumination's irradiance per probe), 36 fog
 // volumes (volumetric, below its cut), 37 the GI probes' validity, 38-40 its voxel levels 0-2, 54 its probes' depth
-// moments (Include/GIField.slang; 41-53 are the GI's light passes' own, which read the field too); 55 the area lights' LTC table
-// and 56 the lights' shapes (Include/AreaLights.slang), 57 the local shadow atlas's depth ranges, 58 the rect lights' shadow
-// masks and 59 their back faces (Include/AreaShadows.slang, Scene/Forward.frag). A new scene resource takes the next free slot
-// (60), and a pass that does not run binds a dummy.
+// moments, 55 its probes' ambient cubes (Include/GIField.slang; 41-53 are the GI's light passes' own, which read the field
+// too); 56 the area lights' LTC table and 57 the lights' shapes (Include/AreaLights.slang), 58 the local shadow atlas's depth
+// ranges, 59 the rect lights' shadow masks and 60 their back faces (Include/AreaShadows.slang, Scene/Forward.frag). A new
+// scene resource takes the next free slot (61), and a pass that does not run binds a dummy.
 
 #include "Include/Common.slang"
 
@@ -48,6 +48,9 @@ static const float c_SurfaceLightMarker = -1.0;
 // 6 (the GI's voxels) and 9 (its probes) draw over the image; the forward pass shades them as the lit image.
 #define ST_LIGHTING_VIEW_GLOBAL_ILLUMINATION 7u // The GI's diffuse light on white (the field, today's beyond it)
 #define ST_LIGHTING_VIEW_OPEN_SHARE        8u // The share of the sky a surface sees through the world, unexposed
+#define ST_LIGHTING_VIEW_SPECULAR          10u // Specular light only (the lights' highlights, image light's reflections)
+#define ST_LIGHTING_VIEW_DIFFUSE           11u // Diffuse light only (the lights' and image light's)
+#define ST_LIGHTING_VIEW_CLUSTERS          12u // The lights listed in the pixel's cluster, as a share of its capacity, unexposed
 
 #define ST_SAMPLER_COUNT 6
 
@@ -124,7 +127,12 @@ struct FrameConstants
 	// the scene's GI intensity; w: the alpha^2 the directional light's disk adds to its highlight's lobe
 	// (RenderData::GetSunLobeAlpha2; Include/PBR.slang).
 	float4 ReflectionParams;
+	// x: what a capture turned off (ST_CAPTURE_*: SceneRendererSpecification's SpecularEnergyCompensation and HorizonFade); 0 in
+	// every other frame
+	uint4 CaptureSwitches;
 };
+#define ST_CAPTURE_NO_SPECULAR_ENERGY 1u
+#define ST_CAPTURE_NO_HORIZON_FADE    2u
 
 ConstantBuffer<FrameConstants> u_Frame : register(b0);
 

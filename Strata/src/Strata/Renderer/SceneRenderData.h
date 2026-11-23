@@ -114,8 +114,14 @@ namespace Strata
 			// scene's GI intensity (0 to 4); w: the alpha^2 the directional light's disk adds to its highlight's lobe
 			// (GetSunLobeAlpha2; 0 without a directional light).
 			glm::vec4 ReflectionParams;
+			// x: what a capture turned off (c_Capture* bits: SceneRendererSpecification's SpecularEnergyCompensation and
+			// HorizonFade); 0 in every other frame
+			glm::uvec4 CaptureSwitches;
 		};
-		static_assert(sizeof(FrameConstants) == 8 * 64 + 27 * 16);
+		static_assert(sizeof(FrameConstants) == 8 * 64 + 28 * 16);
+		// FrameConstants::CaptureSwitches.x (Include/Scene.slang's ST_CAPTURE_*).
+		constexpr uint32_t c_CaptureNoSpecularEnergy = 1u;
+		constexpr uint32_t c_CaptureNoHorizonFade = 2u;
 
 		// The alpha^2 the forward pass adds to a directional light's specular lobe for its disk (ReflectionParams.w): a disk of
 		// angular diameter `degrees` spans the half maximum of a GGX lobe of alpha tan(radius) / c_LobeHalfMaximum (the reflected
@@ -252,7 +258,7 @@ namespace Strata
 		};
 		static_assert(sizeof(MaterialData) == 144);
 
-		// A light of the frame's light buffer (scene set SRV 2), u_LightShapes (SRV 56, LightShape) beside it by index. A rect
+		// A light of the frame's light buffer (scene set SRV 2), u_LightShapes (SRV 57, LightShape) beside it by index. A rect
 		// light's position is its face's center, its range is measured from the face, its color is its luminance (nits) times
 		// its color, its direction is its face's normal and its SpotAngles are (0, 0, its shadow slot plus one, 0).
 		struct LightData
@@ -723,7 +729,7 @@ namespace Strata
 			uint32_t View;             // SceneLightingView
 			float InversePreExposure;  // 1 / the frame's pre-exposure (TemporalParams.y): the HDR target holds luminance times it
 			float LuminanceFirstEV100; // The luminance view's first band's lower edge
-			uint32_t Padding0;
+			uint32_t ClusterCapacity;  // The lights a cluster lists at most (FrameConstants::ClusterGrid.w): the clusters view's counts
 			uint32_t LuminanceColors[c_LightingViewLuminanceColors]; // RGBA8, sRGB, packed (red in the low byte)
 			uint32_t AlbedoLow;
 			uint32_t AlbedoHigh;
@@ -737,6 +743,11 @@ namespace Strata
 		constexpr uint32_t c_GIScrollVoxels = 4;        // A level's window moves in steps of this many voxels: fewer, larger slabs
 		constexpr uint32_t c_GILevelGuardVoxels = 2;    // A level is never sampled this close to its window's (or valid box's) faces
 		constexpr uint32_t c_GILevelBlendVoxels = 2;    // Samples blend into the next level over this many voxels (by distance from the camera)
+		// At High the finest level's window (and its weights) is centered this far below the camera (meters, two scroll steps):
+		// floors and what rests on them lie below the eye, and a camera at the middle of a 5.5 m room left the floor's contacts to
+		// level 1's coarser voxels, closed under a sphere's overhang (the Cornell box). Low's finest level, at full weight only
+		// 1.6 m up and down, stays centered: a drop would hand a room's ceiling 1.5 m above the eye to its 0.4 m voxels.
+		constexpr float c_GIFinestLevelDrop = 0.8f;
 		constexpr uint32_t c_GIRegionBrick = 4;         // Changed boxes snap outward to bricks of this many voxels
 		constexpr uint32_t c_GIMaxRegionVoxels = 64;    // A region is at most this many voxels a side (slabs and windows are cut so)
 		// Windows are addressed from an anchor (a multiple of c_GIAnchorVoxels voxels), kept while the camera stays within
@@ -755,7 +766,15 @@ namespace Strata
 		constexpr uint32_t c_GISmallTriangleVoxels = 64; // A triangle whose whole bounds hold more voxels goes to tiles
 		constexpr uint32_t c_GITileVoxels = 8;           // A tile is 8^3 voxels, a group of 64 threads with 8 voxels each
 		constexpr uint32_t c_GIMaxTiles = 32768;         // Tiles per batch; beyond them a triangle walks its tiles itself (counted)
-		constexpr uint32_t c_GIMovingFrames = 30;        // A proxy placed anew within this many frames is moving: left out of the voxels
+		// A proxy placed anew is moving: out of the voxels its triangles made, in the dynamic layer (GI/VoxelMovers.comp) until it
+		// has kept its place for this long by the renderer's clock (never frames), when its triangles are voxelized again.
+		constexpr float c_GIMoverRestSeconds = 0.25f;
+		// Its triangles' voxels and its box are two forms of it (whole voxels, a box with soft edges): where one takes the other's
+		// place, when it starts to move and when it has rested, the voxels fade from what they showed to what they hold over this
+		// long by the same clock, so the light around it never steps.
+		constexpr float c_GIMoverFadeSeconds = 0.25f;
+		constexpr uint32_t c_GIMoverBrickVoxels = 8;    // The dynamic layer is written in bricks of 8^3 voxels, a group of threads each
+		constexpr uint32_t c_GIMaxMoverBoxes = 64;       // Oriented boxes (a moving proxy's submeshes) a frame: a brick names them by two words of bits
 		constexpr float c_GIMaskedOccupancy = 0.15f;     // Guess: alpha-masked surfaces' occupancy
 		// Guess: the occupancy of voxels marked only because a face on their boundary faces into them (the lit layer in front of a
 		// face on the grid): low, so openings on the grid keep their size, yet the layer's light is taken (Include/Voxelize.slang).
@@ -815,6 +834,15 @@ namespace Strata
 		// whole voxel from the second.
 		constexpr uint32_t c_GIGatherPushSteps = 2;
 		constexpr glm::vec2 c_GIGatherPushOccupancy{ 0.1f, 0.3f };
+		// A drawn point the probes around it see too little of (a gap its finest voxels close: under the yard's car beyond level
+		// 0's reach) takes the light where the view ray leaves the closed voxels: at most this many steps of half a voxel toward
+		// the viewer, to the first sample below this occupancy with the sample a voxel along the normal too (open space, not the
+		// gap's own soft layer), darkened as the ground under a gap of this many voxels sees its opening from as far in
+		// (1 - d / sqrt(d^2 + g^2)): the voxels close gaps up to about one and a half voxels. The distance d is where the
+		// occupancy crosses the threshold between two samples, interpolated: in whole steps the light fell in bands.
+		constexpr uint32_t c_GIGatherExitSteps = 24;
+		constexpr float c_GIGatherExitOccupancy = 0.2f;
+		constexpr float c_GIGatherGapVoxels = 0.75f;
 		constexpr uint32_t c_GIFieldFaces = 6;           // The field's faces per probe: +X, -X, +Y, -Y, +Z, -Z
 		// Each cascade-0 probe's distances to the first hit (GI/FieldReduce.comp): an octahedral tile of this many texels a side, a
 		// one-texel border around one texel per ray of its c_GIFieldDirections (8 x 8), of the mean distance and its variance
@@ -896,7 +924,7 @@ namespace Strata
 			glm::ivec4 Texel;        // xyz: the minimum corner's texel; w: 1 when the level holds valid voxels
 			glm::ivec4 ValidMinimum; // xyz: the valid box's first voxel, relative to the window's minimum corner
 			glm::ivec4 ValidMaximum; // xyz: one past its last voxel
-			glm::vec4 Anchor;        // xyz: the anchor voxel's world position as a float (regions and voxel coordinates start there)
+			glm::vec4 Anchor;        // xyz: the anchor voxel's world position as a float (regions and voxel coordinates start there); w: the level's Drop
 		};
 		static_assert(sizeof(GIVoxelLevelData) == 80);
 
@@ -946,7 +974,7 @@ namespace Strata
 			glm::ivec4 VoxelTexel[3];     // xyz: the minimum corner's texel
 			glm::ivec4 VoxelValidMinimum[3]; // xyz: the valid box's first voxel, relative to the window's minimum corner
 			glm::ivec4 VoxelValidMaximum[3]; // xyz: one past its last voxel
-			glm::vec4 VoxelDimensions;    // xyz: voxels per axis
+			glm::vec4 VoxelDimensions;    // xyz: voxels per axis; w: 1 when drawn points in gaps the voxels close take the gap's light (GlobalIlluminationSettings::GapLight)
 		};
 		static_assert(sizeof(GIFieldConstants) == 256);
 
@@ -963,6 +991,60 @@ namespace Strata
 			uint32_t Padding;
 		};
 		static_assert(sizeof(VoxelPassParameters) == 32);
+
+		// VoxelMover::Flags
+		constexpr uint32_t c_VoxelMoverAlphaMasked = 1u << 0; // Its coverage counts c_GIMaskedOccupancy
+		constexpr uint32_t c_VoxelMoverDoubleSided = 1u << 1; // Lit from either side
+
+		// A moving proxy's submesh as the dynamic layer takes it (GI/VoxelMovers.comp): the oriented box of its bounds.
+		struct VoxelMover
+		{
+			glm::vec4 Center;   // xyz: the box's center, camera-relative (m)
+			glm::vec4 AxisX;    // xyz: its half extent along its first axis (world, rotation and scale included)
+			glm::vec4 AxisY;
+			glm::vec4 AxisZ;
+			uint32_t Albedo;    // As GIMaterial's
+			uint32_t Emission;
+			uint32_t Flags;     // c_VoxelMover*
+			uint32_t Padding;
+		};
+		static_assert(sizeof(VoxelMover) == 80);
+
+		// VoxelMoverBrick::Movers.z of a brick that fades (0: none): the slot of the backup that holds what its voxels showed when
+		// the fade began, plus one; the first and the last of its voxels that fade, three bits an axis; whether this frame takes
+		// what they show.
+		constexpr uint32_t c_VoxelMoverFadeSlotMask = 0x3FFu;
+		constexpr uint32_t c_VoxelMoverFadeLowShift = 10;
+		constexpr uint32_t c_VoxelMoverFadeHighShift = 19;
+		constexpr uint32_t c_VoxelMoverFadeSnapshot = 1u << 31;
+
+		// A brick of c_GIMoverBrickVoxels^3 voxels of a level that moving boxes reach or whose voxels fade: what the dynamic layer
+		// writes this frame and puts back the next.
+		struct VoxelMoverBrick
+		{
+			glm::ivec4 Local;  // xyz: its first voxel, relative to the level's window (voxels outside the window are skipped); w: its slot in the backup
+			glm::ivec4 Texel;  // xyz: that voxel's texel; w: the level
+			// xy: the frame's boxes that reach it, a bit each; z: its fade (c_VoxelMoverFade*); w: how far its fade is, 0 to 1 of
+			// c_GIMoverFadeSeconds (a float's bits): what its fading voxels show goes from what they showed when it began to what
+			// they hold, each voxel in its own part of that time
+			glm::uvec4 Movers;
+		};
+		static_assert(sizeof(VoxelMoverBrick) == 48);
+
+		// VoxelMoverPassParameters::Mode
+		constexpr uint32_t c_VoxelMoverPassCompose = 0;  // Keep what the bricks hold and write the boxes and the fades
+		constexpr uint32_t c_VoxelMoverPassRestore = 1;  // Put back what the bricks held
+		constexpr uint32_t c_VoxelMoverPassSnapshot = 2; // Take what the bricks whose fade starts show
+
+		// The dynamic layer's push constants (b2; GI/VoxelMovers.comp).
+		struct VoxelMoverPassParameters
+		{
+			uint32_t Level;
+			uint32_t FirstBrick;
+			uint32_t BrickCount;
+			uint32_t Mode;      // c_VoxelMoverPass*
+		};
+		static_assert(sizeof(VoxelMoverPassParameters) == 16);
 
 		// The voxels view's push constants (b2; GI/VoxelView.frag): display colors, RGBA8 sRGB packed (red in the low byte).
 		struct VoxelViewParameters

@@ -1,5 +1,9 @@
 [
 	{ "command": "project.info" },
+	{ "command": "editor.commands", "expect": { "/commands/0/mayDefer": { "equals": false }, "/commands/0/results": { "equals": "content" },
+		"/commands/0/waitsForAssets": { "equals": true } } },
+	{ "command": "asset.types", "expect": { "/types/0/type": { "equals": "Scene" }, "/types/0/nativeExtension": { "equals": ".stscene" },
+		"/types/0/importers/0/name": { "equals": "Native" }, "/types/0/importers/0/version": { "min": 1 } } },
 	{ "command": "scene.open", "parameters": { "scene": "Scenes/Feature.stscene" } },
 	{ "command": "script.load", "parameters": { "path": "$<TARGET_FILE:StrataTestScriptsFeatureTest>" },
 		"expect": { "/classes": { "min": 1 } } },

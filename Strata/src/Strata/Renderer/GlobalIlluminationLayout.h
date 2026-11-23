@@ -30,6 +30,9 @@ namespace Strata
 		// c_GIMaxBounceAlbedo), within [0, 1]. 1 by default; 0 is one bounce, as the tests' one-bounce references compute. Only
 		// layouts that bounce (GlobalIlluminationLayout::Bounces) read it.
 		float BounceGain = 1.0f;
+		// Whether a drawn point in a gap its voxels close takes the light of the gap's opening (Include/GIField.slang's
+		// SampleIrradianceField). Off is the gather without it: what the tests compare the gap's light with.
+		bool GapLight = true;
 	};
 
 	// A level of the voxel clipmap: every level has the same dimensions, each twice the voxel size of the one before.
@@ -37,6 +40,7 @@ namespace Strata
 	{
 		float VoxelSize = 0.0f;     // Meters: the first level's voxel size times 2^level
 		glm::uvec3 Dimensions{ 0 }; // Voxels per axis
+		float Drop = 0.0f;          // Meters its window's center lies below the camera (c_GIFinestLevelDrop for High's first level)
 	};
 
 	// A cascade of probes: all cascades cover the same field around the camera; each has half the probes per axis of the one
@@ -76,9 +80,13 @@ namespace Strata
 		uint64_t Validity = 0;    // RGBA8 per probe of every cascade
 		uint64_t Field = 0;       // Six RGBA16F faces per probe of the first cascade
 		uint64_t FieldDepth = 0;  // A 10 x 10 tile of depth moments (two halves a texel) per probe of the first cascade
+		uint64_t FieldIrradiance = 0; // Nine RGBA16F harmonics per probe of the first cascade (what scene passes read)
 		uint64_t Tiles = 0;       // The large triangles' tiles of a batch (8 bytes each)
 		uint64_t WorkItems = 0;   // The frame's work items (16 bytes) and triangle groups (8 bytes)
 		uint64_t Regions = 0;     // The frame's voxel regions (48 bytes each) and the GI's counters
+		// The dynamic layer of moving objects: what its bricks held before it wrote them (12 bytes a voxel), the bricks written and
+		// those put back (48 bytes each) and the frame's boxes (80 bytes each)
+		uint64_t Movers = 0;
 
 		uint64_t GetTotal() const;
 	};
@@ -90,6 +98,9 @@ namespace Strata
 		// Voxels a voxelization batch's regions hold together: the scratch's size (one 64^3 batch at High; one level at Low,
 		// whose levels are smaller).
 		uint32_t BatchVoxels = 0;
+		// Bricks of c_GIMoverBrickVoxels^3 voxels the dynamic layer of moving objects writes a frame at most, over all levels (512 at
+		// High, 256 at Low: a 1 m box reaches 51 of High's at most); movers past them are in no voxel until they rest.
+		uint32_t MoverBricks = 0;
 		glm::vec3 FieldExtent{ 0.0f };     // Meters the probe cascades cover
 		float FieldSnap = 0.0f;            // The field moves in whole steps of the top cascade's spacing
 		glm::vec2 FieldFullExtent{ 0.0f }; // Meters around the camera where the field has full weight: horizontally, vertically
@@ -141,8 +152,9 @@ namespace Strata
 
 		// The world voxel index of a position: floor(position / voxelSize).
 		glm::i64vec3 GetVoxelIndex(const glm::dvec3& position, float voxelSize);
-		// The minimum corner of a level's window around a camera: centered on the camera's voxel, snapped down to a multiple of
-		// c_GIScrollVoxels, so the camera lies between Dimensions / 2 and Dimensions / 2 + c_GIScrollVoxels voxels from it.
+		// The minimum corner of a level's window around a camera: centered on the voxel of the camera lowered by the level's Drop,
+		// snapped down to a multiple of c_GIScrollVoxels, so that point lies between Dimensions / 2 and Dimensions / 2 +
+		// c_GIScrollVoxels voxels from it.
 		glm::i64vec3 GetWindowMinimum(const VoxelLevelLayout& level, const glm::dvec3& cameraPosition);
 		VoxelBox GetWindow(const VoxelLevelLayout& level, const glm::i64vec3& minimum);
 		// Where a world voxel index is stored in a level's textures: its non-negative remainder by the dimensions.
@@ -167,9 +179,10 @@ namespace Strata
 		glm::vec3 GetVoxelCoordinate(const RenderData::AffineTransform& world, const glm::vec3& position, const glm::vec3& anchor, float voxelSize);
 
 		// The weight with which a sample at a camera-relative point reads a level rather than the coarser ones: 1 within the
-		// window's half extent less (c_GIScrollVoxels + c_GILevelGuardVoxels + c_GILevelBlendVoxels) voxels of the camera on every
-		// axis, falling to 0 over c_GILevelBlendVoxels voxels. By the distance from the camera, not from the snapped window, so
-		// it changes continuously as the camera moves (Include/GlobalIllumination.slang's GetLevelWeight).
+		// window's half extent less (c_GIScrollVoxels + c_GILevelGuardVoxels + c_GILevelBlendVoxels) voxels of the window's center
+		// (the camera, the level's Drop below it) on every axis, falling to 0 over c_GILevelBlendVoxels voxels. By the distance
+		// from the camera, not from the snapped window, so it changes continuously as the camera moves
+		// (Include/GlobalIllumination.slang's GetLevelWeight).
 		float GetLevelWeight(const VoxelLevelLayout& level, const glm::vec3& relative);
 
 		// A material's voxel colors (RenderData::GIMaterial): linear RGB in [0, 1] as 8 bits per channel (red in the low byte),

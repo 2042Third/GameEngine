@@ -13,6 +13,7 @@
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -378,6 +379,297 @@ namespace
 			point.Point += offset;
 		return points;
 	}
+
+	// The movers' ground (the dynamic occupancy layer's cases): a slab whose top is y 0 under a constant white sky, and when asked a
+	// sun whose light travels (0.3, -0.7, 0.65), onto the top and the -z face of what stands there. The prop is a box of
+	// c_MoverSize off the 0.1 m voxel grid on every axis but y's foot, sliding along +x c_MoverStep a frame (a fifth of a voxel)
+	// from c_MoverStart; the points are a row on the ground 0.3 m before its -z face.
+	constexpr float c_MoverFrameSeconds = 1.0f / 60.0f;
+	const glm::vec3 c_MoverSize(0.5f, 0.55f, 0.5f);
+	constexpr float c_MoverZ = 0.02f;
+	constexpr float c_MoverStart = -0.37f;
+	constexpr float c_MoverStep = 0.02f;
+	constexpr uint32_t c_MoverFrames = 40;
+	const glm::vec3 c_MoverSky(4000.0f);
+
+	// Straight down at the ground before the prop, `x` along the prop's way.
+	SceneCamera MoverCamera(float x = 0.0f)
+	{
+		return MakeCamera(glm::vec3(x, 2.9f, -1.2f), glm::vec3(x, 0.0f, -1.199f), 100.0f, c_FloorSize);
+	}
+
+	std::vector<RoomPoint> GetMoverPoints()
+	{
+		std::vector<RoomPoint> points;
+		for (int index = -7; index <= 7; index++)
+			points.push_back({ "ground before the prop", { 0.1f * static_cast<float>(index), 0.0f, c_MoverZ - 0.5f * c_MoverSize.z - 0.3f }, c_Up });
+		return points;
+	}
+
+	struct MoverRender
+	{
+		SceneTestAssets Assets;
+		Scene SceneData;
+		Entity Prop;
+		Scope<SceneRenderer> Renderer;
+		float CameraX = 0.0f; // Where the camera stands along the prop's way (MoverCamera)
+
+		// `propAlbedo` null: the ground alone.
+		MoverRender(bool sun, const glm::vec3* propAlbedo, float propX, GlobalIlluminationLevel level = GlobalIlluminationLevel::High)
+		{
+			AddNeutralPostProcess(SceneData);
+			MaterialProperties ground;
+			ground.BaseColor = glm::vec4(0.6f, 0.6f, 0.6f, 1.0f);
+			ground.Roughness = 0.9f;
+			AddMesh(SceneData, BuiltinAssets::CubeMesh, Assets.AddMaterial(ground), glm::vec3(0.0f, -0.5f, 0.0f), "Ground").GetComponent<TransformComponent>().Scale =
+				glm::vec3(40.0f, 1.0f, 40.0f);
+			SceneData.CreateEntity("Sky").AddComponent<SkyLightComponent>().AmbientColor = c_MoverSky;
+			if (sun)
+				AddSun(SceneData, glm::normalize(glm::vec3(0.3f, -0.7f, 0.65f)), 100000.0f);
+			if (propAlbedo)
+			{
+				MaterialProperties material;
+				material.BaseColor = glm::vec4(*propAlbedo, 1.0f);
+				material.Roughness = 0.9f;
+				Prop = AddMesh(SceneData, BuiltinAssets::CubeMesh, Assets.AddMaterial(material), glm::vec3(propX, 0.5f * c_MoverSize.y, c_MoverZ), "Prop");
+				Prop.GetComponent<TransformComponent>().Scale = c_MoverSize;
+			}
+			Renderer = CreateScope<SceneRenderer>(RoomSpecification(level));
+			Renderer->SetViewportSize(c_FloorSize.x, c_FloorSize.y);
+		}
+
+		void MoveTo(float x)
+		{
+			Prop.GetComponent<TransformComponent>().Translation.x = x;
+			Prop.MarkModified<TransformComponent>();
+		}
+
+		// A frame c_MoverFrameSeconds after the one before (the renderer's clock, not the machine's), and the points' light.
+		std::vector<glm::vec3> Frame(const std::vector<RoomPoint>& points)
+		{
+			AssetManager::SetActive(Assets.Manager);
+			SceneRenderOptions options = GIViewOptions();
+			options.AdaptationSeconds = c_MoverFrameSeconds;
+			REQUIRE(RenderGIFrame(*Renderer, SceneData, MoverCamera(CameraX), options));
+			REQUIRE(Renderer->GetStats().GlobalIllumination);
+			REQUIRE_FALSE(Renderer->GetStats().GlobalIlluminationPending);
+			return ReadPoints(*Renderer, MoverCamera(CameraX), points);
+		}
+
+		std::vector<glm::vec3> Settle(const std::vector<RoomPoint>& points)
+		{
+			std::vector<glm::vec3> values;
+			for (uint32_t frame = 0; frame < 3; frame++)
+				values = Frame(points);
+			return values;
+		}
+	};
+
+	float SumLuminance(const std::vector<glm::vec3>& values)
+	{
+		float sum = 0.0f;
+		for (const glm::vec3& value : values)
+			sum += Luminance(value);
+		return sum;
+	}
+
+	// The share of the sky a ground point sees past the prop standing with its center at x `propX`: cosine-weighted directions
+	// (Malley's method over `strata` x `strata` cells) against the box.
+	float GetMoverSkyShare(const glm::vec3& point, float propX, uint32_t strata = 96)
+	{
+		const glm::dvec3 minimum = glm::dvec3(propX, 0.0, c_MoverZ) - glm::dvec3(0.5 * c_MoverSize.x, 0.0, 0.5 * c_MoverSize.z);
+		const glm::dvec3 maximum = glm::dvec3(propX, c_MoverSize.y, c_MoverZ) + glm::dvec3(0.5 * c_MoverSize.x, 0.0, 0.5 * c_MoverSize.z);
+		const glm::dvec3 origin(point.x, 1e-6, point.z);
+		uint32_t open = 0;
+		for (uint32_t i = 0; i < strata; i++)
+		{
+			for (uint32_t j = 0; j < strata; j++)
+			{
+				const double u = (static_cast<double>(i) + 0.5) / strata;
+				const double angle = glm::two_pi<double>() * (static_cast<double>(j) + 0.5) / strata;
+				const glm::dvec3 direction(std::sqrt(u) * std::cos(angle), std::sqrt(1.0 - u), std::sqrt(u) * std::sin(angle));
+				double enter = 0.0;
+				double leave = std::numeric_limits<double>::max();
+				for (int axis = 0; axis < 3; axis++)
+				{
+					const double inverse = 1.0 / (std::abs(direction[axis]) > 1e-12 ? direction[axis] : 1e-12);
+					const double first = (minimum[axis] - origin[axis]) * inverse;
+					const double second = (maximum[axis] - origin[axis]) * inverse;
+					enter = std::max(enter, std::min(first, second));
+					leave = std::min(leave, std::max(first, second));
+				}
+				open += enter > leave ? 1u : 0u;
+			}
+		}
+		return static_cast<float>(open) / static_cast<float>(strata * strata);
+	}
+
+	float LargestComponent(const glm::vec3& value)
+	{
+		return std::max(value.x, std::max(value.y, value.z));
+	}
+
+	// The largest change of a point's light from one frame to the next, over its light (its largest channel).
+	float GetLargestStep(const std::vector<glm::vec3>& before, const std::vector<glm::vec3>& after)
+	{
+		float largest = 0.0f;
+		for (size_t point = 0; point < before.size(); point++)
+			largest = std::max(largest, LargestComponent(glm::abs(after[point] - before[point])) / std::max(LargestComponent(before[point]), 1e-3f));
+		return largest;
+	}
+
+	// How red the points' light is: the sum of red over the sum of green (1 under the white sky alone).
+	float GetRedShare(const std::vector<glm::vec3>& values)
+	{
+		float red = 0.0f;
+		float green = 0.0f;
+		for (const glm::vec3& value : values)
+		{
+			red += value.r;
+			green += value.g;
+		}
+		return red / std::max(green, 1e-6f);
+	}
+
+	// A renderer's voxels (the material, emission and normal textures of its `levelCount` levels, as stored) and its field.
+	void ReadVoxelsAndField(SceneRenderer& renderer, uint32_t levelCount, std::vector<std::vector<uint8_t>>& outLevels, std::vector<uint8_t>& outField)
+	{
+		outLevels.clear();
+		for (uint32_t level = 0; level < levelCount; level++)
+		{
+			for (SceneRenderer::GlobalIlluminationTexture texture : { SceneRenderer::GlobalIlluminationTexture::Material, SceneRenderer::GlobalIlluminationTexture::Emission,
+				SceneRenderer::GlobalIlluminationTexture::Normal })
+			{
+				REQUIRE(renderer.ReadGlobalIlluminationVoxels(level, texture, outLevels.emplace_back()));
+			}
+		}
+		REQUIRE(renderer.ReadGlobalIlluminationField(outField));
+	}
+
+	// Bytes of the field (4.4 million at High) that two renderers of equal voxels may differ in: the driver behaviour "A still
+	// camera's field repeats frame after frame" describes showed as one byte; a brick the dynamic layer left behind would
+	// change thousands.
+	constexpr size_t c_FieldBytes = 16;
+
+	size_t CountDifferingBytes(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b)
+	{
+		REQUIRE(a.size() == b.size());
+		size_t differing = 0;
+		for (size_t index = 0; index < a.size(); index++)
+			differing += a[index] != b[index] ? 1u : 0u;
+		return differing;
+	}
+
+	// How far a point's light leaves the range between two states of it while it goes from the one to the other: the largest
+	// excursion of any channel past both `from` and `to` over `frames`, over the point's light at `to` (its largest channel).
+	// 0: every point's every channel stays between its two ends.
+	float GetLargestExcursion(const std::vector<std::vector<glm::vec3>>& frames, size_t first, const std::vector<glm::vec3>& from, const std::vector<glm::vec3>& to)
+	{
+		float largest = 0.0f;
+		for (size_t frame = first; frame < frames.size(); frame++)
+		{
+			for (size_t point = 0; point < to.size(); point++)
+			{
+				const glm::vec3 low = glm::min(from[point], to[point]);
+				const glm::vec3 high = glm::max(from[point], to[point]);
+				const glm::vec3 outside = glm::max(glm::max(frames[frame][point] - high, low - frames[frame][point]), glm::vec3(0.0f));
+				largest = std::max(largest, LargestComponent(outside) / std::max(LargestComponent(to[point]), 1e-3f));
+			}
+		}
+		return largest;
+	}
+
+	// The movers' closed room: the Cornell box (BuildCornellBox: lit by its ceiling panel alone, so every light in it is the
+	// field's, with every bounce) and a blue box of 0.7 m off the voxel grid that slides c_ClosedStep a frame along +x across
+	// the floor before the tall box, toward the sphere, and stops at c_ClosedEnd (the look-dev's shot of the unit).
+	constexpr float c_ClosedSize = 0.7f;
+	constexpr float c_ClosedZ = 0.83f;
+	constexpr float c_ClosedEnd = -0.43f;
+	constexpr float c_ClosedStep = 0.025f;
+
+	// What the box shades and tints where it stops: the floor beside and behind it, the tall box's face behind it and
+	// the sphere's side toward it. Every point is in the camera's view past the stopped box.
+	std::vector<RoomPoint> GetClosedRoomPoints()
+	{
+		const float left = c_ClosedEnd - 0.5f * c_ClosedSize;
+		const float right = c_ClosedEnd + 0.5f * c_ClosedSize;
+		const float back = c_ClosedZ - 0.5f * c_ClosedSize;
+		// The tall box's face toward the camera: turned 18 degrees about y.
+		const float angle = glm::radians(18.0f);
+		const glm::vec3 faceNormal(std::sin(angle), 0.0f, std::cos(angle));
+		const glm::vec3 faceAlong(std::cos(angle), 0.0f, -std::sin(angle));
+		const glm::vec3 faceCenter = glm::vec3(-1.05f, 0.0f, -1.0f) + 0.8f * faceNormal;
+		const glm::vec3 sphere(1.15f, 0.9f, -0.3f);
+		const glm::vec3 sphereSide = glm::normalize(glm::vec3(-1.0f, 0.0f, 0.3f));
+		const glm::vec3 sphereLow = glm::normalize(glm::vec3(-0.8f, -0.45f, 0.4f));
+		return {
+			{ "floor 0.2 m left of the box", { left - 0.2f, 0.0f, c_ClosedZ }, c_Up },
+			{ "floor 0.5 m left of the box", { left - 0.5f, 0.0f, c_ClosedZ }, c_Up },
+			{ "floor 0.2 m right of the box", { right + 0.2f, 0.0f, c_ClosedZ }, c_Up },
+			{ "floor 0.5 m right of the box", { right + 0.5f, 0.0f, c_ClosedZ }, c_Up },
+			{ "floor behind the box's left", { left - 0.3f, 0.0f, back - 0.05f }, c_Up },
+			{ "floor behind the box's right", { right + 0.2f, 0.0f, back - 0.05f }, c_Up },
+			{ "tall box low, left", faceCenter + glm::vec3(0.0f, 0.8f, 0.0f) - 0.3f * faceAlong, faceNormal },
+			{ "tall box low, right", faceCenter + glm::vec3(0.0f, 0.8f, 0.0f) + 0.3f * faceAlong, faceNormal },
+			{ "tall box middle, left", faceCenter + glm::vec3(0.0f, 1.3f, 0.0f) - 0.3f * faceAlong, faceNormal },
+			{ "tall box middle, right", faceCenter + glm::vec3(0.0f, 1.3f, 0.0f) + 0.3f * faceAlong, faceNormal },
+			{ "sphere toward the box", sphere + 0.9f * sphereSide, sphereSide },
+			{ "sphere toward the box, low", sphere + 0.9f * sphereLow, sphereLow },
+		};
+	}
+
+	struct ClosedRoomRender
+	{
+		SceneTestAssets Assets;
+		Scene SceneData;
+		Entity Prop;
+		Scope<SceneRenderer> Renderer;
+		SceneCamera Camera;
+
+		// `prop` false: the room alone.
+		ClosedRoomRender(bool prop, float propX)
+		{
+			BuildCornellBox(SceneData, Assets);
+			if (prop)
+			{
+				MaterialProperties blue;
+				blue.BaseColor = glm::vec4(0.08f, 0.2f, 0.8f, 1.0f);
+				blue.Roughness = 0.9f;
+				Prop = AddMesh(SceneData, BuiltinAssets::CubeMesh, Assets.AddMaterial(blue), glm::vec3(propX, 0.5f * c_ClosedSize, c_ClosedZ), "Prop");
+				Prop.GetComponent<TransformComponent>().Scale = glm::vec3(c_ClosedSize);
+			}
+			Renderer = CreateScope<SceneRenderer>(RoomSpecification(GlobalIlluminationLevel::High, 1.0f));
+			Renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+			Camera = CornellCamera(static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y));
+		}
+
+		void MoveTo(float x)
+		{
+			Prop.GetComponent<TransformComponent>().Translation.x = x;
+			Prop.MarkModified<TransformComponent>();
+		}
+
+		// A frame c_MoverFrameSeconds after the one before by the renderer's clock, and the points' light.
+		std::vector<glm::vec3> Frame(const std::vector<RoomPoint>& points)
+		{
+			AssetManager::SetActive(Assets.Manager);
+			SceneRenderOptions options = GIViewOptions();
+			options.AdaptationSeconds = c_MoverFrameSeconds;
+			REQUIRE(RenderGIFrame(*Renderer, SceneData, Camera, options));
+			REQUIRE(Renderer->GetStats().GlobalIllumination);
+			REQUIRE_FALSE(Renderer->GetStats().GlobalIlluminationPending);
+			return ReadPoints(*Renderer, Camera, points);
+		}
+
+		// Until every bounce has settled (the Cornell box's take 18 frames; twice that).
+		std::vector<glm::vec3> Settle(const std::vector<RoomPoint>& points)
+		{
+			std::vector<glm::vec3> values;
+			for (uint32_t frame = 0; frame < 36; frame++)
+				values = Frame(points);
+			return values;
+		}
+	};
 
 }
 
@@ -979,8 +1271,9 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 	{
 		// The field is a function of world data and of where the camera stands, never of where it stood: after a strafe along the
 		// yard's fence (13 frames, 0.02 m each, one bounce: every bounce takes the frame before's field by design), the gi view, the
-		// field, cascade 0's validity and its depth moments equal a fresh renderer's at the last camera, bit for bit. What made the
-		// fence crawl was a camera input of the gather itself (DeveloperGuide, "Global illumination"), not a history.
+		// field, the harmonics drawn surfaces read, cascade 0's validity and its depth moments equal a fresh renderer's at the last
+		// camera, bit for bit. What made the fence crawl was a camera input of the gather itself (DeveloperGuide, "Global
+		// illumination"), not a history.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		const float aspect = static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y);
@@ -991,6 +1284,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		{
 			ReadbackImage Image;
 			std::vector<uint8_t> Field;
+			std::vector<uint8_t> Harmonics;
 			std::vector<uint8_t> Validity;
 			std::vector<uint8_t> Depth;
 		};
@@ -999,6 +1293,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 			Reading reading;
 			REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), reading.Image));
 			REQUIRE(renderer.ReadGlobalIlluminationField(reading.Field));
+			REQUIRE(renderer.ReadGlobalIlluminationFieldIrradiance(reading.Harmonics));
 			REQUIRE(renderer.ReadGlobalIlluminationValidity(0, reading.Validity));
 			REQUIRE(renderer.ReadGlobalIlluminationFieldDepth(reading.Depth));
 			return reading;
@@ -1019,8 +1314,64 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		CollectReleases();
 		CHECK(moved.Image.Pixels == still.Image.Pixels);
 		CHECK(moved.Field == still.Field);
+		CHECK(moved.Harmonics == still.Harmonics);
 		CHECK(moved.Validity == still.Validity);
 		CHECK(moved.Depth == still.Depth);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A still camera's field repeats frame after frame")
+	{
+		// At one bounce nothing of a frame reaches the next, so a camera that stands still gets the same field every frame, bit for
+		// bit: the faces, the harmonics drawn surfaces read and the depth moments. One driver (NVIDIA 621.1) ran the reduce's sums
+		// in two ways from dispatch to dispatch, a unit in the last place apart (a face of one probe, the harmonics of some 180),
+		// in a process that had drawn this suite's cases before on a busy machine: GI/FieldReduce.comp's sums are `precise` since.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const float aspect = static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y);
+		SceneTestAssets assets;
+		Scene scene;
+		BuildYard(scene, assets);
+		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification());
+		renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+		constexpr uint32_t c_Frames = 12;
+		std::vector<uint8_t> firstField;
+		std::vector<uint8_t> firstHarmonics;
+		std::vector<uint8_t> firstDepth;
+		uint32_t fieldChanges = 0;
+		uint32_t harmonicsChanges = 0;
+		uint32_t depthChanges = 0;
+		for (uint32_t frame = 0; frame < c_Frames; frame++)
+		{
+			REQUIRE(RenderGIFrame(*renderer, scene, YardStrafe(13, 1.0f, aspect), GIViewOptions()));
+			REQUIRE_FALSE(renderer->GetStats().GlobalIlluminationPending);
+			std::vector<uint8_t> field;
+			std::vector<uint8_t> harmonics;
+			std::vector<uint8_t> depth;
+			REQUIRE(renderer->ReadGlobalIlluminationField(field));
+			REQUIRE(renderer->ReadGlobalIlluminationFieldIrradiance(harmonics));
+			REQUIRE(renderer->ReadGlobalIlluminationFieldDepth(depth));
+			if (frame == 0)
+			{
+				firstField = std::move(field);
+				firstHarmonics = std::move(harmonics);
+				firstDepth = std::move(depth);
+				continue;
+			}
+			fieldChanges += field != firstField ? 1 : 0;
+			harmonicsChanges += harmonics != firstHarmonics ? 1 : 0;
+			depthChanges += depth != firstDepth ? 1 : 0;
+		}
+		renderer.reset();
+		CollectReleases();
+		REQUIRE_FALSE(firstField.empty());
+		REQUIRE_FALSE(firstHarmonics.empty());
+		REQUIRE_FALSE(firstDepth.empty());
+		MESSAGE("of " << c_Frames - 1 << " frames after the first, the faces changed in " << fieldChanges << ", the harmonics in " << harmonicsChanges
+			<< ", the depth moments in " << depthChanges);
+		CHECK(fieldChanges == 0);
+		CHECK(harmonicsChanges == 0);
+		CHECK(depthChanges == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -1166,6 +1517,118 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The north wall keeps its light around the sun's patch on it")
+	{
+		// A sun 6 degrees above the horizon shines through the south window onto the north wall: its patch there (x -11 to -9, y 0.27
+		// to 1.55) is some 18,000 nits, on a wall the room's bounces light to a few hundred. A point of the wall takes nothing from
+		// the patch, which lies in its own plane, but the probes 0.25 m in front of the wall see the patch behind that plane. Their
+		// ambient cubes' +Z faces leave it out (a face holds the light of its own hemisphere); a read that weighs light from behind
+		// the normal's plane shows there as a glow or, where the weight is negative, as dark blotches (the harmonics alone, whose
+		// kernel is negative from 104 to 145 degrees off the normal, read 0.48 to 0.67 of the faces on the patch and 0.74 above it).
+		// So the gi view of the wall, at the points behind the probes of four rows, against those probes' +Z faces: on the patch,
+		// beside it, above it and away from it. Measured with the cubes as the read's floor (Include/GIField.slang's
+		// ReadProbeIrradiance): 0.999 to 1.085 (the harmonics weigh the light straight ahead 6% above the cosine, so a wall facing
+		// a lit room reads a little over its face).
+		constexpr float c_Below = 0.03f;
+		constexpr float c_Above = 0.15f;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SunRoomOptions room;
+		room.SunDirection = SunRoomDirection(-6.0f, 0.0f);
+		std::vector<RoomPoint> points;
+		for (float y : { 0.75f, 1.25f, 1.75f, 2.25f })
+		{
+			for (float x = -12.75f; x < -7.0f; x += 0.5f)
+				points.push_back({ fmt::format("north wall x {} y {}", x, y), { x, y, -5.0f }, -c_North });
+		}
+		RoomRender render(room, c_RoomSize, RoomSpecification(GlobalIlluminationLevel::High, 1.0f));
+		const SceneCamera camera = MakeCamera(glm::vec3(-10.0f, 1.5f, -0.6f), glm::vec3(-10.0f, 1.0f, -5.0f), 70.0f, c_RoomSize);
+		const std::vector<glm::vec3> values = render.Measure(camera, points, c_BounceFrames);
+		std::vector<uint8_t> field;
+		REQUIRE(render.Renderer->ReadGlobalIlluminationField(field));
+		std::string table = "The north wall's gi view over its probes' +Z faces (rows y 0.75, 1.25, 1.75, 2.25; the patch: x -11 to -9, y 0.27 to 1.55):";
+		float lowest = std::numeric_limits<float>::max();
+		float highest = 0.0f;
+		for (size_t index = 0; index < points.size(); index++)
+		{
+			const float value = Luminance(values[index]);
+			const float face = ReadFieldFace(*render.Renderer, camera, field, points[index].Point + glm::vec3(0.0f, 0.0f, 0.25f), 4);
+			if (index % 12 == 0)
+				table += "\n ";
+			table += fmt::format(" {:5.0f}/{:<5.0f}", value, face);
+			INFO(points[index].Name << ": " << value << " against the face's " << face);
+			REQUIRE(face > 0.0f);
+			lowest = std::min(lowest, value / face);
+			highest = std::max(highest, value / face);
+			CHECK(value >= (1.0f - c_Below) * face);
+			CHECK(value <= (1.0f + c_Above) * face);
+		}
+		MESSAGE(table);
+		MESSAGE("gi view over the face: " << lowest << " to " << highest);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A wall between the axes keeps its light at the sun's patch on it")
+	{
+		// The same low sun onto a plaster panel that stands in the room turned 30 degrees about Y: the sun lights the panel's face
+		// west of x -9 (y 0.5 to 1.8) and leaves the rest in the south wall's shadow. The room lights the whole face about evenly,
+		// so its gi view on the patch against its gi view in the shadow, at two heights. The harmonics alone read 0.79 to 1.17 of
+		// the shadowed part's mean there: the patch's light behind the plane took up to a fifth away (in a room that the patch
+		// alone lights, the showcase's hut, the wall around it went black). With the probes' cubes as the read's floor
+		// (Include/GIField.slang's ReadProbeIrradiance) the patch reads 2.2 to 2.7 times the shadowed part: between the axes a
+		// cube blends the hemispheres of two axes, which hold some of the patch's own light. That is the read of the build before,
+		// under sunlight hundreds of times as bright; 0.75 m into the shadow it is 3% above the harmonics', 1.25 m in 1%. So the
+		// patch never reads below c_Lowest of the shadowed part (the blotches), nor above c_Highest of it (a read that takes more
+		// from behind the plane than the cubes do).
+		constexpr float c_Lowest = 0.9f;
+		constexpr float c_Highest = 3.0f;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SunRoomOptions room;
+		room.SunDirection = SunRoomDirection(-6.0f, 0.0f);
+		RoomRender render(room, c_RoomSize, RoomSpecification(GlobalIlluminationLevel::High, 1.0f));
+		const glm::quat turn = glm::angleAxis(glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		const glm::vec3 normal = turn * glm::vec3(0.0f, 0.0f, 1.0f);
+		const glm::vec3 along = turn * glm::vec3(1.0f, 0.0f, 0.0f);
+		const glm::vec3 faceCenter(-9.0f, 1.3f, -3.2f);
+		MaterialProperties plaster;
+		plaster.BaseColor = glm::vec4(glm::vec3(0.58f), 1.0f);
+		plaster.Roughness = 1.0f;
+		plaster.Metallic = 0.0f;
+		Entity panel = AddMesh(render.SceneData, BuiltinAssets::CubeMesh, render.Assets.AddMaterial(plaster), faceCenter - 0.15f * normal, "Panel");
+		TransformComponent& transform = panel.GetComponent<TransformComponent>();
+		transform.Scale = glm::vec3(3.8f, 2.4f, 0.3f);
+		transform.Rotation = turn;
+		panel.MarkModified<TransformComponent>();
+		std::vector<RoomPoint> points;
+		constexpr size_t c_LitPoints = 6;
+		for (float offset : { -1.5f, -1.0f, -0.5f, 0.75f, 1.25f })
+		{
+			for (float y : { 1.0f, 1.25f })
+				points.push_back({ fmt::format("panel {} m along, y {}", offset, y), glm::vec3(faceCenter.x, y, faceCenter.z) + offset * along, normal });
+		}
+		const SceneCamera camera = MakeCamera(faceCenter + 2.4f * normal + glm::vec3(0.0f, 0.2f, 0.0f), faceCenter - glm::vec3(0.0f, 0.2f, 0.0f), 70.0f, c_RoomSize);
+		const std::vector<glm::vec3> values = render.Measure(camera, points, c_BounceFrames);
+		float shadow = 0.0f;
+		for (size_t index = c_LitPoints; index < points.size(); index++)
+			shadow += Luminance(values[index]) / static_cast<float>(points.size() - c_LitPoints);
+		REQUIRE(shadow > 0.0f);
+		std::string row;
+		for (size_t index = 0; index < points.size(); index++)
+		{
+			const float value = Luminance(values[index]);
+			row += fmt::format(" {:.0f}", value);
+			if (index >= c_LitPoints)
+				continue;
+			INFO(points[index].Name << ": " << value << " against the shadowed part's " << shadow);
+			CHECK(value >= c_Lowest * shadow);
+			CHECK(value <= c_Highest * shadow);
+		}
+		MESSAGE("The panel's gi view (on the patch 1.5, 1.0 and 0.5 m from its edge, then 0.75 and 1.25 m into the shadow; y 1.0 and 1.25 each):"
+			<< row << "; the shadowed part's mean " << shadow);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A sealed room stays dark")
 	{
 		// The window filled with plaster: the nineteen points' mean at most erhe's 0.0017 of the open room's, and every junction of
@@ -1297,6 +1760,577 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationRoom")
 				CHECK(Luminance(sealedJunctions[index]) <= c_SealedBound * MeanLuminance(openValues));
 			}
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A moving prop occludes the ground beside it every frame, without a pop per voxel")
+	{
+		// 5b (R5): a box sliding a fifth of a voxel a frame across eight voxels, 0.3 m beside a row of ground points under a
+		// constant sky, one bounce (the box sends nothing: what the points lose is the sky it hides). While it moves it takes
+		// the share of their sky the box itself hides (GetMoverSkyShare, within 15%: 10.1% of the light for 9.8%; left out of the
+		// voxels until it rested, it took none; its static voxels, off the grid here, take 7.9%), and the points' light changes
+		// smoothly: the largest second difference over the frames, over the value, stays under 2% (the spec's flicker measure:
+		// 0.53%; whole voxels turning on gave the lab 15%, the box's plain share of each voxel 5.4% and 3.8% here: Docs/
+		// DeveloperGuide.md, "Global illumination"). That is the move once the voxels it left have faded (c_GIMoverFadeSeconds,
+		// the first 15 frames here, while the box crosses its first three voxels); from rest through the fade it stays under
+		// c_StartSecond (2.9%: its triangles' voxels give way to the box, which without the fade is one frame's step and a
+		// second difference of 15.8%).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::vector<RoomPoint> points = GetMoverPoints();
+		const glm::vec3 white(0.7f);
+		constexpr uint32_t c_Middle = c_MoverFrames / 2;
+		float open = 0.0f;
+		float restingOcclusion = 0.0f;
+		{
+			MoverRender empty(false, nullptr, 0.0f);
+			open = SumLuminance(empty.Settle(points));
+			MoverRender resting(false, &white, c_MoverStart + c_MoverStep * static_cast<float>(c_Middle));
+			restingOcclusion = open - SumLuminance(resting.Settle(points));
+		}
+		CollectReleases();
+		float reference = 0.0f;
+		for (const RoomPoint& point : points)
+			reference += 1.0f - GetMoverSkyShare(point.Point, c_MoverStart + c_MoverStep * static_cast<float>(c_Middle));
+		reference *= open / static_cast<float>(points.size());
+		MESSAGE("the open ground's light " << open / static_cast<float>(points.size()) << " nits per albedo; a resting prop takes " << 100.0f * restingOcclusion / open
+			<< "% of the points' light, the box itself " << 100.0f * reference / open << "% of their sky");
+		REQUIRE(restingOcclusion > 0.03f * open);
+
+		MoverRender moving(false, &white, c_MoverStart);
+		// frames[index]: the box index steps into the move (0: at rest).
+		std::vector<std::vector<glm::vec3>> frames;
+		frames.push_back(moving.Settle(points));
+		float leastOcclusion = std::numeric_limits<float>::max();
+		for (uint32_t frame = 1; frame <= c_MoverFrames; frame++)
+		{
+			moving.MoveTo(c_MoverStart + c_MoverStep * static_cast<float>(frame));
+			frames.push_back(moving.Frame(points));
+			CHECK(moving.Renderer->GetStats().GIMovingProxies == 1);
+			leastOcclusion = std::min(leastOcclusion, open - SumLuminance(frames.back()));
+		}
+		const float movingOcclusion = open - SumLuminance(frames[c_Middle]);
+		MESSAGE("moving through the same place it takes " << 100.0f * movingOcclusion / open << "%, at least " << 100.0f * leastOcclusion / open << "% in every frame");
+		CHECK(movingOcclusion >= 0.85f * reference);
+		CHECK(movingOcclusion <= 1.15f * reference);
+		CHECK(leastOcclusion >= 0.5f * restingOcclusion);
+
+		constexpr float c_StartSecond = 0.04f;
+		// The fade lasts c_GIMoverFadeSeconds from the frame of the first step.
+		const size_t fadeFrames = static_cast<size_t>(std::ceil(RenderData::c_GIMoverFadeSeconds / c_MoverFrameSeconds)) + 1;
+		float largest = 0.0f;
+		float largestStart = 0.0f;
+		double sum = 0.0;
+		uint32_t count = 0;
+		for (size_t frame = 1; frame + 1 < frames.size(); frame++)
+		{
+			for (size_t point = 0; point < points.size(); point++)
+			{
+				const float value = Luminance(frames[frame][point]);
+				const float second = std::abs(Luminance(frames[frame + 1][point]) - 2.0f * value + Luminance(frames[frame - 1][point])) / std::max(value, 1e-3f);
+				if (frame <= fadeFrames)
+				{
+					largestStart = std::max(largestStart, second);
+					continue;
+				}
+				largest = std::max(largest, second);
+				sum += second;
+				count++;
+			}
+		}
+		MESSAGE("second difference over the value: largest " << 100.0f * largest << "%, mean " << 100.0 * sum / count << "%; while the voxels it left fade, largest "
+			<< 100.0f * largestStart << "%");
+		CHECK(largest <= 0.02f);
+		CHECK(largestStart <= c_StartSecond);
+		moving.Renderer.reset();
+		CollectReleases();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A moving prop bounces its color while it moves")
+	{
+		// A red box in the sun: its sunlit face reddens the ground before it while it slides, as it does resting in the same place
+		// (what it adds to the points' red over green: 0.229 moving for 0.227 resting, at least 0.213 in every frame; none before).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::vector<RoomPoint> points = GetMoverPoints();
+		const glm::vec3 red(0.8f, 0.05f, 0.05f);
+		constexpr uint32_t c_Middle = c_MoverFrames / 2;
+		float open = 0.0f;
+		float restingTint = 0.0f;
+		{
+			MoverRender empty(true, nullptr, 0.0f);
+			open = GetRedShare(empty.Settle(points));
+			MoverRender resting(true, &red, c_MoverStart + c_MoverStep * static_cast<float>(c_Middle));
+			restingTint = GetRedShare(resting.Settle(points)) - open;
+		}
+		CollectReleases();
+		MESSAGE("red over green: " << open << " on the open ground, " << open + restingTint << " before the resting prop");
+		REQUIRE(restingTint > 0.1f);
+
+		MoverRender moving(true, &red, c_MoverStart);
+		moving.Settle(points);
+		float leastTint = std::numeric_limits<float>::max();
+		float movingTint = 0.0f;
+		for (uint32_t frame = 1; frame <= c_MoverFrames; frame++)
+		{
+			moving.MoveTo(c_MoverStart + c_MoverStep * static_cast<float>(frame));
+			const float tint = GetRedShare(moving.Frame(points)) - open;
+			leastTint = std::min(leastTint, tint);
+			if (frame == c_Middle)
+				movingTint = tint;
+		}
+		MESSAGE("moving through the same place it adds " << movingTint << " (resting " << restingTint << "), at least " << leastTint << " in every frame");
+		CHECK(movingTint >= 0.75f * restingTint);
+		CHECK(movingTint <= 1.25f * restingTint);
+		CHECK(leastTint >= 0.5f * restingTint);
+		moving.Renderer.reset();
+		CollectReleases();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A prop that stops keeps its light to within its two forms' difference")
+	{
+		// The red box in the sun rests, slides for longer than a fade lasts and stops off the voxel grid. The frame of its last
+		// step holds its shadow on the sky and its bounce, but not yet the resting prop's light: it is within c_FormStep of a
+		// fresh renderer's resting prop (20.7% at the worst point and channel here; it depends on where on the grid the box
+		// stops), which is what the box's two forms differ by: its triangles' voxels are whole ones, fatter than the box with
+		// soft edges the dynamic layer holds, and a probe the box covers finds its way out of the one elsewhere than out of the
+		// other. So "its light is in place the frame it stops" (the owner's ruling) is met in part: the object's light is
+		// there, and up to a fifth of a point's light still changes in the half second after (more in a closed room: "A box
+		// that stops in a closed room", below).
+		// Where one form takes the other's place, the frame it starts and the frame its triangles are voxelized again
+		// (c_GIMoverRestSeconds after its last step by the renderer's clock, not frames), the voxels fade over
+		// c_GIMoverFadeSeconds instead of changing in that frame, which stepped a point's light by 26.5% and 26.1% here (a
+		// second difference of 4.9% over the run):
+		// - the frame it starts changes nothing (c_StartStep), and the frames of the move step by at most c_MoveStep: 10.1% once,
+		//   12 frames in, where the sun's walk lets go of the voxels that leave (it passes voxels under c_GITouchOccupancy), and
+		//   at most 5.3% otherwise, which is what the move itself steps by once the fade is over;
+		// - no frame after the last step changes a point's light by more than c_HandoverStep (4.3%: the steps left are probes
+		//   whose way out of the box changes and voxels changing kind, a few a frame);
+		// - the largest second difference of the points' light over the whole run stays under c_Second (3.1%; the spec's flicker
+		//   measure, 2% for a steady move, which "A moving prop occludes the ground beside it" holds);
+		// - through the hand-over a point's light stays between the box's (the wait's last frame) and the voxels' (faded) but
+		//   for c_Excursion of its light (3.3%).
+		// Faded, it is a fresh renderer's resting prop to the bit.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		constexpr float c_FormStep = 0.25f;
+		constexpr float c_StartStep = 0.01f;
+		constexpr float c_MoveStep = 0.12f;
+		constexpr float c_HandoverStep = 0.06f;
+		constexpr float c_Second = 0.04f;
+		constexpr float c_Excursion = 0.045f;
+		const std::vector<RoomPoint> points = GetMoverPoints();
+		const glm::vec3 red(0.8f, 0.05f, 0.05f);
+		constexpr uint32_t c_Steps = 22;
+		const float end = c_MoverStart + c_MoverStep * static_cast<float>(c_Steps);
+		std::vector<glm::vec3> expected;
+		{
+			MoverRender fresh(true, &red, end);
+			expected = fresh.Settle(points);
+		}
+		CollectReleases();
+
+		MoverRender moving(true, &red, c_MoverStart);
+		std::vector<std::vector<glm::vec3>> frames;
+		frames.push_back(moving.Settle(points));
+		float largestStart = 0.0f;
+		float largestMoving = 0.0f;
+		float nextMoving = 0.0f; // The largest step of the move but one
+		float largestSteady = 0.0f; // The largest once the voxels it left have faded
+		for (uint32_t frame = 1; frame <= c_Steps; frame++)
+		{
+			moving.MoveTo(c_MoverStart + c_MoverStep * static_cast<float>(frame));
+			frames.push_back(moving.Frame(points));
+			const float step = GetLargestStep(frames[frames.size() - 2], frames.back());
+			if (frame == 1)
+			{
+				// The frame it starts: its triangles' voxels leave, and fade into the box that takes their place.
+				largestStart = step;
+				CHECK(moving.Renderer->GetStats().GIMoverFades > 0);
+			}
+			if (moving.Renderer->GetStats().GIMoverFades == 0)
+				largestSteady = std::max(largestSteady, step);
+			nextMoving = std::max(nextMoving, std::min(step, largestMoving));
+			largestMoving = std::max(largestMoving, step);
+		}
+		const std::vector<glm::vec3> stopped = frames.back();
+		CHECK(moving.Renderer->GetStats().GIMovingProxies == 1);
+		CHECK(moving.Renderer->GetStats().GIMoverFades == 0);
+		float largestLater = 0.0f;
+		float largestDrift = 0.0f;
+		uint32_t restFrames = 0;
+		uint32_t fadeFrames = 0;
+		// A second of the renderer's clock: twice the rest and the fade.
+		for (uint32_t frame = 1; frame <= 60; frame++)
+		{
+			frames.push_back(moving.Frame(points));
+			if (moving.Renderer->GetStats().GIMovingProxies == 1)
+				restFrames = frame;
+			fadeFrames += moving.Renderer->GetStats().GIMoverFades > 0 ? 1u : 0u;
+			largestLater = std::max(largestLater, GetLargestStep(frames[frames.size() - 2], frames.back()));
+			largestDrift = std::max(largestDrift, GetLargestStep(stopped, frames.back()));
+		}
+		CHECK(moving.Renderer->GetStats().GIMovingProxies == 0);
+		CHECK(moving.Renderer->GetStats().GIMoverBricks == 0);
+		CHECK(moving.Renderer->GetStats().GIMoverDispatches == 0);
+		float largestFresh = 0.0f;
+		float largestRested = 0.0f;
+		for (size_t point = 0; point < points.size(); point++)
+		{
+			const float scale = std::max(LargestComponent(expected[point]), 1e-3f);
+			largestFresh = std::max(largestFresh, LargestComponent(glm::abs(stopped[point] - expected[point])) / scale);
+			largestRested = std::max(largestRested, LargestComponent(glm::abs(frames.back()[point] - expected[point])) / scale);
+		}
+		float largestSecond = 0.0f;
+		for (size_t frame = 1; frame + 1 < frames.size(); frame++)
+		{
+			for (size_t point = 0; point < points.size(); point++)
+			{
+				const float value = Luminance(frames[frame][point]);
+				largestSecond = std::max(largestSecond, std::abs(Luminance(frames[frame + 1][point]) - 2.0f * value + Luminance(frames[frame - 1][point])) / std::max(value, 1e-3f));
+			}
+		}
+		// From the wait's last frame (the box alone) to the faded one (its triangles' voxels alone).
+		const size_t waited = c_Steps + restFrames;
+		const float largestOutside = GetLargestExcursion(frames, waited, frames[waited], frames.back());
+		MESSAGE("through the hand-over a point's light leaves the range between the box's and the voxels' by at most " << 100.0f * largestOutside << "%");
+		MESSAGE("a frame steps at most " << 100.0f * largestStart << "% when it starts, " << 100.0f * largestMoving << "% while it moves (" << 100.0f * nextMoving
+			<< "% but for that frame, " << 100.0f * largestSteady << "% once the voxels it left have faded) and " << 100.0f * largestLater
+			<< "% after it stopped; second difference over the value at most " << 100.0f * largestSecond << "%");
+		MESSAGE("the frame it stops is within " << 100.0f * largestFresh << "% of a fresh renderer's resting prop; later frames drift at most " << 100.0f * largestDrift
+			<< "% from it; it waited " << restFrames << " frames (" << static_cast<float>(restFrames) * c_MoverFrameSeconds << " s) in the dynamic layer and faded for "
+			<< fadeFrames << "; faded, within " << 100.0f * largestRested << "% of the fresh one");
+		CHECK(largestStart <= c_StartStep);
+		CHECK(largestMoving <= c_MoveStep);
+		CHECK(largestLater <= c_HandoverStep);
+		CHECK(largestSecond <= c_Second);
+		CHECK(largestOutside <= c_Excursion);
+		CHECK(largestFresh <= c_FormStep);
+		CHECK(largestRested <= 1e-4f);
+		// The waits are the clock's: c_GIMoverRestSeconds and c_GIMoverFadeSeconds at 60 frames a second, whatever the frame rate.
+		CHECK(static_cast<float>(restFrames) * c_MoverFrameSeconds <= RenderData::c_GIMoverRestSeconds + c_MoverFrameSeconds);
+		CHECK(fadeFrames > 0);
+		CHECK(static_cast<float>(fadeFrames) * c_MoverFrameSeconds <= RenderData::c_GIMoverFadeSeconds + c_MoverFrameSeconds);
+		moving.Renderer.reset();
+		CollectReleases();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A resting prop makes no mover work, and one that moved and rested leaves a fresh renderer's voxels")
+	{
+		// The dynamic layer is empty while nothing moves: no brick, no dispatch of its pass (GIMoverDispatches: the frames run
+		// the passes they ran before the layer existed), the same field every frame. What a mover's bricks held is put back as
+		// it was: once it has rested and its voxels have faded (three quarters of a second here for the half both take), every
+		// level's textures are a fresh renderer's, to the byte, and so is the field but for what one driver does between two
+		// renderers (c_FieldBytes).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::vector<RoomPoint> points = GetMoverPoints();
+		const glm::vec3 red(0.8f, 0.05f, 0.05f);
+		const float end = c_MoverStart + 0.03f * 11.0f;
+		std::vector<std::vector<uint8_t>> freshLevels;
+		std::vector<uint8_t> freshField;
+		std::vector<uint8_t> field;
+		std::vector<std::vector<uint8_t>> levels;
+		{
+			MoverRender fresh(true, &red, end);
+			for (uint32_t frame = 0; frame < 6; frame++)
+			{
+				fresh.Frame(points);
+				CHECK(fresh.Renderer->GetStats().GIMovingProxies == 0);
+				CHECK(fresh.Renderer->GetStats().GIMoverBricks == 0);
+				CHECK(fresh.Renderer->GetStats().GIMoverDispatches == 0);
+				if (frame == 2)
+					ReadVoxelsAndField(*fresh.Renderer, 4, freshLevels, freshField);
+				if (frame > 2)
+				{
+					// One renderer's faces from frame to frame, to the byte, as "A still camera's field repeats frame after
+					// frame" compares them: the driver's two ways of summing (c_FieldBytes) showed between two renderers and in
+					// the harmonics, never in one renderer's faces since GI/FieldReduce.comp's sums are `precise`. Were it to,
+					// this check fails with main's (the release notes' Known issues).
+					ReadVoxelsAndField(*fresh.Renderer, 4, levels, field);
+					CHECK(levels == freshLevels);
+					CHECK(field == freshField);
+				}
+			}
+		}
+		CollectReleases();
+		uint64_t hash = 14695981039346656037ull;
+		for (uint8_t byte : freshField)
+			hash = (hash ^ byte) * 1099511628211ull;
+		MESSAGE("the resting prop's field: " << freshField.size() << " bytes, FNV-1a " << hash);
+
+		MoverRender moved(true, &red, c_MoverStart);
+		moved.Settle(points);
+		uint32_t bricks = 0;
+		for (uint32_t frame = 1; frame <= 11; frame++)
+		{
+			moved.MoveTo(c_MoverStart + 0.03f * static_cast<float>(frame));
+			moved.Frame(points);
+			bricks = std::max(bricks, moved.Renderer->GetStats().GIMoverBricks);
+			CHECK(moved.Renderer->GetStats().GIMoverDispatches > 0);
+		}
+		CHECK(bricks > 0);
+		for (uint32_t frame = 0; frame < 45; frame++)
+			moved.Frame(points);
+		CHECK(moved.Renderer->GetStats().GIMovingProxies == 0);
+		CHECK(moved.Renderer->GetStats().GIMoverBricks == 0);
+		CHECK(moved.Renderer->GetStats().GIMoverDispatches == 0);
+		ReadVoxelsAndField(*moved.Renderer, 4, levels, field);
+		REQUIRE(levels.size() == freshLevels.size());
+		for (size_t index = 0; index < levels.size(); index++)
+		{
+			CAPTURE(index);
+			CHECK(levels[index] == freshLevels[index]);
+		}
+		// Two renderers' fields: made of equal voxels by the same passes, so equal, but for the driver behaviour "A still
+		// camera's field repeats frame after frame" describes (a unit in the last place of a probe's face from one dispatch to
+		// another on a busy machine; "A prop that moves, pauses and moves on" saw one byte differ between two renderers
+		// without a mover in one run of seven).
+		const size_t differing = CountDifferingBytes(field, freshField);
+		MESSAGE("the mover's field after its rest differs from the fresh renderer's in " << differing << " bytes");
+		CHECK(differing <= c_FieldBytes);
+		moved.Renderer.reset();
+		CollectReleases();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A prop that moves, pauses and moves on while the camera walks leaves a still prop's voxels")
+	{
+		// What the dynamic layer puts back holds while the levels' windows scroll under it, at both layouts. Two renderers walk
+		// the same camera path (c_Walk a frame for c_WalkFrames: level 0's window scrolls every 0.4 m at High and 0.8 m at Low,
+		// the coarser levels less often), one past a prop that stands at the path's end all along, the other past one that
+		// slides there in two moves with a pause between them: long enough to rest (its triangles enter the voxels again and
+		// the voxels around it fade) and short enough that it starts again while they still fade (the fade starts over from
+		// what the voxels show). A second after both stopped, the mover's levels are the still prop's, to the byte, and its
+		// field is the still prop's within c_FieldBytes: the backup put back the right texels whichever way the windows went,
+		// and no brick or fade is left.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::vector<RoomPoint> points = GetMoverPoints();
+		const glm::vec3 red(0.8f, 0.05f, 0.05f);
+		constexpr float c_Walk = 0.06f;
+		constexpr uint32_t c_WalkFrames = 40;
+		constexpr uint32_t c_FirstMove = 8;   // The prop slides in frames 1 to 8
+		constexpr uint32_t c_SecondMove = 31; // and in frames 31 to 40
+		constexpr float c_Slide = 0.03f;
+		const float end = c_MoverStart + c_Slide * static_cast<float>(c_FirstMove + c_WalkFrames - c_SecondMove + 1);
+		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
+		{
+			CAPTURE(static_cast<int>(level));
+			const uint32_t levelCount = level == GlobalIlluminationLevel::High ? 4 : 3;
+			std::vector<std::vector<uint8_t>> stillLevels;
+			std::vector<uint8_t> stillField;
+			{
+				MoverRender still(true, &red, end, level);
+				still.Settle(points);
+				for (uint32_t frame = 1; frame <= c_WalkFrames + 60; frame++)
+				{
+					still.CameraX = c_Walk * static_cast<float>(std::min(frame, c_WalkFrames));
+					still.Frame(points);
+					CHECK(still.Renderer->GetStats().GIMoverBricks == 0);
+				}
+				ReadVoxelsAndField(*still.Renderer, levelCount, stillLevels, stillField);
+			}
+			CollectReleases();
+
+			MoverRender moved(true, &red, c_MoverStart, level);
+			moved.Settle(points);
+			uint32_t steps = 0;
+			uint32_t bricks = 0;
+			bool restedInPause = false;
+			bool fadingAtRestart = false;
+			for (uint32_t frame = 1; frame <= c_WalkFrames + 60; frame++)
+			{
+				moved.CameraX = c_Walk * static_cast<float>(std::min(frame, c_WalkFrames));
+				if (frame <= c_FirstMove || (frame >= c_SecondMove && frame <= c_WalkFrames))
+					moved.MoveTo(c_MoverStart + c_Slide * static_cast<float>(++steps));
+				moved.Frame(points);
+				const SceneRendererStats& stats = moved.Renderer->GetStats();
+				bricks = std::max(bricks, stats.GIMoverBricks);
+				if (frame + 1 == c_SecondMove)
+					restedInPause = stats.GIMovingProxies == 0 && stats.GIMoverFades > 0;
+				if (frame == c_SecondMove)
+					fadingAtRestart = stats.GIMovingProxies == 1 && stats.GIMoverFades > 0;
+			}
+			CHECK(bricks > 0);
+			CHECK(restedInPause);
+			CHECK(fadingAtRestart);
+			CHECK(moved.Renderer->GetStats().GIMovingProxies == 0);
+			CHECK(moved.Renderer->GetStats().GIMoverBricks == 0);
+			CHECK(moved.Renderer->GetStats().GIMoverFades == 0);
+			std::vector<std::vector<uint8_t>> levels;
+			std::vector<uint8_t> field;
+			ReadVoxelsAndField(*moved.Renderer, levelCount, levels, field);
+			REQUIRE(levels.size() == stillLevels.size());
+			for (size_t index = 0; index < levels.size(); index++)
+			{
+				CAPTURE(index);
+				CHECK(levels[index] == stillLevels[index]);
+			}
+			// The field is made of the voxels by the passes of every frame, so it is the still prop's too, but for what one driver
+			// does on a busy machine ("A still camera's field repeats frame after frame": a unit in the last place of a probe's
+			// face from one dispatch to the next; here a fresh renderer's field, with no mover anywhere, differed from the still
+			// prop's by one byte in one run of seven). What a brick left behind would change is thousands of bytes.
+			CHECK(CountDifferingBytes(field, stillField) <= c_FieldBytes);
+			moved.Renderer.reset();
+			CollectReleases();
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A box that stops in a closed room holds most of its shade, and its hand-over stays within bounds")
+	{
+		// The Cornell box, every bounce, and a blue 0.7 m box that slides 2.5 cm a frame across the floor and stops off the voxel
+		// grid (the look-dev's shot of the unit). Here every light is the field's, and what the box's two forms differ by shows
+		// more than under an open sky ("A prop that stops keeps its light to within its two forms' difference"):
+		// - While it moves steadily the light before its leading face is not smooth: the largest second difference over the
+		//   value is c_MoveSecond (19.1% at the floor 0.2 to 0.45 m before the face, 8.7% beside its corner, 3.4% on the tall
+		//   box, under 1.6% elsewhere; under the open sky, beside the box's way, 0.53%: "A moving prop occludes the ground
+		//   beside it"). The floor's light there darkens as the face nears a row of cascade 0's probes (116.6 to 99.7 nits per
+		//   albedo over six frames), rises for the four frames the face takes through the probes' voxel and falls when it
+		//   leaves it (100.4, 101.7, 104.0, 110.5, then 97.1), and steps on (102.2, 108.7, 106.1, 103.2): pops, above the 2%
+		//   of the flicker measure. The cause is the probes' move, not the voxels (GI/ProbeValidity.comp reads the layer as
+		//   it reads still surfaces: it pushes a probe the box covers along the face's normal, which only the one layer of
+		//   voxels the face passes through carries, and then places it by its search among fixed candidates). With cascade
+		//   0's probes kept in place (an experiment of the second fix round, not kept: still scenes need the move) this
+		//   measure read 3.08% and no frame fell; with the box's way out written into all its voxels 9.7%. Not fixed in this
+		//   unit: Known issues, and Docs/DeveloperGuide.md, "Global illumination": What it cannot do.
+		// - The frame of the last step the box takes c_ShadeLeast of the light a resting box takes from the points around it
+		//   (69.1% of it, summed over the points; none of it while it was out of the voxels until it rested), and a point is
+		//   up to 50.7% of its light off the resting box's. That is the forms' difference: the box's soft edge against the
+		//   whole voxels its triangles make. Written as whole voxels (every voxel the box overlaps full: an experiment,
+		//   2026-11-18, not kept, because whole voxels pop as the box crosses them), the wait's last frame was the resting box's
+		//   within 2.3% of every point's red, where the soft box's is up to 73% off.
+		// - While it waits (c_GIMoverRestSeconds) no frame steps a point by more than c_WaitStep (2.5%: the bounces of its last
+		//   steps).
+		// - Through the hand-over (c_GIMoverFadeSeconds) a point's light is not between its two ends all the way: it leaves
+		//   their range by up to c_Excursion of its light (14.8%: the blue on the tall box behind the box rises 11% before it
+		//   falls to 27% under where it began), and one frame steps a point by up to c_HandoverStep (27.6%: the floor 0.3 m
+		//   beside the box's back, two thirds into the fade). That step is one event: with the leaving form held until the
+		//   arriving one stood (an experiment, not kept: it made the open ground's steps 7.4% for 4.3%) it came three frames
+		//   earlier, 27.2% large. It is not cascade 0's relocation alone (GI/ProbeValidity.comp's search takes the lowest of
+		//   some occupancies, a choice no blend of voxels divides): with those probes kept in place, the experiment above, a
+		//   frame of the hand-over still stepped a point by 30.7%. Not traced further.
+		//   Docs/DeveloperGuide.md, "Global illumination": What it cannot do.
+		// - Faded, it is a fresh renderer's resting box (every bounce settles toward it: within c_Rested).
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		constexpr float c_MoveSecond = 0.22f;
+		constexpr float c_ShadeLeast = 0.55f;
+		constexpr float c_WaitStep = 0.03f;
+		constexpr float c_HandoverStep = 0.32f;
+		constexpr float c_Excursion = 0.18f;
+		constexpr float c_Rested = 0.002f;
+		constexpr uint32_t c_Steps = 30;
+		const std::vector<RoomPoint> points = GetClosedRoomPoints();
+		std::vector<glm::vec3> open;
+		std::vector<glm::vec3> fresh;
+		{
+			ClosedRoomRender empty(false, 0.0f);
+			open = empty.Settle(points);
+			ClosedRoomRender resting(true, c_ClosedEnd);
+			fresh = resting.Settle(points);
+		}
+		CollectReleases();
+		const float restingShade = SumLuminance(open) - SumLuminance(fresh);
+		REQUIRE(restingShade > 0.1f * SumLuminance(open));
+
+		ClosedRoomRender moving(true, c_ClosedEnd - c_ClosedStep * static_cast<float>(c_Steps));
+		moving.Settle(points);
+		// steps[index]: the frame of step index + 1.
+		std::vector<std::vector<glm::vec3>> steps;
+		size_t steady = 0;
+		for (uint32_t step = 1; step <= c_Steps; step++)
+		{
+			moving.MoveTo(c_ClosedEnd - c_ClosedStep * static_cast<float>(c_Steps - step));
+			steps.push_back(moving.Frame(points));
+			CHECK(moving.Renderer->GetStats().GIMovingProxies == 1);
+			CHECK(moving.Renderer->GetStats().GIMoversLeftOut == 0);
+			if (moving.Renderer->GetStats().GIMoverFades > 0)
+				steady = steps.size();
+		}
+		CHECK(moving.Renderer->GetStats().GIMoverFades == 0);
+		REQUIRE(steady + 3 < steps.size());
+		// The steady move, once the voxels it left have faded: the second difference over the value, at the points the box
+		// never covers on its way (all but the floor left of where it stops).
+		float largestMoveSecond = 0.0f;
+		std::string moveSecondPoint;
+		for (size_t frame = steady + 1; frame + 1 < steps.size(); frame++)
+		{
+			for (size_t point = 0; point < points.size(); point++)
+			{
+				if (points[point].Normal == c_Up && points[point].Point.x < c_ClosedEnd)
+					continue;
+				const float value = Luminance(steps[frame][point]);
+				const float second = std::abs(Luminance(steps[frame + 1][point]) - 2.0f * value + Luminance(steps[frame - 1][point])) / std::max(value, 1e-3f);
+				if (second > largestMoveSecond)
+				{
+					largestMoveSecond = second;
+					moveSecondPoint = points[point].Name;
+				}
+			}
+		}
+		MESSAGE("while it moves steadily (steps " << steady + 1 << " to " << steps.size() << ") the largest second difference over the value is " << 100.0f * largestMoveSecond
+			<< "%, at: " << moveSecondPoint);
+		CHECK(largestMoveSecond <= c_MoveSecond);
+		// frames[index]: index frames after the last step.
+		std::vector<std::vector<glm::vec3>> frames { steps.back() };
+		const float stoppedShade = SumLuminance(open) - SumLuminance(frames.front());
+		size_t waited = 0;
+		size_t faded = 0;
+		float largestWait = 0.0f;
+		float largestHandover = 0.0f;
+		// A second and a half of the renderer's clock: the wait, the fade and the bounces after it.
+		for (size_t frame = 1; frame <= 90; frame++)
+		{
+			frames.push_back(moving.Frame(points));
+			const SceneRendererStats& stats = moving.Renderer->GetStats();
+			const float step = GetLargestStep(frames[frame - 1], frames[frame]);
+			if (stats.GIMovingProxies == 1 && stats.GIMoverFades == 0)
+			{
+				waited = frame;
+				largestWait = std::max(largestWait, step);
+			}
+			else
+			{
+				largestHandover = std::max(largestHandover, step);
+			}
+			if (stats.GIMoverFades > 0)
+				faded = frame;
+		}
+		CHECK(moving.Renderer->GetStats().GIMovingProxies == 0);
+		CHECK(moving.Renderer->GetStats().GIMoverBricks == 0);
+		CHECK(moving.Renderer->GetStats().GIMoverDispatches == 0);
+		REQUIRE(waited > 0);
+		REQUIRE(faded > waited);
+		const float largestOutside = GetLargestExcursion(frames, waited, frames[waited], frames.back());
+		float largestRested = 0.0f;
+		float largestForm = 0.0f;
+		for (size_t point = 0; point < points.size(); point++)
+		{
+			const float scale = std::max(LargestComponent(fresh[point]), 1e-3f);
+			largestRested = std::max(largestRested, LargestComponent(glm::abs(frames.back()[point] - fresh[point])) / scale);
+			largestForm = std::max(largestForm, LargestComponent(glm::abs(frames.front()[point] - fresh[point])) / scale);
+		}
+		MESSAGE("the frame it stops the box takes " << 100.0f * stoppedShade / restingShade << "% of the light a resting box takes from the points (" << restingShade
+			<< " of " << SumLuminance(open) << " nits per albedo), and a point is up to " << 100.0f * largestForm << "% of its light off the resting box's");
+		MESSAGE("it waited " << waited << " frames, stepping at most " << 100.0f * largestWait << "%, and faded until frame " << faded << ": a frame steps a point by at most "
+			<< 100.0f * largestHandover << "%, and a point leaves the range between the box's light and the voxels' by at most " << 100.0f * largestOutside
+			<< "%; faded, within " << 100.0f * largestRested << "% of a fresh renderer's resting box");
+		CHECK(stoppedShade >= c_ShadeLeast * restingShade);
+		CHECK(stoppedShade <= restingShade);
+		CHECK(largestWait <= c_WaitStep);
+		CHECK(largestHandover <= c_HandoverStep);
+		CHECK(largestOutside <= c_Excursion);
+		CHECK(largestRested <= c_Rested);
+		// The waits are the clock's.
+		CHECK(static_cast<float>(waited) * c_MoverFrameSeconds <= RenderData::c_GIMoverRestSeconds + c_MoverFrameSeconds);
+		CHECK(static_cast<float>(faded - waited) * c_MoverFrameSeconds <= RenderData::c_GIMoverFadeSeconds + c_MoverFrameSeconds);
+		moving.Renderer.reset();
+		CollectReleases();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }
@@ -1467,6 +2501,102 @@ namespace
 
 TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationJoin")
 {
+	TEST_CASE("The white furnace keeps its light with GI")
+	{
+		// A white rough dielectric sphere of the built-in mesh (radius 0.5) under a uniform sky, no sun, seen head-on through an
+		// orthographic camera: its light with GI against today's (the sky's irradiance) at its center (NoV 1) and at 0.8 of its
+		// radius (NoV 0.6).
+		// The sphere is convex: every point of it sees the whole sky, and anything less is light the field lost.
+		// - The probes' ambient cubes read the rim 7% dark (0.932, 0.952 with every bounce: a normal between the axes blends the axes'
+		//   hemispheres, and takes what the probes beside the sphere see of it behind the normal's plane). Drawn surfaces read the probes'
+		//   spherical harmonics, whose kernel is the cosine's about the normal itself: 0.979 at the center, 0.965 at the rim. (The
+		//   read's floor, Include/GIField.slang's ReadProbeIrradiance, changes neither: the cube's face along the camera's axis
+		//   reads the center no higher, and the rim's normal lies between the axes, where even light leaves the floor below.)
+		// - Every bounce (what a renderer draws by default) does not close the rest (0.979 and 0.970): it is not light the
+		//   sphere's voxels could return. A probe within two voxels of the sphere loses the rays that skim it to the voxels'
+		//   layer about the surface, which absorbs them at a grazing angle and sends nothing back (measured: a probe 8 cm off
+		//   the surface holds 0.81 of the sky along the normal, with one bounce and with every bounce).
+		// - So the loss depends on where the sphere lies among the probes: moved by offGrid, which puts a probe 8 cm off its
+		//   front, it reads 0.902 at its center (0.901 with every bounce) and 0.971 at its rim (0.978). That is measured too:
+		//   the center is kept within c_OffGridTolerance, which only holds what is there (c_Tolerance is the goal there as
+		//   well: DeveloperGuide, "Global illumination", Known issues), the rim within c_RimTolerance.
+		constexpr float c_Tolerance = 0.03f;
+		constexpr float c_RimTolerance = 0.04f;
+		constexpr float c_OffGridTolerance = 0.105f;
+		const glm::vec3 offGrid(0.13f, 0.07f, 0.21f);
+		constexpr uint32_t c_Size = 96;
+		constexpr float c_View = 1.2f;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		const AssetHandle sky = assets.Add(CreateEnvironmentTexture(glm::vec3(1.0f), glm::vec3(1.0f)), "Furnace");
+		MaterialProperties dielectric;
+		dielectric.BaseColor = glm::vec4(1.0f);
+		dielectric.Roughness = 1.0f;
+		const AssetHandle material = assets.AddMaterial(dielectric);
+		// The sphere's light at its center (x) and rim (y): without GI, with one bounce and with every bounce, then both again
+		// with the sphere (and the camera) moved off the probes' grid.
+		struct Furnace
+		{
+			bool Asked = false;
+			float BounceGain = 0.0f;
+			glm::vec3 Position { 0.0f };
+			glm::vec2 Light { 0.0f };
+		};
+		Furnace furnaces[5] = { { false, 0.0f }, { true, 0.0f }, { true, 1.0f }, { true, 0.0f, offGrid }, { true, 1.0f, offGrid } };
+		for (Furnace& furnace : furnaces)
+		{
+			Scene scene;
+			AddNeutralPostProcess(scene).GlobalIllumination = furnace.Asked;
+			scene.CreateEntity("Sky").AddComponent<SkyLightComponent>().EnvironmentMap = sky;
+			AddMesh(scene, BuiltinAssets::SphereMesh, material, furnace.Position, "Sphere");
+			SceneRendererSpecification specification = RoomSpecification(GlobalIlluminationLevel::High, furnace.BounceGain);
+			specification.TextureStreaming = false;
+			SceneRenderer renderer(specification);
+			renderer.SetViewportSize(c_Size, c_Size);
+			const SceneCamera camera = OrthographicLookAt(furnace.Position + glm::vec3(0.0f, 0.0f, 3.0f), furnace.Position, c_View);
+			// Until the sky is there and the field holds every bounce it will (by the clock, not a count of frames).
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+			const auto waiting = [&]()
+			{
+				const SceneRendererStats& stats = renderer.GetStats();
+				return !stats.EnvironmentLighting || stats.GlobalIlluminationPending || !stats.GlobalIlluminationSettled;
+			};
+			do
+			{
+				REQUIRE(RenderGIFrame(renderer, scene, camera, SceneRenderOptions {}));
+			} while (waiting() && std::chrono::steady_clock::now() < deadline);
+			REQUIRE(renderer.GetStats().EnvironmentLighting);
+			CHECK(renderer.GetStats().GlobalIllumination == furnace.Asked);
+			CHECK_FALSE(renderer.GetStats().GlobalIlluminationPending);
+			CHECK(renderer.GetStats().GlobalIlluminationSettled);
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(renderer.GetHDRTexture(), image));
+			const uint32_t center = c_Size / 2;
+			const uint32_t rim = center + static_cast<uint32_t>(std::lround(0.8f * 0.5f / c_View * static_cast<float>(c_Size)));
+			furnace.Light = glm::vec2(ReadHalfTexel(image, center, center).g, ReadHalfTexel(image, rim, center).g);
+		}
+		REQUIRE(furnaces[0].Light.x > 0.0f);
+		REQUIRE(furnaces[0].Light.y > 0.0f);
+		const glm::vec2 once = furnaces[1].Light / furnaces[0].Light;
+		const glm::vec2 bounced = furnaces[2].Light / furnaces[0].Light;
+		const glm::vec2 offGridOnce = furnaces[3].Light / furnaces[0].Light;
+		const glm::vec2 offGridBounced = furnaces[4].Light / furnaces[0].Light;
+		MESSAGE("Furnace with GI: center " << once.x << ", rim " << once.y << " of today's with one bounce; center " << bounced.x << ", rim " << bounced.y
+			<< " with every bounce");
+		MESSAGE("Furnace with GI, the sphere off the probes' grid: center " << offGridOnce.x << ", rim " << offGridOnce.y << " with one bounce; center "
+			<< offGridBounced.x << ", rim " << offGridBounced.y << " with every bounce");
+		CHECK(std::abs(once.x - 1.0f) <= c_Tolerance);
+		CHECK(std::abs(once.y - 1.0f) <= c_RimTolerance);
+		CHECK(std::abs(bounced.x - 1.0f) <= c_Tolerance);
+		CHECK(std::abs(bounced.y - 1.0f) <= c_RimTolerance);
+		CHECK(std::abs(offGridOnce.x - 1.0f) <= c_OffGridTolerance);
+		CHECK(std::abs(offGridOnce.y - 1.0f) <= c_RimTolerance);
+		CHECK(std::abs(offGridBounced.x - 1.0f) <= c_OffGridTolerance);
+		CHECK(std::abs(offGridBounced.y - 1.0f) <= c_RimTolerance);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Without GI asked, or at the row Off, nothing is made and the image is the same")
 	{
 		GPUContext gpu;
@@ -1523,7 +2653,44 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationJoin")
 		REQUIRE(RenderGIFrame(pending, scene, camera, SceneRenderOptions {}));
 		CHECK(pending.GetStats().GlobalIllumination);
 		CHECK(pending.GetStats().GlobalIlluminationPending);
+		CHECK(!pending.GetStats().GlobalIlluminationShaded);
 		CHECK(ReadImage(pending.GetOutputTexture()).Pixels == offImage.Pixels);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Only a frame that reads the field draws with the field's forward shaders")
+	{
+		// The forward shaders come in two forms (Scene/Forward.frag.slang's ST_FORWARD_FIELD): the frames without global
+		// illumination draw with the ones that hold nothing of the field's gather, which, compiled in behind a branch they never
+		// took, still cost their opaque pass 6-11% of its time at 3840 x 2160 ("Renderer.ShaderModules" checks what the shaders
+		// hold; the statistic says which forms a frame drew with). The field's forms draw the join and the two views that sample
+		// the field, which they do also where none ran (its weight 0: today's light); the voxels view lies over the lit image
+		// and reads no field.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		BuildYard(scene, assets);
+		const SceneCamera camera = YardStrafe(0, 0.0f, static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y));
+		const auto shaded = [&](GlobalIlluminationLevel level, bool asked, SceneLightingView view)
+		{
+			SetGlobalIllumination(scene, asked);
+			SceneRenderer renderer(RoomSpecification(level));
+			renderer.SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+			SceneRenderOptions options;
+			options.LightingView = view;
+			for (uint32_t frame = 0; frame < 4; frame++)
+				REQUIRE(RenderGIFrame(renderer, scene, camera, options));
+			return renderer.GetStats().GlobalIlluminationShaded;
+		};
+		CHECK(!shaded(GlobalIlluminationLevel::High, false, SceneLightingView::None));
+		CHECK(!shaded(GlobalIlluminationLevel::Off, true, SceneLightingView::None));
+		CHECK(!shaded(GlobalIlluminationLevel::High, false, SceneLightingView::Voxels));
+		CHECK(!shaded(GlobalIlluminationLevel::High, false, SceneLightingView::Indirect));
+		CHECK(shaded(GlobalIlluminationLevel::High, true, SceneLightingView::None));
+		CHECK(shaded(GlobalIlluminationLevel::High, false, SceneLightingView::GlobalIllumination));
+		CHECK(shaded(GlobalIlluminationLevel::High, false, SceneLightingView::OpenShare));
+		CHECK(shaded(GlobalIlluminationLevel::Off, true, SceneLightingView::GlobalIllumination));
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -2160,6 +3327,82 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationBounce")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A bright closed box keeps its harmonics in range")
+	{
+		// The box of the case above at 65,000 nits and an albedo of 0.95 (its bounces take 0.9, c_GIMaxBounceAlbedo): with every
+		// bounce its radiance is about six times Le, 24,000 as the field holds it (times c_GIRadianceScale), under the voxels'
+		// clamp (c_GIMaxRadiance). Band 0 of a probe's harmonics is 3.545 times its rays' mean: stored as the coefficient it
+		// left RGBA16F's range (65,504) here. A driver may write that as the format's largest value or as infinity: this
+		// machine's wrote 65,504, a band 0 22% under the light of the wall ahead (surfaces then read the probes' cubes, which
+		// never held it wrong), and an infinity would be every pixel around the probe. Stored times its basis function it
+		// is the mean itself: every texel is finite, the largest band 0 lies above what the coefficient's form could hold
+		// (so this room is one that overflowed), under the clamp and at the room's light as the wall ahead shows it, and the
+		// wall reads the bounces' series, not the image's limit.
+		constexpr float c_Luminance = 65000.0f;
+		constexpr float c_Albedo = 0.95f;
+		constexpr uint32_t c_Frames = 24;
+		// The largest mean a probe could hold while its band 0 was stored as the coefficient: RGBA16F's largest value times Y00.
+		constexpr float c_CoefficientLimit = 65504.0f * 0.282095f;
+		// The room's radiance is uniform but for the cascades' error (the case above: 4-9% at High); the largest band 0 of
+		// all probes lies this near the wall's own light (measured: 1.16 times it).
+		constexpr float c_MaxOverWall = 1.25f;
+		constexpr float c_MinOverWall = 0.9f;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		BuildGlowingBox(scene, assets, glm::vec3(-2.0f, 0.0f, -2.0f), glm::vec3(2.0f, 3.0f, 2.0f), c_Albedo, c_Luminance);
+		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification(GlobalIlluminationLevel::High, 1.0f));
+		renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+		const SceneCamera camera = MakeCamera(glm::vec3(0.0f, 1.5f, 1.6f), glm::vec3(0.0f, 1.5f, -2.0f), 75.0f, c_RoomSize);
+		const SceneRenderOptions options = GIViewOptions();
+		// Settled, then on until the bounces have brought the room near its series.
+		const uint32_t settled = RenderUntilSettled(*renderer, scene, camera, options, 40);
+		for (uint32_t frame = settled; frame < c_Frames; frame++)
+			REQUIRE(RenderGIFrame(*renderer, scene, camera, options));
+		std::vector<uint8_t> harmonics;
+		REQUIRE(renderer->ReadGlobalIlluminationFieldIrradiance(harmonics));
+		const glm::uvec3 grid(glm::vec3(renderer->GetGlobalIlluminationFieldConstants().FieldSize));
+		const size_t rowTexels = static_cast<size_t>(grid.x) * 3;
+		const size_t texels = rowTexels * grid.y * 3 * grid.z;
+		REQUIRE(texels > 0);
+		REQUIRE(harmonics.size() == texels * 8);
+		size_t unbounded = 0; // Halves that are infinite or not a number
+		float largestMean = 0.0f;
+		for (size_t texel = 0; texel < texels; texel++)
+		{
+			uint16_t halves[4];
+			std::memcpy(halves, harmonics.data() + texel * 8, sizeof(halves));
+			for (const uint16_t half : halves)
+				unbounded += (half & 0x7C00u) == 0x7C00u ? 1 : 0;
+			// Band 0 is the first texel of a probe's three by three.
+			if (texel % rowTexels % 3 == 0 && texel / rowTexels % 3 == 0)
+			{
+				for (uint32_t channel = 0; channel < 3; channel++)
+					largestMean = std::max(largestMean, glm::unpackHalf1x16(halves[channel]));
+			}
+		}
+		ReadbackImage image;
+		REQUIRE(Renderer::ReadTexture(renderer->GetHDRTexture(), image));
+		const glm::uvec2 pixel = ProjectToPixel(camera, glm::vec3(0.0f, 1.5f, -1.99f), image.Width, image.Height);
+		REQUIRE(pixel.x < image.Width);
+		REQUIRE(pixel.y < image.Height);
+		const float wall = Luminance(glm::vec3(ReadHalfTexel(image, pixel.x, pixel.y))) / c_RoomPreExposure;
+		const float wallStored = wall * RenderData::c_GIRadianceScale;
+		MESSAGE("The largest band 0 " << largestMean << " (as a coefficient " << largestMean / 0.282095f << "), " << unbounded
+			<< " values out of range, the wall ahead " << wall / c_Luminance << " times Le (" << wallStored << " as the field holds it)");
+		CHECK(unbounded == 0);
+		CHECK(largestMean > c_CoefficientLimit);
+		CHECK(largestMean <= RenderData::c_GIMaxRadiance);
+		CHECK(largestMean <= c_MaxOverWall * wallStored);
+		CHECK(largestMean >= c_MinOverWall * wallStored);
+		CHECK(wall >= 4.0f * c_Luminance);
+		CHECK(wall <= 10.0f * c_Luminance);
+		renderer.reset();
+		CollectReleases();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Bounces fill the sun room")
 	{
 		// 6.4: with every bounce each point takes at least its one-bounce light and the ceiling over the patch at least 10% more.
@@ -2538,12 +3781,15 @@ namespace
 		}
 	};
 
-	CornellView RenderCornellView(GlobalIlluminationLevel level)
+	// gapLight false is the gather without the thin gaps' light (GlobalIlluminationSettings::GapLight).
+	CornellView RenderCornellView(GlobalIlluminationLevel level, bool gapLight = true)
 	{
 		SceneTestAssets assets;
 		Scene scene;
 		BuildCornellBox(scene, assets);
-		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(RoomSpecification(level, 1.0f));
+		SceneRendererSpecification specification = RoomSpecification(level, 1.0f);
+		specification.GlobalIllumination.GapLight = gapLight;
+		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(specification);
 		renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
 		CornellView view;
 		view.Camera = CornellCamera(static_cast<float>(c_RoomSize.x) / static_cast<float>(c_RoomSize.y));
@@ -2595,6 +3841,22 @@ namespace
 		return values[values.size() / 2];
 	}
 
+	// The interior texel a texel of a probe's depth tile repeats (Include/GlobalIllumination.slang's GetDepthTileSource): itself
+	// inside, and on the one-texel border the interior texel across the octahedron's edge.
+	glm::ivec2 GetDepthTileSource(const glm::ivec2& texel)
+	{
+		constexpr int c_Last = static_cast<int>(RenderData::c_GIFieldDepthTexels) - 1;
+		const bool column = texel.x == 0 || texel.x == c_Last;
+		const bool row = texel.y == 0 || texel.y == c_Last;
+		if (column && row)
+			return glm::ivec2(texel.x == 0 ? c_Last - 1 : 1, texel.y == 0 ? c_Last - 1 : 1);
+		if (column)
+			return glm::ivec2(texel.x == 0 ? 1 : c_Last - 1, c_Last - texel.y);
+		if (row)
+			return glm::ivec2(c_Last - texel.x, texel.y == 0 ? 1 : c_Last - 1);
+		return texel;
+	}
+
 	// A cascade-0 probe's depth moments toward a direction, bilinear between the four texels of its tile around the direction's
 	// octahedral point (the texels Include/GIField.slang's LiesBeforeProbeHits reads), as their mixture: the mean distance to the
 	// first hit and its variance.
@@ -2628,6 +3890,48 @@ namespace
 		for (int corner = 0; corner < 4; corner++)
 			variance += weights[corner] * (texels[corner].y + (texels[corner].x - mean) * (texels[corner].x - mean));
 		return glm::vec2(mean, variance);
+	}
+
+	// The gi view of a scene with every bounce, settled, and the world position each of its pixels shows: what the thin gaps'
+	// tests read. gapLight false is the gather without the gaps' light (GlobalIlluminationSettings::GapLight).
+	struct GapView
+	{
+		ReadbackImage Image;
+		std::vector<std::optional<glm::vec3>> Positions;
+
+		float GetLuminance(uint32_t x, uint32_t y) const
+		{
+			return Luminance(glm::vec3(ReadHalfTexel(Image, x, y))) / c_RoomPreExposure;
+		}
+	};
+
+	GapView RenderGapView(Scene& scene, const SceneCamera& camera, GlobalIlluminationLevel level, bool gapLight = true)
+	{
+		SceneRendererSpecification specification = RoomSpecification(level, 1.0f);
+		specification.GlobalIllumination.GapLight = gapLight;
+		Scope<SceneRenderer> renderer = CreateScope<SceneRenderer>(specification);
+		renderer->SetViewportSize(c_RoomSize.x, c_RoomSize.y);
+		RenderUntilSettled(*renderer, scene, camera, GIViewOptions(), RenderData::c_GIMaxSettleFrames + 4);
+		REQUIRE_FALSE(renderer->GetStats().GlobalIlluminationPending);
+		GapView view;
+		REQUIRE(Renderer::ReadTexture(renderer->GetHDRTexture(), view.Image));
+		REQUIRE(view.Image.Format == nvrhi::Format::RGBA16_FLOAT);
+		view.Positions = ReadRelativePositions(*renderer, camera);
+		for (std::optional<glm::vec3>& position : view.Positions)
+		{
+			if (position)
+				*position += camera.Position;
+		}
+		renderer.reset();
+		CollectReleases();
+		return view;
+	}
+
+	// The camera of the thin gaps' tests: it looks at the ground under the near edge of the yard's covered car from `distance`
+	// in front of it.
+	SceneCamera YardCarCamera(float distance)
+	{
+		return MakeCamera(glm::vec3(-3.0f, 0.5f, -4.0f - distance), glm::vec3(-3.0f, 0.05f, -4.0f), 30.0f, c_RoomSize);
 	}
 }
 
@@ -2742,14 +4046,17 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
 		// the sphere overhangs counts where the camera sees it, down to c_ContactGap from its contact point (a gap of 0.23 m under
 		// it, two voxels: closer in, no visibility point fits between the floor's and the sphere's voxels). Points the camera does
 		// not see and neighbours under the objects are left out, and so are points whose brightest neighbour is darker than a
-		// fiftieth of the floor's median. At High around the sphere's footprint; the overhung rim and the tall box's foot (the gap
-		// between its back-left corner and the red wall) still fall faster than c_MinRatio a voxel, which no probe of 0.5 m resolves:
-		// there the darkest point keeps at least c_MinOverhangRatio and c_MinBoxFootRatio of its brightest neighbour (0.021 and 0.10
-		// before probe relocation and the gather's guard visibility: a dead probe in the sphere and Chebyshev's blurred depths left
-		// them black), and c_MinRatio is a goal not met yet (DeveloperGuide, "Global illumination"). Low's 1 m probes are measured
-		// and reported: whole cells of them lie in the coarse voxels' solids beside the box and the sphere.
+		// fiftieth of the floor's median. At High around the sphere's footprint and under its overhang (0.083 while the floor, 2.75 m
+		// below the camera, lay beyond voxel level 0's weights: level 1's 0.2 m voxels closed the gap and the probe relocated there
+		// read a fortieth of its open neighbour's light; the finest level's window now lies c_GIFinestLevelDrop below the camera).
+		// The tall box's foot (the gap between its back-left corner and the red wall) still falls faster than c_MinRatio a voxel:
+		// there the darkest point keeps at least c_MinBoxFootRatio of its brightest neighbour (0.10 before probe relocation and the
+		// gather's guard visibility). That gap is in the box's full shadow from the panel, but the probes in front of it read the
+		// panel through the cascades' merge (parents beside the box see past it), 17 times their neighbours in the shadow, which
+		// the trilinear weights blend in linearly: c_MinRatio there is a goal not met yet (DeveloperGuide, "Global
+		// illumination"). Low's 1 m probes are measured and reported: whole cells of them lie in the coarse voxels' solids beside
+		// the box and the sphere.
 		constexpr float c_MinRatio = 0.5f;
-		constexpr float c_MinOverhangRatio = 0.06f;
 		constexpr float c_MinBoxFootRatio = 0.2f;
 		constexpr float c_ContactGap = 0.6f;
 		GPUContext gpu;
@@ -2828,7 +4135,7 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
 					<< " of the brightest, at (" << lowestAt.x << ", 0, " << lowestAt.y << "); the floor's median " << floorMedian);
 				CHECK(measured > (area == 1 ? 50u : 200u));
 				if (level == GlobalIlluminationLevel::High)
-					CHECK(lowest >= (area == 0 ? c_MinRatio : area == 1 ? c_MinOverhangRatio : c_MinBoxFootRatio));
+					CHECK(lowest >= (area == 2 ? c_MinBoxFootRatio : c_MinRatio));
 			}
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -2926,6 +4233,9 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
 		// In the Cornell box, a probe a known height over the open floor finds the floor straight down within a voxel and a half
 		// (the voxels' soft surface and the filter over neighbouring rays), its spread within two voxels, and nothing up to the
 		// march's end straight up (the ceiling lies farther): the distances are the march's, in meters.
+		// Every tile's border holds the bits of the interior texels across the octahedron's edges (the reduce copies them instead
+		// of filtering the rays again), which is what makes the gather's bilinear read seamless there: every border texel of
+		// every probe is compared with its source, and the tiles are not all empty or flat.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
@@ -2959,8 +4269,335 @@ TEST_SUITE("GPU.SceneRenderer.GlobalIlluminationStitching")
 			CHECK(std::abs(down.x - center.y) <= 1.5f * voxel);
 			CHECK(std::sqrt(down.y) <= 2.0f * voxel);
 			CHECK(up.x >= 0.95f * missDistance);
+			const glm::ivec3 grid(renderer->GetGlobalIlluminationLayout()->Cascades.front().Grid);
+			constexpr int c_Texels = static_cast<int>(RenderData::c_GIFieldDepthTexels);
+			const size_t width = static_cast<size_t>(grid.x * c_Texels);
+			const size_t height = static_cast<size_t>(grid.y * c_Texels);
+			REQUIRE(depth.size() == width * height * static_cast<size_t>(grid.z) * 4);
+			const auto readTexel = [&](const glm::ivec3& tile, const glm::ivec2& texel)
+			{
+				const size_t x = static_cast<size_t>(tile.x * c_Texels + texel.x);
+				const size_t y = static_cast<size_t>(tile.y * c_Texels + texel.y);
+				const size_t index = x + width * (y + height * static_cast<size_t>(tile.z));
+				uint32_t value = 0;
+				std::memcpy(&value, depth.data() + index * 4, sizeof(value));
+				return value;
+			};
+			size_t borderTexels = 0;
+			size_t differentFromSource = 0;
+			size_t differentFromNeighbour = 0;
+			for (int z = 0; z < grid.z; z++)
+			{
+				for (int y = 0; y < grid.y; y++)
+				{
+					for (int x = 0; x < grid.x; x++)
+					{
+						const glm::ivec3 tile(x, y, z);
+						for (int index = 0; index < c_Texels * c_Texels; index++)
+						{
+							const glm::ivec2 texel(index % c_Texels, index / c_Texels);
+							const glm::ivec2 source = GetDepthTileSource(texel);
+							if (source == texel)
+								continue;
+							borderTexels++;
+							const uint32_t value = readTexel(tile, texel);
+							if (value != readTexel(tile, source))
+								differentFromSource++;
+							// The next border texel along the row or column repeats another interior texel: where the two differ, a
+							// border copied from the wrong place would show.
+							const bool onRow = texel.y == 0 || texel.y == c_Texels - 1;
+							const glm::ivec2 next = onRow && texel.x + 1 < c_Texels ? texel + glm::ivec2(1, 0)
+								: texel.y + 1 < c_Texels ? texel + glm::ivec2(0, 1) : texel;
+							if (value != readTexel(tile, next))
+								differentFromNeighbour++;
+						}
+					}
+				}
+			}
+			MESSAGE(levelName << ": " << borderTexels << " border texels, " << differentFromSource << " differ from their source, "
+				<< differentFromNeighbour << " from the next border texel");
+			const size_t probes = static_cast<size_t>(grid.x) * static_cast<size_t>(grid.y) * static_cast<size_t>(grid.z);
+			CHECK(borderTexels == probes * static_cast<size_t>(4 * c_Texels - 4));
+			CHECK(differentFromSource == 0);
+			// Most probes lie in the open or are dead and hold flat tiles: with this room 13.7% of the border texels differ from the
+			// next one at High and 17.6% at Low, and a twentieth shows the comparison above had something to compare.
+			CHECK(differentFromNeighbour * 20 >= borderTexels);
 			renderer.reset();
 			CollectReleases();
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A thin gap takes field light beyond the finest voxels")
+	{
+		// The yard's covered car stands 0.15 m off the ground. Seen from 4 m at High, voxel level 0 (0.1 m) holds its gap and
+		// probes relocate into it; from 6 m (beyond level 0's relocation, 5.35 m, within the field's full reach, 7.5 m) only
+		// level 1's 0.2 m voxels do, which close the gap: no probe lives there and none sees the ground more than 0.25 m under
+		// the car. The gi view of the ground the camera sees under the car's near edge, in bands of depth under it (0.02-0.2,
+		// 0.2-0.5 and 0.5-1 m), each band's median against the open ground's in front of the car.
+		// From below: from 6 m the first band keeps at least c_MinEdge of the open ground's light, and every band at least
+		// c_MinShare of what it keeps from 4 m (without the gaps' light the two inner bands are black from 6 m).
+		// From above: no band is brighter than the open ground (c_MaxEdge), and the inner bands keep at most c_MaxOpening times
+		// what the ground under a gap this tall sees of its opening (0.04 and 0.01 of the open ground's light by the view
+		// factor), from either distance. The gap's light not darkened by the way in reads 0.91 in both inner bands from 6 m and
+		// fails; the bounds leave the measured light a factor of 1.8 and 2.0.
+		// Measured at High: 0.41, 0.060 and 0.0047 from 4 m; 0.91, 0.067 and 0.015 from 6 m (0.057 and 0.012 while the way out
+		// was counted in whole steps).
+		// At Low (0.2 m voxels, probes 1 m apart) the probes beside the car light the first 0.5 m under its edge as they light
+		// the open ground, with the gaps' light or without (0.97-0.99 from both distances); the band 0.5-1 m in, black without
+		// the gaps' light, keeps 0.016 from 4 m and 0.048 from 6 m, where the voxels are 0.4 m and the gap they stand for twice
+		// as tall: between c_LowMinimum and c_LowMaximum (undarkened: 0.95 and 0.96).
+		// Every bounce, settled.
+		constexpr float c_MinEdge = 0.1f;
+		constexpr float c_MinShare = 0.5f;
+		constexpr float c_MaxEdge = 1.05f;
+		constexpr float c_MaxOpening = 3.0f;
+		constexpr float c_LowMinimum = 0.005f;
+		constexpr float c_LowMaximum = 0.1f;
+		constexpr uint32_t c_Bands = 3;
+		const float bandDepths[c_Bands + 1] = { 0.02f, 0.2f, 0.5f, 1.0f };
+		// The inner bands' share of the open ground's light by the view factor of the gap's opening.
+		const float openingShares[c_Bands] = { 0.22f, 0.04f, 0.01f };
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		BuildYard(scene, assets);
+		for (GlobalIlluminationLevel level : { GlobalIlluminationLevel::High, GlobalIlluminationLevel::Low })
+		{
+			const bool high = level == GlobalIlluminationLevel::High;
+			const std::string levelName = high ? "High" : "Low";
+			CAPTURE(levelName);
+			float shares[2][c_Bands] = {};
+			for (uint32_t view = 0; view < 2; view++)
+			{
+				const float distance = view == 0 ? 4.0f : 6.0f;
+				CAPTURE(distance);
+				const GapView gap = RenderGapView(scene, YardCarCamera(distance), level);
+				std::vector<float> bands[c_Bands];
+				std::vector<float> open;
+				for (uint32_t y = 0; y < gap.Image.Height; y++)
+				{
+					for (uint32_t x = 0; x < gap.Image.Width; x++)
+					{
+						const std::optional<glm::vec3>& point = gap.Positions[static_cast<size_t>(y) * gap.Image.Width + x];
+						if (!point || point->y > 0.02f || point->x < -4.6f || point->x > -1.4f)
+							continue;
+						const float value = gap.GetLuminance(x, y);
+						if (point->z > -4.7f && point->z < -4.3f)
+							open.push_back(value);
+						const float depth = point->z + 4.0f;
+						for (uint32_t band = 0; band < c_Bands; band++)
+						{
+							if (depth >= bandDepths[band] && depth < bandDepths[band + 1])
+								bands[band].push_back(value);
+						}
+					}
+				}
+				REQUIRE(open.size() > 50);
+				const float openMedian = Median(open);
+				REQUIRE(openMedian > 0.0f);
+				for (uint32_t band = 0; band < c_Bands; band++)
+				{
+					INFO("band " << band);
+					REQUIRE(bands[band].size() > 20);
+					shares[view][band] = Median(bands[band]) / openMedian;
+					MESSAGE(levelName << " from " << distance << " m, " << bandDepths[band] << "-" << bandDepths[band + 1] << " m under the car: "
+						<< bands[band].size() << " points, their median " << shares[view][band] << " of the open ground's " << openMedian);
+					CHECK(shares[view][band] <= c_MaxEdge);
+					if (high && band > 0)
+						CHECK(shares[view][band] <= c_MaxOpening * openingShares[band]);
+				}
+				if (!high)
+				{
+					CHECK(shares[view][c_Bands - 1] >= c_LowMinimum);
+					CHECK(shares[view][c_Bands - 1] <= c_LowMaximum);
+				}
+			}
+			if (high)
+			{
+				CHECK(shares[1][0] >= c_MinEdge);
+				for (uint32_t band = 0; band < c_Bands; band++)
+				{
+					INFO("band " << band);
+					CHECK(shares[1][band] >= c_MinShare * shares[0][band]);
+				}
+			}
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The light of a thin gap falls off without bands")
+	{
+		// The gap's light falls with the way from the point to the gap's opening, and the way ends where the voxels' occupancy
+		// crosses the threshold between two samples half a voxel apart. Counted in whole steps the light fell in bands, with a
+		// step of up to 1.5 times between two neighboring pixels at each. The yard's car from 6.5 m through a 4 degree lens (a
+		// pixel 0.9 mm wide and 13 mm deep on the ground), at High: among the pixels of the ground 0.02-0.9 m under its edge that
+		// take their light from the gap (the probes alone give at most c_ProbesShare of it) and at least c_Darkest of the open
+		// ground's, no two neighbors differ by more than c_MaxStep (1.12; the light falls by 1.04 a pixel on average there).
+		// The probes' own light ends 0.25 m under the edge in a hard line, with the gaps' light or without (the release notes'
+		// known issues): its pixels do not count here.
+		constexpr float c_MaxStep = 1.25f;
+		constexpr float c_Darkest = 0.003f;
+		constexpr float c_ProbesShare = 0.1f;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		YardOptions options;
+		options.Fence = false;
+		BuildYard(scene, assets, options);
+		const SceneCamera camera = MakeCamera(glm::vec3(-3.0f, 0.5f, -10.5f), glm::vec3(-3.0f, 0.0f, -3.55f), 4.0f, c_RoomSize);
+		const GapView gap = RenderGapView(scene, camera, GlobalIlluminationLevel::High);
+		const GapView plain = RenderGapView(scene, camera, GlobalIlluminationLevel::High, false);
+		REQUIRE(plain.Image.Width == gap.Image.Width);
+		REQUIRE(plain.Image.Height == gap.Image.Height);
+		const uint32_t width = gap.Image.Width;
+		const uint32_t height = gap.Image.Height;
+		// The gap's light on the ground under the car, 0 where a pixel shows something else or the probes' light.
+		std::vector<float> under(static_cast<size_t>(width) * height, 0.0f);
+		std::vector<float> open;
+		for (uint32_t y = 0; y < height; y++)
+		{
+			for (uint32_t x = 0; x < width; x++)
+			{
+				const size_t index = static_cast<size_t>(y) * width + x;
+				const std::optional<glm::vec3>& point = gap.Positions[index];
+				if (!point || point->y > 0.02f || point->x < -4.6f || point->x > -1.4f)
+					continue;
+				const float value = gap.GetLuminance(x, y);
+				if (point->z > -4.7f && point->z < -4.3f)
+					open.push_back(value);
+				if (point->z >= -3.98f && point->z <= -3.1f && plain.GetLuminance(x, y) <= c_ProbesShare * value)
+					under[index] = value;
+			}
+		}
+		REQUIRE(open.size() > 50);
+		const float openMedian = Median(open);
+		REQUIRE(openMedian > 0.0f);
+		const float darkest = c_Darkest * openMedian;
+		uint32_t pairs = 0;
+		float largest = 1.0f;
+		glm::uvec2 largestAt(0);
+		for (uint32_t y = 0; y < height; y++)
+		{
+			for (uint32_t x = 0; x < width; x++)
+			{
+				const float value = under[static_cast<size_t>(y) * width + x];
+				if (value < darkest)
+					continue;
+				// The pixel to the right and the one below.
+				for (uint32_t neighbor = 0; neighbor < 2; neighbor++)
+				{
+					const uint32_t otherX = x + (neighbor == 0 ? 1u : 0u);
+					const uint32_t otherY = y + (neighbor == 0 ? 0u : 1u);
+					if (otherX >= width || otherY >= height)
+						continue;
+					const float other = under[static_cast<size_t>(otherY) * width + otherX];
+					if (other < darkest)
+						continue;
+					pairs++;
+					const float step = std::max(value, other) / std::min(value, other);
+					if (step > largest)
+					{
+						largest = step;
+						largestAt = glm::uvec2(x, y);
+					}
+				}
+			}
+		}
+		const std::optional<glm::vec3>& where = gap.Positions[static_cast<size_t>(largestAt.y) * width + largestAt.x];
+		MESSAGE(pairs << " pairs of neighboring pixels in the gap's light under the car, the largest step " << largest << " at " << largestAt.x << ", "
+			<< largestAt.y << " (z " << (where ? where->z : 0.0f) << "), the open ground " << openMedian);
+		REQUIRE(pairs > 50000);
+		CHECK(largest <= c_MaxStep);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The light of a thin gap darkens no point")
+	{
+		// A point takes the gap's light for the share of it its probes do not see; their own light, faded already by what they
+		// see, stays whole. Blended toward the gap's light it was faded twice, and a point its probes see in part was darker
+		// with the gaps' light than without it (a fold of the ground, a contact). The gi view with the gaps' light against the
+		// one without (GlobalIlluminationSettings::GapLight; the field is the same, only drawn points take the gaps' light): no
+		// pixel with at least c_Darkest of the picture's median falls below c_Tolerance of itself, in the yard's car from 4 and
+		// 6 m and in the Cornell box (blended: 42 pixels from 6 m, the darkest at 0.18 of itself, and one in the box at 0.78).
+		// From 6 m, where the voxels close the gap, more than c_MinLighter pixels are lighter by c_Lighter (3,140; none from 4 m
+		// and in the box, where no gap is closed).
+		constexpr float c_Tolerance = 0.98f;
+		constexpr float c_Lighter = 1.05f;
+		constexpr float c_Darkest = 0.01f;
+		constexpr uint32_t c_MinLighter = 1000;
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const auto read = [](const ReadbackImage& image, uint32_t x, uint32_t y)
+		{
+			return Luminance(glm::vec3(ReadHalfTexel(image, x, y))) / c_RoomPreExposure;
+		};
+		// Checks that no pixel is darker with the gaps' light; returns how many are lighter.
+		const auto compare = [&](const std::string& name, const ReadbackImage& with, const ReadbackImage& without)
+		{
+			INFO(name);
+			REQUIRE(with.Width == without.Width);
+			REQUIRE(with.Height == without.Height);
+			std::vector<float> lit;
+			for (uint32_t y = 0; y < without.Height; y++)
+			{
+				for (uint32_t x = 0; x < without.Width; x++)
+				{
+					const float value = read(without, x, y);
+					if (value > 0.0f)
+						lit.push_back(value);
+				}
+			}
+			REQUIRE(!lit.empty());
+			const float darkest = c_Darkest * Median(lit);
+			uint32_t darker = 0;
+			uint32_t lighter = 0;
+			float smallest = 1.0f;
+			glm::uvec2 smallestAt(0);
+			for (uint32_t y = 0; y < without.Height; y++)
+			{
+				for (uint32_t x = 0; x < without.Width; x++)
+				{
+					const float off = read(without, x, y);
+					const float on = read(with, x, y);
+					if (on > c_Lighter * std::max(off, darkest))
+						lighter++;
+					if (off < darkest)
+						continue;
+					if (on < c_Tolerance * off)
+						darker++;
+					if (on / off < smallest)
+					{
+						smallest = on / off;
+						smallestAt = glm::uvec2(x, y);
+					}
+				}
+			}
+			MESSAGE(name << ": " << darker << " pixels darker with the gaps' light, the smallest share " << smallest << " at " << smallestAt.x << ", "
+				<< smallestAt.y << "; " << lighter << " lighter");
+			CHECK(darker == 0);
+			return lighter;
+		};
+		{
+			SceneTestAssets assets;
+			Scene scene;
+			BuildYard(scene, assets);
+			for (float distance : { 4.0f, 6.0f })
+			{
+				const SceneCamera camera = YardCarCamera(distance);
+				const GapView with = RenderGapView(scene, camera, GlobalIlluminationLevel::High, true);
+				const GapView without = RenderGapView(scene, camera, GlobalIlluminationLevel::High, false);
+				const uint32_t lighter = compare("the yard's car from " + std::to_string(static_cast<int>(distance)) + " m", with.Image, without.Image);
+				if (distance > 5.0f)
+					CHECK(lighter > c_MinLighter);
+			}
+		}
+		{
+			const CornellView with = RenderCornellView(GlobalIlluminationLevel::High, true);
+			const CornellView without = RenderCornellView(GlobalIlluminationLevel::High, false);
+			compare("the Cornell box", with.Image, without.Image);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

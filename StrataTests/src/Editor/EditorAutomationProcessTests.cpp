@@ -608,6 +608,30 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 				CHECK(*wrongExit == 3);
 				CHECK(wrong.OutputContains("Usage: StrataEditor"));
 			}
+			// --window-size takes <width>x<height>, no smaller than the editor's layout is made for, and needs a window: each mistake
+			// says what it expects.
+			const std::pair<std::vector<std::string>, const char*> windowSizes[] = {
+				{ { "--window-size", "1600" }, "--window-size expects the window's pixels as <width>x<height>" },
+				{ { "--window-size", "0x900" }, "--window-size expects the window's pixels as <width>x<height>" },
+				{ { "--window-size", "wide" }, "--window-size expects the window's pixels as <width>x<height>" },
+				{ { "--window-size", "1x1" }, "at least 640 wide and 360 high" },
+				{ { "--window-size", "320x180" }, "at least 640 wide and 360 high" },
+				{ { "--window-size", "1600x359" }, "at least 640 wide and 360 high" },
+				{ { "--window-size", "639x900" }, "at least 640 wide and 360 high" },
+				{ { "--window-size" }, "--window-size" },
+				{ { "--no-gpu", "--window-size", "1600x900" }, "it cannot be combined with --headless or --no-gpu" },
+				{ { "--headless", "--window-size", "1600x900" }, "it cannot be combined with --headless or --no-gpu" } };
+			for (const auto& [arguments, message] : windowSizes)
+			{
+				CAPTURE(arguments[arguments.size() - 1]);
+				EditorProcess wrong;
+				REQUIRE(wrong.Start(arguments));
+				const std::optional<int> wrongExit = wrong.Wait();
+				REQUIRE(wrongExit.has_value());
+				CHECK(*wrongExit == 3);
+				CHECK(wrong.OutputContains(message));
+				CHECK(wrong.OutputContains("Usage: StrataEditor"));
+			}
 			CHECK(EditorSession::FindSessions(environment.SessionDirectory).empty());
 		}
 

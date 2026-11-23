@@ -9,7 +9,9 @@
 #include <nvrhi/nvrhi.h>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 // A scene renderer's global illumination (SceneRendererGlobalIllumination.cpp): what SceneRenderer keeps of it, made by the first
@@ -63,6 +65,17 @@ namespace Strata
 		uint64_t BoundPoolBuffers = 0;
 		uint64_t BoundPoolTables = 0;
 		const nvrhi::IBuffer* BoundMaterials = nullptr;
+		// The dynamic layer of moving objects (GI/VoxelMovers.comp): the frame's boxes, its bricks after those it puts back, and
+		// what the bricks written held; a binding set per level. ComposedBricks: the bricks the levels' textures hold the layer
+		// in now, put back before anything else is voxelized.
+		nvrhi::BufferHandle MoverBoxes;              // RenderData::VoxelMover
+		nvrhi::BufferHandle MoverBricks;             // RenderData::VoxelMoverBrick: twice the layout's bricks
+		nvrhi::BufferHandle MoverBackup;             // Three words per voxel of a brick
+		nvrhi::BindingLayoutHandle MoverLayout;
+		nvrhi::ComputePipelineHandle MoverPipeline;
+		std::vector<nvrhi::BindingSetHandle> MoverSets;
+		std::vector<RenderData::VoxelMoverBrick> ComposedBricks;
+		std::optional<std::chrono::steady_clock::time_point> LastMoverTime; // The movers' clock (StepSeconds)
 		// The light: per cascade its probes' validity, weights (but the top) and rays; the field; the passes' pipelines (their
 		// layouts follow their binding sets) and binding sets, made again when a level's or cascade's texture, the environment
 		// cube or the counters change (Bound*).
@@ -76,6 +89,7 @@ namespace Strata
 		std::vector<Cascade> Cascades;
 		nvrhi::TextureHandle Field;
 		nvrhi::TextureHandle FieldDepth; // R32_UINT, two halves: each cascade-0 probe's tile of depth moments (FieldReduce.comp)
+		nvrhi::TextureHandle FieldIrradiance; // RGBA16F: each cascade-0 probe's irradiance as nine harmonics (what scene passes read)
 		// Multi-bounce by re-injection: VoxelInject reads the field the frame before left (its texture and cascade 0's validity
 		// still hold it when injection runs) through these constants (b3), relative to that frame's camera.
 		nvrhi::BufferHandle PreviousFieldBuffer;   // RenderData::GIFieldConstants

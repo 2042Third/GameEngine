@@ -330,6 +330,13 @@ namespace Strata
 		const uint32_t groupsY = (m_ViewportSize.y + c_GroupSize - 1) / c_GroupSize;
 		commandList->dispatch(groupsX, groupsY, 1);
 
+		// A capture without the resolve (SceneRendererSpecification::SpatialReflectionResolve) shows each pixel's traced
+		// reflection as the march found it: the traced target holds what the resolve writes, premultiplied alike.
+		if (!m_Specification.SpatialReflectionResolve)
+		{
+			commandList->copyTexture(m_ScreenReflectionTexture, nvrhi::TextureSlice(), m_TracedReflectionTexture, nvrhi::TextureSlice());
+			return;
+		}
 		state.pipeline = m_ReflectionResolvePipeline;
 		state.bindings = { m_ReflectionResolveSet };
 		commandList->setComputeState(state);

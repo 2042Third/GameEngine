@@ -32,11 +32,11 @@
 
 // Levels of cells of 4 << level atlas texels each way: the nearest depth (toward the light, the largest) rounded up in the
 // high 16 bits and the farthest rounded down in the low 16 bits, for the tiles of rect lights' views.
-Texture2D<uint4> u_LocalShadowRanges : register(t57);
+Texture2D<uint4> u_LocalShadowRanges : register(t58);
 // The rect lights' views drawn again with the winding reversed and no depth bias (SceneRenderer::EnsureLocalShadowBackAtlas):
 // per texel the nearest back face, where the solid the view sees first ends (0, the far plane, where it sees none), in the
 // atlas's tiles.
-Texture2D<float4> u_LocalShadowBackAtlas : register(t59);
+Texture2D<float4> u_LocalShadowBackAtlas : register(t60);
 
 static const float c_AreaShadowReach = 0.125;          // RenderData::c_AreaShadowReach
 static const float c_LocalShadowRangeMinTileShare = 8.0; // RenderData::c_LocalShadowRangeMinTileShare

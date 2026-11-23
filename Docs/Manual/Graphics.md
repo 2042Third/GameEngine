@@ -29,8 +29,8 @@ what each one costs:
 | Motion blur samples (scenes with motion blur) | Off | 8 | 12 | 16 |
 | Reflection probe resolution (per face) | 128 | 128 | 256 | 256 |
 | Global illumination (experimental; scenes that use it) | Off | Off | High | High |
-| Memory of one view, 1920 x 1080 (see below) | 66 MiB | 262 MiB | 765 MiB | 2.08 GiB |
-| Memory of one view, 3840 x 2160 | 66 MiB | 394 MiB | 1.93 GiB | 2.32 GiB |
+| Memory of one view, 1920 x 1080 (see below) | 66 MiB | 262 MiB | 774 MiB | 2.09 GiB |
+| Memory of one view, 3840 x 2160 | 66 MiB | 394 MiB | 1.94 GiB | 2.33 GiB |
 
 - **Medium** keeps Strata 0.6.0's shadow map sizes and sample counts. **High**, the default, adds smoother wide sun
   penumbrae at every size, and sharper sun shadows at every size: twice Medium's shadow map size each way below 1440
@@ -42,6 +42,13 @@ what each one costs:
   because they can shimmer in motion; each sun's Contact Shadow Length sets how far they reach:
   [Lighting.md](Lighting.md#shadows)). Neither takes memory of its own; both cost GPU time in the
   `GPU.ScreenShadows` stage.
+- **Level of detail error** and **Smallest drawn size** decide how much geometry a frame draws. Two debug views of the
+  Scene view's debug view chip show it: **Wireframe** draws the edges of every triangle drawn over the image, so you see
+  which level of detail each mesh is drawn at; **Culled** draws a box over everything around each mesh in view the frame
+  left out, yellow where it is smaller on screen than the smallest drawn size (each box's diagonal grown to 6 pixels so
+  it shows), red where it is hidden behind what is drawn (occlusion culling, on GPUs that cull on the GPU), with the counts
+  in its legend. While the camera moves, the Occluded count may be a little ahead of the red boxes: it counts what the
+  frame found hidden, and what was in view a frame before is drawn once more and gets its box in the next frame.
 - **Ambient occlusion samples** set how finely the ambient occlusion that darkens creases and contacts is traced, in
   scenes whose Post Process turns it on: more samples give smoother, truer occlusion for GPU time in the `GPU.AO` stage
   (Medium's 2 x 6 is Strata 0.6.0's), into the same targets at every preset.
@@ -60,7 +67,7 @@ what each one costs:
   the reflections it asks for show at full resolution from High on, and not at all at Low.
 - **Global illumination** (experimental) applies only to scenes whose Post Process turns it on (it is off by default, and
   in the template and the samples). The Low and Medium presets draw none; set to Low, it traces a coarser, shorter field for
-  about 18 MiB of GPU memory per view, High a finer one for about 111 MiB and several milliseconds of GPU time at 3840 x
+  about 25 MiB of GPU memory per view, High a finer one for about 156 MiB and several milliseconds of GPU time at 3840 x
   2160 (the `GPU.RadianceCascades` stage). High's cost was measured on one Windows machine with an NVIDIA GPU only: on
   integrated and Apple GPUs choose Low until measured there.
 - **Motion blur samples** apply only to scenes whose Post Process turns motion blur on (it is off by default, and in the
@@ -90,7 +97,14 @@ what each one costs:
   game will, and so does the Scene view while it looks through the scene's camera (**Game camera**): its chip then names
   the game's preset, a player's choice while you play.
 - **Pictures** (`viewport.capture`) draw at the quality of the view they show unless they ask for one
-  (`{"quality": "ultra"}`).
+  (`{"quality": "ultra"}`). A picture waits a bounded number of frames for what it shows to load and settle; its result's
+  `complete` says whether it got there, and `incomplete` names what it still lacked. A picture can also switch techniques
+  off or on for itself alone, to show what they do (`{"renderer": {"SpecularAntiAliasing": false}}`, and the energy
+  compensation, dithering, FXAA's sub-pixel amount, one bounce of global illumination...); the views and the game never
+  draw with them. With automatic exposure each picture is exposed for its own light, so a switch that changes how much
+  light there is (energy compensation, the bounces) brightens or darkens the whole picture too: compare such pairs with a
+  fixed exposure (the Post Process's Auto Exposure off). The result's `renderStats.exposure` says what automatic
+  exposure metered (null with a fixed exposure).
 - **One run of a game**: `<Game> --quality low` (or `medium`, `high`, `ultra`) plays at that preset without saving
   anything.
 

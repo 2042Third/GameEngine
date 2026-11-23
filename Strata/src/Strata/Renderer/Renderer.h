@@ -107,7 +107,7 @@ namespace Strata
 		// index by the screen pixel (the sun's shadows turn their disk by it).
 		static nvrhi::ITexture* GetBlueNoiseTexture();
 		// The rect lights' LTC tables (Renderer/AreaLights.h, LTCTable.inl): a 2D array of AreaLights::c_TableLayers layers of
-		// 64 x 64 RGBA32F texels, written before the first frame and never changed (the scene sets bind it at SRV 55; shaders
+		// 64 x 64 RGBA32F texels, written before the first frame and never changed (the scene sets bind it at SRV 56; shaders
 		// read it with Load and their own bilinear weights, as AreaLights::SampleTable does).
 		static nvrhi::ITexture* GetAreaLightTable();
 		// A 1x1x1 black 3D texture: what the scene passes bind as aerial perspective's volume in frames without it.

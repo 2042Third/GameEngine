@@ -43,6 +43,7 @@ namespace Strata
 			}
 
 			AssetType GetType() const override { return m_Type; }
+			std::string GetName() const override { return "Native"; }
 			std::vector<std::string> GetExtensions() const override { return { m_Extension }; }
 			uint32_t GetVersion() const override { return 1; }
 			bool StoresSourceDirectly() const override { return true; }

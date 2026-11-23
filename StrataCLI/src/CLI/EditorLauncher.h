@@ -9,6 +9,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace Strata::CLI
 {
@@ -23,6 +24,8 @@ namespace Strata::CLI
 		std::filesystem::path ProjectDirectory; // Empty starts the editor without a project (e.g. to create one)
 		bool Headless = false;                  // No window ("--headless")
 		bool NoGpu = false;                     // No graphics device either ("--no-gpu", implies headless)
+		std::string WindowSize;                 // A window of exactly these pixels ("--window-size <width>x<height>"); empty: maximized
+		std::optional<float> UIScale;           // The UI at this scale ("--ui-scale <factor>"); unset: the display's
 		std::chrono::milliseconds WaitTimeout = std::chrono::milliseconds(60000);
 		// The editor closes itself after this long without a connected client ("--idle-timeout <seconds>"), so an editor
 		// started for a client that went away does not run forever. Unset: it runs until editor.quit.
@@ -61,8 +64,11 @@ namespace Strata::CLI
 		Scope<Process> EditorProcess;
 	};
 
-	// Starts the editor detached ("--project <dir>" when a project is given, "--headless", "--no-gpu", "--idle-timeout";
-	// output discarded) and waits until its session accepts an authenticated connection, then (with a project, unless
+	// The editor's command line for a launch (without the executable): "--project <dir>" when a project is given, then
+	// "--headless", "--no-gpu", "--window-size", "--ui-scale" and "--idle-timeout" as the specification asks.
+	std::vector<std::string> GetEditorArguments(const EditorLaunchSpecification& specification);
+
+	// Starts the editor detached (GetEditorArguments; output discarded) and waits until its session accepts an authenticated connection, then (with a project, unless
 	// WaitForProject is off) until the project is ready. An editor that exits early, does not become reachable in time or
 	// whose project stops progressing is stopped, never left running unnoticed.
 	EditorLaunchResult LaunchEditor(const EditorLaunchSpecification& specification);

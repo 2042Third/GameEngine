@@ -305,13 +305,21 @@ namespace Strata
 		m_ForwardAreaPixelShader = shaders.Get("Scene/ForwardAreaLights.frag");
 		m_ForwardTransparentAreaPixelShader = shaders.Get("Scene/ForwardTransparentAreaLights.frag");
 		m_GlassAreaPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/ForwardGlassAreaLights.frag" : "Scene/ForwardGlassNoEntityIDsAreaLights.frag");
+		m_ForwardFieldPixelShader = shaders.Get("Scene/ForwardField.frag");
+		m_ForwardTransparentFieldPixelShader = shaders.Get("Scene/ForwardTransparentField.frag");
+		m_GlassFieldPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/ForwardGlassField.frag" : "Scene/ForwardGlassNoEntityIDsField.frag");
+		m_ForwardAreaFieldPixelShader = shaders.Get("Scene/ForwardAreaLightsField.frag");
+		m_ForwardTransparentAreaFieldPixelShader = shaders.Get("Scene/ForwardTransparentAreaLightsField.frag");
+		m_GlassAreaFieldPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/ForwardGlassAreaLightsField.frag"
+			: "Scene/ForwardGlassNoEntityIDsAreaLightsField.frag");
 		m_FullscreenVertexShader = shaders.Get("PostProcess/Fullscreen.vert");
 		m_TonemapPixelShader = shaders.Get("PostProcess/Tonemap.frag");
 		m_SkyboxPixelShader = shaders.Get("Scene/Skybox.frag");
 		m_AtmosphereSkyboxPixelShader = shaders.Get("Scene/SkyboxAtmosphere.frag");
 		m_ShadowVertexShader = shaders.Get("Scene/ShadowMesh.vert");
 		m_ShadowMaskPixelShader = shaders.Get("Scene/ShadowMask.frag");
-		m_FXAAPixelShader = shaders.Get("PostProcess/FXAA.frag");
+		m_FXAAPixelShader = shaders.Get(m_Specification.FXAASubpixel == SceneRendererSpecification::c_WideFXAASubpixel ? "PostProcess/FXAAWideSubpixel.frag"
+			: "PostProcess/FXAA.frag");
 		m_MorphologicalEdgesShader = shaders.Get("PostProcess/MorphologicalEdges.frag");
 		m_MorphologicalWeightsShader = shaders.Get("PostProcess/MorphologicalWeights.frag");
 		m_MorphologicalBlendShader = shaders.Get("PostProcess/MorphologicalBlend.frag");
@@ -322,7 +330,8 @@ namespace Strata
 			&& m_ForwardAreaPixelShader && m_ForwardTransparentAreaPixelShader && m_GlassAreaPixelShader && m_FullscreenVertexShader
 			&& m_TonemapPixelShader && m_SkyboxPixelShader && m_AtmosphereSkyboxPixelShader && m_ShadowVertexShader && m_ShadowMaskPixelShader && m_FXAAPixelShader && m_SkinnedMeshVertexShader
 			&& m_SkinnedShadowVertexShader && m_SelectionMaskPixelShader && m_LocalShadowVertexShader && m_SkinnedLocalShadowVertexShader && m_MorphologicalEdgesShader
-			&& m_MorphologicalWeightsShader && m_MorphologicalBlendShader,
+			&& m_MorphologicalWeightsShader && m_MorphologicalBlendShader && m_ForwardFieldPixelShader && m_ForwardTransparentFieldPixelShader
+			&& m_GlassFieldPixelShader && m_ForwardAreaFieldPixelShader && m_ForwardTransparentAreaFieldPixelShader && m_GlassAreaFieldPixelShader,
 			"SceneRenderer shaders are missing");
 
 		// The knobs within their ranges: cascades 1 to 4, the local shadows' atlas a power of two from 512 to 8192, at most
@@ -393,19 +402,20 @@ namespace Strata
 			nvrhi::BindingLayoutItem::Texture_SRV(29),          // Aerial perspective's volume (Include/AerialPerspective.slang)
 			nvrhi::BindingLayoutItem::Texture_SRV(32),          // The sun shadow cascades' depth ranges (Include/Shadows.slang)
 			nvrhi::BindingLayoutItem::Texture_SRV(33),          // The blue-noise tile (Include/Shadows.slang)
-			// Global illumination (Include/GIField.slang): its field, its probes' validity, voxel levels 0-2 and the probes' depth
-			// moments; the black 3D texture in frames without GI.
+			// Global illumination (Include/GIField.slang): its field's harmonics, its probes' validity, voxel levels 0-2, the probes'
+			// depth moments and the field's ambient cubes; the black 3D textures in frames without GI.
 			nvrhi::BindingLayoutItem::Texture_SRV(35),
 			nvrhi::BindingLayoutItem::Texture_SRV(37),
 			nvrhi::BindingLayoutItem::Texture_SRV(38),
 			nvrhi::BindingLayoutItem::Texture_SRV(39),
 			nvrhi::BindingLayoutItem::Texture_SRV(40),
 			nvrhi::BindingLayoutItem::Texture_SRV(54),
-			nvrhi::BindingLayoutItem::Texture_SRV(55),          // The rect lights' LTC table (Renderer::GetAreaLightTable)
-			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(56), // The lights' faces (RenderData::LightShape, parallel to SRV 2)
-			nvrhi::BindingLayoutItem::Texture_SRV(57),          // The local shadow atlas's depth ranges (Include/AreaShadows.slang)
-			nvrhi::BindingLayoutItem::Texture_SRV(58),          // The rect lights' screen-space shadow masks (Scene/Forward.frag)
-			nvrhi::BindingLayoutItem::Texture_SRV(59),          // The rect lights' back faces (Include/AreaShadows.slang)
+			nvrhi::BindingLayoutItem::Texture_SRV(55),
+			nvrhi::BindingLayoutItem::Texture_SRV(56),          // The rect lights' LTC table (Renderer::GetAreaLightTable)
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(57), // The lights' faces (RenderData::LightShape, parallel to SRV 2)
+			nvrhi::BindingLayoutItem::Texture_SRV(58),          // The local shadow atlas's depth ranges (Include/AreaShadows.slang)
+			nvrhi::BindingLayoutItem::Texture_SRV(59),          // The rect lights' screen-space shadow masks (Scene/Forward.frag)
+			nvrhi::BindingLayoutItem::Texture_SRV(60),          // The rect lights' back faces (Include/AreaShadows.slang)
 			nvrhi::BindingLayoutItem::Sampler(0).setSize(RenderData::c_SamplerCount),
 			nvrhi::BindingLayoutItem::Sampler(8),
 			nvrhi::BindingLayoutItem::Sampler(9),
@@ -1100,7 +1110,7 @@ namespace Strata
 		nvrhi::ITexture* probeArray = GetBoundReflectionProbes();
 		nvrhi::ITexture* screenReflections = GetBoundScreenReflections();
 		nvrhi::ITexture* sceneColor = GetBoundSceneColor();
-		const std::array<nvrhi::ITexture*, 6> giTextures = GetBoundGITextures();
+		const std::array<nvrhi::ITexture*, 7> giTextures = GetBoundGITextures();
 
 		// The shadow pass reads the same resources except for its own draw list (and never the shadow maps it draws into).
 		nvrhi::ITexture* screenShadows = GetBoundScreenShadows();
@@ -1131,12 +1141,13 @@ namespace Strata
 				nvrhi::BindingSetItem::Texture_SRV(39, giTextures[3], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
 				nvrhi::BindingSetItem::Texture_SRV(40, giTextures[4], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
 				nvrhi::BindingSetItem::Texture_SRV(54, giTextures[5], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
-				nvrhi::BindingSetItem::Texture_SRV(55, Renderer::GetAreaLightTable(), nvrhi::Format::UNKNOWN, nvrhi::AllSubresources,
+				nvrhi::BindingSetItem::Texture_SRV(55, giTextures[6], nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture3D),
+				nvrhi::BindingSetItem::Texture_SRV(56, Renderer::GetAreaLightTable(), nvrhi::Format::UNKNOWN, nvrhi::AllSubresources,
 					nvrhi::TextureDimension::Texture2DArray),
-				nvrhi::BindingSetItem::StructuredBuffer_SRV(56, m_LightShapeBuffer),
-				nvrhi::BindingSetItem::Texture_SRV(57, boundLocalRanges),
-				nvrhi::BindingSetItem::Texture_SRV(58, boundAreaMasks, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture2DArray),
-				nvrhi::BindingSetItem::Texture_SRV(59, boundBackAtlas),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(57, m_LightShapeBuffer),
+				nvrhi::BindingSetItem::Texture_SRV(58, boundLocalRanges),
+				nvrhi::BindingSetItem::Texture_SRV(59, boundAreaMasks, nvrhi::Format::UNKNOWN, nvrhi::AllSubresources, nvrhi::TextureDimension::Texture2DArray),
+				nvrhi::BindingSetItem::Texture_SRV(60, boundBackAtlas),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SceneGPU->GetMaterialBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment->Irradiance.Get() : blackCube),
@@ -1230,10 +1241,13 @@ namespace Strata
 			m_SkinnedMeshVelocityVertexShader = shaders.Get("Scene/MeshSkinnedVelocity.vert");
 			m_PrepassVelocityPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/DepthPrepassVelocity.frag" : "Scene/DepthPrepassNoEntityIDsVelocity.frag");
 			m_GlassVelocityPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/ForwardGlassVelocity.frag" : "Scene/ForwardGlassNoEntityIDsVelocity.frag");
+			m_GlassVelocityFieldPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/ForwardGlassVelocityField.frag" : "Scene/ForwardGlassNoEntityIDsVelocityField.frag");
 			m_GlassVelocityAreaPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/ForwardGlassVelocityAreaLights.frag"
 				: "Scene/ForwardGlassNoEntityIDsVelocityAreaLights.frag");
+			m_GlassVelocityAreaFieldPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/ForwardGlassVelocityAreaLightsField.frag"
+				: "Scene/ForwardGlassNoEntityIDsVelocityAreaLightsField.frag");
 			ST_CORE_VERIFY(m_MeshVelocityVertexShader && m_SkinnedMeshVelocityVertexShader && m_PrepassVelocityPixelShader && m_GlassVelocityPixelShader
-				&& m_GlassVelocityAreaPixelShader,
+				&& m_GlassVelocityFieldPixelShader && m_GlassVelocityAreaPixelShader && m_GlassVelocityAreaFieldPixelShader,
 				"SceneRenderer: the velocity shaders are missing");
 		}
 		if (!m_VelocityTexture)
@@ -2498,6 +2512,15 @@ namespace Strata
 		ST_CORE_VERIFY(vertexLayout.has_value(), "SceneRenderer: vertex shader '{}' has no entry in c_SceneVertexEntries",
 			desc.VS->getDesc().debugName);
 		desc.inputLayout = m_SceneInputLayouts[static_cast<size_t>(*vertexLayout)];
+		// The forward passes' form: with the rect lights' shading (PipelineKey::AreaLights), global illumination's field
+		// (PipelineKey::Field), both or neither.
+		const auto forwardShader = [&key](const nvrhi::ShaderHandle& plain, const nvrhi::ShaderHandle& field, const nvrhi::ShaderHandle& area,
+			const nvrhi::ShaderHandle& areaField) -> nvrhi::IShader*
+		{
+			if (key.AreaLights)
+				return key.Field ? areaField.Get() : area.Get();
+			return key.Field ? field.Get() : plain.Get();
+		};
 		switch (key.PassType)
 		{
 			case Pass::Prepass:
@@ -2512,17 +2535,26 @@ namespace Strata
 			case Pass::Shadow:
 			case Pass::LocalShadow:
 			case Pass::LocalShadowBack: desc.PS = nullptr; break; // Depth only
-			case Pass::Transparent:  desc.PS = key.AreaLights ? m_ForwardTransparentAreaPixelShader : m_ForwardTransparentPixelShader; break;
+			case Pass::Transparent:  desc.PS = forwardShader(m_ForwardTransparentPixelShader, m_ForwardTransparentFieldPixelShader,
+				m_ForwardTransparentAreaPixelShader, m_ForwardTransparentAreaFieldPixelShader); break;
 			case Pass::Glass:
-				desc.PS = key.Velocity ? (key.AreaLights ? m_GlassVelocityAreaPixelShader : m_GlassVelocityPixelShader)
-					: (key.AreaLights ? m_GlassAreaPixelShader : m_GlassPixelShader);
+				if (key.Velocity)
+					desc.PS = forwardShader(m_GlassVelocityPixelShader, m_GlassVelocityFieldPixelShader, m_GlassVelocityAreaPixelShader,
+						m_GlassVelocityAreaFieldPixelShader);
+				else
+					desc.PS = forwardShader(m_GlassPixelShader, m_GlassFieldPixelShader, m_GlassAreaPixelShader, m_GlassAreaFieldPixelShader);
 				break;
-			case Pass::Opaque:       desc.PS = key.AreaLights ? m_ForwardAreaPixelShader : m_ForwardPixelShader; break;
+			case Pass::Opaque:
+				desc.PS = forwardShader(m_ForwardPixelShader, m_ForwardFieldPixelShader, m_ForwardAreaPixelShader, m_ForwardAreaFieldPixelShader);
+				break;
 			case Pass::SelectionMask: desc.PS = m_SelectionMaskPixelShader; break;
+			case Pass::Wireframe:    desc.PS = m_WireframePixelShader; break;
 		}
 		desc.bindingLayouts = { m_SceneBindingLayout, Renderer::GetBindlessTextures().GetLayout() };
 		if (shadowPass)
 			desc.bindingLayouts.push_back(m_ShadowPushLayout);
+		if (key.PassType == Pass::Wireframe)
+			desc.bindingLayouts.push_back(m_WireframePushLayout);
 		// Front faces are counter-clockwise; a mirroring transform reverses the winding on screen, and so do the back faces' passes
 		// (they cull the front faces).
 		desc.renderState.rasterState.setFrontCounterClockwise(key.Mirrored == backFacePass);
@@ -2569,6 +2601,22 @@ namespace Strata
 				depth.setDepthWriteEnable(false).setDepthFunc(nvrhi::ComparisonFunc::GreaterOrEqual);
 				SetJitteredDepthBias(desc.renderState.rasterState);
 				break;
+			case Pass::Wireframe:
+			{
+				// The triangles' edges where nothing is in front of them, blended over the image: drawn with the camera's own matrices
+				// against the frame's (jittered, with TAA) depth with its bias, which also lifts the edges off their own surfaces.
+				desc.renderState.rasterState.setFillWireframe();
+				depth.setDepthWriteEnable(false).setDepthFunc(nvrhi::ComparisonFunc::GreaterOrEqual);
+				SetJitteredDepthBias(desc.renderState.rasterState);
+				nvrhi::BlendState::RenderTarget blend;
+				blend.setBlendEnable(true)
+					.setSrcBlend(nvrhi::BlendFactor::SrcAlpha)
+					.setDestBlend(nvrhi::BlendFactor::InvSrcAlpha)
+					.setSrcBlendAlpha(nvrhi::BlendFactor::One)
+					.setDestBlendAlpha(nvrhi::BlendFactor::InvSrcAlpha);
+				desc.renderState.blendState.setRenderTarget(0, blend);
+				break;
+			}
 			case Pass::Transparent:
 			{
 				depth.setDepthWriteEnable(false).setDepthFunc(nvrhi::ComparisonFunc::GreaterOrEqual);
@@ -2588,7 +2636,7 @@ namespace Strata
 
 		nvrhi::IFramebuffer* framebuffer = localShadowPass ? m_LocalShadowFramebuffer.Get() : shadowPass ? m_ShadowFramebuffers[0].Get()
 			: (key.PassType == Pass::Prepass ? (key.Surface ? m_SurfacePrepassFramebuffer.Get() : key.Velocity ? m_MotionPrepassFramebuffer.Get() : m_PrepassFramebuffer.Get())
-			: (selectionMask ? m_SelectionMaskFramebuffer.Get()
+			: (selectionMask ? m_SelectionMaskFramebuffer.Get() : key.PassType == Pass::Wireframe ? m_OverlayFramebuffer.Get()
 			: (key.PassType == Pass::Glass ? (key.Velocity ? m_GlassMotionFramebuffer.Get() : m_GlassFramebuffer.Get()) : m_ForwardFramebuffer.Get())));
 		nvrhi::GraphicsPipelineHandle pipeline = m_Device->createGraphicsPipeline(desc, framebuffer->getFramebufferInfo());
 		ST_CORE_VERIFY(pipeline, "SceneRenderer: failed to create a scene pipeline");
@@ -2798,10 +2846,11 @@ namespace Strata
 			nvrhi::GraphicsState glassState = state;
 			glassState.framebuffer = GetGlassFramebuffer();
 			const bool glassVelocity = m_MotionFrame;
+			const bool glassField = m_FieldFrame;
 			DrawBuckets(commandList, glassState, drawn.first(m_GlassBatchCount), firstArgument,
-				[glassVelocity](const SceneDrawBatch& batch)
+				[glassVelocity, glassField](const SceneDrawBatch& batch)
 				{
-					return PipelineKey { Pass::Glass, batch.DoubleSided, batch.Mirrored, batch.Skinned, glassVelocity, false };
+					return PipelineKey { Pass::Glass, batch.DoubleSided, batch.Mirrored, batch.Skinned, glassVelocity, false, glassField };
 				},
 				nullptr, nullptr);
 			firstArgument += m_GlassBatchCount;
@@ -2810,10 +2859,11 @@ namespace Strata
 		// Blended transparent surfaces have no EQUAL test to agree with and write no motion: the plain shaders.
 		const bool velocity = m_MotionFrame && pass != Pass::Transparent;
 		const bool surface = m_ReflectionFrame && pass == Pass::Prepass;
+		const bool field = m_FieldFrame && (pass == Pass::Opaque || pass == Pass::Transparent);
 		DrawBuckets(commandList, state, drawn, firstArgument,
-			[pass, velocity, surface](const SceneDrawBatch& batch)
+			[pass, velocity, surface, field](const SceneDrawBatch& batch)
 			{
-				return PipelineKey { pass, batch.DoubleSided, batch.Mirrored, batch.Skinned, velocity, surface };
+				return PipelineKey { pass, batch.DoubleSided, batch.Mirrored, batch.Skinned, velocity, surface, field };
 			},
 			nullptr, nullptr);
 		if (pass == Pass::Prepass)
@@ -3230,6 +3280,9 @@ namespace Strata
 		// A render scene without proxies gives the GPU nothing to cull or draw (scenes of empty entities, an editor's new scene).
 		m_GPUCullFrame = m_GPUDrivenFrame && renderScene.GetProxyCapacity() > 0;
 		m_Stats.GPUCulled = m_GPUCullFrame;
+		// The culled view's list: the GPU's culling or the CPU's extraction record into it (frames without it record nothing).
+		m_CulledViewFrame = options.ShowCulled && !options.HDROutput;
+		m_CulledProxies.clear();
 		CollectLights(scene, renderScene, camera, preview, frame);
 		const auto extractionStart = std::chrono::steady_clock::now();
 		// The CPU's culling works in world space (the spatial index holds world bounds).
@@ -3330,7 +3383,7 @@ namespace Strata
 		}
 		ResolveAssets(renderScene);
 		if (m_GIFrame)
-			PrepareGlobalIllumination(renderScene, assets, camera);
+			PrepareGlobalIllumination(renderScene, assets, camera, options);
 		// After the materials' lookups (which a still frame replays): the probes' captures, and the conversions of the frame.
 		if (!GatherReflectionProbes(scene, camera))
 			degraded = true;
@@ -3370,6 +3423,9 @@ namespace Strata
 		const SceneLightingView forwardView = IsGlobalIlluminationOverlayView(options.LightingView) ? SceneLightingView::None : options.LightingView;
 		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, static_cast<float>(forwardView),
 			m_Specification.SpecularAntiAliasing ? 1.0f : 0.0f, options.ProbeCapture ? 1.0f : 0.0f);
+		// What a capture turned off (Include/Scene.slang, ST_CAPTURE_*): 0 in every other renderer's frames.
+		frame.CaptureSwitches = glm::uvec4((m_Specification.SpecularEnergyCompensation ? 0u : RenderData::c_CaptureNoSpecularEnergy)
+			| (m_Specification.HorizonFade ? 0u : RenderData::c_CaptureNoHorizonFade), 0u, 0u, 0u);
 
 		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get())
 			|| m_BoundShadowRanges != (m_ShadowRanges ? m_ShadowRanges.Get() : m_DummyShadowRanges.Get()) || m_BoundScreenShadows != GetBoundScreenShadows()
@@ -3462,6 +3518,10 @@ namespace Strata
 			frame.ReflectionParams.z = std::isfinite(postProcess.GlobalIlluminationIntensity)
 				? std::clamp(postProcess.GlobalIlluminationIntensity, 0.0f, 4.0f) : 1.0f;
 		}
+		// Only such a frame, and one that shows a GI view (which samples the field wherever it shows), draws with the forward
+		// shaders that hold the field's gather (PipelineKey::Field).
+		m_FieldFrame = frame.ReflectionParams.y > 0.0f || forwardView == SceneLightingView::GlobalIllumination || forwardView == SceneLightingView::OpenShare;
+		m_Stats.GlobalIlluminationShaded = m_FieldFrame;
 		WriteFrameConstants(commandList, frame);
 		commandList->writeBuffer(m_GIFieldConstantBuffer, &m_GIFieldConstants, sizeof(m_GIFieldConstants));
 		UploadSceneData(commandList, drawListsRecreated);
@@ -3965,7 +4025,8 @@ namespace Strata
 	bool SceneRenderer::HasOverlays(const SceneRenderOptions& options)
 	{
 		return options.ShowGrid || !options.SelectedEntities.empty() || (options.DebugShapes && !options.DebugShapes->IsEmpty()) || !options.EntityTints.empty()
-			|| options.ShowMotionVectors || options.ShowShadowView || options.LightingView != SceneLightingView::None;
+			|| options.ShowMotionVectors || options.ShowShadowView || options.LightingView != SceneLightingView::None || options.ShowWireframe
+			|| options.ShowCulled;
 	}
 
 	bool SceneRenderer::DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport)
@@ -4221,6 +4282,12 @@ namespace Strata
 			return false;
 		if (entityIDs && !options.EntityTints.empty() && !DrawEntityTints(commandList, scene, options.EntityTints, viewport))
 			return false;
+		// The wireframe and culled views draw over the image and its tints, under the other overlays (each reported when it
+		// could not be drawn: the image is complete without it).
+		if (options.ShowWireframe && !DrawWireframeView(commandList, options))
+			complete = false;
+		if (options.ShowCulled && !DrawCulledView(commandList, options))
+			complete = false;
 
 		if (options.ShowGrid)
 		{

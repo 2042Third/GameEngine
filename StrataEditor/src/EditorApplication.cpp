@@ -8,6 +8,7 @@
 #include <Strata/Core/SettingsRegistry.h>
 #include <Strata/Core/Timer.h>
 #include <Strata/Core/Version.h>
+#include <Strata/Core/Window.h>
 #include <Strata/Engine/EntryPoint.h>
 #include <Strata/ImGui/ImGuiLayer.h>
 #include <Strata/ImGui/ImGuiModule.h>
@@ -40,6 +41,10 @@ namespace Strata
 
 	constexpr uint32_t c_HeadlessFrameRate = 60;
 	constexpr int64_t c_MaxIdleTimeoutSeconds = 7 * 24 * 60 * 60; // A week
+	// The smallest window --window-size asks for: the size the editor's panels are laid out for, which every desktop can make
+	// (Windows makes no window narrower than its title bar, about 176 pixels). StrataCLI launch checks the same.
+	constexpr uint32_t c_MinWindowWidth = 640;
+	constexpr uint32_t c_MinWindowHeight = 360;
 
 	namespace
 	{
@@ -70,6 +75,7 @@ namespace Strata
 			{ "--headless", nullptr, "Run without a window (rendering stays available for captures)" },
 			{ "--no-gpu", nullptr, "Run without a graphics device (implies --headless)" },
 			{ "--windowed", nullptr, "Open a 1600x900 window instead of a maximized one" },
+			{ "--window-size", "<width>x<height>", "Open a window of exactly this many pixels (at least 640x360) instead of a maximized one" },
 			{ "--ui-scale", "<factor>", "Draw the UI at this scale instead of the display's (1 is 100%)" },
 			{ "--layout", "<file.ini>", "Keep the panel layout in this file" },
 			{ "--no-automation", nullptr, "Do not serve automation (StrataCLI, MCP)" },
@@ -118,6 +124,17 @@ namespace Strata
 			}
 			if (commandLine.HasFlag("--ui-scale") && !ParseUIScale(commandLine.GetOption("--ui-scale").value_or(std::string())))
 				return fmt::format("--ui-scale expects a factor from {} to {} (1 is 100%)", ImGuiLayer::c_MinScale, ImGuiLayer::c_MaxScale);
+			if (commandLine.HasFlag("--window-size"))
+			{
+				const std::optional<std::pair<uint32_t, uint32_t>> size = commandLine.GetSizeOption("--window-size");
+				if (!size || size->first < c_MinWindowWidth || size->second < c_MinWindowHeight)
+				{
+					return fmt::format("--window-size expects the window's pixels as <width>x<height> (e.g. 1600x900), at least {} wide and {} high, "
+						"each at most {}", c_MinWindowWidth, c_MinWindowHeight, CommandLine::c_MaxSizeOption);
+				}
+				if (commandLine.HasFlag("--headless") || commandLine.HasFlag("--no-gpu"))
+					return std::string("--window-size sizes the editor's window: it cannot be combined with --headless or --no-gpu, which open none");
+			}
 			return std::nullopt;
 		}
 
@@ -202,6 +219,16 @@ namespace Strata
 			// Nothing will ever be rendered: the answer is an empty image, on the next frame as a capture's would be.
 			m_Application.SubmitToMainThread([callback = std::move(callback)]() { callback(ReadbackImage()); });
 		}
+
+		void RequestWindowReadback(const glm::uvec4& region, WindowReadbackCallback callback) override
+		{
+			if (GraphicsModule* graphics = m_Application.GetModules().Find<GraphicsModule>())
+			{
+				graphics->RequestBackBufferReadback(TextureReadbackRegion { region.x, region.y, region.z, region.w }, std::move(callback));
+				return;
+			}
+			m_Application.SubmitToMainThread([callback = std::move(callback)]() { callback(ReadbackImage(), "this editor runs without a graphics device"); });
+		}
 	private:
 		GraphicsDevice* GetDevice() const
 		{
@@ -222,6 +249,8 @@ namespace Strata
 				SetEditorWindowIcon(*window);
 			if (!IsRunning())
 				return;
+			if (!HasRequestedPixels(specification))
+				return;
 			// The editor's look: the Bedrock theme at the UI scale, and its own fonts (ImGui's built-in font is never used).
 			const ImGuiModule* imguiModule = GetModules().Find<ImGuiModule>();
 			if (ImGuiLayer* imgui = imguiModule ? imguiModule->GetLayer() : nullptr)
@@ -237,17 +266,53 @@ namespace Strata
 			// The layer owns its host; the application outlives its layers.
 			PushLayer(new EditorLayer(options, CreateScope<ApplicationEditorHost>(*this)));
 		}
+	private:
+		// --window-size promises a window of exactly that many pixels, so that its pictures have that size: a window the system
+		// made another size (Windows shrinks one larger than the display to fit it; a display whose scale is 2, a Retina one,
+		// makes only even sizes) ends the start, as a failure, instead of giving pictures of another size. False then, the
+		// application closing with exit code 1.
+		bool HasRequestedPixels(const ApplicationSpecification& specification)
+		{
+			const Window* window = GetWindow();
+			if (!window || !specification.Window.SizeInPixels)
+				return true;
+			const glm::uvec2 requested(specification.Window.Width, specification.Window.Height);
+			const glm::uvec2 pixels = window->GetFramebufferSize();
+			const glm::uvec2 windowSize(window->GetWidth(), window->GetHeight());
+			const WindowPixelsMatch match = MatchWindowPixels(requested, pixels, windowSize);
+			if (match == WindowPixelsMatch::Exact)
+				return true;
+			if (match == WindowPixelsMatch::NearestOfScale)
+			{
+				const double scale = static_cast<double>(pixels.x) / static_cast<double>(windowSize.x);
+				ReportFatalError(specification.Name, fmt::format("{} cannot start: the display's scale ({:.3g} pixels to a point) makes no window of {} x {} "
+					"pixels (--window-size); the nearest it makes is {} x {}.", specification.Name, scale, requested.x, requested.y, pixels.x, pixels.y),
+					fmt::format("Ask for {}x{}, or another size the display's scale makes, or leave out --window-size.", pixels.x, pixels.y));
+			}
+			else
+			{
+				ReportFatalError(specification.Name, fmt::format("{} cannot start: the display cannot hold a window of {} x {} pixels (--window-size), "
+					"the system made it {} x {}.", specification.Name, requested.x, requested.y, pixels.x, pixels.y),
+					"Ask for a window that fits on the display, or leave out --window-size.");
+			}
+			SetExitCode(1);
+			Close();
+			return false;
+		}
 	};
 
 	ProgramRun GetProgramRun(const CommandLine& commandLine)
 	{
 		// What it prints is the point: information, a usage error, and the log of runs that tools and command scripts drive
-		// (they end by themselves or through automation). A person's window leaves the terminal it was started from alone.
+		// (they end by themselves or through automation), among them --window-size's pictures of a fixed size: a start that
+		// fails there (a window the display cannot hold) ends at once with its reason in the output, never in a dialog that
+		// waits for a person while the tool waits for the editor (StrataCLI launch discards the output). A person's window
+		// leaves the terminal it was started from alone.
 		if (commandLine.HasFlag("--help") || commandLine.HasFlag("-h") || commandLine.HasFlag("--version"))
 			return ProgramRun::Console;
 		if (CommandLineOptions::FindUnknownArgument(commandLine, c_Arguments) || CheckValues(commandLine))
 			return ProgramRun::Console;
-		for (const char* scripted : { "--headless", "--no-gpu", "--frames", "--commands", "--quit-after-commands" })
+		for (const char* scripted : { "--headless", "--no-gpu", "--frames", "--commands", "--quit-after-commands", "--window-size" })
 		{
 			if (commandLine.HasFlag(scripted))
 				return ProgramRun::Console;
@@ -347,6 +412,15 @@ namespace Strata
 		specification.Window.Width = 1600;
 		specification.Window.Height = 900;
 		specification.Window.Maximized = !commandLine.HasFlag("--windowed");
+		// A window of exactly that many pixels, whatever the display's scale: screenshots of the editor that compare across
+		// machines and displays (editor.screenshot).
+		if (const std::optional<std::pair<uint32_t, uint32_t>> size = commandLine.GetSizeOption("--window-size"))
+		{
+			specification.Window.Width = size->first;
+			specification.Window.Height = size->second;
+			specification.Window.SizeInPixels = true;
+			specification.Window.Maximized = false;
+		}
 		if (const std::optional<int64_t> frames = commandLine.GetIntOption("--frames"))
 			specification.MaxFrames = static_cast<uint64_t>(*frames);
 		options.MaxFrames = specification.MaxFrames;

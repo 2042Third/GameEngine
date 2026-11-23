@@ -1312,6 +1312,28 @@ TEST_SUITE("Editor.UI")
 		CHECK(editor.Context().GetViewport().GetSettings().PilotGameCamera != pilot);
 	}
 
+	TEST_CASE("A window shrunk to almost nothing draws the panels without breaking ImGui's rules")
+	{
+		// A person can shrink the editor's window until the Scene view has no room under its toolbar, or the dock space none at
+		// all. ImGui checks the layout code's use of its cursor and sizes: in Debug builds it asserts (the editor stops), in
+		// others it logs the error and shows its error window, which would be in every screenshot. The errors are counted here.
+		for (const ImVec2 size : { ImVec2(320.0f, 180.0f), ImVec2(176.0f, 48.0f), ImVec2(1.0f, 1.0f) })
+		{
+			CAPTURE(size.x);
+			CAPTURE(size.y);
+			// Declared first: the editor's last frames, as it closes, may still report.
+			std::vector<std::string> errors;
+			HarnessEditor editor({ size, 1.5f }, WithFeatureProject("EditorUITinyWindow"));
+			ImGuiContext& imgui = *ImGui::GetCurrentContext();
+			imgui.ErrorCallback = [](ImGuiContext*, void* userData, const char* message) { static_cast<std::vector<std::string>*>(userData)->push_back(message); };
+			imgui.ErrorCallbackUserData = &errors;
+			ImGui::GetIO().ConfigErrorRecoveryEnableAssert = false;
+			editor.Frames(4);
+			const std::string firstError = errors.empty() ? std::string() : errors.front();
+			CHECK_MESSAGE(errors.empty(), firstError);
+		}
+	}
+
 	TEST_CASE("The toolbar's tools and the viewport's chips change the viewport's settings")
 	{
 		HarnessEditor editor({}, WithFeatureProject("EditorUIToolbar"));

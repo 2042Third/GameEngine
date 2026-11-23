@@ -7,6 +7,7 @@
 #include "Strata/Core/Window.h"
 #include "Strata/Renderer/GraphicsDevice.h"
 #include "Strata/Renderer/Renderer.h"
+#include "Strata/Renderer/TextureReadback.h"
 
 namespace Strata
 {
@@ -73,6 +74,7 @@ namespace Strata
 		if (!began)
 			return m_Device->IsDeviceLost() ? EngineFrameAction::Close : EngineFrameAction::Skip;
 		Renderer::BeginFrame();
+		PollBackBufferReadbacks();
 		return EngineFrameAction::Continue;
 	}
 
@@ -81,6 +83,7 @@ namespace Strata
 		// A frame that drew nothing into the back buffer still presents (and captures) a defined image: black.
 		Renderer::PrepareBackBuffer();
 		ProcessBackBufferCaptures(true);
+		StartBackBufferReadbacks(true);
 		ST_PROFILE_STAGE("Present");
 		m_Device->EndFrame();
 	}
@@ -89,12 +92,14 @@ namespace Strata
 	{
 		// No frame will render what is still asked for.
 		ProcessBackBufferCaptures(false);
+		FailBackBufferReadbacks("the program is closing");
 		m_Device->WaitForIdle();
 	}
 
 	void GraphicsModule::OnShutdown()
 	{
 		ProcessBackBufferCaptures(false);
+		FailBackBufferReadbacks("the program is closing");
 		Renderer::Shutdown();
 		m_Device.reset();
 		m_Window = nullptr;
@@ -104,6 +109,76 @@ namespace Strata
 	{
 		std::scoped_lock<std::mutex> lock(m_CaptureMutex);
 		m_BackBufferCaptures.push_back(std::move(callback));
+	}
+
+	void GraphicsModule::RequestBackBufferReadback(const TextureReadbackRegion& region, BackBufferReadbackCallback callback)
+	{
+		m_BackBufferReadbackRequests.push_back({ region, std::move(callback) });
+	}
+
+	void GraphicsModule::StartBackBufferReadbacks(bool frameRendered)
+	{
+		if (m_BackBufferReadbackRequests.empty())
+			return;
+		std::vector<BackBufferReadbackRequest> requests;
+		requests.swap(m_BackBufferReadbackRequests);
+		nvrhi::ITexture* backBuffer = frameRendered && m_Device && m_Device->HasSwapchain() ? m_Device->GetBackBuffer() : nullptr;
+		for (BackBufferReadbackRequest& request : requests)
+		{
+			if (!backBuffer)
+			{
+				request.Callback(ReadbackImage(), "there is no window to read back (headless)");
+				continue;
+			}
+			std::string error;
+			Scope<TextureReadback> readback = TextureReadback::Create(backBuffer, request.Region, &error);
+			if (!readback)
+			{
+				request.Callback(ReadbackImage(), fmt::format("reading the window back failed: {}", error));
+				continue;
+			}
+			m_BackBufferReadbacks.push_back({ std::move(readback), std::move(request.Callback), std::chrono::steady_clock::now() });
+		}
+	}
+
+	void GraphicsModule::PollBackBufferReadbacks()
+	{
+		for (size_t index = 0; index < m_BackBufferReadbacks.size();)
+		{
+			PendingBackBufferReadback& pending = m_BackBufferReadbacks[index];
+			ReadbackImage image;
+			std::string error;
+			if (pending.Readback->IsReady())
+			{
+				if (!pending.Readback->GetResult(image))
+					error = "mapping the window's pixels failed";
+			}
+			else if (std::chrono::steady_clock::now() - pending.Submitted > c_BackBufferReadbackTimeout)
+			{
+				error = fmt::format("the GPU did not finish reading the window back within {} seconds", c_BackBufferReadbackTimeout.count());
+			}
+			else
+			{
+				index++;
+				continue;
+			}
+			// Taken out first: the callback may ask for another readback.
+			BackBufferReadbackCallback callback = std::move(pending.Callback);
+			m_BackBufferReadbacks.erase(m_BackBufferReadbacks.begin() + static_cast<std::ptrdiff_t>(index));
+			callback(image, error);
+		}
+	}
+
+	void GraphicsModule::FailBackBufferReadbacks(const std::string& reason)
+	{
+		std::vector<BackBufferReadbackRequest> requests;
+		requests.swap(m_BackBufferReadbackRequests);
+		std::vector<PendingBackBufferReadback> pending;
+		pending.swap(m_BackBufferReadbacks);
+		for (BackBufferReadbackRequest& request : requests)
+			request.Callback(ReadbackImage(), reason);
+		for (PendingBackBufferReadback& readback : pending)
+			readback.Callback(ReadbackImage(), reason);
 	}
 
 	void GraphicsModule::ProcessBackBufferCaptures(bool frameRendered)
