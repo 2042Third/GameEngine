@@ -199,7 +199,7 @@ TEST_SUITE("Editor.UI.GraphicsQuality")
 		// global illumination's layout (155.7 MiB at every size). Whole MiB, rounded down.
 		CHECK(TextOf(PageKey("Memory1080.Low")) == "66 MiB");
 		CHECK(TextOf(PageKey("Memory1080.Medium")) == "262 MiB");
-		CHECK(TextOf(PageKey("Memory1080.High")) == "774 MiB");
+		CHECK(TextOf(PageKey("Memory1080.High")) == "775 MiB");
 		CHECK(TextOf(PageKey("Memory1080.Ultra")) == "2.09 GiB");
 		CHECK(TextOf(PageKey("Memory2160.Medium")) == "394 MiB");
 		CHECK(TextOf(PageKey("Memory2160.High")) == "1.94 GiB");

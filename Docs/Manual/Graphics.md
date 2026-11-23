@@ -29,7 +29,7 @@ what each one costs:
 | Motion blur samples (scenes with motion blur) | Off | 8 | 12 | 16 |
 | Reflection probe resolution (per face) | 128 | 128 | 256 | 256 |
 | Global illumination (experimental; scenes that use it) | Off | Off | High | High |
-| Memory of one view, 1920 x 1080 (see below) | 66 MiB | 262 MiB | 774 MiB | 2.09 GiB |
+| Memory of one view, 1920 x 1080 (see below) | 66 MiB | 262 MiB | 775 MiB | 2.09 GiB |
 | Memory of one view, 3840 x 2160 | 66 MiB | 394 MiB | 1.94 GiB | 2.33 GiB |
 
 - **Medium** keeps Strata 0.6.0's shadow map sizes and sample counts. **High**, the default, adds smoother wide sun
