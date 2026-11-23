@@ -46,6 +46,12 @@ Guides for people making games in the editor:
 
 What each release of Strata delivers, for the people who download it, and what the archives hold:
 
+- [Releases/0.8.0.md](Releases/0.8.0.md): Strata 0.8.0 (wave 8: global illumination of world-space radiance cascades,
+  experimental; rect lights with soft shadows; many shadowed point and spot lights; stable sun shadows; motion drawn
+  between physics steps; shaders in Slang; the High Desert Outpost showcase; capture tools for agents).
+- [Releases/0.7.0.md](Releases/0.7.0.md): Strata 0.7.0 (wave 7: Graphics Quality presets and the players' graphics
+  options, the sun's physical shadows, the Filmic tone curve and a camera's lens, energy-conserving materials, faster
+  physics and editor).
 - [Releases/0.6.0.md](Releases/0.6.0.md): Strata 0.6.0 (wave 6: temporal anti-aliasing, shadows of point and spot
   lights, reflection probes and screen-space reflections, height fog, a physical atmosphere, light units, clear coat and
   glass; Project Settings and Preferences, input actions with rebinding, collision layers for the whole project and the

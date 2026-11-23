@@ -15,9 +15,9 @@ project's releases page: https://github.com/2042Third/GameEngine/releases
 | `StrataEditor` | The editor. Start it to get the launcher: new project, open a project, the samples, connecting an AI agent. |
 | `StrataRuntime` | Plays exported games. The editor copies it into every game it exports, renamed after the game. |
 | `StrataCLI` | Command-line client of a running editor, and an MCP server for AI agents (`StrataCLI mcp`). |
-| `Samples/` | Finished games to learn from, made by an AI agent through the editor: Third-Person Adventure, Open World, Physics Playground and Tetris, each with a `README.md` of what it shows and a `CREDITS.md` of its assets. The editor opens copies of them (Open Sample). |
+| `Samples/` | Finished games to learn from, made by an AI agent through the editor: High Desert Outpost, Third-Person Adventure, Open World, Physics Playground and Tetris, each with a `README.md` of what it shows and a `CREDITS.md` of its assets. The editor opens copies of them (Open Sample). |
 | `StrataScriptCore/` | The script SDK: the headers your scripts include and the CMake package their build uses. |
-| `Docs/Manual/` | Guides for making games: `Scripting.md`, `Worlds.md`, `Prefabs.md`, `GameView.md`, `GameUI.md`, `Lighting.md`, `Camera.md`, `AntiAliasing.md` and `Settings.md`. |
+| `Docs/Manual/` | Guides for making games: `Scripting.md`, `Worlds.md`, `Prefabs.md`, `GameView.md`, `GameUI.md`, `Lighting.md`, `Camera.md`, `AntiAliasing.md`, `Graphics.md` and `Settings.md`. |
 | `Skills/` | Guides for AI agents that make games with the editor (see "Connect an AI agent"). |
 | `StrataInstall.json` | Marks this folder as a Strata installation. Keep it next to the executables. |
 | `ThirdPartyNotices.md` | The third-party components Strata contains (box3d for physics, among others) and their licenses, and the samples' asset packs with the attributions games made from them must show. |
@@ -84,15 +84,17 @@ and get its exit code, pipe its output, e.g. `.\StrataEditor --version | Write-O
 
 1. Start `StrataEditor`. In the launcher choose **New Project**, pick the **Basic 3D** template (a lit scene with a
    camera, a sun, a sky and a ground), a name and a folder. Or choose **Open Sample** and open a copy of one of the
-   samples: the Third-Person Adventure (an animated character, menus, several scenes), the Open World (a streamed
-   island), the Physics Playground (about 600 box3d bodies to play with) or Tetris (a small scripted game). Press
-   **Play** in a sample: it builds the sample's scripts first.
+   samples: the High Desert Outpost (the graphical showcase: a camera tour, a walk and a photo mode), the Third-Person
+   Adventure (an animated character, menus, several scenes), the Open World (a streamed island), the Physics Playground
+   (about 600 box3d bodies to play with) or Tetris (a small scripted game). Press **Play** in a sample: it builds the
+   sample's scripts first.
 2. Build the scene with the Scene view, the Hierarchy and the Inspector. Drop models, textures and sounds onto the
    window to import them. Menus and HUDs are UI elements (**Hierarchy > + > UI**, see `Docs/Manual/GameUI.md`); a level
    too large to keep loaded is a world of streamed cells (**New > World** in the Content Browser, see
    `Docs/Manual/Worlds.md`). `Docs/Manual/Lighting.md` explains the lights and their units, the sky, fog, shadows and
    reflections, `Docs/Manual/Camera.md` the camera's image (exposure, the tone curve, color, bloom, motion blur, depth
-   of field), and `Docs/Manual/AntiAliasing.md` TAA.
+   of field), `Docs/Manual/AntiAliasing.md` TAA, and `Docs/Manual/Graphics.md` each row of the Graphics Quality
+   presets.
 3. Write scripts in the project's `Scripts` folder (**Scripts > New Script...** starts one) and build them with
    **Scripts > Build Scripts** (Ctrl+B). Build errors are listed in the Problems panel; a double click opens the line.
    Attach a script in the Inspector (**Add Component > Script**) and press **Play**: Play builds changed scripts first,
