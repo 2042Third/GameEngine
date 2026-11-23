@@ -633,7 +633,10 @@ The spec's gate for the light (Gate W) is not fully met; measured against a one-
   the filter's spacing of looks). The red wall in the tall box's shadow reads up to 0.18 of the light too dark at the
   shadow's outer edge and up to 0.08 too light inside it. A light whose shadow tile halves as the camera moves away
   draws its penumbra 9% narrower (0.503 m against 0.552 m; the spec asked 5%); the frames that still sample its old
-  tiles keep it. Where an open mesh (a single-sided plane) lies in front of a closed one, the space between them counts
+  tiles keep it. Most of that is the shadow biases, which are sized in shadow texels as the point and spot lights' are
+  (3.8% without them, 4.7% with the depth bias alone, 6.7% with the normal bias alone); sizing them by angle for rect
+  lights changes what keeps every comparison off the receiver's own surface, so it is left for a later unit. Where an
+  open mesh (a single-sided plane) lies in front of a closed one, the space between them counts
   as solid where the light's center does not see the surface, so a surface under the plane's edge reads darker there; a
   double-sided closed mesh is known only by its front, so light passes at its foot as it did before the back faces
   (neither measured). The side of an object facing away from the light's center finds a blocker in front of it within

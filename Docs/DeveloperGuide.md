@@ -5159,7 +5159,9 @@ lights, Post Process and the sky), and never a resolution below the output's.
   more than 0.3 off). The red wall's penumbrae (the tall box's shadow, seen from the front) read up to 0.185 darker than the
   reference at their outer edge and up to 0.078 lighter inside, which L4's steps, taken where the reference is flat, do not
   see. A light whose tile halves (512 to 256 texels, S10's dolly) draws its penumbra 8.9% narrower (0.503 m against 0.552 m,
-  the reference 0.578 m; the spec's 5% is not met); the frames that still sample its old tiles keep the old width.
+  the reference 0.578 m; the spec's 5% is not met); the frames that still sample its old tiles keep the old width. Most of
+  the change is the biases, which are SampleLocalShadow's, in texels of the tile: the same dolly measured 3.8% with no
+  depth or normal bias, 4.7% with the depth bias alone, 6.7% with the normal bias alone and 10.4% with both doubled.
   A side whose plane has the light's center in front of it but that a blocker hides from the center reads umbra (S14: the
   slab's side under the bar reads 0 where the reference is 0.65 to 0.89): a cell blocks only where it is nearer than the
   receiver's plane over the whole cell, which a steep receiver's plane across a coarse cell never allows, so no blocker
